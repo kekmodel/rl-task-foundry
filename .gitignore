@@ -20,6 +20,7 @@ venv/
 
 # Output
 output/
+review_packs/
 
 # Environment
 .env

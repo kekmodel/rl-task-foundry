@@ -1,0 +1,154 @@
+database:
+  dsn: "${DATABASE_DSN:-postgresql://sakila:sakila@127.0.0.1:5433/sakila}"
+  schema_allowlist: ["public"]
+  readonly_role: "rlvr_reader"
+  statement_timeout_ms: 5000
+  lock_timeout_ms: 1000
+  idle_tx_timeout_ms: 5000
+  solver_pool_size: 32
+  control_pool_size: 8
+
+domain:
+  name: "service_operations"
+  language: "ko"
+  user_role: "end user"
+  agent_role: "organization AI assistant"
+  scenario_description: "an end user asking the organization that owns the database for help or information"
+
+providers:
+  codex_oauth:
+    type: "openai_compatible"
+    base_url: "http://127.0.0.1:10531/v1"
+    api_key_env: "OPENAI_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
+  local_server:
+    type: "openai_compatible"
+    base_url: "${LOCAL_OPENAI_BASE_URL:-http://127.0.0.1:8000/v1}"
+    api_key_env: "LOCAL_OPENAI_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
+  anthropic_main:
+    type: "anthropic"
+    api_key_env: "ANTHROPIC_API_KEY"
+    max_concurrency: 8
+    timeout_s: 120
+
+models:
+  composer:
+    provider: "codex_oauth"
+    model: "gpt-5.4-mini"
+  solver_backbone:
+    provider: "codex_oauth"
+    model: "gpt-5.4-mini"
+  solvers:
+    - solver_id: "gpt54m_replica"
+      backend: "openai_agents"
+      provider: "codex_oauth"
+      model: "gpt-5.4-mini"
+      replicas: 4
+      memory_mode: "none"
+      summarization_mode: "off"
+    - solver_id: "gpt54m_memory"
+      backend: "openai_agents"
+      provider: "codex_oauth"
+      model: "gpt-5.4-mini"
+      replicas: 2
+      memory_mode: "explicit_summary"
+      summarization_mode: "explicit"
+
+provider_resilience:
+  circuit_breaker_window_s: 60
+  circuit_breaker_threshold: 0.3
+  probe_interval_s: 30
+  release_semaphore_on_backoff: true
+
+tool_compiler:
+  max_hops: 4
+  allow_aggregates: true
+  allow_timelines: true
+  max_list_cardinality: 20
+  naming_temperature_l2: 1.0
+  business_alias_overrides: {}
+
+task_composer:
+  label_tier: "A"
+  question_families:
+    - "status_lookup"
+    - "causal_chain"
+    - "timeline_resolution"
+    - "aggregate_verification"
+  selected_tool_level: 1
+  negative_outcome_ratio: 0.2
+  max_attempts_per_anchor: 6
+  anchor_samples_per_source: 3
+  question_temperature: 1.0
+  question_validation_temperature: 0.0
+  exclude_answer_column_patterns:
+    - "(^|_)last_update($|_)"
+  aggregate_discouraged_target_patterns:
+    - "(^|_)(address|city|country|state|province|region|language|currency)($|_)"
+
+solver_runtime:
+  max_turns: 16
+  structured_output_required: true
+  tracing: true
+  sdk_sessions_enabled: true
+  canonical_state_store: "run_db"
+
+calibration:
+  lower_pass_rate: 0.2
+  upper_pass_rate: 0.8
+  ci_alpha: 0.1
+  canary_replica_count: 2
+  post_canary_batch_size: 2
+  full_replica_limit: 6
+  safe_early_termination: true
+  difficulty_weight_hops: 100.0
+  difficulty_weight_family: 10.0
+  difficulty_weight_outcome: 3.0
+  difficulty_weight_answer_width: 1.0
+  difficulty_weight_fanout: 0.1
+  difficulty_weight_shortcuts: 0.5
+  difficulty_fanout_cap: 99.0
+  difficulty_family_order:
+    status_lookup: 0
+    timeline_resolution: 1
+    causal_chain: 2
+    aggregate_verification: 3
+  difficulty_outcome_order:
+    answer: 0
+    no_result: 1
+    clarify: 2
+    deny: 2
+
+verification:
+  require_provenance: true
+  fail_on_internal_field_leak: true
+  float_precision: 6
+  shadow_sample_rate: 0.1
+
+dedup:
+  exact_enabled: true
+  near_dup_enabled: true
+  minhash_threshold: 0.9
+
+budget:
+  max_run_usd: 250.0
+  max_gpu_hours: null
+  compose_phase_usd: 40.0
+  solve_phase_usd: 180.0
+  reserve_strategy: "phase_specific"
+
+privacy:
+  default_visibility: "blocked"
+  visibility_overrides:
+    courier_phone: "user_visible"
+    internal_ticket_note: "blocked"
+
+output:
+  run_db_path: "./artifacts/run.db"
+  accepted_jsonl_path: "./artifacts/accepted.jsonl"
+  rejected_jsonl_path: "./artifacts/rejected.jsonl"
+  events_jsonl_path: "./artifacts/events.jsonl"
+  traces_dir: "./artifacts/traces"

@@ -1,69 +1,48 @@
-"""Tests for the event bus."""
-
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from rlvr_synth.events import EventBus, Event
-
-
-class FakeEvent(Event):
-    event_type: str = "fake"
-    value: int = 0
+from rl_task_foundry.infra.events import Event, EventBus
 
 
 @pytest.mark.asyncio
-async def test_subscribe_and_publish() -> None:
-    bus = EventBus()
-    received: list[Event] = []
-
-    async def listener(event: Event) -> None:
-        received.append(event)
-
-    bus.subscribe(listener)
-    await bus.publish(FakeEvent(value=42))
-    await asyncio.sleep(0.05)
-
-    assert len(received) == 1
-    assert received[0].value == 42
-
-
-@pytest.mark.asyncio
-async def test_slow_subscriber_does_not_block() -> None:
-    """Non-authoritative: slow subscriber gets dropped, publisher doesn't block."""
-    bus = EventBus(max_queue_size=2)
-    received: list[Event] = []
+async def test_event_bus_drops_on_lag_without_blocking_emit():
+    bus = EventBus(max_queue_size=1)
+    received: list[dict[str, object]] = []
+    release = asyncio.Event()
 
     async def slow_listener(event: Event) -> None:
-        await asyncio.sleep(10)  # intentionally slow
-        received.append(event)
+        received.append(event.payload)
+        await release.wait()
 
-    bus.subscribe(slow_listener)
+    bus.subscribe("task.accepted", slow_listener)
 
-    # Publish more than queue size — should not block or raise
-    for i in range(5):
-        await bus.publish(FakeEvent(value=i))
+    await bus.emit(Event("task.accepted", {"seq": 1}))
+    await bus.emit(Event("task.accepted", {"seq": 2}))
+    await bus.emit(Event("task.accepted", {"seq": 3}))
 
-    # Publisher should return immediately (no hang)
-    assert True
+    assert bus.dropped_count("task.accepted") >= 1
+
+    release.set()
+    await asyncio.sleep(0)
+    await bus.aclose()
 
 
 @pytest.mark.asyncio
-async def test_unsubscribe() -> None:
-    bus = EventBus()
-    received: list[Event] = []
+async def test_event_bus_delivers_when_listener_keeps_up():
+    bus = EventBus(max_queue_size=4)
+    received: list[int] = []
 
     async def listener(event: Event) -> None:
-        received.append(event)
+        received.append(int(event.payload["seq"]))
 
-    unsub = bus.subscribe(listener)
-    await bus.publish(FakeEvent(value=1))
-    await asyncio.sleep(0.05)
+    bus.subscribe("task.started", listener)
 
-    unsub()
-    await bus.publish(FakeEvent(value=2))
-    await asyncio.sleep(0.05)
+    await bus.emit(Event("task.started", {"seq": 1}))
+    await bus.emit(Event("task.started", {"seq": 2}))
+    await asyncio.sleep(0)
 
-    assert len(received) == 1
+    assert received == [1, 2]
+    await bus.aclose()

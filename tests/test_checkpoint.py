@@ -1,43 +1,23 @@
-"""Tests for checkpoint with WAL-based durability."""
+import sqlite3
 
-from __future__ import annotations
-
-import json
-from pathlib import Path
-
-import pytest
-
-from rlvr_synth.checkpoint import RunCheckpoint
+from rl_task_foundry.infra.checkpoint import ensure_checkpoint
 
 
-@pytest.mark.asyncio
-async def test_mark_and_check_processed(tmp_path: Path) -> None:
-    cp = RunCheckpoint(output_dir=tmp_path)
-    assert not cp.is_processed(42)
+def test_checkpoint_store_tracks_processed_keys_and_flushes(tmp_path):
+    store = ensure_checkpoint(tmp_path / "artifacts" / "run.db")
 
-    await cp.mark_processed(42)
-    assert cp.is_processed(42)
+    assert store.is_processed("anchor:1") is False
 
+    store.mark_processed("anchor:1", payload={"task_id": "task_1"})
+    assert store.is_processed("anchor:1") is True
+    store.flush()
 
-@pytest.mark.asyncio
-async def test_persistence_across_instances(tmp_path: Path) -> None:
-    cp1 = RunCheckpoint(output_dir=tmp_path)
-    await cp1.mark_processed(1)
-    await cp1.mark_processed(2)
+    reopened = ensure_checkpoint(store.run_db_path)
+    assert reopened.is_processed("anchor:1") is True
 
-    # New instance loads from disk
-    cp2 = RunCheckpoint(output_dir=tmp_path)
-    assert cp2.is_processed(1)
-    assert cp2.is_processed(2)
-    assert not cp2.is_processed(3)
-
-
-@pytest.mark.asyncio
-async def test_manifest(tmp_path: Path) -> None:
-    cp = RunCheckpoint(output_dir=tmp_path, run_id="test_run", rng_seed=42)
-    await cp.mark_processed(10)
-    manifest = cp.get_manifest()
-
-    assert manifest["run_id"] == "test_run"
-    assert manifest["rng_seed"] == 42
-    assert 10 in manifest["processed_pks"]
+    with sqlite3.connect(store.run_db_path) as conn:
+        row = conn.execute(
+            "SELECT namespace, item_key FROM processed_keys WHERE item_key = ?",
+            ("anchor:1",),
+        ).fetchone()
+    assert row == ("anchors", "anchor:1")
