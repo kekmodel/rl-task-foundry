@@ -37,6 +37,7 @@ packages = ["src/rlvr_synth"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
