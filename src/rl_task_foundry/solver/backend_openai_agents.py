@@ -153,18 +153,20 @@ def _extract_tool_call_name(item: Any) -> str | None:
     return None
 
 
-def _extract_tool_calls(run_result: Any) -> list[dict[str, Any]]:
+def _extract_tool_calls(
+    run_result: Any,
+    *,
+    semantic_keys_by_name: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     tool_calls: list[dict[str, Any]] = []
     for item in getattr(run_result, "new_items", []) or []:
         tool_name = _extract_tool_call_name(item)
         if tool_name is None:
             continue
-        tool_calls.append(
-            {
-                "name": tool_name,
-                "repr": repr(item),
-            }
-        )
+        payload = {"name": tool_name, "repr": repr(item)}
+        if semantic_keys_by_name is not None and tool_name in semantic_keys_by_name:
+            payload["semantic_key"] = semantic_keys_by_name[tool_name]
+        tool_calls.append(payload)
     return tool_calls
 
 
@@ -375,7 +377,10 @@ class OpenAIAgentsSolverBackend:
                 "solver_id": self.solver_config.solver_id,
                 "replica_index": replica_index,
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", [])],
-                "tool_calls": _extract_tool_calls(run_result),
+                "tool_calls": _extract_tool_calls(
+                    run_result,
+                    semantic_keys_by_name={spec.name: spec.semantic_key for spec in self.tool_specs},
+                ),
             },
         )
 

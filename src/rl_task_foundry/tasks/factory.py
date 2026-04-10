@@ -304,11 +304,14 @@ class TierATaskFactory:
     ) -> list[TaskContractDraft]:
         drafts: list[TaskContractDraft] = []
         target_table = graph.get_table(path.edges[-1].target_table, schema_name=path.edges[-1].target_schema)
+        scalar_fields = self._select_scalar_fields(target_table)
         scalar_field = self._select_scalar_field(target_table)
         list_field = self._select_list_field(target_table)
         temporal_field = self._select_temporal_field(target_table)
 
         for family in self.task_config.question_families:
+            if path.hop_count < self._family_min_required_hops(family):
+                continue
             if family == "status_lookup" and scalar_field is not None:
                 drafts.append(
                     self._scalar_contract_draft(
@@ -326,6 +329,23 @@ class TierATaskFactory:
                         outcome_type="no_result",
                     )
                 )
+                if len(scalar_fields) >= 2 and self.task_config.max_status_lookup_answer_fields > 1:
+                    drafts.append(
+                        self._record_contract_draft(
+                            path,
+                            family=family,
+                            columns=scalar_fields[: self.task_config.max_status_lookup_answer_fields],
+                            outcome_type="answer",
+                        )
+                    )
+                if self.task_config.enable_exists_status_lookup:
+                    drafts.append(
+                        self._exists_contract_draft(
+                            path,
+                            family=family,
+                            outcome_type="answer",
+                        )
+                    )
             elif family == "causal_chain" and path.hop_count >= 2 and scalar_field is not None:
                 list_supported = (
                     list_field is not None
@@ -427,7 +447,7 @@ class TierATaskFactory:
     ) -> TaskContractDraft:
         field_name = self._answer_field_name(path, column)
         field_label = humanize_identifier(field_name)
-        target_table_label = humanize_identifier(path.tables[-1])
+        target_table_label = humanize_identifier(singularize_token(path.tables[-1]))
         answer_schema = AnswerSchema(
             fields=[
                 AnswerField(
@@ -470,6 +490,69 @@ class TierATaskFactory:
             answer_schema=answer_schema,
             target_label=target_human,
             count_unit_hint=count_unit_hint_for_identifier(raw_target_label),
+        )
+
+    def _exists_contract_draft(
+        self,
+        path: PathSpec,
+        *,
+        family: str,
+        outcome_type: Literal["answer", "no_result"],
+    ) -> TaskContractDraft:
+        target_table_label = humanize_identifier(singularize_token(path.tables[-1]))
+        answer_schema = AnswerSchema(
+            fields=[
+                AnswerField(
+                    name=f"has_{singularize_token(path.tables[-1])}",
+                    type="bool",
+                    canonicalizer="bool_cast",
+                    description=f"Whether a related {target_table_label} is present.",
+                    source_columns=["meta:exists"],
+                )
+            ]
+        )
+        return TaskContractDraft(
+            question_family=family,
+            outcome_type=outcome_type,
+            answer_schema=answer_schema,
+            field_label=target_table_label,
+            target_label=target_table_label,
+        )
+
+    def _record_contract_draft(
+        self,
+        path: PathSpec,
+        *,
+        family: str,
+        columns: list[ColumnProfile],
+        outcome_type: Literal["answer", "no_result"],
+    ) -> TaskContractDraft:
+        target_table_label = humanize_identifier(singularize_token(path.tables[-1]))
+        answer_schema = AnswerSchema(
+            fields=[
+                AnswerField(
+                    name=self._answer_field_name(path, column),
+                    type=_column_to_answer_type(column),
+                    canonicalizer=_default_canonicalizer(column),
+                    description=(
+                        f"User-facing {humanize_identifier(self._answer_field_name(path, column))} value."
+                    ),
+                    visibility=self._answer_field_visibility(column),
+                    source_columns=[f"{column.table_name}.{column.column_name}"],
+                )
+                for column in columns
+            ]
+        )
+        field_label = ", ".join(
+            humanize_identifier(self._answer_field_name(path, column))
+            for column in columns
+        )
+        return TaskContractDraft(
+            question_family=family,
+            outcome_type=outcome_type,
+            answer_schema=answer_schema,
+            field_label=field_label,
+            target_label=target_table_label,
         )
 
     async def _sample_anchor_values(
@@ -544,9 +627,26 @@ class TierATaskFactory:
 
         field = contract.answer_schema.fields[0]
         target_alias = _alias_for_index(path.hop_count)
-        source_ref = field.source_columns[0]
-        column_name = source_ref.split(".")[-1]
-        value_predicate = f"{target_alias}.{quote_ident(column_name)} IS NOT NULL"
+        source_refs = [
+            answer_field.source_columns[0]
+            for answer_field in contract.answer_schema.fields
+            if answer_field.source_columns
+        ]
+        if source_refs and all(source_ref == "meta:exists" for source_ref in source_refs):
+            target_table = graph.get_table(
+                path.edges[-1].target_table,
+                schema_name=path.edges[-1].target_schema,
+            )
+            target_pk = target_table.primary_key[0]
+            value_predicate = f"{target_alias}.{quote_ident(target_pk)} IS NOT NULL"
+        else:
+            predicates: list[str] = []
+            for source_ref in source_refs:
+                if source_ref.startswith("meta:"):
+                    continue
+                column_name = source_ref.split(".")[-1]
+                predicates.append(f"{target_alias}.{quote_ident(column_name)} IS NOT NULL")
+            value_predicate = " AND ".join(predicates) if predicates else "TRUE"
         if field.type.startswith("list[") and contract.outcome_type == "answer":
             return readonly_query(
                 f"""
@@ -640,13 +740,18 @@ class TierATaskFactory:
         )
 
     def _select_scalar_field(self, table) -> ColumnProfile | None:
+        scalar_fields = self._select_scalar_fields(table)
+        return scalar_fields[0] if scalar_fields else None
+
+    def _select_scalar_fields(self, table) -> list[ColumnProfile]:
+        selected: list[ColumnProfile] = []
         for column in table.columns:
             if not self._is_candidate_answer_column(column):
                 continue
             answer_type = _column_to_answer_type(column)
             if answer_type in {"string", "int", "float", "bool", "date", "datetime"}:
-                return column
-        return None
+                selected.append(column)
+        return selected
 
     def _select_temporal_field(self, table) -> ColumnProfile | None:
         for column in table.columns:
@@ -674,6 +779,11 @@ class TierATaskFactory:
         target_label = contract.target_label or field_label
         scalar_focus_label = self._scalar_question_focus_label(contract)
         if contract.question_family == "status_lookup":
+            shape = _answer_schema_shape(contract.answer_schema, question_family=contract.question_family)
+            if shape == "exists":
+                return f"현재 {target_label}이 등록되어 있는지 알려주세요."
+            if shape == "record":
+                return f"현재 {target_label} 정보가 어떻게 되어 있는지 알려주세요."
             return f"현재 {field_label} 정보가 어떻게 되어 있는지 알려주세요."
         if contract.question_family == "causal_chain":
             if _answer_schema_shape(contract.answer_schema, question_family=contract.question_family) == "list":
@@ -694,6 +804,11 @@ class TierATaskFactory:
         target_label = contract.target_label or field_label
         scalar_focus_label = self._scalar_question_focus_label(contract)
         if contract.question_family == "status_lookup":
+            shape = _answer_schema_shape(contract.answer_schema, question_family=contract.question_family)
+            if shape == "exists":
+                return f"Can you tell me whether a {target_label} is currently registered?"
+            if shape == "record":
+                return f"Can you tell me the current {target_label} details?"
             return f"Can you tell me the current {field_label} information?"
         if contract.question_family == "causal_chain":
             if _answer_schema_shape(contract.answer_schema, question_family=contract.question_family) == "list":
@@ -789,6 +904,12 @@ class TierATaskFactory:
             return False
         return True
 
+    def _family_min_required_hops(self, family: str) -> int:
+        raw_value = self.task_config.family_min_required_hops.get(family)
+        if raw_value is None:
+            return 0
+        return max(0, int(raw_value))
+
     @staticmethod
     def _scalar_question_focus_label(contract: TaskContractDraft) -> str:
         field_label = (contract.field_label or contract.target_label or "information").strip()
@@ -815,7 +936,7 @@ class TierATaskFactory:
         column_token = column.column_name.strip().lower()
         if column_token == table_token:
             return column_token
-        if column_token in {"name", "title", "status", "type", "kind", "label", "code"}:
+        if column_token in {"name", "title", "label", "code"}:
             return f"{table_token}_{column_token}"
         return column_token
 
@@ -888,6 +1009,8 @@ def _answer_schema_shape(
         return "exists"
     if schema.fields and all(field.type.startswith("list[") for field in schema.fields):
         return "list"
+    if len(schema.fields) > 1:
+        return "record"
     if question_family == "timeline_resolution":
         return "latest_scalar"
     return "scalar"

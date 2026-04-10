@@ -227,13 +227,7 @@ async def test_task_composer_generates_task_aware_l2_presentation(monkeypatch):
     assert package.task.question_source == "model_generated"
     assert package.task.question_generation_metadata["status"] == "accepted"
     assert package.task.question_generation_metadata["task_package_judge"]["pass_validation"] is True
-    assert sorted(package.task.provenance_requirements) == sorted(
-        [
-            tool.name
-            for tool in package.presented_tool_bundle.tools
-            if tool.presentation_role == "core"
-        ]
-    )
+    assert package.task.provenance_requirements == ["semantic_key:orders.shipments:lookup"]
     assert captured["task_question"] == "제 주문 배송이 지금 어디쯤 왔는지 알려줘."
     assert captured["question_family"] == "status_lookup"
     assert captured["outcome_type"] == "answer"

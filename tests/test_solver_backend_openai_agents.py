@@ -8,6 +8,7 @@ from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, Sol
 from rl_task_foundry.solver import backend_openai_agents as backend_module
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.tasks.models import TaskSpec
+from rl_task_foundry.tools.models import ToolParameter, ToolSpec
 from rl_task_foundry.truth.schemas import AnswerField, AnswerSchema
 
 
@@ -140,6 +141,21 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             sdk_sessions_enabled=True,
             canonical_state_store="run_db",
         ),
+        tool_specs=[
+            ToolSpec(
+                name="delivery_lookup",
+                description="lookup tool",
+                sql_template="SELECT 1",
+                parameters=[ToolParameter(name="anchor_order_id", json_type="integer", description="id")],
+                output_fields=["delivery_status"],
+                path_id="orders.shipments",
+                kind="lookup",
+                tool_level=1,
+                semantic_key="orders.shipments:lookup",
+                name_source="rule_based",
+            )
+        ],
+        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
         session_db_path=tmp_path / "sessions.sqlite",
         traces_dir=tmp_path / "traces",
     )
@@ -182,7 +198,11 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
         "'tool-call(submit_result)'",
     ]
     assert tool_trace_payload["tool_calls"] == [
-        {"name": "delivery_lookup", "repr": "'tool-call(delivery_lookup)'"},
+        {
+            "name": "delivery_lookup",
+            "repr": "'tool-call(delivery_lookup)'",
+            "semantic_key": "orders.shipments:lookup",
+        },
         {"name": "submit_result", "repr": "'tool-call(submit_result)'"},
     ]
 

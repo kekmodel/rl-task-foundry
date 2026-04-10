@@ -334,6 +334,85 @@ def test_task_factory_builds_list_shaped_causal_chain_contract():
     assert "which channel items apply in my case" in factory._render_en_question(list_contracts[0]).lower()
 
 
+def test_task_factory_builds_exists_status_lookup_contract():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["status_lookup"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+            enable_exists_status_lookup=True,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+
+    contracts = factory._contract_drafts_for_path(graph, path)
+    exists_contracts = [
+        contract
+        for contract in contracts
+        if contract.question_family == "status_lookup"
+        and contract.answer_schema.fields[0].source_columns == ["meta:exists"]
+    ]
+
+    assert exists_contracts
+    assert exists_contracts[0].answer_schema.fields[0].type == "bool"
+    assert factory._render_en_question(exists_contracts[0]) == (
+        "Can you tell me whether a shipment is currently registered?"
+    )
+
+
+def test_task_factory_builds_multi_field_status_lookup_contract():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["status_lookup"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+            max_status_lookup_answer_fields=2,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+
+    contracts = factory._contract_drafts_for_path(graph, path)
+    record_contracts = [
+        contract
+        for contract in contracts
+        if contract.question_family == "status_lookup"
+        and len(contract.answer_schema.fields) == 2
+    ]
+
+    assert record_contracts
+    assert [field.name for field in record_contracts[0].answer_schema.fields] == [
+        "status",
+        "shipped_at",
+    ]
+    assert factory._render_en_question(record_contracts[0]) == (
+        "Can you tell me the current shipment details?"
+    )
+
+
 def test_task_factory_uses_target_concept_for_generic_causal_scalar_fields():
     graph, catalog = _synthetic_graph()
     path = catalog.get("orders.shipments.support_channels")
@@ -390,6 +469,37 @@ def test_task_factory_discourages_location_like_causal_targets():
             selected_tool_level=1,
             negative_outcome_ratio=0.0,
             max_attempts_per_anchor=6,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+
+    contracts = factory._contract_drafts_for_path(graph, path)
+
+    assert contracts == []
+
+
+def test_task_factory_applies_family_min_required_hops():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["status_lookup", "aggregate_verification"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+            family_min_required_hops={
+                "status_lookup": 2,
+                "aggregate_verification": 2,
+            },
         ),
         tool_compiler=ToolCompilerConfig(
             max_hops=3,

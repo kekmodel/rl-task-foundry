@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from rl_task_foundry.tools.models import ToolSpec
+from rl_task_foundry.tools.models import ToolParameter, ToolSpec
 
 
 ToolExecutor = Callable[[dict[str, Any]], Any]
@@ -22,16 +22,25 @@ def make_sdk_tool(spec: ToolSpec, executor: ToolExecutor) -> object:
     SDK present in the active environment.
     """
 
-    from agents import function_tool
+    from agents import FunctionTool
+    from agents.strict_schema import ensure_strict_json_schema
 
-    @function_tool(name_override=spec.name, description_override=spec.description)
-    async def _tool(**kwargs: Any) -> Any:
-        result = executor(kwargs)
+    params_json_schema = ensure_strict_json_schema(_tool_params_json_schema(spec.parameters))
+
+    async def _invoke_tool(_tool_context: Any, input_json: str) -> Any:
+        payload = _parse_tool_input(input_json)
+        result = executor(payload)
         if inspect.isawaitable(result):
             return await result
         return result
 
-    return _tool
+    return FunctionTool(
+        name=spec.name,
+        description=spec.description,
+        params_json_schema=params_json_schema,
+        on_invoke_tool=_invoke_tool,
+        strict_json_schema=True,
+    )
 
 
 def make_submit_result_tool(
@@ -80,3 +89,45 @@ def make_submit_result_tool(
         on_invoke_tool=_invoke_tool,
         strict_json_schema=True,
     )
+
+
+def _parse_tool_input(input_json: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(input_json) if input_json else {}
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Tool input is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Tool input must be a JSON object")
+    return payload
+
+
+def _tool_params_json_schema(parameters: list[ToolParameter]) -> dict[str, Any]:
+    properties = {
+        parameter.name: {
+            "type": _json_schema_type(parameter.json_type),
+            "description": parameter.description,
+        }
+        for parameter in parameters
+    }
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    required = [parameter.name for parameter in parameters if parameter.required]
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _json_schema_type(json_type: str) -> str:
+    normalized = json_type.strip().lower()
+    if normalized in {"string", "integer", "number", "boolean", "object", "array"}:
+        return normalized
+    if normalized == "int":
+        return "integer"
+    if normalized == "float":
+        return "number"
+    if normalized == "bool":
+        return "boolean"
+    return "string"

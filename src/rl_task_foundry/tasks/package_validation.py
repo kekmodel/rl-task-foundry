@@ -99,7 +99,8 @@ def _validation_prompt(
                     "key": "semantic_coherence",
                     "criterion": (
                         "The question is semantically answerable by exactly the provided answer schema and matches the "
-                        "intended question family. For example, a status question must ask for a status-like value, "
+                        "intended question family. For example, a status question must ask for a status-like value, a yes/no presence check, "
+                        "or a compact set of current details that align with the answer fields, "
                         "a count question must ask for a count-like value, and a causal-chain question must still read "
                         "like a practical downstream user request rather than an internal traversal. For causal-chain, "
                         "it is acceptable to ask which concrete downstream item, entity, title, language, provider, or "

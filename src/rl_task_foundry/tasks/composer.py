@@ -90,12 +90,9 @@ class TaskComposer:
         task = task.model_copy(
             update={
                 "presented_tool_bundle_id": presented_bundle.bundle_id,
-                "provenance_requirements": sorted(
-                    {
-                        tool.name
-                        for tool in presented_bundle.tools
-                        if tool.presentation_role == "core"
-                    }
+                "provenance_requirements": _provenance_requirements(
+                    task=task,
+                    presented_bundle=presented_bundle,
                 ),
             }
         )
@@ -525,6 +522,66 @@ def _question_policy_violations(
         if leaked_tokens:
             violations.append(f"contains raw english schema tokens in korean: {sorted(set(leaked_tokens))}")
     return violations
+
+
+def _provenance_requirements(
+    *,
+    task: TaskSpec,
+    presented_bundle: PresentedToolBundle,
+) -> list[str]:
+    core_tools = [tool for tool in presented_bundle.tools if tool.presentation_role == "core"]
+    if not core_tools:
+        return []
+
+    answer_shape = _task_answer_shape(task)
+    if answer_shape == "count":
+        return _semantic_key_requirements(core_tools, kind="count")
+    if answer_shape == "exists":
+        return _semantic_key_requirements(core_tools, kind="exists")
+    if answer_shape == "list":
+        return _semantic_key_requirements(core_tools, kind="list_related")
+    if answer_shape == "latest_scalar":
+        prefixes = sorted(
+            {
+                f"semantic_key_prefix:{tool.semantic_key}"
+                for tool in core_tools
+                if tool.kind == "timeline"
+            }
+        )
+        if prefixes:
+            return prefixes
+    return _semantic_key_requirements(core_tools, kind="lookup")
+
+
+def _semantic_key_requirements(
+    tools: list[PresentedToolSpec],
+    *,
+    kind: str,
+) -> list[str]:
+    requirements = sorted(
+        {
+            f"semantic_key:{tool.semantic_key}"
+            for tool in tools
+            if tool.kind == kind
+        }
+    )
+    if requirements:
+        return requirements
+    return sorted({f"semantic_key:{tool.semantic_key}" for tool in tools})
+
+
+def _task_answer_shape(task: TaskSpec) -> str:
+    if any(field.source_columns and field.source_columns[0] == "meta:count" for field in task.answer_schema.fields):
+        return "count"
+    if any(field.source_columns and field.source_columns[0] == "meta:exists" for field in task.answer_schema.fields):
+        return "exists"
+    if task.answer_schema.fields and all(field.type.startswith("list[") for field in task.answer_schema.fields):
+        return "list"
+    if len(task.answer_schema.fields) > 1:
+        return "record"
+    if task.question_family == "timeline_resolution":
+        return "latest_scalar"
+    return "scalar"
 
 
 def _question_generation_context(question_context: dict[str, object]) -> dict[str, object]:

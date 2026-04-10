@@ -86,6 +86,22 @@ def _quality_examples(
             "제 고객 정보에 연결된 값을 알려주세요.",
         ]
         if task.question_family == "status_lookup":
+            if answer_shape == "exists":
+                return {
+                    "avoid": common_avoid,
+                    "prefer": [
+                        "현재 등록되어 있는지 확인해 주실 수 있나요?",
+                        "지금 이용 가능한지 알려주세요.",
+                    ],
+                }
+            if answer_shape == "record":
+                return {
+                    "avoid": common_avoid,
+                    "prefer": [
+                        "현재 등록된 정보가 어떻게 되어 있는지 한 번에 알려주세요.",
+                        "지금 확인되는 세부 정보를 같이 알려주세요.",
+                    ],
+                }
             return {
                 "avoid": common_avoid,
                 "prefer": [
@@ -153,6 +169,22 @@ def _quality_examples(
         "Tell me the value linked to my customer info.",
     ]
     if task.question_family == "status_lookup":
+        if answer_shape == "exists":
+            return {
+                "avoid": common_avoid,
+                "prefer": [
+                    "Could you confirm whether this is currently registered?",
+                    "Can you tell me whether this is currently available?",
+                ],
+            }
+        if answer_shape == "record":
+            return {
+                "avoid": common_avoid,
+                "prefer": [
+                    "Could you give me the currently registered details together?",
+                    "Can you tell me the current details in one response?",
+                ],
+            }
         return {
             "avoid": common_avoid,
             "prefer": [
@@ -240,7 +272,7 @@ def _question_prompt(
         "(for example, 'my address' or 'my account') instead of awkward compounds like 'my customer address'. "
         "If the style guide gives a preferred subject reference, use that instead of awkward account/profile wording. "
         "If the style guide gives banned phrases, do not use them or close paraphrases. "
-        "The question family must shape the request: status lookup asks for one concrete value, "
+        "The question family must shape the request: status lookup asks for one concrete value, whether something exists, or a compact set of current details, "
         "causal chain asks about a downstream real-world detail, aggregate verification asks about a count or total of concrete items, "
         "and timeline resolution asks when something happened. "
         "If the style guide includes an answer concept reference, phrase the request around that user-facing concept "

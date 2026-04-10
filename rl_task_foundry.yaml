@@ -84,6 +84,13 @@ task_composer:
   anchor_samples_per_source: 3
   question_temperature: 1.0
   question_validation_temperature: 0.0
+  family_min_required_hops:
+    status_lookup: 2
+    timeline_resolution: 2
+    causal_chain: 3
+    aggregate_verification: 2
+  max_status_lookup_answer_fields: 2
+  enable_exists_status_lookup: true
   exclude_answer_column_patterns:
     - "(^|_)last_update($|_)"
   exclude_anchor_table_patterns:

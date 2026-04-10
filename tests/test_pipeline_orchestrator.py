@@ -599,7 +599,13 @@ def test_execute_task_retries_with_harder_compatible_path(monkeypatch, tmp_path,
     config = _config(tmp_path).model_copy(
         update={
             "task_composer": _config(tmp_path).task_composer.model_copy(
-                update={"max_attempts_per_anchor": 3}
+                update={
+                    "max_attempts_per_anchor": 3,
+                    "family_min_required_hops": {
+                        "status_lookup": 1,
+                        "aggregate_verification": 1,
+                    },
+                }
             )
         }
     )
@@ -956,7 +962,13 @@ def test_execute_task_rewrites_contract_on_same_path_when_needed(monkeypatch, tm
     config = _config(tmp_path).model_copy(
         update={
             "task_composer": _config(tmp_path).task_composer.model_copy(
-                update={"max_attempts_per_anchor": 3}
+                update={
+                    "max_attempts_per_anchor": 3,
+                    "family_min_required_hops": {
+                        "status_lookup": 1,
+                        "aggregate_verification": 1,
+                    },
+                }
             )
         }
     )

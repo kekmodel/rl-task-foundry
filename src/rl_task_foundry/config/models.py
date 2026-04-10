@@ -87,6 +87,9 @@ class TaskComposerConfig(StrictModel):
     anchor_samples_per_source: int = Field(default=3, ge=1)
     question_temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     question_validation_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    family_min_required_hops: dict[str, int] = Field(default_factory=dict)
+    max_status_lookup_answer_fields: int = Field(default=2, ge=1, le=4)
+    enable_exists_status_lookup: bool = True
     exclude_answer_column_patterns: list[str] = Field(default_factory=list)
     exclude_anchor_table_patterns: list[str] = Field(
         default_factory=lambda: [

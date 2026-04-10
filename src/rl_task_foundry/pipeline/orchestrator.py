@@ -1051,6 +1051,10 @@ class Orchestrator:
     @staticmethod
     def _family_intent(task: TaskSpec, *, answer_shape: str) -> str:
         if task.question_family == "status_lookup":
+            if answer_shape == "exists":
+                return "The user wants to confirm whether a concrete related thing is present for their own situation."
+            if answer_shape == "record":
+                return "The user wants a compact set of currently registered details for their own situation."
             return "The user wants to confirm one concrete value tied to their own account, request, or situation."
         if task.question_family == "causal_chain":
             if answer_shape == "list":
@@ -1088,10 +1092,26 @@ class Orchestrator:
         count_unit_hint = self._count_unit_hint(path)
         family_patterns = {
             "status_lookup": {
-                "goal": "Ask for one concrete current or registered detail.",
+                "goal": (
+                    "Ask whether a concrete thing is currently present."
+                    if answer_shape == "exists"
+                    else (
+                        "Ask for a compact set of current or registered details."
+                        if answer_shape == "record"
+                        else "Ask for one concrete current or registered detail."
+                    )
+                ),
                 "preferred_shape": (
-                    "Phrase the request directly around the answer field the user wants to know, "
-                    "such as a status, city, date, or language."
+                    "Use a yes/no phrasing around whether the thing exists or is registered."
+                    if answer_shape == "exists"
+                    else (
+                        "Ask for the currently registered details together, such as a status and date."
+                        if answer_shape == "record"
+                        else (
+                            "Phrase the request directly around the answer field the user wants to know, "
+                            "such as a status, city, date, or language."
+                        )
+                    )
                 ),
                 "avoid_shape": (
                     "Do not narrate the internal chain or say the value is connected, linked, or related."
@@ -1168,6 +1188,8 @@ class Orchestrator:
             return "exists"
         if task.answer_schema.fields and all(field.type.startswith("list[") for field in task.answer_schema.fields):
             return "list"
+        if len(task.answer_schema.fields) > 1:
+            return "record"
         if task.question_family == "timeline_resolution":
             return "latest_scalar"
         return "scalar"

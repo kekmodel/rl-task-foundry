@@ -528,3 +528,140 @@ def test_verification_engine_passes_when_required_core_tool_used(tmp_path):
     verify = VerificationEngine().verify(task, truth, result)
     assert verify.pass_exact is True
     assert verify.provenance_pass is True
+
+
+def test_verification_engine_passes_when_required_semantic_key_used(tmp_path):
+    schema = AnswerSchema(
+        fields=[
+            AnswerField(
+                name="delivery_status",
+                type="string",
+                canonicalizer="lower_trim",
+                visibility="user_visible",
+                source_columns=["shipments.status"],
+            )
+        ]
+    )
+    tool_trace_path = tmp_path / "tool_trace_semantic.json"
+    tool_trace_path.write_text(
+        json.dumps(
+            {
+                "tool_calls": [
+                    {
+                        "name": "delivery_lookup",
+                        "semantic_key": "orders.shipments:lookup",
+                        "repr": "'tool-call(delivery_lookup)'",
+                    },
+                    {"name": "submit_result", "repr": "'tool-call(submit_result)'"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    task = TaskSpec(
+        task_id="task_1",
+        anchor_table="orders",
+        anchor_pk_column="order_id",
+        anchor_pk_value="1",
+        domain="customer_support",
+        language="ko",
+        label_tier="A",
+        question="현재 배송 상태는 무엇인가요?",
+        answer_schema=schema,
+        selected_path_id="orders.shipments",
+        required_hops=2,
+        tool_bundle_id="orders.shipments",
+        provenance_requirements=["semantic_key:orders.shipments:lookup"],
+        sensitivity_policy="default",
+    )
+    truth = GroundTruth(
+        task_id="task_1",
+        verification_sql="SELECT 1",
+        canonical_answer={"delivery_status": "in_transit"},
+        answer_schema_version="v1",
+    )
+    result = SolverResult(
+        task_id="task_1",
+        solver_id="solver_a",
+        provider="codex_oauth",
+        model="gpt-5.4-mini",
+        replica_index=0,
+        transcript_ref="trace://transcript",
+        tool_trace_ref=str(tool_trace_path),
+        raw_output_text="IN_TRANSIT",
+        structured_output={"delivery_status": "IN_TRANSIT"},
+        status="completed",
+    )
+
+    verify = VerificationEngine().verify(task, truth, result)
+    assert verify.pass_exact is True
+    assert verify.provenance_pass is True
+
+
+def test_verification_engine_passes_when_timeline_prefix_requirement_used(tmp_path):
+    schema = AnswerSchema(
+        fields=[
+            AnswerField(
+                name="latest_shipped_at",
+                type="datetime",
+                canonicalizer="datetime",
+                visibility="user_visible",
+                source_columns=["shipments.shipped_at"],
+            )
+        ]
+    )
+    tool_trace_path = tmp_path / "tool_trace_timeline.json"
+    tool_trace_path.write_text(
+        json.dumps(
+            {
+                "tool_calls": [
+                    {
+                        "name": "timeline_delivery",
+                        "semantic_key": "orders.shipments:timeline:shipped_at",
+                        "repr": "'tool-call(timeline_delivery)'",
+                    },
+                    {"name": "submit_result", "repr": "'tool-call(submit_result)'"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    task = TaskSpec(
+        task_id="task_1",
+        anchor_table="orders",
+        anchor_pk_column="order_id",
+        anchor_pk_value="1",
+        domain="customer_support",
+        language="ko",
+        label_tier="A",
+        question_family="timeline_resolution",
+        question="가장 최근 발송 시점이 언제인지 알려주세요.",
+        answer_schema=schema,
+        selected_path_id="orders.shipments",
+        required_hops=2,
+        tool_bundle_id="orders.shipments",
+        provenance_requirements=["semantic_key_prefix:orders.shipments:timeline:"],
+        sensitivity_policy="default",
+    )
+    truth = GroundTruth(
+        task_id="task_1",
+        verification_sql="SELECT 1",
+        canonical_answer={"latest_shipped_at": "2025-10-03T14:15:00"},
+        answer_schema_version="v1",
+    )
+    result = SolverResult(
+        task_id="task_1",
+        solver_id="solver_a",
+        provider="codex_oauth",
+        model="gpt-5.4-mini",
+        replica_index=0,
+        transcript_ref="trace://transcript",
+        tool_trace_ref=str(tool_trace_path),
+        raw_output_text="2025-10-03T14:15:00",
+        structured_output={"latest_shipped_at": "2025-10-03T14:15:00"},
+        status="completed",
+    )
+
+    verify = VerificationEngine().verify(task, truth, result)
+    assert verify.pass_exact is True
+    assert verify.provenance_pass is True
