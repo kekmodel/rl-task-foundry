@@ -1,0 +1,150 @@
+database:
+  connection: "postgresql://sakila:sakila@localhost:5432/sakila"
+  schema: "public"
+  anchors:
+    - table: "customer"
+      column: "customer_id"
+  pk_sample_size: 200
+  pk_sample_strategy: "random"
+  pk_filter: null
+  pool_min_size: 10
+  pool_max_size: 60
+  max_inflight_queries: 40
+  control_plane_pool_size: 8
+  statement_timeout_ms: 5000
+  connection_acquire_timeout_ms: 5000
+  read_only: true
+
+domain:
+  scenario: "고객센터"
+  user_role: "고객"
+  agent_role: "상담사"
+  language: "ko"
+
+providers:
+  default: "openai_oauth"
+  openai_oauth:
+    type: "openai_compatible"
+    base_url: "http://127.0.0.1:10531/v1"
+    api_key: "dummy"
+    model: "gpt-5.4-mini"
+    max_concurrent: 10
+    max_pending: 20
+
+models:
+  tool_architect:
+    provider: "openai_oauth"
+    model: "gpt-5.4-mini"
+  task_composer:
+    provider: "openai_oauth"
+    model: "gpt-5.4-mini"
+  solver:
+    - provider: "openai_oauth"
+      count: 3
+
+provider_resilience:
+  circuit_breaker_window_s: 60
+  circuit_breaker_threshold: 0.3
+  probe_interval_s: 30
+  release_semaphore_on_backoff: true
+  gpu_oom_action: "reduce_batch"
+  queue_full_action: "backpressure"
+  health_check_endpoint: "/health"
+  health_check_interval_s: 10
+
+tool_architect:
+  base_strategy: "one_per_table"
+  hop_constraint: "single"
+  variants:
+    - level: 1
+      naming: "direct"
+      column_split: false
+      decoy_scope: "all"
+    - level: 2
+      naming: "semi_indirect"
+      column_split: true
+      decoy_scope: "all"
+    - level: 3
+      naming: "business_domain"
+      column_split: true
+      decoy_scope: "all"
+  validation:
+    sample_per_tool: 5
+    max_retry: 3
+
+schema_explorer:
+  max_depth: 6
+  max_paths: 500
+  max_fanout: 100
+  exclude_tables: []
+  exclude_columns: []
+
+task_composer:
+  initial_depth: 2
+  initial_conditions: 1
+  initial_tool_level: 1
+  max_depth: 6
+  max_conditions: 5
+  negative_outcome_ratio: 0.2
+  text_truncation_length: 200
+
+solver:
+  num_solvers: 3
+  max_turns: 20
+  timeout: 60
+
+calibration:
+  target_pass_rate: 0.5
+  sigma: 0.5
+  max_iterations: 10
+  max_concurrent_composers: 6
+  max_concurrent_solver_pks: 20
+  ci_alpha: 0.1
+  max_compose_retries: 3
+  solver_early_termination: true
+  difficulty_step:
+    depth: 1
+    conditions: 1
+    tool_level: 1
+
+verification:
+  mode: "exact_and_partial"
+  partial_threshold: 0.8
+  shadow_sample_rate: 0.1
+  shadow_disagreement_threshold: 0.05
+  label_tier: "A"
+  tier_b_rules:
+    float_precision: 2
+    tie_breaker: "pk_asc"
+    date_granularity: "date"
+    null_handling: "exclude"
+    list_ordering: "pk_asc"
+
+output:
+  format: "jsonl"
+  path: "./output/dataset.jsonl"
+  include_metadata: true
+  include_tool_traces: false
+  include_rollout_records: true
+  dedup_similarity_threshold: 0.85
+
+budget:
+  mode: "hybrid"
+  max_api_usd: 200.0
+  max_gpu_hours: 4.0
+  abort_if_accept_rate_below: 0.05
+  reservation_mode: "phase_specific"
+  smoke_canary_pks: 5
+  smoke_canary_solvers: 2
+  load_canary_pks: 32
+  load_canary_min_completed: 16
+
+privacy:
+  auto_detect_pii: true
+  pii_patterns: ["email", "phone", "ssn", "address", "birth"]
+  redact_dashboard: true
+  redact_event_bus: true
+
+dashboard:
+  enabled: true
+  refresh_rate: 0.5

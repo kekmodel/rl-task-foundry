@@ -1,0 +1,25 @@
+# Reference clones
+OpenHarness/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Output
+output/
+
+# Environment
+.env
