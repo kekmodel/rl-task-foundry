@@ -7,7 +7,7 @@ import pytest
 from rl_task_foundry.config.models import DomainConfig, ModelRef, ProviderConfig
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
 from rl_task_foundry.schema.path_catalog import build_path_catalog
-from rl_task_foundry.tasks.composer import ComposeRequest, TaskComposer
+from rl_task_foundry.tasks.composer import ComposeRequest, TaskComposer, _question_policy_violations
 from rl_task_foundry.tasks.package_validation import TaskPackageJudgeResult
 from rl_task_foundry.tasks.models import TaskSpec
 from rl_task_foundry.tools.compiler import compile_canonical_tool_bundle, compile_path_tools
@@ -213,6 +213,7 @@ async def test_task_composer_generates_task_aware_l2_presentation(monkeypatch):
             path=path,
             canonical_bundle=canonical_bundle,
             question_context={
+                "language": "ko",
                 "relationship_depth": 1,
                 "forbidden_markers": [
                     {"normalized": "sasebo", "match_mode": "substring", "display": "sasebo"}
@@ -246,6 +247,19 @@ async def test_task_composer_generates_task_aware_l2_presentation(monkeypatch):
         "model_generated"
     }
     assert any(tool.presentation_role == "distractor" for tool in package.presented_tool_bundle.tools)
+
+
+def test_question_policy_rejects_raw_english_schema_tokens_in_korean():
+    violations = _question_policy_violations(
+        "제 inventory에 등록된 film 제목이 무엇인지 알려주세요.",
+        {
+            "language": "ko",
+            "path_entity_labels": ["inventory", "film"],
+            "answer_fields": [{"name": "film_title", "label": "film title"}],
+        },
+    )
+
+    assert any("raw english schema tokens" in violation for violation in violations)
 
 
 @pytest.mark.asyncio

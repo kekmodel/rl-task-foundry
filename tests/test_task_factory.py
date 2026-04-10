@@ -91,6 +91,16 @@ def _synthetic_graph() -> tuple[SchemaGraph, object]:
                         visibility="blocked",
                         is_foreign_key=True,
                     ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="shipments",
+                        column_name="support_channel_id",
+                        data_type="int4",
+                        ordinal_position=5,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_foreign_key=True,
+                    ),
                 ],
             ),
             TableProfile(
@@ -120,6 +130,33 @@ def _synthetic_graph() -> tuple[SchemaGraph, object]:
                     ),
                 ],
             ),
+            TableProfile(
+                schema_name="public",
+                table_name="support_channels",
+                primary_key=("support_channel_id",),
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="support_channels",
+                        column_name="support_channel_id",
+                        data_type="int4",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                        is_unique=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="support_channels",
+                        column_name="channel",
+                        data_type="text",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                ],
+            ),
         ],
         edges=[
             ForeignKeyEdge(
@@ -139,6 +176,15 @@ def _synthetic_graph() -> tuple[SchemaGraph, object]:
                 target_schema="public",
                 target_table="cities",
                 target_columns=("city_id",),
+            ),
+            ForeignKeyEdge(
+                constraint_name="shipments_support_channels_fk",
+                source_schema="public",
+                source_table="shipments",
+                source_columns=("support_channel_id",),
+                target_schema="public",
+                target_table="support_channels",
+                target_columns=("support_channel_id",),
             ),
         ],
     )
@@ -189,7 +235,7 @@ async def test_task_factory_generates_task_specs_from_synthetic_graph(monkeypatc
         graph,
         catalog,
         limit=6,
-        path_ids=["orders.shipments", "orders.shipments.cities"],
+        path_ids=["orders.shipments", "orders.shipments.cities", "orders.shipments.support_channels"],
     )
 
     assert tasks
@@ -250,12 +296,12 @@ def test_task_factory_renders_question_from_contract():
     )
 
     assert not hasattr(contract, "question")
-    assert task.question == "Check the related city value."
+    assert task.question == "Can you tell me the current city information?"
 
 
 def test_task_factory_builds_list_shaped_causal_chain_contract():
     graph, catalog = _synthetic_graph()
-    path = catalog.get("orders.shipments.cities")
+    path = catalog.get("orders.shipments.support_channels")
     factory = TierATaskFactory(
         database=load_config("rl_task_foundry.yaml").database,
         domain=DomainConfig(name="customer_support", language="en"),
@@ -284,8 +330,79 @@ def test_task_factory_builds_list_shaped_causal_chain_contract():
     ]
 
     assert list_contracts
-    assert list_contracts[0].answer_schema.fields[0].name == "city_list"
-    assert "which related city items exist" in factory._render_en_question(list_contracts[0]).lower()
+    assert list_contracts[0].answer_schema.fields[0].name == "channel_list"
+    assert "which channel items apply in my case" in factory._render_en_question(list_contracts[0]).lower()
+
+
+def test_task_factory_uses_target_concept_for_generic_causal_scalar_fields():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments.support_channels")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["causal_chain"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+            causal_min_scalar_hops=2,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+    contract = TaskContractDraft(
+        question_family="causal_chain",
+        outcome_type="answer",
+        answer_schema=AnswerSchema(
+            fields=[
+                AnswerField(
+                    name="support_channel_title",
+                    type="string",
+                    canonicalizer="lower_trim",
+                    source_columns=["support_channels.channel"],
+                )
+            ]
+        ),
+        field_label="support channel title",
+        target_label="support channel",
+    )
+
+    assert factory._render_en_question(contract) == (
+        "Can you tell me which support channel actually applies in my case?"
+    )
+
+
+def test_task_factory_discourages_location_like_causal_targets():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments.cities")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["causal_chain"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+
+    contracts = factory._contract_drafts_for_path(graph, path)
+
+    assert contracts == []
 
 
 def test_task_factory_prefers_aggregate_paths_with_count_gt_one():
@@ -331,9 +448,87 @@ def test_task_factory_prefers_aggregate_paths_with_count_gt_one():
     assert "HAVING COUNT(DISTINCT" in sql
 
 
+def test_task_factory_renders_people_like_aggregate_questions_naturally():
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="ko"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["aggregate_verification"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+    contract = TaskContractDraft(
+        question_family="aggregate_verification",
+        outcome_type="answer",
+        answer_schema=AnswerSchema(
+            fields=[
+                AnswerField(
+                    name="related_count",
+                    type="int",
+                    canonicalizer="int_cast",
+                    source_columns=["meta:count"],
+                )
+            ]
+        ),
+        target_label="사람",
+        count_unit_hint="people",
+    )
+
+    assert factory._render_ko_question(contract) == "제 경우와 관련된 사람이 몇 명인지 알려주세요."
+
+
+def test_task_factory_renders_place_like_aggregate_questions_naturally():
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="ko"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["aggregate_verification"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+    contract = TaskContractDraft(
+        question_family="aggregate_verification",
+        outcome_type="answer",
+        answer_schema=AnswerSchema(
+            fields=[
+                AnswerField(
+                    name="related_count",
+                    type="int",
+                    canonicalizer="int_cast",
+                    source_columns=["meta:count"],
+                )
+            ]
+        ),
+        target_label="장소",
+        count_unit_hint="places",
+    )
+
+    assert factory._render_ko_question(contract) == "제 경우와 관련된 장소가 몇 곳인지 알려주세요."
+
+
 def test_task_factory_prefers_list_paths_with_multiple_distinct_values():
     graph, catalog = _synthetic_graph()
-    path = catalog.get("orders.shipments.cities")
+    path = catalog.get("orders.shipments.support_channels")
     factory = TierATaskFactory(
         database=load_config("rl_task_foundry.yaml").database,
         domain=DomainConfig(name="customer_support", language="en"),
@@ -362,7 +557,7 @@ def test_task_factory_prefers_list_paths_with_multiple_distinct_values():
     sql = factory._compile_anchor_sampling_sql(graph, path, contract, limit=5)
 
     assert "GROUP BY" in sql
-    assert 'COUNT(DISTINCT t2."city") > 1' in sql
+    assert 'COUNT(DISTINCT t2."channel") > 1' in sql
 
 
 def test_task_factory_ignores_non_user_visible_answer_columns():

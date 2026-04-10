@@ -89,7 +89,11 @@ def _validation_prompt(
                 },
                 {
                     "key": "no_schema_exposure",
-                    "criterion": "The question does not expose schema, database, tool, join, record, or ID structure."
+                    "criterion": (
+                        "The user question itself does not expose schema, database, join, record, path, or ID structure. "
+                        "Do not fail this criterion only because the provided tool names or descriptions are technical; "
+                        "the tool bundle is for answerability checking, while schema-exposure judgment should focus on the question text."
+                    )
                 },
                 {
                     "key": "semantic_coherence",
@@ -97,7 +101,9 @@ def _validation_prompt(
                         "The question is semantically answerable by exactly the provided answer schema and matches the "
                         "intended question family. For example, a status question must ask for a status-like value, "
                         "a count question must ask for a count-like value, and a causal-chain question must still read "
-                        "like a practical downstream user request rather than an internal traversal."
+                        "like a practical downstream user request rather than an internal traversal. For causal-chain, "
+                        "it is acceptable to ask which concrete downstream item, entity, title, language, provider, or "
+                        "other real-world detail a user's payment, rental, order, or request ultimately refers to."
                     )
                 },
                 {

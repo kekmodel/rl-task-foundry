@@ -88,7 +88,23 @@ class TaskComposerConfig(StrictModel):
     question_temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     question_validation_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     exclude_answer_column_patterns: list[str] = Field(default_factory=list)
+    exclude_anchor_table_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "(^|_)(city|country|state|province|region|language|category|taxonomy|dimension|lookup|mapping|xref|bridge|association|relation)($|_)"
+        ]
+    )
     aggregate_discouraged_target_patterns: list[str] = Field(default_factory=list)
+    causal_discouraged_target_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "(^|_)(address|city|country|state|province|region|zipcode|postal|postcode|currency|timezone)($|_)"
+        ]
+    )
+    causal_preferred_answer_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "(^|_)(status|category|type|kind|title|label|code|language|method|channel|plan|tier|level|provider|carrier|reason|option|mode|format|service|policy|destination)($|_)"
+        ]
+    )
+    causal_min_scalar_hops: int = Field(default=3, ge=2)
 
 
 class SolverRuntimeConfig(StrictModel):

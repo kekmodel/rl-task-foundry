@@ -30,6 +30,26 @@ def test_classify_columns_prefers_qualified_overrides():
     ]
 
 
+def test_classify_columns_promotes_safe_catalog_fields_to_internal():
+    columns = [
+        ColumnRef(schema_name="public", table_name="language", column_name="name"),
+        ColumnRef(schema_name="public", table_name="film", column_name="title"),
+        ColumnRef(schema_name="public", table_name="customer", column_name="name"),
+    ]
+
+    classified = classify_columns(
+        columns,
+        default_visibility="blocked",
+        overrides={},
+    )
+
+    assert [column.visibility for column in classified] == [
+        "internal",
+        "internal",
+        "blocked",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_postgres_schema_introspector_reads_sakila_schema():
     config = load_config("rl_task_foundry.yaml")
@@ -48,6 +68,9 @@ async def test_postgres_schema_introspector_reads_sakila_schema():
     assert customer.primary_key == ("customer_id",)
     assert customer.get_column("customer_id").is_primary_key is True
     assert customer.get_column("email").visibility == "internal"
+
+    language = graph.get_table("language", schema_name="public")
+    assert language.get_column("name").visibility == "internal"
 
     film_actor = graph.get_table("film_actor", schema_name="public")
     assert film_actor.primary_key == ("actor_id", "film_id")

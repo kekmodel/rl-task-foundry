@@ -52,7 +52,9 @@ def _family_shape_guidance(
         "anchor_reference": style_guide.get("anchor_reference"),
         "downstream_reference": style_guide.get("downstream_reference"),
         "target_reference": style_guide.get("target_reference"),
+        "answer_concept_reference": style_guide.get("answer_concept_reference"),
         "count_target_reference": style_guide.get("count_target_reference"),
+        "count_phrase_reference": style_guide.get("count_phrase_reference"),
         "count_unit_hint": style_guide.get("count_unit_hint"),
         "answer_labels": style_guide.get("answer_labels", []),
         "answer_shape": style_guide.get("answer_shape"),
@@ -74,6 +76,7 @@ def _quality_examples(
     if not isinstance(style_guide, dict):
         style_guide = {}
     count_target = str(style_guide.get("count_target_reference", "item")).strip() or "item"
+    count_phrase = str(style_guide.get("count_phrase_reference", "")).strip()
     count_unit = str(style_guide.get("count_unit_hint", "items")).strip() or "items"
     if domain.language == "ko":
         common_avoid = [
@@ -94,13 +97,13 @@ def _quality_examples(
             return {
                 "avoid": common_avoid,
                 "prefer": [
-                    "제 상황과 관련해서 어떤 항목들이 해당되는지 알려주세요.",
-                    "이 경우에 실제로 어떤 옵션들이 연결되는지 알고 싶어요.",
+                    "제 경우에 실제로 어떤 옵션들이 해당되는지 알려주세요.",
+                    "이 상황에서 적용되는 대상이 어떤 것들인지 알고 싶어요.",
                 ]
                 if answer_shape == "list"
                 else [
-                    "이 정보 기준으로 최종적으로 어떤 값으로 연결되는지 알려주세요.",
-                    "제가 이용한 항목과 관련해 실제로 어떤 결과가 나오는지 알고 싶어요.",
+                    "제 경우에 실제로 어떤 항목이 적용되는지 알려주세요.",
+                    "이 상황에서 최종적으로 어떤 결과가 되는지 알고 싶어요.",
                 ],
             }
         if task.question_family == "aggregate_verification":
@@ -108,22 +111,30 @@ def _quality_examples(
                 return {
                     "avoid": common_avoid,
                     "prefer": [
-                        f"이 건과 관련된 {count_target}이 몇 명인지 알려주세요.",
-                        f"제 상황을 처리하는 {count_target}이 몇 명인지 확인해 주세요.",
+                        "이 건을 처리하는 사람이 몇 명인지 알려주세요.",
+                        "제 상황과 관련된 인원이 몇 명인지 확인해 주세요.",
+                    ],
+                }
+            if count_unit == "places":
+                return {
+                    "avoid": common_avoid,
+                    "prefer": [
+                        "이와 관련된 장소가 몇 곳인지 알려주세요.",
+                        "제 상황에 연결된 위치가 몇 곳인지 확인해 주세요.",
                     ],
                 }
             if count_unit == "cases":
                 return {
                     "avoid": common_avoid,
                     "prefer": [
-                        f"이와 관련된 {count_target}이 몇 건인지 알려주세요.",
-                        f"제 상황에 해당하는 {count_target} 건수가 얼마나 되는지 확인해 주세요.",
+                        "이와 관련된 건이 몇 건인지 알려주세요.",
+                        "제 상황에 해당하는 건수가 얼마나 되는지 확인해 주세요.",
                     ],
                 }
             return {
                 "avoid": common_avoid,
                 "prefer": [
-                    f"관련된 {count_target}이 몇 개인지 알려주세요.",
+                    f"관련된 {count_phrase or count_target}이 얼마나 되는지 알려주세요.",
                     f"제가 확인할 수 있는 {count_target} 수를 알려주세요.",
                 ],
             }
@@ -153,13 +164,13 @@ def _quality_examples(
         return {
             "avoid": common_avoid,
             "prefer": [
-                "Can you tell me which items actually apply in my case?",
-                "I want to know which concrete options this leads to.",
+                "Can you tell me which options actually apply in my case?",
+                "I want to know which concrete items I end up with here.",
             ]
             if answer_shape == "list"
             else [
-                "Can you tell me the final detail that applies to my case?",
-                "I want to know which real-world detail this ends up mapping to.",
+                "Can you tell me which concrete detail actually applies in my case?",
+                "I want to know what this ultimately turns into for me.",
             ],
         }
     if task.question_family == "aggregate_verification":
@@ -167,22 +178,30 @@ def _quality_examples(
             return {
                 "avoid": common_avoid,
                 "prefer": [
-                    f"How many {count_target} are involved in this for me?",
-                    f"Can you tell me how many {count_target} are assigned here?",
+                    "How many people are involved in this for me?",
+                    "Can you tell me how many people are handling this?",
+                ],
+            }
+        if count_unit == "places":
+            return {
+                "avoid": common_avoid,
+                "prefer": [
+                    "How many locations are involved in this for me?",
+                    "Can you tell me how many places are tied to this?",
                 ],
             }
         if count_unit == "cases":
             return {
                 "avoid": common_avoid,
                 "prefer": [
-                    f"How many {count_target} are associated with this?",
-                    f"Can you tell me how many relevant {count_target} there are?",
+                    "How many relevant cases are associated with this?",
+                    "Can you tell me how many relevant cases there are?",
                 ],
             }
         return {
             "avoid": common_avoid,
             "prefer": [
-                f"How many {count_target} are associated with this for me?",
+                f"How many {count_phrase or count_target} are associated with this for me?",
                 f"Can you tell me how many relevant {count_target} there are?",
             ],
         }
@@ -224,6 +243,9 @@ def _question_prompt(
         "The question family must shape the request: status lookup asks for one concrete value, "
         "causal chain asks about a downstream real-world detail, aggregate verification asks about a count or total of concrete items, "
         "and timeline resolution asks when something happened. "
+        "If the style guide includes an answer concept reference, phrase the request around that user-facing concept "
+        "rather than talking about a raw field like a title, name, label, or code value. "
+        "If the style guide includes a count phrase reference, prefer that concept or a natural paraphrase when the raw target label feels awkward. "
         "If the style guide includes a count target reference and count unit hint, use them to form a natural counting phrase "
         "(for example, people -> how many people / 몇 명, cases -> how many cases / 몇 건) instead of generic item-count wording. "
         "If writing in Korean, do not leave raw English schema tokens like city, status, language, or count in the final question "

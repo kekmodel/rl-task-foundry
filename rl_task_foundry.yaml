@@ -86,8 +86,15 @@ task_composer:
   question_validation_temperature: 0.0
   exclude_answer_column_patterns:
     - "(^|_)last_update($|_)"
+  exclude_anchor_table_patterns:
+    - "(^|_)(city|country|state|province|region|language|category|taxonomy|dimension|lookup|mapping|xref|bridge|association|relation)($|_)"
   aggregate_discouraged_target_patterns:
     - "(^|_)(address|city|country|state|province|region|language|currency)($|_)"
+  causal_discouraged_target_patterns:
+    - "(^|_)(address|city|country|state|province|region|zipcode|postal|postcode|currency|timezone)($|_)"
+  causal_preferred_answer_patterns:
+    - "(^|_)(status|category|type|kind|title|label|code|language|method|channel|plan|tier|level|provider|carrier|reason|option|mode|format|service|policy|destination)($|_)"
+  causal_min_scalar_hops: 3
 
 solver_runtime:
   max_turns: 16

@@ -3,8 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
-from rl_task_foundry.infra.privacy import Visibility, resolve_visibility
+from rl_task_foundry.infra.privacy import Visibility, infer_visibility
+
+
+_SAFE_INTERNAL_COLUMN_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"(^|_)(name|title|label|status|type|kind|category|language|code|rating|mode|method|channel|plan|tier|level)($|_)",
+    )
+)
+_SENSITIVE_TABLE_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"(^|_)(customer|user|member|account|profile|person|staff|employee|contact|address|patient|student|teacher)($|_)",
+    )
+)
 
 
 @dataclass(slots=True)
@@ -57,11 +72,16 @@ def resolve_column_visibility(
         if candidate in overrides:
             return overrides[candidate]
 
-    return resolve_visibility(
-        column.column_name,
-        default_visibility=default_visibility,
-        overrides={},
-    )
+    inferred = infer_visibility(column.column_name)
+    if inferred is not None:
+        return inferred
+    if default_visibility != "blocked":
+        return default_visibility
+    if any(pattern.search(column.table_name) for pattern in _SENSITIVE_TABLE_PATTERNS):
+        return default_visibility
+    if any(pattern.search(column.column_name) for pattern in _SAFE_INTERNAL_COLUMN_PATTERNS):
+        return "internal"
+    return default_visibility
 
 
 def classify_columns(

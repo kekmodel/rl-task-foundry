@@ -48,7 +48,12 @@ from rl_task_foundry.tasks.models import (
 from rl_task_foundry.tools.compiler import compile_canonical_tool_bundle, compile_path_tools
 from rl_task_foundry.tools.models import ToolBundle, ToolSpec
 from rl_task_foundry.tools.openai_agents_adapter import ToolExecutor
-from rl_task_foundry.tools.text_utils import humanize_identifier, singularize_token
+from rl_task_foundry.tools.text_utils import (
+    count_phrase_reference,
+    count_unit_hint_for_identifier,
+    humanize_identifier,
+    singularize_token,
+)
 from rl_task_foundry.truth.generator import TierAGroundTruthGenerator, _prepare_asyncpg_query
 from rl_task_foundry.truth.schemas import GroundTruth
 from rl_task_foundry.verification.policies import VerificationPolicy
@@ -1017,6 +1022,7 @@ class Orchestrator:
                 sanitized_rows.append(sanitized_row)
 
         return {
+            "language": task.language,
             "question_family": task.question_family,
             "outcome_type": task.outcome_type,
             "answer_shape": answer_shape,
@@ -1049,10 +1055,13 @@ class Orchestrator:
         if task.question_family == "causal_chain":
             if answer_shape == "list":
                 return (
-                    "The user asks which downstream items, options, or entities apply to their own situation "
+                    "The user asks which downstream items, options, services, or entities apply to their own situation "
                     "through an indirect relationship."
                 )
-            return "The user asks for a value that is reached through an indirect relationship or multi-step dependency."
+            return (
+                "The user asks for the concrete downstream item, title, option, category, provider, language, or other "
+                "real-world detail that applies to their own situation through an indirect relationship."
+            )
         if task.question_family == "timeline_resolution":
             return "The user asks when something most recently happened or when a relevant event took place."
         if task.question_family == "aggregate_verification":
@@ -1072,8 +1081,10 @@ class Orchestrator:
             humanize_identifier(field.name)
             for field in task.answer_schema.fields
         ]
+        answer_concept_reference = self._answer_concept_reference(task, path)
         answer_shape = self._answer_shape(task)
         count_target_reference = self._count_target_reference(path)
+        count_phrase_reference = self._count_phrase_reference(path)
         count_unit_hint = self._count_unit_hint(path)
         family_patterns = {
             "status_lookup": {
@@ -1090,14 +1101,15 @@ class Orchestrator:
                 "goal": (
                     "Ask which downstream items apply."
                     if answer_shape == "list"
-                    else "Ask for an indirectly derived real-world detail in a practical way."
+                    else "Ask for the concrete downstream detail that actually applies in a practical way."
                 ),
                 "preferred_shape": (
                     "Ask which concrete downstream items, options, or entities are associated with the user."
                     if answer_shape == "list"
                     else (
-                        "Phrase the question around the downstream thing the user cares about, "
-                        "not around account/profile metadata or a database traversal."
+                        "Phrase the question around the downstream thing the user actually cares about, such as an "
+                        "item, title, option, language, provider, category, or destination, not around account/profile metadata "
+                        "or a database traversal."
                     )
                 ),
                 "avoid_shape": (
@@ -1139,8 +1151,10 @@ class Orchestrator:
             ),
             "target_reference": target_label,
             "count_target_reference": count_target_reference,
+            "count_phrase_reference": count_phrase_reference,
             "count_unit_hint": count_unit_hint,
             "answer_labels": answer_labels,
+            "answer_concept_reference": answer_concept_reference,
             "answer_shape": answer_shape,
             "family_patterns": family_patterns.get(task.question_family, {}),
             "banned_phrases": self._banned_question_phrases(path),
@@ -1262,39 +1276,33 @@ class Orchestrator:
         return humanize_identifier(singularize_token(path.tables[-1]))
 
     @staticmethod
+    def _count_phrase_reference(path: PathSpec) -> str:
+        return count_phrase_reference(path.tables[-1])
+
+    @staticmethod
     def _count_unit_hint(path: PathSpec) -> str:
-        people_like = {
-            "staff",
-            "employee",
-            "agent",
-            "user",
-            "customer",
-            "member",
-            "person",
-            "patient",
-            "student",
-            "teacher",
-            "driver",
-            "courier",
-        }
-        case_like = {
-            "order",
-            "payment",
-            "rental",
-            "booking",
-            "shipment",
-            "request",
-            "ticket",
-            "case",
-            "invoice",
-            "transaction",
-        }
-        target = singularize_token(path.tables[-1]).strip().lower()
-        if target in people_like:
-            return "people"
-        if target in case_like:
-            return "cases"
-        return "items"
+        return count_unit_hint_for_identifier(path.tables[-1])
+
+    @staticmethod
+    def _answer_concept_reference(task: TaskSpec, path: PathSpec) -> str | None:
+        if len(task.answer_schema.fields) != 1:
+            return None
+        field = task.answer_schema.fields[0]
+        target_label = humanize_identifier(singularize_token(path.tables[-1]))
+        normalized_field = field.name.strip().lower()
+        normalized_target = target_label.strip().lower()
+        if (
+            normalized_field in {"name", "title", "label", "code"}
+            or normalized_field.endswith(("_name", "_title", "_label", "_code"))
+            or normalized_field in {
+                f"{normalized_target}_name",
+                f"{normalized_target}_title",
+                f"{normalized_target}_label",
+                f"{normalized_target}_code",
+            }
+        ):
+            return target_label
+        return humanize_identifier(field.name)
 
     @staticmethod
     def _normalize_answer_value(value: object) -> str | None:

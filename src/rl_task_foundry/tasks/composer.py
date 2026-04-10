@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import re
 from typing import Literal
 
 from rl_task_foundry.config.models import DomainConfig, ModelRef, ProviderConfig
@@ -513,6 +514,16 @@ def _question_policy_violations(
         violations.append(f"contains internal/schema wording: {schema_hits}")
     if " id " in f" {normalized_question} ":
         violations.append("contains raw id terminology")
+
+    if str(question_context.get("language", "")).lower() == "ko":
+        raw_english_tokens = _raw_schema_tokens(question_context)
+        leaked_tokens = [
+            token
+            for token in raw_english_tokens
+            if re.search(rf"(?<![a-z]){re.escape(token)}(?![a-z])", normalized_question)
+        ]
+        if leaked_tokens:
+            violations.append(f"contains raw english schema tokens in korean: {sorted(set(leaked_tokens))}")
     return violations
 
 
@@ -548,3 +559,31 @@ def _text_matches_forbidden_marker(text: str, marker: dict[str, object]) -> bool
         }
         return normalized in tokens
     return normalized in text
+
+
+def _raw_schema_tokens(question_context: dict[str, object]) -> set[str]:
+    tokens: set[str] = set()
+    path_entity_labels = question_context.get("path_entity_labels")
+    if isinstance(path_entity_labels, list):
+        for label in path_entity_labels:
+            if not isinstance(label, str):
+                continue
+            tokens.update(_ascii_tokens(label))
+    answer_fields = question_context.get("answer_fields")
+    if isinstance(answer_fields, list):
+        for field in answer_fields:
+            if not isinstance(field, dict):
+                continue
+            for key in ("name", "label"):
+                value = field.get(key)
+                if isinstance(value, str):
+                    tokens.update(_ascii_tokens(value))
+    return {token for token in tokens if len(token) >= 4}
+
+
+def _ascii_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z]+", value.strip().lower())
+        if token
+    }

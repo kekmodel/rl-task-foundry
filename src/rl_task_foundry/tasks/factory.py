@@ -31,6 +31,10 @@ from rl_task_foundry.tools.sql_templates import (
     readonly_query,
 )
 from rl_task_foundry.tools.text_utils import humanize_identifier, singularize_token
+from rl_task_foundry.tools.text_utils import (
+    count_unit_hint_for_identifier,
+    default_count_target_label,
+)
 from rl_task_foundry.truth.generator import TierAGroundTruthGenerator
 from rl_task_foundry.truth.schemas import AnswerField, AnswerSchema
 
@@ -105,6 +109,7 @@ class TaskContractDraft:
     answer_schema: AnswerSchema
     field_label: str | None = None
     target_label: str | None = None
+    count_unit_hint: str | None = None
 
 
 @dataclass(slots=True)
@@ -259,6 +264,7 @@ class TierATaskFactory:
                     family,
                     source,
                     aggregate_discouraged_target_patterns=self.task_config.aggregate_discouraged_target_patterns,
+                    causal_discouraged_target_patterns=self.task_config.causal_discouraged_target_patterns,
                 )
             )
         return _interleave_sources_by_family(
@@ -284,7 +290,12 @@ class TierATaskFactory:
 
     def _supports_anchor_sampling(self, graph: SchemaGraph, path: PathSpec) -> bool:
         root_table = graph.get_table(path.root_table, schema_name=path.edges[0].source_schema)
-        return len(root_table.primary_key) == 1
+        if len(root_table.primary_key) != 1:
+            return False
+        return not _matches_any_pattern(
+            singularize_token(path.root_table),
+            self.task_config.exclude_anchor_table_patterns,
+        )
 
     def _contract_drafts_for_path(
         self,
@@ -316,7 +327,11 @@ class TierATaskFactory:
                     )
                 )
             elif family == "causal_chain" and path.hop_count >= 2 and scalar_field is not None:
-                if list_field is not None:
+                list_supported = (
+                    list_field is not None
+                    and self._supports_causal_list_contract(path, target_table, list_field)
+                )
+                if list_supported:
                     drafts.append(
                         self._list_contract_draft(
                             path,
@@ -325,22 +340,28 @@ class TierATaskFactory:
                             outcome_type="answer",
                         )
                     )
-                drafts.append(
-                    self._scalar_contract_draft(
-                        path,
-                        family=family,
-                        column=scalar_field,
-                        outcome_type="answer",
+                if self._supports_causal_scalar_contract(
+                    path,
+                    target_table,
+                    scalar_field,
+                    prefer_list=list_supported,
+                ):
+                    drafts.append(
+                        self._scalar_contract_draft(
+                            path,
+                            family=family,
+                            column=scalar_field,
+                            outcome_type="answer",
+                        )
                     )
-                )
-                drafts.append(
-                    self._scalar_contract_draft(
-                        path,
-                        family=family,
-                        column=scalar_field,
-                        outcome_type="no_result",
+                    drafts.append(
+                        self._scalar_contract_draft(
+                            path,
+                            family=family,
+                            column=scalar_field,
+                            outcome_type="no_result",
+                        )
                     )
-                )
             elif family == "timeline_resolution" and temporal_field is not None:
                 drafts.append(
                     self._scalar_contract_draft(
@@ -428,15 +449,17 @@ class TierATaskFactory:
         )
 
     def _count_contract_draft(self, path: PathSpec) -> TaskContractDraft:
-        target_label = singularize_token(path.tables[-1])
-        target_human = humanize_identifier(target_label)
+        raw_target_label = singularize_token(path.tables[-1])
+        target_human = default_count_target_label(raw_target_label, language=self.domain.language)
         answer_schema = AnswerSchema(
             fields=[
                 AnswerField(
                     name="related_count",
                     type="int",
                     canonicalizer="int_cast",
-                    description=f"Count of related {target_human} items.",
+                    description=(
+                        f"Count of related {humanize_identifier(raw_target_label)} items."
+                    ),
                     source_columns=["meta:count"],
                 )
             ]
@@ -446,6 +469,7 @@ class TierATaskFactory:
             outcome_type="answer",
             answer_schema=answer_schema,
             target_label=target_human,
+            count_unit_hint=count_unit_hint_for_identifier(raw_target_label),
         )
 
     async def _sample_anchor_values(
@@ -648,28 +672,42 @@ class TierATaskFactory:
     def _render_ko_question(self, contract: TaskContractDraft) -> str:
         field_label = contract.field_label or contract.target_label or "정보"
         target_label = contract.target_label or field_label
+        scalar_focus_label = self._scalar_question_focus_label(contract)
         if contract.question_family == "status_lookup":
-            return f"연결된 {field_label} 값을 확인해줘."
+            return f"현재 {field_label} 정보가 어떻게 되어 있는지 알려주세요."
         if contract.question_family == "causal_chain":
             if _answer_schema_shape(contract.answer_schema, question_family=contract.question_family) == "list":
-                return f"연결 경로를 따라 어떤 {field_label} 항목들이 있는지 확인해줘."
-            return f"연결 경로를 따라 최종 {field_label} 값을 확인해줘."
+                return f"제 경우에 해당되는 {field_label} 항목이 어떤 것들인지 알려주세요."
+            return f"제 경우에 실제로 어떤 {scalar_focus_label}이 해당되는지 알려주세요."
         if contract.question_family == "timeline_resolution":
-            return f"연결된 기록 중 가장 최근 {field_label} 시점을 확인해줘."
-        return f"연결된 {target_label} 항목 수를 확인해줘."
+            return f"가장 최근 {field_label} 시점이 언제인지 알려주세요."
+        if contract.count_unit_hint == "people":
+            return "제 경우와 관련된 사람이 몇 명인지 알려주세요."
+        if contract.count_unit_hint == "cases":
+            return "제 경우와 관련된 건이 몇 건인지 알려주세요."
+        if contract.count_unit_hint == "places":
+            return "제 경우와 관련된 장소가 몇 곳인지 알려주세요."
+        return f"제 경우에 해당되는 {target_label}이 몇 개인지 알려주세요."
 
     def _render_en_question(self, contract: TaskContractDraft) -> str:
         field_label = contract.field_label or contract.target_label or "information"
         target_label = contract.target_label or field_label
+        scalar_focus_label = self._scalar_question_focus_label(contract)
         if contract.question_family == "status_lookup":
-            return f"Check the related {field_label} value."
+            return f"Can you tell me the current {field_label} information?"
         if contract.question_family == "causal_chain":
             if _answer_schema_shape(contract.answer_schema, question_family=contract.question_family) == "list":
-                return f"Check which related {field_label} items exist."
-            return f"Follow the relation path and find the final {field_label} value."
+                return f"Can you tell me which {field_label} items apply in my case?"
+            return f"Can you tell me which {scalar_focus_label} actually applies in my case?"
         if contract.question_family == "timeline_resolution":
-            return f"Find the most recent related {field_label} timestamp."
-        return f"Check how many related {target_label} records exist."
+            return f"Can you tell me when the latest {field_label} happened?"
+        if contract.count_unit_hint == "people":
+            return "Can you tell me how many people are involved in my case?"
+        if contract.count_unit_hint == "cases":
+            return "Can you tell me how many relevant cases are associated with my case?"
+        if contract.count_unit_hint == "places":
+            return "Can you tell me how many locations are associated with my case?"
+        return f"Can you tell me how many {target_label} are associated with my case?"
 
     def _is_candidate_answer_column(self, column: ColumnProfile) -> bool:
         if self._answer_field_visibility(column) != "user_visible":
@@ -709,6 +747,67 @@ class TierATaskFactory:
         if any(pattern.search(table_name) for pattern in _IDENTITY_TABLE_PATTERNS):
             return False
         return True
+
+    def _supports_causal_list_contract(
+        self,
+        path: PathSpec,
+        target_table,
+        column: ColumnProfile,
+    ) -> bool:
+        del column
+        return not _matches_any_pattern(
+            singularize_token(target_table.table_name),
+            self.task_config.causal_discouraged_target_patterns,
+        )
+
+    def _supports_causal_scalar_contract(
+        self,
+        path: PathSpec,
+        target_table,
+        column: ColumnProfile,
+        *,
+        prefer_list: bool,
+    ) -> bool:
+        target_name = singularize_token(target_table.table_name)
+        if _matches_any_pattern(target_name, self.task_config.causal_discouraged_target_patterns):
+            return False
+        if path.hop_count < self.task_config.causal_min_scalar_hops:
+            return False
+
+        contextual_field_name = self._answer_field_name(path, column)
+        candidate_tokens = {
+            target_name,
+            column.column_name.strip().lower(),
+            contextual_field_name,
+        }
+        if not any(
+            _matches_any_pattern(token, self.task_config.causal_preferred_answer_patterns)
+            for token in candidate_tokens
+        ):
+            return False
+        if prefer_list and contextual_field_name == target_name:
+            return False
+        return True
+
+    @staticmethod
+    def _scalar_question_focus_label(contract: TaskContractDraft) -> str:
+        field_label = (contract.field_label or contract.target_label or "information").strip()
+        target_label = (contract.target_label or field_label).strip()
+        normalized_field = field_label.lower()
+        normalized_target = target_label.lower()
+        generic_suffixes = (
+            f"{normalized_target} name",
+            f"{normalized_target} title",
+            f"{normalized_target} label",
+            f"{normalized_target} code",
+        )
+        if (
+            normalized_field in {"name", "title", "label", "code"}
+            or normalized_field.endswith((" name", " title", " label", " code"))
+            or normalized_field in generic_suffixes
+        ):
+            return target_label
+        return field_label
 
     @staticmethod
     def _answer_field_name(path: PathSpec, column: ColumnProfile) -> str:
@@ -825,6 +924,7 @@ def _source_priority_key(
     source: TaskSource,
     *,
     aggregate_discouraged_target_patterns: list[str],
+    causal_discouraged_target_patterns: list[str],
 ) -> tuple[float, ...] | tuple[int, ...] | tuple[object, ...]:
     fanout = float(source.path.difficulty_features.get("fanout_product", 1.0))
     hop_count = int(source.path.hop_count)
@@ -841,8 +941,14 @@ def _source_priority_key(
         )
         return (discouraged_rank, -fanout, -hop_count, source.path.path_id)
     if family == "causal_chain":
+        discouraged_rank = int(
+            _matches_any_pattern(
+                source.path.tables[-1],
+                causal_discouraged_target_patterns,
+            )
+        )
         list_rank = 0 if answer_shape == "list" else 1
-        return (list_rank, -hop_count, -fanout, source.path.path_id)
+        return (discouraged_rank, list_rank, -hop_count, -fanout, source.path.path_id)
     if family == "timeline_resolution":
         return (-hop_count, -fanout, source.path.path_id)
     return (hop_count, source.path.path_id)
