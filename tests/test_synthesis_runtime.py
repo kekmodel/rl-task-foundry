@@ -59,6 +59,11 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisStageResult,
     SynthesisToolTraceEntry,
 )
+from rl_task_foundry.synthesis.scheduler import (
+    SynthesisDbSnapshot,
+    SynthesisDomainScheduler,
+    SynthesisSelectionStatus,
+)
 from rl_task_foundry.synthesis.subprocess_pool import (
     RegistrationSelfConsistencyResult,
     RegistrationVerifierProbeResult,
@@ -1094,6 +1099,56 @@ async def test_synthesis_agent_runtime_category_status_requires_bound_db_match()
 
     with pytest.raises(SynthesisDbBindingError):
         await runtime.category_status(db_id="northwind")
+
+
+@pytest.mark.asyncio
+async def test_synthesis_runtime_category_status_integrates_with_scheduler(monkeypatch):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 1
+    config.synthesis.runtime.max_consecutive_category_discards = 1
+    config.synthesis.runtime.category_backoff_duration_s = 600
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _failing_self_consistency_result(
+            solution_tool_calls=0,
+            facts_match_result=True,
+            check_constraints_result=False,
+            verify_result=False,
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    with pytest.raises(SynthesisSelfConsistencyError):
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    scheduler = SynthesisDomainScheduler()
+    snapshot = SynthesisDbSnapshot(
+        db_id="sakila",
+        categories=[CategoryTaxonomy.ASSIGNMENT],
+        category_status=await runtime.category_status(),
+    )
+    decision = scheduler.choose_next([snapshot])
+
+    assert decision.status == SynthesisSelectionStatus.BACKOFF
+    assert decision.wait_until is not None
+    assert decision.wait_seconds > 0
 
 
 @pytest.mark.asyncio

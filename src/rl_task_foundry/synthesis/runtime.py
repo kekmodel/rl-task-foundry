@@ -10,7 +10,7 @@ from enum import StrEnum
 from hashlib import sha256
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.pipeline.provider_resilience import (
@@ -94,6 +94,14 @@ class SynthesisCategoryStatus(StrictModel):
     last_outcome: SynthesisSelfConsistencyOutcome | None = None
     last_error_codes: list[str] = Field(default_factory=list)
     last_updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _validate_timezones(self) -> SynthesisCategoryStatus:
+        if self.backoff_until is not None and self.backoff_until.tzinfo is None:
+            raise ValueError("backoff_until must be timezone-aware")
+        if self.last_updated_at is not None and self.last_updated_at.tzinfo is None:
+            raise ValueError("last_updated_at must be timezone-aware")
+        return self
 
 
 class SynthesisMemoryEntry(StrictModel):
