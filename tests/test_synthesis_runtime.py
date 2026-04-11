@@ -15,6 +15,7 @@ from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
+    DifficultyAxis,
     EnvironmentContract,
     EnvironmentStatus,
     MaterializedFactsSchema,
@@ -45,6 +46,7 @@ from rl_task_foundry.synthesis.runtime import (
     RUNTIME_OWNED_ENVIRONMENT_FIELDS,
     SchemaExplorationOutput,
     SynthesisAgentRuntime,
+    SynthesisCategoryBackoffError,
     SynthesisCategoryMismatchError,
     SynthesisDbBindingError,
     SynthesisMemoryEntry,
@@ -138,6 +140,7 @@ def _sample_graph() -> SchemaGraph:
 
 def _sample_proposed_environment(
     category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
+    difficulty_vector: dict[DifficultyAxis, float] | None = None,
 ) -> ProposedEnvironmentDraft:
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(
@@ -182,7 +185,7 @@ def _sample_proposed_environment(
                     summary="같은 고객을 중복 배정하지 않는다.",
                 )
             ],
-            difficulty_vector={},
+            difficulty_vector=difficulty_vector or {},
         ),
         solution=SolutionContract(),
         tool_self_test=ToolSelfTestContract(),
@@ -422,6 +425,29 @@ class _FakeBackend:
                 )
             ],
         )
+
+
+class _AttemptAwareBackend(_FakeBackend):
+    def __init__(
+        self,
+        *,
+        provider_name: str,
+        model_name: str,
+        base_payloads: dict[SynthesisPhase, object],
+        artifact_payloads_by_attempt: dict[int, ArtifactGenerationOutput],
+    ) -> None:
+        super().__init__(
+            provider_name=provider_name,
+            model_name=model_name,
+            payloads=base_payloads,
+        )
+        self.artifact_payloads_by_attempt = artifact_payloads_by_attempt
+
+    async def run_stage(self, request: SynthesisStageRequest) -> SynthesisStageResult:
+        if request.phase == SynthesisPhase.ARTIFACT_GENERATION:
+            payload = self.artifact_payloads_by_attempt[request.attempt_index]
+            self.payloads = {**self.payloads, request.phase: payload}
+        return await super().run_stage(request)
 
 
 def test_proposed_and_materialized_environment_schemas_align() -> None:
@@ -851,6 +877,143 @@ async def test_synthesis_agent_runtime_raises_after_self_consistency_budget_exha
     assert exc_info.value.last_self_consistency_diagnostics is not None
     assert exc_info.value.last_self_consistency_diagnostics.verify_result is False
     assert backend.calls.count(SynthesisPhase.ARTIFACT_GENERATION) == 2
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_rejects_weakened_difficulty_vector_between_attempts(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 3
+    payloads = _payloads()
+    backend = _AttemptAwareBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        base_payloads=payloads,
+        artifact_payloads_by_attempt={
+            1: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={
+                        DifficultyAxis.SLOT_COUNT: 3.0,
+                        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
+                    }
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt one",
+            ),
+            2: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 2.0}
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt two weakened",
+            ),
+            3: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={
+                        DifficultyAxis.SLOT_COUNT: 3.0,
+                        DifficultyAxis.CONSTRAINT_COUNT: 5.0,
+                    }
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt three strengthened",
+            ),
+        },
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+    checks = iter(
+        [
+            _failing_self_consistency_result(
+                solution_tool_calls=1,
+                facts_match_result=True,
+                check_constraints_result=False,
+                verify_result=False,
+            ),
+            _passing_self_consistency_result(),
+        ]
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return next(checks)
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    assert [attempt.outcome for attempt in draft.self_consistency_attempts] == [
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+        SynthesisSelfConsistencyOutcome.DIFFICULTY_WEAKENED,
+        SynthesisSelfConsistencyOutcome.PASSED,
+    ]
+    assert "constraint_count" in draft.self_consistency_attempts[1].error_message
+    artifact_requests = [
+        request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
+    ]
+    assert [request.attempt_index for request in artifact_requests] == [1, 2, 3]
+    assert artifact_requests[2].latest_self_consistency_diagnostics is not None
+    assert artifact_requests[2].latest_self_consistency_diagnostics.verify_result is False
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_enters_category_backoff_after_consecutive_discards(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 1
+    config.synthesis.runtime.max_consecutive_category_discards = 1
+    config.synthesis.runtime.category_backoff_duration_s = 3600
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _failing_self_consistency_result(
+            solution_tool_calls=0,
+            facts_match_result=True,
+            check_constraints_result=False,
+            verify_result=False,
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    with pytest.raises(SynthesisSelfConsistencyError):
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    with pytest.raises(SynthesisCategoryBackoffError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    assert exc_info.value.consecutive_discards == 1
+    assert exc_info.value.backoff_until > datetime.now(timezone.utc)
+    assert backend.calls.count(SynthesisPhase.ARTIFACT_GENERATION) == 1
 
 
 @pytest.mark.asyncio

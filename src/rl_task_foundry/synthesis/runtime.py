@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from enum import StrEnum
 from hashlib import sha256
@@ -22,6 +22,7 @@ from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
     CrossInstanceSet,
+    DifficultyAxis,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
@@ -226,6 +227,7 @@ class SynthesisSelfConsistencyOutcome(StrEnum):
     REGISTRATION_FAILED = "registration_failed"
     CATEGORY_MISMATCH = "category_mismatch"
     SELF_CONSISTENCY_FAILED = "self_consistency_failed"
+    DIFFICULTY_WEAKENED = "difficulty_weakened"
 
 
 class SynthesisSelfConsistencyDiagnostics(StrictModel):
@@ -278,6 +280,31 @@ class SynthesisSelfConsistencyError(SynthesisRuntimeError):
 
 class SynthesisDbBindingError(SynthesisRuntimeError):
     """Raised when a runtime instance is reused for a different logical database id."""
+
+
+class SynthesisCategoryBackoffError(SynthesisRuntimeError):
+    """Raised when a db/category pair is temporarily backed off after repeated discards."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        db_id: str,
+        category: CategoryTaxonomy,
+        consecutive_discards: int,
+        backoff_until: datetime,
+    ) -> None:
+        super().__init__(message)
+        self.db_id = db_id
+        self.category = category
+        self.consecutive_discards = consecutive_discards
+        self.backoff_until = backoff_until
+
+
+@dataclass(slots=True)
+class _CategoryFailureState:
+    consecutive_discards: int = 0
+    backoff_until: datetime | None = None
 
 
 SynthesisStageRequest.model_rebuild()
@@ -348,6 +375,21 @@ def _sample_output_value(field: OutputFieldContract) -> object:
     return "sample"
 
 
+def _weakened_difficulty_axes(
+    *,
+    previous: dict[DifficultyAxis, float] | None,
+    current: dict[DifficultyAxis, float],
+) -> list[str]:
+    if previous is None:
+        return []
+    weakened: list[str] = []
+    for axis, previous_value in previous.items():
+        current_value = current.get(axis)
+        if current_value is None or current_value < previous_value:
+            weakened.append(axis.value)
+    return weakened
+
+
 @dataclass(slots=True)
 class SynthesisAgentRuntime:
     """Single-db synthesis runtime with lock-protected shared state."""
@@ -360,9 +402,15 @@ class SynthesisAgentRuntime:
         default=None, init=False, repr=False
     )
     _bound_db_id: str | None = field(default=None, init=False, repr=False)
+    _category_failures: dict[tuple[str, CategoryTaxonomy], _CategoryFailureState] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _bind_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _graph_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _registration_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
+    _category_state_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
 
@@ -405,88 +453,93 @@ class SynthesisAgentRuntime:
         graph: SchemaGraph | None = None,
     ) -> SynthesisEnvironmentDraft:
         await self._bind_db_id(db_id)
+        await self._ensure_category_available(db_id, requested_category)
         resolved_graph = graph if graph is not None else await self._introspect_graph()
         schema_summary = summarize_schema_graph(resolved_graph)
+        try:
+            stage_results: list[SynthesisStageResult] = []
+            memory: list[SynthesisMemoryEntry] = []
+            tool_traces: list[SynthesisToolTraceEntry] = []
+            previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput] = {}
 
-        stage_results: list[SynthesisStageResult] = []
-        memory: list[SynthesisMemoryEntry] = []
-        tool_traces: list[SynthesisToolTraceEntry] = []
-        previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput] = {}
+            for phase in (
+                SynthesisPhase.SCHEMA_EXPLORATION,
+                SynthesisPhase.CATEGORY_INFERENCE,
+            ):
+                request = SynthesisStageRequest(
+                    phase=phase,
+                    db_id=db_id,
+                    domain_name=self.config.domain.name,
+                    user_role=self.config.domain.user_role,
+                    agent_role=self.config.domain.agent_role,
+                    scenario_description=self.config.domain.scenario_description,
+                    requested_category=requested_category,
+                    attempt_index=1,
+                    schema_summary=schema_summary,
+                    previous_outputs=previous_outputs,
+                    memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
+                )
+                result = await self._run_phase(request)
+                stage_results.append(result)
+                memory.append(result.memory_entry)
+                tool_traces.extend(result.tool_traces)
+                previous_outputs[phase] = result.payload
 
-        for phase in (
-            SynthesisPhase.SCHEMA_EXPLORATION,
-            SynthesisPhase.CATEGORY_INFERENCE,
-        ):
-            request = SynthesisStageRequest(
-                phase=phase,
+            category_payload = previous_outputs[SynthesisPhase.CATEGORY_INFERENCE]
+            assert isinstance(category_payload, CategoryInferenceOutput)
+            selected_category = category_payload.selected_category
+            if selected_category != requested_category:
+                raise SynthesisCategoryMismatchError(
+                    "category inference result did not match the requested category"
+                )
+
+            (
+                artifact_payload,
+                registration_report,
+                registration_diagnostics,
+                self_consistency_diagnostics,
+                self_consistency_attempts,
+            ) = await self._run_artifact_generation_with_self_consistency(
                 db_id=db_id,
-                domain_name=self.config.domain.name,
-                user_role=self.config.domain.user_role,
-                agent_role=self.config.domain.agent_role,
-                scenario_description=self.config.domain.scenario_description,
                 requested_category=requested_category,
-                attempt_index=1,
                 schema_summary=schema_summary,
                 previous_outputs=previous_outputs,
-                memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
-            )
-            result = await self._run_phase(request)
-            stage_results.append(result)
-            memory.append(result.memory_entry)
-            tool_traces.extend(result.tool_traces)
-            previous_outputs[phase] = result.payload
-
-        category_payload = previous_outputs[SynthesisPhase.CATEGORY_INFERENCE]
-        assert isinstance(category_payload, CategoryInferenceOutput)
-        selected_category = category_payload.selected_category
-        if selected_category != requested_category:
-            raise SynthesisCategoryMismatchError(
-                "category inference result did not match the requested category"
+                stage_results=stage_results,
+                memory=memory,
+                tool_traces=tool_traces,
             )
 
-        (
-            artifact_payload,
-            registration_report,
-            registration_diagnostics,
-            self_consistency_diagnostics,
-            self_consistency_attempts,
-        ) = await self._run_artifact_generation_with_self_consistency(
-            db_id=db_id,
-            requested_category=requested_category,
-            schema_summary=schema_summary,
-            previous_outputs=previous_outputs,
-            stage_results=stage_results,
-            memory=memory,
-            tool_traces=tool_traces,
-        )
+            materialized_at = datetime.now(timezone.utc)
+            environment = self._materialize_environment(
+                proposed_environment=artifact_payload.proposed_environment,
+                artifacts=artifact_payload.artifacts,
+                db_id=db_id,
+                requested_category=requested_category,
+                created_at=materialized_at,
+                self_consistency_pass=self_consistency_diagnostics.passed,
+            )
+            await self._reset_category_failure_state(db_id, requested_category)
 
-        materialized_at = datetime.now(timezone.utc)
-        environment = self._materialize_environment(
-            proposed_environment=artifact_payload.proposed_environment,
-            artifacts=artifact_payload.artifacts,
-            db_id=db_id,
-            requested_category=requested_category,
-            created_at=materialized_at,
-            self_consistency_pass=self_consistency_diagnostics.passed,
-        )
-
-        return SynthesisEnvironmentDraft(
-            created_at=materialized_at,
-            db_id=db_id,
-            requested_category=requested_category,
-            schema_summary=schema_summary,
-            selected_category=selected_category,
-            environment=environment,
-            artifacts=artifact_payload.artifacts,
-            registration_report=registration_report,
-            registration_diagnostics=registration_diagnostics,
-            self_consistency_diagnostics=self_consistency_diagnostics,
-            self_consistency_attempts=self_consistency_attempts,
-            stage_results=stage_results,
-            memory=memory,
-            tool_traces=tool_traces,
-            provider_status=self.provider_status(),
-        )
+            return SynthesisEnvironmentDraft(
+                created_at=materialized_at,
+                db_id=db_id,
+                requested_category=requested_category,
+                schema_summary=schema_summary,
+                selected_category=selected_category,
+                environment=environment,
+                artifacts=artifact_payload.artifacts,
+                registration_report=registration_report,
+                registration_diagnostics=registration_diagnostics,
+                self_consistency_diagnostics=self_consistency_diagnostics,
+                self_consistency_attempts=self_consistency_attempts,
+                stage_results=stage_results,
+                memory=memory,
+                tool_traces=tool_traces,
+                provider_status=self.provider_status(),
+            )
+        except (SynthesisCategoryMismatchError, SynthesisSelfConsistencyError):
+            await self._record_category_discard(db_id, requested_category)
+            raise
 
     async def close(self) -> None:
         if self._registration_pool is not None:
@@ -498,6 +551,55 @@ class SynthesisAgentRuntime:
             provider_name: _snapshot_to_status(breaker.snapshot())
             for provider_name, breaker in self._breakers.items()
         }
+
+    async def _ensure_category_available(
+        self,
+        db_id: str,
+        category: CategoryTaxonomy,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        async with self._category_state_lock:
+            state = self._category_failures.get((db_id, category))
+            if state is None:
+                return
+            if state.backoff_until is None:
+                return
+            if state.backoff_until <= now:
+                del self._category_failures[(db_id, category)]
+                return
+            raise SynthesisCategoryBackoffError(
+                "synthesis category is temporarily backed off after repeated discards",
+                db_id=db_id,
+                category=category,
+                consecutive_discards=state.consecutive_discards,
+                backoff_until=state.backoff_until,
+            )
+
+    async def _record_category_discard(
+        self,
+        db_id: str,
+        category: CategoryTaxonomy,
+    ) -> None:
+        async with self._category_state_lock:
+            key = (db_id, category)
+            state = self._category_failures.get(key, _CategoryFailureState())
+            state.consecutive_discards += 1
+            if (
+                state.consecutive_discards
+                >= self.config.synthesis.runtime.max_consecutive_category_discards
+            ):
+                state.backoff_until = datetime.now(timezone.utc) + timedelta(
+                    seconds=self.config.synthesis.runtime.category_backoff_duration_s
+                )
+            self._category_failures[key] = state
+
+    async def _reset_category_failure_state(
+        self,
+        db_id: str,
+        category: CategoryTaxonomy,
+    ) -> None:
+        async with self._category_state_lock:
+            self._category_failures.pop((db_id, category), None)
 
     async def _run_phase(self, request: SynthesisStageRequest) -> SynthesisStageResult:
         candidate_backends = self.phase_backends.get(request.phase, []) if self.phase_backends else []
@@ -549,6 +651,7 @@ class SynthesisAgentRuntime:
         attempts: list[SynthesisSelfConsistencyAttempt] = []
         latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
         latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
+        strongest_difficulty_vector: dict[DifficultyAxis, float] | None = None
         max_iterations = self.config.synthesis.runtime.max_self_consistency_iterations
 
         for attempt_index in range(1, max_iterations + 1):
@@ -574,6 +677,35 @@ class SynthesisAgentRuntime:
             tool_traces.extend(result.tool_traces)
 
             artifact_payload = result.payload
+            current_difficulty_vector = dict(
+                artifact_payload.proposed_environment.task.difficulty_vector
+            )
+            weakened_axes = _weakened_difficulty_axes(
+                previous=strongest_difficulty_vector,
+                current=current_difficulty_vector,
+            )
+            if weakened_axes:
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_WEAKENED,
+                    provider=result.provider,
+                    model=result.model,
+                    memory_summary=result.memory_entry.summary,
+                    error_message=(
+                        "artifact generation reduced difficulty on axes: "
+                        + ",".join(weakened_axes)
+                    ),
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "artifact generation exhausted self-consistency budget after difficulty weakening",
+                        attempts=attempts,
+                        last_registration_diagnostics=latest_registration_diagnostics,
+                        last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                    )
+                continue
             if artifact_payload.proposed_environment.task.category != requested_category:
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
@@ -593,6 +725,7 @@ class SynthesisAgentRuntime:
                         attempts=attempts,
                     )
                 continue
+            strongest_difficulty_vector = current_difficulty_vector
 
             try:
                 registration_report, registration_diagnostics = await self._execute_registration_gate(
@@ -692,6 +825,8 @@ class SynthesisAgentRuntime:
             f"self_consistency_attempt={attempt.attempt_index}",
             f"outcome={attempt.outcome.value}",
         ]
+        if attempt.error_message:
+            detail_parts.append(f"message={attempt.error_message}")
         if error_codes:
             detail_parts.append(f"errors={','.join(error_codes)}")
         if weak_signals:

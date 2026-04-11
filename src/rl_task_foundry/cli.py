@@ -111,7 +111,11 @@ def validate_config(
         f"sdk_sessions_enabled={config.synthesis.runtime.sdk_sessions_enabled},"
         f"memory_window={config.synthesis.runtime.explicit_memory_window},"
         "max_self_consistency_iterations="
-        f"{config.synthesis.runtime.max_self_consistency_iterations}"
+        f"{config.synthesis.runtime.max_self_consistency_iterations},"
+        "max_consecutive_category_discards="
+        f"{config.synthesis.runtime.max_consecutive_category_discards},"
+        "category_backoff_duration_s="
+        f"{config.synthesis.runtime.category_backoff_duration_s}"
     )
     runtime_plan = build_runtime_isolation_plan(config)
     console.print(

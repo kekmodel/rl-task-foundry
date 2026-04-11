@@ -263,6 +263,7 @@ Acceptance:
 - infeasible discard path
 - discard consumes budget 정책
 - `db_id x category` failure counter와 backoff queue
+- `max_consecutive_category_discards` / `category_backoff_duration_s` config로 local runtime backoff enforce
 - tool change -> solution/verifier invalidation policy
 - verifier weakening 금지 규칙
 - one-axis-per-step difficulty crank
@@ -274,6 +275,7 @@ Acceptance:
 - verifier가 `False`를 반환하면 artifact generation이 다음 attempt로 재시도된다
 - verifier relaxation으로만 통과하는 gaming이 reject된다
 - difficulty vector가 monotonic하게 증가한다
+- 연속 discard threshold를 넘긴 `db_id x category`는 backoff error로 즉시 차단된다
 - 반복 discard가 scheduler-level backoff로 이어진다
 
 ### Milestone 7: Hybrid C + Hybrid D

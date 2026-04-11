@@ -22,7 +22,8 @@ def test_cli_validate_config_command():
     assert "shadow_sample_rate=0.1" in normalized
     assert (
         "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=True,"
-        "memory_window=8,max_self_consistency_iterations=5"
+        "memory_window=8,max_self_consistency_iterations=5,"
+        "max_consecutive_category_discards=3,category_backoff_duration_s=3600"
     ) in normalized
     assert "registration_lane=" in normalized
     assert "workers=2" in normalized
