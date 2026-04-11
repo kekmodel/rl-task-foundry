@@ -819,6 +819,10 @@ synthesis agent도 solver와 동일하게 provider resilience를 사용한다.
 
 즉 synthesis orchestrator는 기존 `pipeline/orchestrator.py`의 resilience skeleton을 재사용한다.
 
+Milestone 3 skeleton의 기본 구현은 `models.composer`를 synthesis backend model로 재사용하며,
+phase별 backend list를 주입해 circuit breaker 이후 healthy provider로 fallback할 수 있게 한다.
+또 각 phase는 explicit memory entry와 tool trace entry를 남긴다.
+
 ## Environment Registry
 
 registry는 filesystem + sqlite index의 이중 구조를 가진다.

@@ -158,6 +158,8 @@ Acceptance:
 - tool/task/solution/verifier generation phase
 - explicit memory / tool trace contract
 - provider resilience reuse
+- synthesis runtime config (`max_turns`, `tracing`, `sdk_sessions_enabled`, `explicit_memory_window`)
+- default skeleton은 `models.composer`를 synthesis backend model로 재사용하고, phase별 fallback backend 주입을 허용한다
 
 Acceptance:
 

@@ -170,7 +170,15 @@ class RegistrationPolicyConfig(StrictModel):
     enforce_async_tool_functions: bool = True
 
 
+class SynthesisRuntimeConfig(StrictModel):
+    max_turns: int = Field(default=8, ge=1)
+    tracing: bool = True
+    sdk_sessions_enabled: bool = True
+    explicit_memory_window: int = Field(default=8, ge=1)
+
+
 class SynthesisConfig(StrictModel):
+    runtime: SynthesisRuntimeConfig = Field(default_factory=SynthesisRuntimeConfig)
     registration_workers: RegistrationWorkerConfig = Field(
         default_factory=RegistrationWorkerConfig
     )

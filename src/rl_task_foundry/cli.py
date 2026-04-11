@@ -104,6 +104,13 @@ def validate_config(
     console.print(f"float_precision={config.verification.float_precision}")
     console.print(f"shadow_sample_rate={config.verification.shadow_sample_rate}")
     console.print(f"negative_outcome_ratio={config.task_composer.negative_outcome_ratio}")
+    console.print(
+        "synthesis_runtime="
+        f"max_turns={config.synthesis.runtime.max_turns},"
+        f"tracing={config.synthesis.runtime.tracing},"
+        f"sdk_sessions_enabled={config.synthesis.runtime.sdk_sessions_enabled},"
+        f"memory_window={config.synthesis.runtime.explicit_memory_window}"
+    )
     runtime_plan = build_runtime_isolation_plan(config)
     console.print(
         "registration_lane="

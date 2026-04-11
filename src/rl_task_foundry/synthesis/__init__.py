@@ -1,5 +1,6 @@
 """Contracts and runtime helpers for the synthesis-agent rewrite."""
 
+from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
     CategoryTaxonomy,
@@ -56,6 +57,20 @@ from rl_task_foundry.synthesis.registration_runner import (
     RegistrationBundleStatus,
     run_registration_bundle,
 )
+from rl_task_foundry.synthesis.runtime import (
+    SynthesisAgentRuntime,
+    SynthesisCategoryMismatchError,
+    SynthesisEnvironmentDraft,
+    SynthesisMemoryEntry,
+    SynthesisPhase,
+    SynthesisPhaseExecutionError,
+    SynthesisProviderStatus,
+    SynthesisProviderUnavailableError,
+    SynthesisStageRequest,
+    SynthesisStageResult,
+    SynthesisToolTraceEntry,
+    summarize_schema_graph,
+)
 from rl_task_foundry.synthesis.runtime_policy import (
     ExecutionLane,
     RegistrationDbAccessStrategy,
@@ -99,6 +114,7 @@ __all__ = [
     "InstanceSpaceContract",
     "IntRangeParameterSpace",
     "MaterializedFactsSchema",
+    "OpenAIAgentsSynthesisBackend",
     "OutputFieldContract",
     "OutputFieldType",
     "OutputSchemaContract",
@@ -121,6 +137,17 @@ __all__ = [
     "ShadowPromptStrategy",
     "ShadowVerifierContract",
     "SolutionContract",
+    "SynthesisAgentRuntime",
+    "SynthesisCategoryMismatchError",
+    "SynthesisEnvironmentDraft",
+    "SynthesisMemoryEntry",
+    "SynthesisPhase",
+    "SynthesisPhaseExecutionError",
+    "SynthesisProviderStatus",
+    "SynthesisProviderUnavailableError",
+    "SynthesisStageRequest",
+    "SynthesisStageResult",
+    "SynthesisToolTraceEntry",
     "TaskContract",
     "ToolContract",
     "ToolEmptyResultBehavior",
@@ -133,5 +160,6 @@ __all__ = [
     "RuntimeIsolationPlan",
     "build_runtime_isolation_plan",
     "run_registration_bundle",
+    "summarize_schema_graph",
     "validate_generated_module",
 ]

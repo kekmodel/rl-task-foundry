@@ -105,6 +105,11 @@ task_composer:
   causal_min_scalar_hops: 3
 
 synthesis:
+  runtime:
+    max_turns: 8
+    tracing: true
+    sdk_sessions_enabled: true
+    explicit_memory_window: 8
   registration_workers:
     worker_count: 2
     connections_per_worker: 2
