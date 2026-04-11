@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 import os
 import sys
@@ -25,6 +26,46 @@ try:
     import resource
 except ImportError:  # pragma: no cover - platform dependent
     resource = None
+
+
+_SAFE_BUILTIN_NAMES = (
+    "__import__",
+    "abs",
+    "all",
+    "any",
+    "AssertionError",
+    "bool",
+    "dict",
+    "enumerate",
+    "Exception",
+    "filter",
+    "float",
+    "int",
+    "isinstance",
+    "KeyError",
+    "len",
+    "list",
+    "map",
+    "max",
+    "min",
+    "range",
+    "reversed",
+    "round",
+    "RuntimeError",
+    "set",
+    "sorted",
+    "str",
+    "sum",
+    "tuple",
+    "TypeError",
+    "ValueError",
+    "zip",
+)
+
+_SAFE_BUILTINS = {
+    name: getattr(builtins, name)
+    for name in _SAFE_BUILTIN_NAMES
+}
 
 
 def _set_memory_limit(memory_limit_mb: int | None) -> None:
@@ -105,6 +146,7 @@ class _CallCounter:
     count: int = 0
 
     def profiler(self, _frame: Any, event: str, _arg: Any) -> Callable[..., Any] | None:
+        # This profiler is process-global, so worker requests must remain serialized.
         if event == "call":
             self.count += 1
             if self.count > self.limit:
@@ -113,7 +155,10 @@ class _CallCounter:
 
 
 def _build_module_globals() -> dict[str, Any]:
-    return {"__name__": "__generated_artifact__"}
+    return {
+        "__name__": "__generated_artifact__",
+        "__builtins__": _SAFE_BUILTINS,
+    }
 
 
 def _load_entrypoint(
@@ -188,6 +233,8 @@ def _build_tool_facade(tool_source: str) -> SimpleNamespace:
 
 def _bind_tool_function(function: Callable[..., Any]) -> Callable[..., Any]:
     async def _bound(*args: Any, **kwargs: Any) -> Any:
+        # Milestone 2 self-tests validate tool logic against a lightweight facade only.
+        # DB-backed tool execution is wired in later milestones.
         result = function(None, *args, **kwargs)
         if asyncio.iscoroutine(result):
             return await result

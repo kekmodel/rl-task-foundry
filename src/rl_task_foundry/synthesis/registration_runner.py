@@ -47,6 +47,7 @@ class ArtifactRegistrationResult(StrictModel):
     artifact_name: RegistrationArtifactName
     artifact_kind: ArtifactKind
     static_errors: list[RegistrationError] = Field(default_factory=list)
+    execution_required: bool = False
     executed: bool = False
     execution_errors: list[RegistrationError] = Field(default_factory=list)
     execution_call_count: int | None = None
@@ -54,7 +55,17 @@ class ArtifactRegistrationResult(StrictModel):
 
     @property
     def passed(self) -> bool:
-        return not self.static_errors and not self.execution_errors
+        return self.static_passed and self.runtime_passed
+
+    @property
+    def static_passed(self) -> bool:
+        return not self.static_errors
+
+    @property
+    def runtime_passed(self) -> bool:
+        if not self.execution_required:
+            return True
+        return self.executed and not self.execution_errors
 
 
 class RegistrationBundleReport(StrictModel):
@@ -72,6 +83,12 @@ async def run_registration_bundle(
     bundle: GeneratedArtifactBundle,
     pool: RegistrationSubprocessPool | None = None,
 ) -> RegistrationBundleReport:
+    """Run Milestone 2 registration checks for a generated artifact bundle.
+
+    Passing an existing pool is the normal production path. Letting the runner create
+    its own pool is primarily a convenience for tests and one-off local checks.
+    """
+
     policy = config.synthesis.registration_policy
     tool = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.TOOL,
@@ -85,6 +102,7 @@ async def run_registration_bundle(
     tool_self_test = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.TOOL_SELF_TEST,
         artifact_kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
+        execution_required=True,
         static_errors=validate_generated_module(
             bundle.tool_self_test_source,
             kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
@@ -120,7 +138,7 @@ async def run_registration_bundle(
     )
 
     owns_pool = pool is None
-    if tool.passed and tool_self_test.passed:
+    if tool.static_passed and tool_self_test.static_passed:
         pool = pool or await RegistrationSubprocessPool.start(config)
         execution_result = await pool.run_tool_self_test(
             tool_source=bundle.tool_source,

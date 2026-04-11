@@ -622,7 +622,10 @@ AST 검사에서 아래를 강제한다.
 - `decimal`
 - `typing`
 - `collections.abc`
-- runtime-provided tool facade
+
+v1에서는 runtime facade를 import로 주입하지 않는다.
+
+- generated code는 runtime-provided function arguments (`tools`, `facts`)를 직접 사용한다
 
 금지 예:
 
@@ -669,8 +672,13 @@ v1에서는 generated code를 두 개의 runtime lane으로 나눈다.
 - worker protocol은 최소한 `validate_module`, `execute_module_entrypoint`, `run_tool_self_test` 요청을 지원한다
 - timeout은 subprocess 단위로 강제한다
 - memory limit도 프로세스 단위로 강제한다
+  - Linux에서는 enforced guard로 취급한다
+  - macOS 개발 환경에서는 best-effort / near no-op일 수 있다
 - main process의 asyncpg pool을 subprocess와 공유하지 않는다
 - registration runner는 `tool + tool_self_test + solution + verifier + shadow_verifier` 번들을 한 번에 평가하는 orchestration helper를 가진다
+  - Milestone 2에서는 `tool_self_test`만 runtime execution 대상이다
+  - `solution`, `verifier`, `shadow_verifier`는 아직 static registration policy만 통과한다
+  - tool self-test는 lightweight facade를 통해 실행되며, 이 단계에서는 live DB connection 대신 `conn=None`이 주입된다
 
 #### Lane B: Production Solver Runtime Lane
 

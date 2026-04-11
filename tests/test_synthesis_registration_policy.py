@@ -77,6 +77,87 @@ def solve(tools):
     assert any(error.code == "dunder_access_forbidden" for error in errors)
 
 
+def test_registration_policy_rejects_dunder_subscript_access() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def solve(tools):
+    data = {"__class__": "secret"}
+    return {"x": data["__class__"]}
+""",
+        kind=ArtifactKind.SOLUTION_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "dunder_subscript_forbidden" for error in errors)
+
+
+def test_registration_policy_rejects_forbidden_subscript_call() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def solve(tools):
+    def helper():
+        return 1
+    handlers = {"open": helper}
+    return handlers["open"]()
+""",
+        kind=ArtifactKind.SOLUTION_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "forbidden_subscript_call" for error in errors)
+
+
+def test_registration_policy_allows_type_annotation_names() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def solve(tools: type) -> dict[str, int]:
+    return {"x": 1}
+""",
+        kind=ArtifactKind.SOLUTION_MODULE,
+        policy=policy,
+    )
+
+    assert all(error.code != "forbidden_symbol" for error in errors)
+    assert errors == []
+
+
+def test_registration_policy_rejects_top_level_executable_statement() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+_cache = [i * i for i in range(10)]
+
+def solve(tools):
+    return {"x": len(_cache)}
+""",
+        kind=ArtifactKind.SOLUTION_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "top_level_statement_forbidden" for error in errors)
+
+
+def test_registration_policy_visits_nested_class_body() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+class Bad:
+    value = holder.__class__
+
+def solve(tools):
+    return {"x": 1}
+""",
+        kind=ArtifactKind.SOLUTION_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "class_definition_forbidden" for error in errors)
+    assert any(error.code == "dunder_access_forbidden" for error in errors)
+
+
 def test_registration_policy_rejects_wrong_solution_signature() -> None:
     policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
     errors = validate_generated_module(
@@ -133,6 +214,24 @@ def run_self_test():
     )
 
     assert any(error.code == "run_self_test_signature_invalid" for error in errors)
+
+
+def test_registration_policy_rejects_duplicate_required_function() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def solve(tools):
+    return {"x": 1}
+
+def solve(tools):
+    return {"x": 2}
+""",
+        kind=ArtifactKind.SOLUTION_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "duplicate_public_function" for error in errors)
+    assert any(error.code == "duplicate_solve_function" for error in errors)
 
 
 def test_runtime_isolation_plan_uses_lane_a_and_b_split() -> None:
@@ -194,6 +293,37 @@ async def get_city(conn, customer_id):
 """,
                 artifact_kind=ArtifactKind.TOOL_MODULE,
             )
+            second = await pool.validate_module(
+                source="""
+async def get_country(conn, customer_id):
+    return {"customer_id": customer_id}
+""",
+                artifact_kind=ArtifactKind.TOOL_MODULE,
+            )
+            return first.worker_pid, second.worker_pid
+        finally:
+            await pool.close()
+
+    first_pid, second_pid = asyncio.run(_run())
+    assert first_pid != second_pid
+
+
+def test_registration_subprocess_pool_restarts_dead_worker() -> None:
+    async def _run() -> tuple[int, int]:
+        config = load_config("rl_task_foundry.yaml")
+        config.synthesis.registration_workers.worker_count = 1
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            first = await pool.validate_module(
+                source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id}
+""",
+                artifact_kind=ArtifactKind.TOOL_MODULE,
+            )
+            worker = pool.workers[0]
+            worker.process.kill()
+            await worker.process.wait()
             second = await pool.validate_module(
                 source="""
 async def get_country(conn, customer_id):

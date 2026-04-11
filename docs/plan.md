@@ -136,6 +136,7 @@ Acceptance:
 - solver runtime tool execution lane 고정
 - timeout / process-memory limit / call-count guard
 - custom AST preflight implementation 선택과 RestrictedPython 비채택 사유를 [ADR 0001](adr/0001-custom-ast-preflight.md)로 문서화
+- Milestone 2 self-test는 lightweight tool facade 기준이며 live DB connection 검증은 이후 milestone에서 연결한다
 
 Acceptance:
 

@@ -54,7 +54,8 @@ def validate_generated_module(
 
     visitor = _PolicyVisitor(policy)
     visitor.visit(tree)
-    errors = visitor.errors[:]
+    errors = _validate_top_level_statements(tree)
+    errors.extend(visitor.errors)
     errors.extend(_validate_module_signature(tree, kind=kind, policy=policy))
     return errors
 
@@ -91,7 +92,7 @@ class _PolicyVisitor(ast.NodeVisitor):
                 node,
                 "relative_import_forbidden",
                 "Relative imports are not allowed in generated code.",
-                "Import only absolute allowlisted modules or runtime-provided facades.",
+                "Use only absolute allowlisted modules and runtime-provided function arguments.",
             )
             return
         module = node.module or ""
@@ -120,13 +121,14 @@ class _PolicyVisitor(ast.NodeVisitor):
             "Dynamic class definitions are not allowed in generated code.",
             "Use plain functions and data literals only.",
         )
+        self.generic_visit(node)
 
     def visit_With(self, node: ast.With) -> None:
         self._error(
             node,
             "with_statement_forbidden",
             "Context managers are not allowed in generated code.",
-            "Use the runtime-provided tool facade instead of custom resource management.",
+            "Use runtime-provided function arguments like 'tools' instead of custom resource management.",
         )
         self.generic_visit(node)
 
@@ -135,7 +137,7 @@ class _PolicyVisitor(ast.NodeVisitor):
             node,
             "async_with_forbidden",
             "Async context managers are not allowed in generated code.",
-            "Use the runtime-provided tool facade instead of custom resource management.",
+            "Use runtime-provided function arguments like 'tools' instead of custom resource management.",
         )
         self.generic_visit(node)
 
@@ -183,6 +185,8 @@ class _PolicyVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
+        if _is_annotation_node(node):
+            return
         if node.id in self.policy.forbidden_symbols:
             self._error(
                 node,
@@ -197,6 +201,25 @@ class _PolicyVisitor(ast.NodeVisitor):
                 f"Dunder-like name '{node.id}' is not allowed.",
                 "Avoid reflection and Python object model escape hatches.",
             )
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        key = _literal_subscript_key(node.slice)
+        if isinstance(key, str):
+            if self.policy.forbid_dunder_access and "__" in key:
+                self._error(
+                    node,
+                    "dunder_subscript_forbidden",
+                    f"Dunder-like subscript key '{key}' is not allowed.",
+                    "Avoid reflective or Python object model escape-hatch keys.",
+                )
+            if _is_call_target(node) and key in self.policy.forbidden_symbols:
+                self._error(
+                    node,
+                    "forbidden_subscript_call",
+                    f"Calling a value loaded from subscript key '{key}' is not allowed.",
+                    "Use runtime-provided function arguments instead of reflective lookup.",
+                )
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -218,6 +241,19 @@ class _PolicyVisitor(ast.NodeVisitor):
                     "Use runtime-injected DB access only.",
                 )
         self.generic_visit(node)
+
+    def generic_visit(self, node: ast.AST) -> None:
+        for field, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        setattr(item, "_policy_parent", node)
+                        setattr(item, "_policy_parent_field", field)
+                        self.visit(item)
+            elif isinstance(value, ast.AST):
+                setattr(value, "_policy_parent", node)
+                setattr(value, "_policy_parent_field", field)
+                self.visit(value)
 
     def _error(
         self,
@@ -247,6 +283,7 @@ def _validate_module_signature(
     functions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
     public_functions = [node for node in functions if not node.name.startswith("_")]
     errors: list[RegistrationError] = []
+    errors.extend(_duplicate_function_errors(public_functions))
 
     if kind is ArtifactKind.TOOL_MODULE:
         if not public_functions:
@@ -283,24 +320,30 @@ def _validate_module_signature(
         return errors
 
     if kind is ArtifactKind.SOLUTION_MODULE:
-        return _require_named_function(
-            public_functions,
-            expected_name="solve",
-            expected_async=False,
-            expected_args=["tools"],
-            missing_code="missing_solve_function",
-            invalid_code="solve_signature_invalid",
+        errors.extend(
+            _require_named_function(
+                public_functions,
+                expected_name="solve",
+                expected_async=False,
+                expected_args=["tools"],
+                missing_code="missing_solve_function",
+                invalid_code="solve_signature_invalid",
+            )
         )
+        return errors
 
     if kind is ArtifactKind.TOOL_SELF_TEST_MODULE:
-        return _require_named_function(
-            public_functions,
-            expected_name="run_self_test",
-            expected_async=True,
-            expected_args=["tools"],
-            missing_code="missing_run_self_test_function",
-            invalid_code="run_self_test_signature_invalid",
+        errors.extend(
+            _require_named_function(
+                public_functions,
+                expected_name="run_self_test",
+                expected_async=True,
+                expected_args=["tools"],
+                missing_code="missing_run_self_test_function",
+                invalid_code="run_self_test_signature_invalid",
+            )
         )
+        return errors
 
     if kind in {ArtifactKind.VERIFIER_MODULE, ArtifactKind.SHADOW_VERIFIER_MODULE}:
         errors.extend(
@@ -366,6 +409,18 @@ def _require_named_function(
                 suggestion=f"Define {expected_name}({', '.join(expected_args)}).",
             )
         ]
+    if len(matches) > 1:
+        return [
+            RegistrationError(
+                code=f"duplicate_{expected_name}_function",
+                line=function.lineno,
+                col=function.col_offset,
+                node_type=type(function).__name__,
+                detail=f"Function '{expected_name}' must be defined exactly once.",
+                suggestion=f"Keep a single definition of {expected_name}({', '.join(expected_args)}).",
+            )
+            for function in matches[1:]
+        ]
     function = matches[0]
     errors: list[RegistrationError] = []
     if expected_async != isinstance(function, ast.AsyncFunctionDef):
@@ -416,4 +471,78 @@ def _call_name(node: ast.AST) -> str:
             parts.append(current.id)
         parts.reverse()
         return ".".join(parts)
+    if isinstance(node, ast.Subscript):
+        base = _call_name(node.value)
+        key = _literal_subscript_key(node.slice)
+        if key is None:
+            return f"{base}[<subscript>]"
+        return f"{base}[{key!r}]"
     return "<unknown>"
+
+
+def _validate_top_level_statements(tree: ast.Module) -> list[RegistrationError]:
+    errors: list[RegistrationError] = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue
+        errors.append(
+            RegistrationError(
+                code="top_level_statement_forbidden",
+                line=getattr(node, "lineno", None),
+                col=getattr(node, "col_offset", None),
+                node_type=type(node).__name__,
+                detail="Top-level executable statements are not allowed in generated modules.",
+                suggestion="Move executable logic inside the required entrypoint functions.",
+            )
+        )
+    return errors
+
+
+def _duplicate_function_errors(
+    functions: Iterable[ast.FunctionDef | ast.AsyncFunctionDef],
+) -> list[RegistrationError]:
+    seen: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    errors: list[RegistrationError] = []
+    for function in functions:
+        previous = seen.get(function.name)
+        if previous is not None:
+            errors.append(
+                RegistrationError(
+                    code="duplicate_public_function",
+                    line=function.lineno,
+                    col=function.col_offset,
+                    node_type=type(function).__name__,
+                    detail=f"Public function '{function.name}' is defined more than once.",
+                    suggestion="Keep a single public definition per function name.",
+                )
+            )
+            continue
+        seen[function.name] = function
+    return errors
+
+
+def _literal_subscript_key(node: ast.AST) -> str | int | float | bool | None:
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, (str, int, float, bool)):
+            return value
+    return None
+
+
+def _is_annotation_node(node: ast.AST) -> bool:
+    current: ast.AST | None = node
+    while current is not None:
+        parent = getattr(current, "_policy_parent", None)
+        field = getattr(current, "_policy_parent_field", None)
+        if field in {"annotation", "returns"}:
+            return True
+        current = parent
+    return False
+
+
+def _is_call_target(node: ast.AST) -> bool:
+    parent = getattr(node, "_policy_parent", None)
+    field = getattr(node, "_policy_parent_field", None)
+    return isinstance(parent, ast.Call) and field == "func"
