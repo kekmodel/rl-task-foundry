@@ -71,3 +71,22 @@ Tradeoffs:
   `src/rl_task_foundry/synthesis/subprocess_worker.py`
 - Lane planning lives in
   `src/rl_task_foundry/synthesis/runtime_policy.py`
+
+## Superseded Sections (2026-04-12)
+
+Sections covering R1~R7 validators for synthesis-generated `tool.py`
+(async contract, parameterized query, read-only, bounded result set,
+no cursor, no server-side state, deterministic SQL) are **partially
+superseded by ADR 0002** (Atomic Tools per Database).
+
+Under ADR 0002, synthesis no longer generates `tool.py`. Atomic tool
+implementations are produced deterministically by the schema-driven
+generator, which satisfies R1~R7 by construction. The AST preflight
+for tool modules is therefore no longer needed.
+
+Preflight validators for `solution.py`, `verifier.py`, and
+`shadow_verifier.py` remain in effect and are extended in ADR 0002 to
+check that these modules call only names present in the db-level
+atomic tool set.
+
+See ADR 0002 for the new validation contract.
