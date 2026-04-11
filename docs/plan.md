@@ -1,420 +1,404 @@
-# Plan 2: Composition-Centric Rewrite Plan
+# Plan 3: Synthesis-Agent Hybrid Rewrite Plan
 
 ## Objective
 
-이 계획의 목적은 RL Task Foundry를 `path-centric single-value lookup generator`에서  
-`composition-centric constraint satisfaction task generator`로 전면 재설계하는 것이다.
+이 계획의 목적은 RL Task Foundry를 `path-centric task generator`에서  
+`synthesis-agent driven environment generator`로 전면 재설계하는 것이다.
 
-이번 계획은 clean break를 전제로 한다.
+새 시스템은 임의의 read-only PostgreSQL DB를 등록하면, 해당 DB에 대해 compositional task environment를 자동 생성하고, hybrid verifier 기반 quality gate를 통과한 환경만 registry에 누적한다.
 
-- 기존 task generation layer는 더 이상 incremental improvement하지 않는다
-- infra / solver / orchestration 자산은 최대한 보존한다
-- rewrite는 `spec -> core contract -> proof task -> generalized factory` 순서로 진행한다
+## Rewrite Ground Rules
+
+1. task generation 관련 코드의 incremental polishing은 중단한다
+2. 먼저 문서와 core contract를 고정한다
+3. 그 다음 proof environment 하나를 끝까지 만든다
+4. generalized factory는 proof environment 이후로 미룬다
+5. infra / solver / orchestration skeleton은 최대한 유지한다
 
 ## Deliverable
 
-Plan 2가 끝나면 아래가 가능해야 한다.
+Plan 3가 끝나면 아래가 가능해야 한다.
 
-1. DB schema에서 entity / relation primitive를 읽는다
-2. path catalog 위에 plan catalog를 생성한다
-3. `CompositeTaskPlan + ConstraintDSL + AnswerSchema v2` 기반 task contract를 만든다
-4. deterministic candidate enumeration 또는 compiled checker로 valid solution set을 정의한다
-5. solver answer를 execution-based constraint checker로 binary verification한다
-6. entity-centric tools로 composition task를 풀게 한다
-7. pass-rate band를 보고 slot/constraint 중심으로 난이도를 조절한다
-8. review pack으로 생성 품질을 지속적으로 정성 평가한다
+1. DB registry에 새 DB를 등록한다
+2. scheduler가 DB를 하나 선택해 synthesis loop를 돈다
+3. synthesis agent가 environment 4-tuple을 생성한다
+4. code registration policy가 generated code를 검사한다
+5. self-consistency, shadow verifier, cross-instance, solver pass-rate quality gate를 통과한 environment만 registry에 커밋한다
+6. review pack에서 compositional task quality를 사람이 지속적으로 확인할 수 있다
 
 ## Explicit Non-Deliverable
 
 이번 계획은 아래를 하지 않는다.
 
-- path-centric Tier A와 composition-centric Tier C를 병행 운영
-- 현재 path-centric accepted dataset을 production training에 사용
-- 기존 task factory를 장기간 유지한 채 우회 보강
+- path-centric baseline을 계속 보강하는 것
+- baseline accepted dataset을 training source로 쓰는 것
+- multi-DB joint task generation
+- fuzzy / subjective verifier
 
-## Rewrite Constraints
+## Preserved Modules
 
-### Constraint 1: Code Freeze Boundary
+다음은 유지 또는 최소 수정 재사용을 목표로 한다.
 
-task generation 관련 코드는 더 이상 점진 개선하지 않는다.
-
-문서 합의 전에는 아래만 허용된다.
-
-- spec / plan 문서 수정
-- baseline snapshot 보존
-- review artifact 확인
-
-### Constraint 2: Infra Preservation
-
-아래는 가능한 한 유지한다.
-
-- `infra/`
 - `config/`
+- `infra/`
 - `solver/backend_openai_agents.py`
 - `calibration/`
-- `pipeline/orchestrator.py`의 runtime skeleton
-- `schema/introspect.py`, `schema/graph.py`
+- `pipeline/orchestrator.py` skeleton
+- `schema/introspect.py`, `schema/graph.py`, `schema/path_catalog.py`
+- `verification/shadow.py` 개념
 - `infra/json_chat_client.py`
+- `cli.py`
+- `pipeline/review_pack.py` 구조
 
-### Constraint 3: Binary Reward 유지
+## Rewrite Modules
 
-새 verifier도 RLVR reward는 binary만 사용한다.
+전면 재작성 대상으로 본다.
 
-- all hard constraints satisfied -> `1`
-- otherwise -> `0`
-
-diagnostic per-constraint scores는 기록만 한다.
-
-### Constraint 4: Determinism 우선
-
-composition task여도 verifier noise는 허용하지 않는다.
-
-- deterministic candidate enumeration
-- stable canonical solution selection
-- compiled checker replay
-- tie-break / float / date / NULL 규칙 명시
+- `tasks/factory.py`
+- `tasks/composer.py`
+- `tasks/question_generation.py`
+- `tasks/package_validation.py`
+- `tasks/provenance.py`
+- `truth/generator.py`
+- `truth/canonicalize.py` contract 부분
+- `tools/compiler.py`
+- `tools/sql_templates.py`
+- `tools/model_naming.py`
+- `tools/naming_eval.py`
+- `verification/compare.py`
 
 ## Milestones
 
-### Milestone 0: Freeze and Baseline
+### Milestone A: Freeze, Baseline, and Registry Foundations
 
 목표:
 
-- 현재 path-centric baseline을 archive하고 rewrite 입력으로 삼는다
+- rewrite 기간의 baseline과 registry contract를 고정한다
 
 작업:
 
-- 최신 review pack archive 유지
-- current green test suite를 baseline으로 기록
-- production run 금지 상태 명시
+- latest review pack을 baseline snapshot으로 기록
+- current green suite를 infra regression baseline으로 명시
+- environment registry directory layout 설계
+- sqlite registry index schema 설계
+- DB registry metadata schema 설계
+
+산출물:
+
+- `docs/spec.md`
+- `docs/plan.md`
+- registry schema draft
 
 Acceptance:
 
-- baseline review pack 경로가 문서에 기록돼 있다
-- rewrite 기간 동안 accepted dataset export는 training source로 사용되지 않는다
+- baseline snapshot path가 문서에 기록돼 있다
+- registry schema가 env/db/category/difficulty/status/pass-rate를 표현할 수 있다
 
-### Milestone 1: Core Contract Redesign
+### Milestone B: Core Contracts
 
 목표:
 
-- composition-centric core contract를 타입 수준에서 정의한다
+- environment generation의 핵심 타입을 고정한다
 
 작업:
 
-- `CompositeTaskPlan`
-- `EntitySlot`
-- `ConstraintDSL`
-- `AnswerSchema v2`
-- `GroundTruth v2`
-- `VerifyResult` diagnostic extension
+- `EnvironmentContract`
+- `ToolContract`
+- `TaskContract`
+- `VerifierContract`
+- `ShadowVerifierContract`
+- `CrossInstanceSet`
 
-Files:
+필수 요구:
 
-- `tasks/models.py`
-- `truth/schemas.py`
-- `verification/policies.py`
+- environment directory 레이아웃과 1:1 대응
+- function signature contract 포함
+- metadata hash / provenance fields 포함
 
 Acceptance:
 
-- one-file prototype로 trip-planning 수준 task contract를 표현할 수 있다
-- nested / array answer schema가 타입으로 표현된다
+- environment 하나를 코드 없이 JSON/YAML만으로 기술할 수 있다
+- verifier stage separation을 타입으로 표현할 수 있다
 
-### Milestone 2: Constraint Checker and Solution Methodology
+### Milestone C: Code Registration Policy
 
 목표:
 
-- `exact field match`가 아니라 `constraint execution`을 verifier source of truth로 만든다
+- generated Python code를 안전하게 등록 / 실행할 수 있게 한다
 
 작업:
 
-- ConstraintDSL evaluator 설계
-- candidate enumeration contract 설계
-- canonical solution selection contract 설계
-- checker payload serialization 설계
-- deterministic rules 공통 모듈 설계
+- AST import allowlist
+- forbidden builtins / attributes
+- forbidden syntax rules
+- function signature validation
+- runtime timeout contract
+- call-count / memory guard contract
+- readonly DB mediation contract
 
-Files:
+파일 후보:
 
-- `truth/generator.py`
-- `verification/compare.py`
-- `truth/canonicalize.py`
+- 신규 `synthesis/registration_policy.py`
+- `infra/` runtime wrappers
 
 Acceptance:
 
-- valid solution이 여러 개인 task도 verifier가 binary pass/fail을 결정할 수 있다
-- per-constraint diagnostics를 기록할 수 있다
+- 허용되지 않은 import / file I/O / subprocess / eval이 등록 단계에서 차단된다
+- tool / solution / verifier signature mismatch는 즉시 reject된다
 
-### Milestone 3: Entity-Centric Tool Surface
+### Milestone D: Synthesis Agent Runtime
 
 목표:
 
-- path-bound tool bundle을 entity-centric tool bundle로 대체한다
+- OpenAI Agents SDK 기반 synthesis meta-agent runtime을 만든다
 
 작업:
 
-- entity retrieval tool classes 정의
-- attribute selection contract 정의
-- deterministic bounded query rule 정의
-- `L1/L2` naming layer 유지 전략 정의
+- schema exploration phase
+- category inference phase
+- tool/task/solution/verifier generation phase
+- repair / retry loop
+- explicit memory / tool trace contract
 
-Files:
+재사용:
 
-- `tools/models.py`
-- `tools/compiler.py`
-- `tools/sql_templates.py`
+- `solver/backend_openai_agents.py` 구조
+- `submit_result()` 개념 대신 environment draft finalization event
 
 Acceptance:
 
-- 하나의 composition proof task를 solver가 entity-centric tools만으로 풀 수 있다
-- tool surface가 schema chain 설명 없이도 answerable하다
+- 단일 DB에서 단일 category에 대해 environment draft 하나를 생성할 수 있다
 
-### Milestone 4: Plan Catalog
+### Milestone E: Hybrid A + Hybrid B Enforcement
 
 목표:
 
-- path catalog 위에 composition template abstraction을 올린다
+- verifier 신뢰도의 핵심 제약을 enforced contract로 만든다
 
 작업:
 
-- plan template families 정의
-- slot graph abstraction 정의
-- difficulty feature 정의
-- template viability checks 정의
-
-Files:
-
-- `schema/path_catalog.py`
-- `tasks/factory.py`
-- 신규 `plan catalog` 모듈
+- fact check must use tools
+- fact stage / constraint stage separation
+- static analyzer로 verifier body 검사
+- runtime instrumentation으로 tool usage trace 수집
 
 Acceptance:
 
-- one path가 아니라 multiple relation primitive를 합쳐 하나의 plan template를 만들 수 있다
-- difficulty가 slot/constraint 기준으로 계산된다
+- pure-hardcoded verifier는 등록 단계에서 reject된다
+- fact-free constraint-only verifier는 reject된다
 
-### Milestone 5: Proof Task Vertical Slice
+### Milestone F: Proof Environment Vertical Slice
 
 목표:
 
-- trip-planning 수준의 compositional proof task 하나를 end-to-end로 통과시킨다
+- compositional proof environment 하나를 end-to-end로 통과시킨다
 
 권장 proof task:
 
-- itinerary / assignment / bundle construction 중 하나
+- trip planning 비슷한 fixture
 - 3개 이상 slot
-- uniqueness constraint 포함
-- conditional budget constraint 포함
-- answer schema는 array of objects
+- uniqueness
+- conditional threshold
+- locality constraint
+- answer schema는 `list[object]`
 
 작업:
 
-- fixture DB 또는 synthetic fixture schema 준비
-- plan 생성
-- canonical solution / checker 생성
-- solver execution
-- binary verification
-- review pack 생성
+- fixture DB 또는 synthetic DB 준비
+- tools synthesis
+- task synthesis
+- solution synthesis
+- verifier synthesis
+- self-consistency loop
 
 Acceptance:
 
+- solution이 verifier를 통과한다
+- verifier는 hybrid A/B 제약을 만족한다
 - review pack에서 사람이 봐도 compositional task로 인정된다
-- solver가 실제로 constraint reasoning을 해야 한다
-- verifier noise가 없다
 
-### Milestone 6: Question Composer and Judge Rewrite
+### Milestone G: Hybrid C + Hybrid D
 
 목표:
 
-- question / tool presentation / judge를 composition contract 기준으로 다시 짠다
+- shadow verifier와 cross-instance consistency를 production mandatory로 붙인다
 
 작업:
 
-- question composer agent prompt 전면 수정
-- task package judge rubric 전면 수정
-- tool presentation judge와의 관계 재정의
-- seed fallback 정책 재정의
-
-Files:
-
-- `tasks/composer.py`
-- `tasks/package_validation.py`
-- `tasks/question_generation.py`
+- independent shadow verifier generation
+- disagreement logging
+- instance parameterization
+- cross-instance validation loop
 
 Acceptance:
 
-- question이 single-value lookup phrasing을 벗어난다
-- review pack 정성평가에서 “실제 사용자 요청”처럼 보인다
+- shadow disagreement rate가 측정된다
+- instance별 서로 다른 valid solution을 verifier가 correctly accept한다
 
-### Milestone 7: Generalized Composite Factory
+### Milestone H: Quality Gate 5-Stage Pipeline
 
 목표:
 
-- proof task 하나에서 끝내지 않고 arbitrary DB primitive 위에 composition task를 생성한다
+- 전체 quality filter를 orchestrated pipeline으로 만든다
+
+단계:
+
+1. code registration policy
+2. self-consistency
+3. shadow verifier agreement
+4. cross-instance consistency
+5. solver pass-rate band
 
 작업:
 
-- generic template matching
-- deterministic anchor/reference sampling
-- constraint instantiation
-- negative outcome policy 재정의
-
-Files:
-
-- `tasks/factory.py`
+- stage별 rejection reason schema
+- stage별 retry / discard policy
+- CI-based early termination
 
 Acceptance:
 
-- 특정 fixture DB에 특화되지 않고 다른 relational schema에도 적용 가능하다
-- review pack에서 family 다양성이 실제로 나타난다
+- environment는 5단계를 모두 통과해야 accepted 된다
+- rejection reason이 structured하게 남는다
 
-### Milestone 8: Orchestrator Integration
+### Milestone I: Domain Scheduler and Multi-DB Production Loop
 
 목표:
 
-- 새 task contract를 기존 orchestration skeleton에 연결한다
+- 여러 DB를 registry에서 순차 처리하는 production loop를 만든다
 
 작업:
 
-- composed task -> solver -> checker -> export
-- calibration decision을 slot/constraint difficulty 기준으로 갱신
-- checkpoint / budget / circuit breaker 경로 유지
-
-Files:
-
-- `pipeline/orchestrator.py`
-- `calibration/*`
+- DB add/remove contract
+- round-robin / priority scheduler
+- per-DB progress tracking
+- retry / backoff / starvation protection
+- checkpoint / resume
 
 Acceptance:
 
-- rolling orchestration, provider resilience, checkpoint, budget가 새 paradigm에서도 유지된다
+- DB가 동적으로 추가되어도 scheduler가 처리할 수 있다
+- DB 간 task가 섞이지 않는다
 
-### Milestone 9: Review and Export Readiness
+### Milestone J: Environment Registry, Dedup, Coverage
 
 목표:
 
-- rewrite 결과를 사람이 계속 볼 수 있는 artifact loop를 고정한다
+- accepted environment를 durable registry로 관리한다
 
 작업:
 
-- review pack schema 확장
-- constraint summary 포함
-- canonical solution / valid solution semantics 포함
-- accepted export schema 재정의
-
-Files:
-
-- `pipeline/review_pack.py`
-- `pipeline/export.py`
+- filesystem registry
+- sqlite index
+- dedup signatures
+- coverage counters
+- generator versioning
 
 Acceptance:
 
-- review pack만 봐도 task quality와 verifier contract를 이해할 수 있다
+- 같은 DB 안에서 near-duplicate environment를 감지할 수 있다
+- category / difficulty coverage를 계산할 수 있다
 
-## First Implementation Sequence
+### Milestone K: Review Pack and Observability
 
-코드 재작성 순서는 아래를 따른다.
+목표:
 
-1. `spec.md` 확정
-2. `plan.md` 확정
-3. core contract 타입 정의
-4. proof task vertical slice
-5. verifier / checker proof
-6. tool surface proof
-7. composer / judge proof
-8. generalized factory
-9. orchestrator reintegration
+- 사람이 계속 품질을 볼 수 있는 artifact loop를 고정한다
 
-즉 generalized rewrite 전에 반드시 `proof task`를 먼저 끝까지 증명한다.
+작업:
 
-## Recommended Proof Task Shape
+- review pack에 constraint summary 추가
+- verifier summary / shadow summary 추가
+- instance summary 추가
+- environment-level metrics 노출
 
-proof task는 아래 특성을 가져야 한다.
+Acceptance:
 
-- slot 3개 이상
-- cross-slot uniqueness
-- one conditional constraint
-- one numeric threshold
-- one locality / compatibility constraint
-- answer format은 list of objects
+- review pack만 봐도 environment 품질과 verifier contract를 이해할 수 있다
 
-예:
+## First Proof Sequence
 
-- 3-day itinerary
-- multi-shift roster
-- constrained bundle assembly
+실제 구현 순서는 아래가 좋다.
 
-## Difficulty Redefinition
+1. core contracts
+2. registration policy
+3. synthesis runtime skeleton
+4. hybrid A/B enforcement
+5. proof environment vertical slice
+6. hybrid C/D
+7. quality gate pipeline
+8. scheduler
+9. registry / dedup / coverage
 
-adaptive difficulty는 아래 순서로 올린다.
+## Quality Filter Defaults
 
-1. slot count
-2. candidate width
-3. constraint count
-4. conditional depth
-5. uniqueness scope
-6. temporal window complexity
-7. tool presentation level
+초기 제안값:
 
-더 이상 `required_hops`가 중심 난이도 축이 아니다.
+```yaml
+quality_filter:
+  attempts_per_env: 10
+  lower_pass_rate: 0.25
+  upper_pass_rate: 0.75
+  ci_alpha: 0.1
+  safe_early_termination: true
+  shadow_disagreement_threshold: 0.05
+  min_cross_instances: 3
+  require_all_instances_pass_verifier_consistency: true
+```
+
+품질 우선이므로 비용 상한은 낮은 우선순위다.
 
 ## Test Strategy
 
-rewrite 중 테스트는 두 층으로 나눈다.
+### Layer 1: Infra Regression
 
-### Layer A: Infra Regression
-
-현재 green suite는 계속 유지한다.
-
-목적:
+현재 green suite는 아래를 계속 보호한다.
 
 - db pool
 - checkpoint
 - budget
 - solver runtime
-- provider resilience
 - calibration skeleton
+- provider resilience
 
-### Layer B: New Paradigm Proof
+### Layer 2: New Paradigm Proof Tests
 
-새 테스트는 proof task 중심으로 시작한다.
+신규 테스트는 아래 중심으로 시작한다.
 
-포함:
-
-- contract validation
-- checker determinism
-- multiple valid solution handling
-- binary verification
-- review pack quality smoke
+- registration policy AST rejection
+- verifier stage separation
+- self-consistency loop
+- cross-instance checker stability
+- proof environment binary verification
 
 ## Review Strategy
 
-이 rewrite에서는 정성 평가가 필수다.
+이 rewrite에서는 review pack 정성 평가가 필수다.
 
 반드시 반복한다.
 
-1. small review pack 생성
-2. 질문 / tool set / answer format / constraint summary를 사람 눈으로 확인
-3. 문제 유형을 기록
-4. prompt / contract / template를 수정
+1. small environment batch 생성
+2. question / tool set / verifier summary / constraint summary를 직접 읽는다
+3. 품질 문제를 taxonomy로 기록한다
+4. prompt / policy / category inference를 수정한다
 
-즉 테스트 green만으로 진행 판단을 하지 않는다.
+즉 green tests만으로 진행 결정을 내리지 않는다.
 
 ## Success Criteria
 
 이 계획의 성공은 아래로 판단한다.
 
-- generated task가 single-value lookup처럼 보이지 않는다
+- generated environment가 lookup task처럼 보이지 않는다
 - solver가 실제 composition reasoning을 해야 한다
-- verifier가 deterministic binary reward를 준다
-- arbitrary relational DB에도 적용 가능한 template abstraction이 있다
-- review pack 정성 평가에서 예시 수준 이상의 quality가 반복적으로 나온다
+- verifier는 DB-grounded deterministic binary reward를 준다
+- shadow / cross-instance / pass-rate 품질 필터가 모두 동작한다
+- arbitrary DB를 registry에 추가해도 pipeline이 돌아간다
 
 ## Stop Conditions
 
-아래 중 하나면 다시 설계를 멈추고 조정한다.
+아래 중 하나면 구현을 멈추고 문서로 돌아간다.
 
-- verifier가 canonical exact-match에 다시 의존하게 될 때
-- question만 자연스러워지고 core contract는 lookup에 머물 때
-- template가 특정 fixture schema에만 맞을 때
-- review pack 품질이 높지 않은데도 test green만으로 진행하려 할 때
+- verifier가 다시 self-consistent but ungrounded Python checker로 흐를 때
+- question만 자연스럽고 contract는 여전히 lookup일 때
+- proof environment 없이 generalized factory부터 만들려 할 때
+- review pack 품질이 낮은데도 green tests만으로 진행하려 할 때
 

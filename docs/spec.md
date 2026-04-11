@@ -1,572 +1,616 @@
-# RL Task Foundry — Composition-Centric Design Spec
+# RL Task Foundry — Synthesis-Agent Hybrid Design Spec
 
 ## Overview
 
-이 프로젝트의 목표는 PostgreSQL 스키마를 읽어 RLVR용 synthetic dataset을 대량 생산하는 것이다.  
-다만 핵심 task paradigm은 더 이상 `path-centric single-value lookup`이 아니다.
+이 프로젝트의 목표는 사람이 PostgreSQL DB를 등록하면, 그 DB를 바탕으로 RLVR용 high-quality compositional task environment를 자동 생성하고, 엄격한 품질 필터를 통과한 environment만 dataset registry에 누적하는 상시 파이프라인을 만드는 것이다.
+
+핵심 paradigm은 더 이상 `path-centric single-value lookup`이 아니다.
 
 새 기준은 아래와 같다.
 
-- solver가 실제로 조합적 계획과 제약 만족을 풀어야 한다
-- verifier는 여전히 noise 없는 deterministic binary reward를 줘야 한다
-- task는 하나의 값 조회가 아니라 `여러 entity slot + cross-slot constraints`를 가진 composition problem이어야 한다
+- task는 `<environment, tools, task, verifier>` 4-tuple 단위로 생성한다
+- synthesis agent가 task, tool surface, solution, verifier를 함께 합성한다
+- 그러나 verifier 신뢰도는 `hybrid DB-grounded constraints`로 강하게 통제한다
+- solver는 compositional reasoning을 풀고, verifier는 deterministic binary reward를 준다
 
-대표 예시는 trip planning, roster assignment, bundle construction, multi-day itinerary, eligibility-constrained matching 같은 과제다.
+대표 목표 task는 다음 수준이다.
 
-이 문서는 기존 path-centric baseline을 대체하는 새 기준 문서다. 현재 코드베이스의 infra / orchestration / solver substrate 자산은 최대한 유지하고, task generation / truth generation / verification contract를 composition paradigm으로 재설계한다.
+- trip planning
+- roster / assignment
+- bundle construction
+- no-repeat recommendation
+- threshold-conditioned selection
+- temporal / budget / uniqueness constraints가 섞인 planning task
 
-## Why This Rewrite
+즉 이 시스템은 “값 하나를 조회하는 질문 생성기”가 아니라,  
+“임의 DB에 대해 compositional reasoning environment를 자동 생성하고 품질 필터링하는 production pipeline”이다.
 
-현재 single-value lookup 중심 생산물은 다음 한계가 있다.
+## Why A Clean Break Is Required
 
-- RLVR 학습 신호가 약하다
-- 실제 사용자 요청 수준의 compositional reasoning으로 일반화되기 어렵다
-- question quality를 올려도 core contract가 여전히 단순 조회에 머문다
-- path/hop 난이도만으로는 진짜 계획형 문제의 complexity를 표현할 수 없다
+기존 path-centric 구조는 다음 상한을 가진다.
 
-따라서 설계 중심을 아래처럼 이동한다.
+- 대부분 scalar / count / bool 수준의 answer shape
+- question이 자연스러워져도 core contract는 단순 lookup
+- conditional branching, uniqueness, threshold, multi-slot dependency를 표현하기 어려움
+- reverse aggregate, multi-field record, sampling 개선을 해도 복잡도 상한 자체는 깨지지 않음
 
-- `path`는 더 이상 task 그 자체가 아니다
-- `path catalog`는 `plan catalog`를 만들기 위한 하위 primitive다
-- verifier는 `exact field match`보다 `constraint satisfaction`을 평가한다
-- tool surface는 path-bound lookup 집합보다 entity-centric retrieval 집합으로 이동한다
+따라서 필요한 것은 incremental improvement가 아니라 paradigm 전환이다.
 
-## Core Principles
+## Operating Principles
 
 1. `hard to solve, easy to verify`
-2. task는 `composition-first`, path는 그 구성 primitive다
-3. solver runtime과 RL rollout runtime은 같은 상태 기계를 사용한다
-4. reward는 끝까지 binary이며, diagnostic은 별도 채널로 남긴다
-5. correctness는 SDK가 아니라 domain contract와 constraint checker가 책임진다
-6. dataset quality는 테스트 숫자보다 generated review pack의 정성 평가를 통해 계속 검증한다
+2. 품질 최우선. throughput보다 quality gate가 우선이다
+3. verifier 신뢰도는 RLVR의 핵심 자산이며 절대 희생하지 않는다
+4. arbitrary relational DB에 대응해야 하며, schema/domain 하드코딩을 금지한다
+5. DB 간 task를 섞지 않는다. 한 environment는 정확히 한 DB에 속한다
+6. DB는 언제든 registry에 추가될 수 있어야 한다
+7. reward는 binary만 사용하고, diagnostics는 별도 채널로 기록한다
 
-## Goals
+## System Goal
 
-- PostgreSQL schema에서 entity, relation, attribute 구조를 읽는다
-- composition template를 자동 생성할 수 있는 `plan catalog`를 만든다
-- entity slot과 constraint set을 가진 task contract를 생성한다
-- deterministic solver-visible tools를 entity-centric surface로 제공한다
-- valid solution set을 enumerate하거나 constraint checker를 compile한다
-- solver 답을 constraint execution으로 검증한다
-- 여러 solver replica를 병렬 실행해 pass-rate band에 맞춰 난이도를 조절한다
-- review pack과 accepted dataset을 함께 관리한다
+시스템의 장기 목표는 아래다.
+
+- 사용자는 read-only PostgreSQL DB만 등록한다
+- system이 schema를 탐색한다
+- system이 domain/category를 추론한다
+- synthesis agent가 environment 4-tuple을 작성한다
+- self-consistency / shadow verifier / cross-instance / solver pass-rate quality gate를 통과한 environment만 registry에 커밋한다
+- registry는 계속 커지고, scheduler는 DB별로 round-robin 또는 priority queue로 작업한다
 
 ## Non-Goals
 
-- 자연어 품질만 개선한 single-value lookup dataset 생산
-- fuzzy grading이나 semantic similarity reward
-- human-in-the-loop labeling이 필수인 verifier
-- production training run을 현재 rewrite 중간 산출물에 바로 연결하는 것
+- path-centric Tier A와 composition-centric Tier C를 병행 유지하는 것
+- 현재 baseline dataset으로 production RL training을 시작하는 것
+- fuzzy / semantic similarity verifier
+- verifier correctness를 사람 수동 리뷰에 의존하는 운영
+- DB 직접 write가 필요한 environment generation
 
 ## Clean Break Policy
 
-이 rewrite는 `Tier A path-centric`와 `Tier C composition-centric`를 병행 운영하지 않는다.
+이 rewrite는 clean break다.
 
 - 기존 path-centric baseline은 freeze한다
-- 기존 review pack은 baseline snapshot으로 보존한다
-- production run은 composition contract가 proof되기 전까지 금지한다
-- 새 구현은 기존 task generation layer를 대체하는 clean break를 목표로 한다
+- baseline review pack은 archive로 보존한다
+- production run은 새 hybrid pipeline이 proof되기 전까지 금지한다
+- 기존 task generation layer는 더 이상 점진 보강하지 않는다
 
-## Preserved Assets
+## Current Assets To Preserve
 
-그대로 유지하거나 최대한 재사용한다.
+다음 자산은 최대한 유지한다.
 
+- `config/` 구조 및 load 메커니즘
 - `infra/`
-  - DB pool
+  - db pool
   - events
   - budget
   - checkpoint
   - storage
   - privacy
-- `config/` 구조와 load 메커니즘
 - `solver/backend_openai_agents.py`
   - `submit_result()`
+  - structured output
   - explicit terminal action
-  - structured output handling
-- `verification/shadow.py`와 verification framework 골격
 - `calibration/`
   - pass-rate band
   - Clopper-Pearson CI
   - safe early stop
 - `pipeline/orchestrator.py`
-  - rolling semaphore
-  - provider circuit breaker
-  - checkpoint / budget / export 골격
-- `cli.py`, `review_pack.py` 구조
-- `schema/graph.py`, `schema/introspect.py`
+  - rolling orchestration
+  - provider semaphore
+  - circuit breaker
+  - checkpoint / budget / export skeleton
+- `schema/introspect.py`, `schema/graph.py`, `schema/path_catalog.py`
+- `verification/shadow.py`의 independent-verifier 개념
 - `infra/json_chat_client.py`
+- `cli.py`, `pipeline/review_pack.py`의 shell 구조
 
 ## Rewrite Targets
 
-전면 재설계 대상은 아래다.
+다음 계층은 전면 재설계 대상이다.
 
 - `tasks/factory.py`
 - `tasks/composer.py`
+- `tasks/question_generation.py`
 - `tasks/package_validation.py`
+- `tasks/provenance.py`
 - `truth/generator.py`
+- `truth/canonicalize.py`의 contract 부분
 - `tools/compiler.py`
 - `tools/sql_templates.py`
+- `tools/model_naming.py`
+- `tools/naming_eval.py`
 - `verification/compare.py`
 
-부분 보강 대상으로는 아래가 있다.
+## System Architecture
 
-- `truth/canonicalize.py`
-  - nested / array / multi-slot answer 지원 확장
-- `schema/path_catalog.py`
-  - 유지하되 상위의 `plan catalog`가 필요
+### Top-Level Structure
 
-## New Architecture
+```text
+DB Registry
+  -> Domain Scheduler
+  -> Synthesis Orchestrator
+  -> Quality Gate
+  -> Environment Registry
+```
 
-시스템은 다섯 층으로 나뉜다.
+### Layer Breakdown
 
-1. `Schema + Entity Layer`
+1. `Schema + Domain Discovery`
    - schema introspection
-   - PK/FK graph
-   - entity profile
-   - attribute visibility
+   - FK graph
+   - sample row inspection
+   - domain / category inference
 
-2. `Plan Catalog Layer`
-   - composition template library
-   - slot graph
-   - constraint family
-   - difficulty features
+2. `Synthesis Layer`
+   - tool synthesis
+   - task synthesis
+   - solution synthesis
+   - verifier synthesis
+   - difficulty crank
 
-3. `Task Synthesis Layer`
-   - contract-first task generation
-   - question composition
-   - tool presentation composition
-   - task package judge
+3. `Registration and Runtime Safety Layer`
+   - AST policy
+   - function contract validation
+   - runtime timeout / resource limits
+   - DB access mediation
 
-4. `Solution + Verification Layer`
-   - deterministic solution enumeration
-   - canonical solution selection
-   - execution-based constraint checker
+4. `Quality Gate Layer`
+   - self-consistency
+   - shadow verifier
+   - cross-instance consistency
+   - solver pass-rate filter
 
-5. `Runtime + Orchestration Layer`
-   - solver swarm
-   - calibration
-   - checkpoint / budget / export
+5. `Registry + Orchestration Layer`
+   - filesystem environment registry
+   - sqlite index
+   - dedup
+   - coverage
+   - scheduler
 
-### High-Level Flow
+## Environment as the Core Unit
+
+### Environment 4-Tuple
+
+각 environment는 아래 4-tuple이다.
+
+- `environment`
+- `tools`
+- `task`
+- `verifier`
+
+이 네 개를 함께 생성하고 함께 품질 평가한다.
+
+### Filesystem Layout
 
 ```text
-Postgres
-  -> schema introspection
-  -> entity graph + relation graph
-  -> plan catalog
-  -> composite task contract
-  -> question + presented tool bundle composition
-  -> deterministic solution enumerator / constraint checker
-  -> solver swarm execution
-  -> execution-based verification
-  -> adaptive calibration
-  -> review pack / accepted dataset export
+environments/
+  <env_id>/
+    environment.yaml
+    tools.py
+    task.json
+    solution.py
+    verifier.py
+    shadow_verifier.py
+    instances/
+      instance_1.json
+      instance_2.json
+      instance_3.json
 ```
 
-## Agent Runtime Contract
+### Environment Metadata
 
-solver와 RL rollout agent는 같은 step contract를 따른다.
+`environment.yaml`은 최소 아래를 포함한다.
 
-```text
-Observation -> Policy Call -> Action -> Tool Result -> State Update
+```yaml
+env_id: str
+db_id: str
+domain: str
+category: str
+difficulty_level: str
+created_at: str
+generator_version: str
+tool_hash: str
+task_signature: str
+status: draft | accepted | rejected | archived
+quality_metrics:
+  self_consistency_pass: bool
+  shadow_disagreement_rate: float
+  solver_pass_rate: float
+  solver_ci_low: float
+  solver_ci_high: float
 ```
 
-여기서 action은 다음을 포함한다.
+## Task Complexity Target
 
-- entity-centric retrieval tool 호출
-- optional summarization event
-- `submit_result()` terminal action
+이 시스템이 지향하는 task는 다음 성질을 가져야 한다.
 
-메모리, summary, tool trace는 모두 explicit event다.  
-최종 제출은 반드시 `submit_result()` tool 호출로만 처리한다.
-
-## Core Task Paradigm
-
-### Old Paradigm
-
-- 하나의 anchor row
-- 하나의 path
-- 하나의 scalar/list/count answer
-- verifier는 mostly field equality
-
-### New Paradigm
-
-- 하나 이상의 anchor / reference entity
-- 여러 `slot`
-- slot 간 제약
-- answer는 nested rows / arrays / records일 수 있음
-- verifier는 constraint execution
-
-즉 task는 `무슨 경로를 따라 무엇을 읽느냐`보다  
-`어떤 entities를 골라 어떤 global constraints를 만족시키느냐`가 핵심이다.
-
-## Core Data Model
-
-### Entity Slot
-
-```python
-EntitySlot:
-  slot_id: str
-  entity_type: str
-  cardinality: "one" | "many"
-  source_plan_node: str
-  visible_attributes: list[str]
-  required_output_fields: list[str]
-```
-
-### Constraint DSL
-
-constraint는 solver 답이 만족해야 하는 predicate다.
-
-```python
-Constraint:
-  constraint_id: str
-  kind:
-    - equality
-    - inequality
-    - range
-    - membership
-    - uniqueness_across
-    - cardinality
-    - conditional
-    - implication
-    - ordering
-    - budget_sum
-    - threshold_by_bucket
-    - same_location_as
-    - no_repeat
-  args: dict[str, object]
-  severity: "hard"
-  description: str
-```
-
-### CompositeTaskPlan
-
-```python
-CompositeTaskPlan:
-  plan_id: str
-  template_family: str
-  slots: list[EntitySlot]
-  constraints: list[Constraint]
-  objective:
-    "find_any_valid_solution" | "find_canonical_solution"
-  candidate_sources: list[str]
-  difficulty_features: dict[str, float | int | bool | str]
-```
-
-### AnswerSchema v2
-
-```python
-AnswerField:
-  name: str
-  type:
-    - "string"
-    - "int"
-    - "float"
-    - "bool"
-    - "date"
-    - "datetime"
-    - "enum"
-    - "object"
-    - "list[string]"
-    - "list[int]"
-    - "list[object]"
-  nullable: bool
-  ordered: bool
-  canonicalizer: str
-  description: str
-  visibility: "user_visible" | "internal" | "blocked"
-  source_columns: list[str]
-
-AnswerSchema:
-  version: "v2"
-  fields: list[AnswerField]
-  primary_output_format: "json_object" | "json_array"
-```
-
-### TaskSpec v2
-
-```python
-TaskSpec:
-  task_id: str
-  domain: str
-  language: str
-  label_tier: "A" | "B"
-  question_family: str
-  question: str
-  outcome_type: "answer" | "no_result" | "clarify" | "deny"
-  answer_schema: AnswerSchema
-  composite_plan_id: str
-  selected_tool_level: 1 | 2
-  tool_bundle_id: str
-  presented_tool_bundle_id: str | None
-  provenance_requirements: list[str]
-  difficulty_features: dict[str, float | int | str | bool]
-  contract_metadata: dict[str, object]
-```
-
-`anchor_table`, `selected_path_id`, `required_hops`는 더 이상 중심 contract가 아니다.  
-필요하면 metadata에 남길 수 있지만 source of truth는 `CompositeTaskPlan`이다.
-
-### GroundTruth v2
-
-```python
-GroundTruth:
-  task_id: str
-  expected_outcome_type: "answer" | "no_result" | "clarify" | "deny"
-  canonical_solution: dict[str, object] | list[dict[str, object]] | None
-  valid_solution_signature: str
-  checker_kind: "compiled_constraint_checker"
-  checker_payload: dict[str, object]
-  row_context: list[dict[str, object]]
-  answer_schema_version: str
-```
-
-중요한 점:
-
-- ground truth는 단일 값이 아닐 수 있다
-- verifier는 canonical solution exact match 대신 `constraint checker`를 실행한다
-- canonical solution은 review / debugging / seeding 용도다
-
-## Execution-Based Verification
-
-### Verification Contract
-
-solver 답을 받으면 verifier는 아래를 수행한다.
-
-1. strict schema validation
-2. canonicalization
-3. constraint checker execution
-4. binary pass/fail 결정
-5. diagnostic per-constraint result 기록
-
-### Binary Reward Principle
-
-RLVR reward는 여전히 binary다.
-
-- 모든 hard constraint를 만족하면 `1`
-- 하나라도 깨면 `0`
-
-하지만 diagnostic은 richer하게 남긴다.
-
-```python
-VerifyResult:
-  pass_exact: bool
-  failure_reason: str | None
-  constraint_diagnostics: list[{
-    constraint_id: str,
-    passed: bool,
-    reason: str | None
-  }]
-  provenance_pass: bool
-  shadow_verifier_status: str | None
-```
-
-즉 partial reward는 주지 않되, 어떤 constraint가 깨졌는지는 남긴다.
-
-### Determinism Rules
-
-constraint checker는 아래를 공통으로 강제한다.
-
-- float는 configured precision으로 round
-- ordering은 total order를 가져야 함
-- top-k는 tie-break를 명시해야 함
-- list answer는 deterministic order를 가져야 함
-- date / datetime은 timezone과 cast rule을 명시해야 함
-- NULL semantics를 명시해야 함
-- candidate enumeration은 deterministic ordering을 사용해야 함
-
-## Ground Truth Methodology
-
-### Canonical Approach
-
-기본 방법은 `constraint set -> deterministic candidate enumeration -> checker payload`다.
-
-흐름:
-
-1. candidate entities를 SQL로 읽는다
-2. slot assignment 후보를 deterministic order로 나열한다
-3. constraint DSL evaluator가 valid assignment를 찾는다
-4. objective가 `find_canonical_solution`이면 stable ordering으로 첫 valid solution을 canonical로 선택한다
-5. solver 답 검증 시에는 canonical exact match가 아니라 checker를 다시 실행한다
-
-### Multiple Valid Solutions
-
-valid solution이 여러 개일 수 있다.
-
-이 경우 verifier 전략은:
-
-- 기본: `any valid solution`이면 pass
-- canonical solution은 review/debug용 reference로만 사용
-- dedup signature는 canonical solution이 아니라 `plan structure + checker payload hash` 기준으로 만든다
-
-## Tool Surface Redesign
-
-### Principle
-
-tool은 더 이상 `path lookup compiler` 중심이 아니다.  
-solver가 필요한 entities와 attributes를 조합할 수 있게 해야 한다.
-
-### Entity-Centric Tool Classes
+- 여러 entity slot
+- cross-slot uniqueness
+- locality / compatibility constraints
+- threshold constraints
+- conditional branching
+- multi-day / multi-step composition
+- multiple valid solutions 가능
 
 예시:
 
-- `get_all_{entity}_by_{filter}`
-- `get_{entity}_options_for_{context}`
-- `get_infos_by_{entity}(entity_ref, keys)`
-- `get_related_{entity}(entity_ref, relation)`
-- `get_temporal_events_by_{entity}(entity_ref, keys)`
-- `submit_result(answer_json)`
+- 3일 itinerary
+- 호텔 가격 버킷에 따라 다른 budget constraints
+- 도시 / 호텔 / 식당 / 관광지 중복 금지
+- 각 day의 entity가 같은 city context를 공유
 
-tool은 가능한 한 다음 성질을 가진다.
+즉 complexity는 더 이상 hop 수가 아니라 `constraint structure`다.
 
-- read-only
-- bounded
-- deterministic ordering
-- attribute selection 가능
+## General Agent Methodology, With RLVR Corrections
 
-### L1 / L2
+이 설계는 general agent식 synthesis 방법론의 표현력은 가져오되, verifier 신뢰도 약화는 hybrid rules로 막는다.
 
-`L1/L2` tool level은 유지한다.
+### Baseline General-Agent Loop
 
-- `L1`
-  - direct
-  - canonical
-  - rule-based
-- `L2`
-  - model-generated presentation
-  - same semantics, harder surface
+1. schema / sample exploration
+2. category proposal
+3. tools synthesis
+4. task + solution + verifier synthesis
+5. solution 실행
+6. verifier 통과 여부 확인
+7. 실패 시 iterate
+8. 통과 시 difficulty crank
 
-하지만 difficulty의 핵심은 naming이 아니라 composition complexity다.
+### Why Naive General-Agent Is Not Enough
 
-## Plan Catalog
+그대로 쓰면 아래 문제가 생긴다.
 
-`path catalog` 위에 `plan catalog`를 둔다.
+- solution과 verifier가 같은 세션에서 공모할 수 있다
+- Python verifier는 non-determinism risk가 있다
+- verifier가 tool bug를 그대로 따라갈 수 있다
+- multiple valid solutions handling이 애매해진다
+- verifier correctness를 대규모로 증명하기 어렵다
 
-### Role
+따라서 production에서는 아래 hybrid rules를 모두 강제한다.
 
-plan catalog는 여러 relation/path primitive를 조합해 reusable composition template를 만든다.
+## Hybrid Verifier Rules
 
-### Example Template Families
+### Hybrid A — Fact Check Must Use Tools
 
-- itinerary / schedule
-- assignment / roster
-- bundle selection
-- top-k with constraints
-- no-repeat recommendation
-- threshold-conditioned selection
-- temporal window planning
+verifier는 answer의 factual claim을 검사할 때 반드시 tool call을 통해 DB 사실을 다시 조회해야 한다.
 
-### Difficulty Features
+허용:
 
-기존 hop/fanout 외에 아래가 핵심이다.
+- `hotel_name -> tools.get_infos_by_hotel(["price"], hotel_name)`
+- `restaurant_name -> tools.get_city_by_restaurant(...)`
 
-- slot_count
-- candidate_width
-- constraint_count
-- conditional_depth
-- uniqueness_scope_count
-- numerical_threshold_count
-- temporal_window_count
-- cross-slot coupling
-- distractor_density
+금지:
 
-## Question Composition
+- answer literal을 하드코딩된 문자열/숫자와만 비교
+- tool 호출 없이 pure Python if/else만으로 fact correctness 판정
 
-질문은 반드시 contract-first로 생성한다.
+등록 시점 정적 규칙:
 
-순서:
+- verifier 본문에 `tools.` 호출이 최소 1회 이상 있어야 한다
+- direct literal comparison만 있고 tool fact check가 없으면 거부한다
 
-1. `CompositeTaskPlan`
-2. `AnswerSchema v2`
-3. `GroundTruth / Checker payload`
-4. sanitized question context
-5. question composer agent
-6. task package judge agent
+### Hybrid B — Fact Check and Constraint Check Must Be Separated
 
-질문은 다음 성질을 가져야 한다.
+verifier는 두 단계 구조를 강제한다.
 
-- 이 DB를 소유한 기업의 AI agent에게 실제 user가 할 법한 요청
-- schema / DB 구조 노출 금지
-- answer leak 금지
-- plan semantics와 coherent해야 함
+```python
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    if not check_constraints(answer, facts):
+        return False
+    return True
+```
 
-## Task Package Judge Agent
+- Stage 1: fact check
+  - tool-grounded
+  - DB state와 answer claim의 일치성
+- Stage 2: constraint check
+  - pure Python allowed
+  - uniqueness, thresholds, conditionals, budgets, ordering
 
-judge agent는 semantic validation을 맡는다.
+이 구조로 Python 표현력은 유지하면서 factual correctness는 DB-grounded로 보존한다.
 
-입력:
+### Hybrid C — Shadow Verifier Is Mandatory
 
-- question
-- answer schema
-- tool bundle
-- ground truth context
-- plan summary
+각 environment는 primary verifier와 independent shadow verifier를 가져야 한다.
 
-루브릭:
+요구:
 
-- 자연스러운 domain language인가
-- answer leak가 없는가
-- schema exposure가 없는가
-- answer schema와 semantic coherence가 맞는가
-- solver가 주어진 tool set으로 풀 수 있는가
+- 다른 synthesis session에서 생성
+- 다른 prompt / temperature
+- 가능하면 다른 model family
 
-## Calibration
+평가:
 
-adaptive calibration의 중심도 바뀐다.
+- primary pass + shadow pass -> trusted
+- primary fail + shadow fail -> trusted
+- disagreement -> quality risk
 
-이전:
+`shadow_disagreement_rate > threshold`면 environment를 reject한다.
 
-- hop
-- fanout
-- tool level
+### Hybrid D — Cross-Instance Verification Is Mandatory
 
-이후:
+같은 environment 구조로 서로 다른 instance를 여러 개 생성한다.
 
-- slot count
-- constraint count
-- conditional depth
-- candidate width
-- uniqueness scope
-- temporal windows
-- tool level
+요구:
 
-즉 solver pass-rate를 보고 다음 layer에서 question만 바꾸는 것이 아니라  
-plan 자체를 강화한다.
+- instance별 anchor / threshold / context가 달라야 한다
+- valid solution도 instance별로 달라져야 한다
+- verifier가 한 정답만 하드코딩 통과시키는 환경은 여기서 잡아낸다
+
+production rule:
+
+- 최소 `N`개 instance 생성
+- 모든 instance에서 verifier consistency가 유지되어야 한다
+
+## Code Registration Policy
+
+container sandbox 대신, 등록 단계와 runtime 단계의 강한 policy로 generated code를 통제한다.
+
+### Static Policy
+
+AST 검사에서 아래를 강제한다.
+
+- import allowlist
+- 금지 builtins / attributes
+- 금지 syntax
+- 함수 signature contract
+
+#### Import Allowlist
+
+허용 예:
+
+- `datetime`
+- `math`
+- `json`
+- `re`
+- `decimal`
+- `typing`
+- `collections.abc`
+- registry가 제공하는 tool module
+
+금지 예:
+
+- `os`
+- `sys`
+- `subprocess`
+- `socket`
+- `pathlib` file write
+- DB 직접 client import
+
+#### Forbidden Operations
+
+- `open`
+- `eval`
+- `exec`
+- `compile`
+- `__import__`
+- process spawn
+- network access
+- filesystem write
+- raw DB connection creation
+
+### Function Contracts
+
+tool / solution / verifier는 signature가 고정된다.
+
+```python
+async def tool_name(conn, **kwargs) -> Any
+def solve(tools) -> dict
+def verify(answer, tools) -> bool
+```
+
+generated code는 DB에 직접 연결하지 못하고 runtime이 주입한 tool / connection만 사용한다.
+
+### Runtime Policy
+
+- per-call timeout
+- total function timeout
+- memory limit
+- function call count limit
+- readonly DB role only
+- statement timeout / idle tx timeout
+- exception capture and trace logging
+
+## Synthesis Agent Loop
+
+### Stage 1: Schema and Domain Discovery
+
+- schema introspection
+- sample row inspection
+- entity cluster inference
+- category proposal
+
+### Stage 2: 4-Tuple Synthesis
+
+agent는 아래를 함께 만든다.
+
+- `tools.py`
+- `task.json`
+- `solution.py`
+- `verifier.py`
+
+### Stage 3: Self-Consistency Iterate
+
+- solution 실행
+- verifier 통과?
+- 실패하면 solution / verifier / tools를 수정
+- trivial verifier / overfit verifier는 registration policy와 shadow/cross-instance gate가 차단
+
+### Stage 4: Difficulty Escalation
+
+기본 environment가 통과하면 constraint를 추가해 난이도를 올린다.
+
+difficulty crank 예시:
+
+- slot count 증가
+- uniqueness scope 추가
+- threshold 추가
+- conditional branch 추가
+- temporal dependency 추가
+- budget dependency 추가
+
+### Stage 5: Shadow and Cross-Instance
+
+- independent shadow verifier 생성
+- N instances 생성
+- instance별 consistency 측정
+
+### Stage 6: Solver Quality Filter
+
+- 여러 solver attempts 실행
+- pass-rate band 판정
+- CI 기반 early stop
+
+## Quality Gate
+
+Environment는 아래 다섯 단계를 모두 통과해야 accepted 된다.
+
+### Gate 1: Code Registration Policy
+
+- AST 검사
+- import/syntax/signature enforcement
+
+### Gate 2: Self-Consistency
+
+- synthesized solution이 synthesized verifier를 통과
+
+### Gate 3: Shadow Verifier Agreement
+
+- primary vs shadow disagreement rate 측정
+
+### Gate 4: Cross-Instance Consistency
+
+- 여러 instance에서 verifier가 stable하게 동작
+
+### Gate 5: Solver Pass-Rate Band
+
+- N attempts
+- Clopper-Pearson CI
+- safe early termination
+
+quality filter config 예시:
+
+```yaml
+quality_filter:
+  attempts_per_env: 10
+  lower_pass_rate: 0.25
+  upper_pass_rate: 0.75
+  ci_alpha: 0.1
+  safe_early_termination: true
+  shadow_disagreement_threshold: 0.05
+  min_cross_instances: 3
+  require_all_instances_pass_verifier_consistency: true
+```
+
+## Domain Scheduler
+
+### Registry Model
+
+시스템은 여러 DB를 관리하지만, task는 DB 간 섞지 않는다.
+
+```text
+DB Registry
+  - db_1
+  - db_2
+  - db_n
+```
+
+### Scheduler Requirements
+
+- DB 동적 추가/제거 지원
+- round-robin 또는 priority queue
+- 한 번에 한 DB unit으로 synthesis
+- domain별 progress 추적
+- 실패한 environment 재시도 / 폐기 정책
+
+## Environment Registry
+
+registry는 filesystem + sqlite index의 이중 구조를 가진다.
+
+### Filesystem
+
+- environment directory 자체가 source of truth artifact
+
+### SQLite Index
+
+최소 아래를 기록한다.
+
+- env_id
+- db_id
+- domain
+- category
+- difficulty
+- pass_rate
+- CI interval
+- shadow disagreement
+- created_at
+- status
+- tool_hash
+- task_signature
+- generator_version
+
+### Dedup and Coverage
+
+- dedup은 `tool set hash + task signature + verifier signature` 기준
+- coverage는 domain/category/difficulty 분포를 추적
+
+## Solver Runtime Position
+
+OpenAI Agents SDK 기반 solver runtime은 계속 solver substrate로 유지한다.
+
+solver가 맡는 역할:
+
+- presented tools 사용
+- reasoning
+- explicit `submit_result()`
+- transcript / tool trace
+
+solver가 맡지 않는 역할:
+
+- verifier correctness
+- environment synthesis correctness
+- quality gate
 
 ## Review Pack
 
-review pack은 이제 필수 artifact다.
+review pack은 계속 1급 artifact다.
 
-포함 항목:
+포함해야 할 것:
 
 - final question
-- submit format
-- presented tool bundle
-- plan summary
+- tool set
+- output schema
 - constraint summary
-- canonical solution
-- question strategy
-- judge summary
+- verifier summary
+- shadow verifier status
+- instance summary
+- canonical solution reference
 
-review는 테스트보다 먼저 품질을 드러내는 장치다.  
-새 paradigm에서는 정성 평가가 development loop의 1급 입력이다.
+정성 평가 기준:
 
-## Migration Notes
+- 실제 user 요청처럼 보이는가
+- compositional reasoning이 필요한가
+- tool surface가 task와 coherent한가
+- verifier summary가 이해 가능하고 설득력 있는가
 
-현재 path-centric baseline은 아래 용도로만 남긴다.
+## Success Criteria
 
-- infra / solver / orchestration regression test
-- schema introspection fixture
-- rewrite 전 baseline snapshot
+성공은 아래로 판단한다.
 
-하지만 future production dataset은 composition-centric pipeline만 사용한다.
+- generated task가 더 이상 lookup task처럼 보이지 않는다
+- solver가 실제 composition reasoning을 해야 한다
+- verifier는 deterministic binary reward를 준다
+- arbitrary DB에 대해 environment를 생성할 수 있다
+- review pack 정성 평가에서 예시 수준 이상의 quality가 반복적으로 나온다
 
 ## Freeze Policy
 
-이 문서 기준으로 다음 원칙을 적용한다.
+이 spec 기준으로:
 
-- task generation 관련 코드는 spec/plan 합의 전까지 incremental polishing을 중단한다
-- rewrite는 `spec -> plan -> one vertical proof task -> generalization` 순으로 진행한다
-- first proof task는 trip-planning 수준의 composition fixture를 택한다
+- 기존 task generation code는 incremental polishing을 중단한다
+- rewrite는 `spec -> plan -> core contracts -> proof environment -> generalization` 순으로 간다
+- proof environment가 나오기 전 production run은 금지한다
 
