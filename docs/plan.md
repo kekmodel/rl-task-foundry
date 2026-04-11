@@ -196,11 +196,25 @@ Phase 3 — Solver backend transition
 Phase 4 — Legacy deletion
 
 - C11: `chore: delete legacy path-centric tool pipeline`
+  - 삭제 대상 test 범위도 함께 고정한다
+    - `tests/test_task_factory.py`
+    - `tests/test_task_package_composer.py`
+    - `tests/test_tool_compiler.py`
+    - `tests/test_tool_model_naming.py`
+    - `tests/test_tool_naming_eval.py`
+    - `tests/test_truth_canonicalize.py`
+    - `tests/test_ground_truth_generator.py`의 legacy path-centric 부분
+  - C11을 C12보다 먼저 두는 이유는 exporter 구현 시 legacy 분기를 고려하지 않도록 authoritative path를 먼저 단일화하기 위해서다
 - C12: `feat: environment bundle exporter`
 
 Phase 5 — Documentation finalization
 
 - C13: `docs: final spec/plan sync after implementation`
+  - atomic tool count 실측
+  - triple oracle disagreement rate 실측
+  - synthesis prompt 최종 wording
+  - exporter가 만든 실제 bundle shape
+  를 spec/plan에 backfill한다
 
 Dependencies:
 
@@ -229,6 +243,9 @@ Risks:
 - actor-facing parity invariant test
 - cross-instance verification이 canonical answer materialization과 직교함을 명시
 - pass-rate band 재calibration 계획 수립
+  - Milestone 5 proof environment에서 solver pass rate를 실측한다
+  - 기존 `25-75%` band가 여전히 유효한지 또는 조정이 필요한지 결정한다
+  - 결정 결과를 config와 `docs/spec.md`의 Quality Gate section에 반영한다
 
 Acceptance:
 
@@ -481,9 +498,9 @@ Acceptance:
 
 Rollback trigger:
 
-1. synthesis agent가 20줄 이상 `solution.py`를 구조적으로 안정 생성하지 못한다
-2. triple oracle disagreement rate가 threshold를 초과해 self-consistency가 붕괴한다
-3. atomic tool definition context 때문에 synthesis context window가 지속적으로 overflow한다
+1. C5~C7 진행 중 생성된 `solution.py`의 50% 이상이 parse 실패 또는 triple oracle disagreement를 유발한다
+2. 작은 proof DB에서 triple oracle agreement rate가 `80%` 미만으로 지속된다
+3. atomic tool definition context가 synthesis model context window의 `30%` 이상을 차지해 prompt truncation 또는 구조적 overflow가 반복된다
 
 ## Quality Filter Defaults
 

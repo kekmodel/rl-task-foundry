@@ -327,6 +327,8 @@ actor에게 노출되는 것은 정확히 세 가지다.
 - hidden verifier rule 없음
 - hidden task metadata 없음
 - canonical answer 직접 노출 없음
+  - canonical answer가 client에 노출되면 actor가 이를 그대로 echo해서 reward `1.0`을 받는 shortcut이 생긴다
+  - 이는 training signal을 무의미하게 만들므로 canonical answer는 server trust boundary 안에만 남아야 한다
 
 ### Parity Principle
 
@@ -356,6 +358,8 @@ solver가 task.question, answer schema, verifier internals, canonical answer, sy
 운영 원칙:
 
 - 자연어 질문과 constraint wording은 모두 이 prompt에 들어간다
+- instance parameter는 instance 생성 시점에 prompt에 fully substitute되어 `instances.jsonl`에 저장된다
+- template placeholder 형태를 runtime rollout 경로에 남기지 않는다
 - 출력 필드 이름은 prompt 안의 `Submit Result Format:` block에서만 노출된다
 - schema 밖의 hidden formatting rule을 두지 않는다
 
@@ -451,6 +455,12 @@ tool set은 schema graph의 함수로 고정된다.
 - tool count는 난이도 조절 lever가 아니다
 - 난이도는 tool 수가 아니라 chain depth와 constraint structure가 담당한다
 - tool name은 task intent를 leak하지 않아야 한다
+
+추가 원칙:
+
+- 어떤 environment에서 `solution.py`가 호출하지 않는 atomic tool은 그 environment에 대해 distractor 역할을 한다
+- distractor는 별도 플래그나 분리된 저장 구조를 갖지 않는다
+- 즉 distractor 여부는 tool set 전체와 solution trace를 비교하면 structural하게 식별된다
 
 ### SQL Contract
 
@@ -759,7 +769,9 @@ bundle_root/
   - 모든 env가 import하는 audit/runtime source
 - `databases/{db_id}/atomic_tool_definitions.json`
   - actor-facing tool spec
-  - name / description / params schema
+  - JSON Schema draft-2020-12 기반 tool list
+  - 각 tool entry는 `name`, `description`, `params_schema`, `returns_schema`를 가진다
+  - server는 이를 그대로 FunctionTool spec으로 변환한다
 - `environments/{env_id}/environment.yaml`
   - env metadata
   - output schema
@@ -767,6 +779,7 @@ bundle_root/
   - `atomic_tool_set_ref`
 - `environments/{env_id}/instances.jsonl`
   - instance별 `instance_id`, `rendered_user_prompt`, params
+  - 여기의 `rendered_user_prompt`는 placeholder가 남지 않은 fully rendered prompt다
 - `environments/{env_id}/canonical_answers.jsonl`
   - instance별 canonical answer
 - `environments/{env_id}/audit/`
@@ -885,6 +898,7 @@ RolloutConstraintsContract:
 - `TaskSpec`
 
 authoritative spec에서는 더 이상 중심 contract로 다루지 않는다.
+삭제는 `docs/plan.md`의 `Milestone M-Atomic-Transition` Phase 4 (`C11`)에서 수행한다.
 
 ## Code Registration Policy
 
