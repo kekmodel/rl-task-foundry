@@ -580,7 +580,7 @@ unregistered generated Python code는 in-process로 실행하지 않는다.
 - v1은 `RestrictedPython`을 전면 채택하지 않는다
 - 대신 narrow DSL 전제를 둔 custom AST preflight + subprocess isolation을 사용한다
 - production promotion 전에 denylist 우회 사례가 발견되면 RestrictedPython 또는 동등한 safe-subset compiler 도입을 재평가한다
-- 이 선택의 사유는 spec 본문과 별도 ADR에 함께 기록한다
+- 이 선택의 사유는 spec 본문과 [ADR 0001](adr/0001-custom-ast-preflight.md)에 함께 기록한다
 
 ### Static Policy
 

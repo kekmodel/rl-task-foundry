@@ -133,7 +133,7 @@ Acceptance:
 - subprocess worker DB access strategy 고정
 - solver runtime tool execution lane 고정
 - timeout / process-memory limit / call-count guard
-- custom AST preflight implementation 선택과 RestrictedPython 비채택 사유를 별도 ADR로 문서화
+- custom AST preflight implementation 선택과 RestrictedPython 비채택 사유를 [ADR 0001](adr/0001-custom-ast-preflight.md)로 문서화
 
 Acceptance:
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 from rl_task_foundry.config import load_config
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
     validate_generated_module,
 )
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
+from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
 
 
 def test_registration_policy_accepts_valid_tool_module() -> None:
@@ -105,9 +108,69 @@ def test_runtime_isolation_plan_uses_lane_a_and_b_split() -> None:
     plan = build_runtime_isolation_plan(config)
 
     assert plan.registration_lane.subprocess_required is True
+    assert plan.registration_lane.worker_mode == "persistent_subprocess_pool"
+    assert plan.registration_lane.db_access_strategy == "worker_owned_pool"
     assert plan.registration_lane.max_db_connections == (
         config.synthesis.registration_workers.worker_count
         * config.synthesis.registration_workers.connections_per_worker
     )
     assert plan.production_solver_lane.main_process_execution is True
     assert plan.production_solver_lane.per_tool_subprocess_roundtrip is False
+    assert str(plan.registration_lane.adr_path) == "docs/adr/0001-custom-ast-preflight.md"
+
+
+def test_registration_subprocess_pool_reuses_persistent_worker() -> None:
+    async def _run() -> tuple[int, int]:
+        config = load_config("rl_task_foundry.yaml")
+        config.synthesis.registration_workers.worker_count = 1
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            first = await pool.validate_module(
+                source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id}
+""",
+                artifact_kind=ArtifactKind.TOOL_MODULE,
+            )
+            second = await pool.validate_module(
+                source="""
+def solve(answer):
+    return {"x": 1}
+""",
+                artifact_kind=ArtifactKind.SOLUTION_MODULE,
+            )
+            assert any(error.code == "solve_signature_invalid" for error in second.errors)
+            return first.worker_pid, second.worker_pid
+        finally:
+            await pool.close()
+
+    first_pid, second_pid = asyncio.run(_run())
+    assert first_pid == second_pid
+
+
+def test_registration_subprocess_pool_round_robins_across_workers() -> None:
+    async def _run() -> tuple[int, int]:
+        config = load_config("rl_task_foundry.yaml")
+        config.synthesis.registration_workers.worker_count = 2
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            first = await pool.validate_module(
+                source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id}
+""",
+                artifact_kind=ArtifactKind.TOOL_MODULE,
+            )
+            second = await pool.validate_module(
+                source="""
+async def get_country(conn, customer_id):
+    return {"customer_id": customer_id}
+""",
+                artifact_kind=ArtifactKind.TOOL_MODULE,
+            )
+            return first.worker_pid, second.worker_pid
+        finally:
+            await pool.close()
+
+    first_pid, second_pid = asyncio.run(_run())
+    assert first_pid != second_pid

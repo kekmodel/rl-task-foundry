@@ -11,17 +11,24 @@ from rl_task_foundry.tasks.models import TaskSpec
 
 def test_cli_validate_config_command():
     result = CliRunner().invoke(app, ["validate-config"])
+    normalized = result.stdout.replace("\n", "")
     assert result.exit_code == 0
-    assert "solver_replicas=6" in result.stdout
-    assert "composer=codex_oauth/gpt-5.4-mini" in result.stdout
-    assert "label_tier=A" in result.stdout
-    assert "selected_tool_level=1" in result.stdout
-    assert "negative_outcome_ratio=0.2" in result.stdout
-    assert "float_precision=6" in result.stdout
-    assert "shadow_sample_rate=0.1" in result.stdout
-    assert "registration_lane=workers=2,connections_per_worker=2,max_db_connections=4" in result.stdout
-    assert "solver_lane=main_process=True,per_tool_subprocess=False" in result.stdout
-    assert "estimated_total_db_connections=44" in result.stdout
+    assert "solver_replicas=6" in normalized
+    assert "composer=codex_oauth/gpt-5.4-mini" in normalized
+    assert "label_tier=A" in normalized
+    assert "selected_tool_level=1" in normalized
+    assert "negative_outcome_ratio=0.2" in normalized
+    assert "float_precision=6" in normalized
+    assert "shadow_sample_rate=0.1" in normalized
+    assert "registration_lane=" in normalized
+    assert "workers=2" in normalized
+    assert "connections_per_worker=2" in normalized
+    assert "max_db_connections=4" in normalized
+    assert "mode=persistent_subprocess_pool" in normalized
+    assert "db_access=worker_owned_pool" in normalized
+    assert "solver_lane=main_process=True,per_tool_subprocess=False" in normalized
+    assert "estimated_total_db_connections=44" in normalized
+    assert "registration_policy_adr=docs/adr/0001-custom-ast-preflight.md" in normalized
 
 
 def test_cli_generate_task_specs_writes_jsonl(monkeypatch, tmp_path):

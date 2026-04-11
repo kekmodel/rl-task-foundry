@@ -107,6 +107,8 @@ def validate_config(
     runtime_plan = build_runtime_isolation_plan(config)
     console.print(
         "registration_lane="
+        f"mode={runtime_plan.registration_lane.worker_mode},"
+        f"db_access={runtime_plan.registration_lane.db_access_strategy},"
         f"workers={runtime_plan.registration_lane.worker_count},"
         f"connections_per_worker={runtime_plan.registration_lane.connections_per_worker},"
         f"max_db_connections={runtime_plan.registration_lane.max_db_connections}"
@@ -117,6 +119,7 @@ def validate_config(
         f"per_tool_subprocess={runtime_plan.production_solver_lane.per_tool_subprocess_roundtrip}"
     )
     console.print(f"estimated_total_db_connections={runtime_plan.estimated_total_db_connections}")
+    console.print(f"registration_policy_adr={runtime_plan.registration_lane.adr_path}")
     console.print(f"solvers={_solver_summary(config)}")
 
 

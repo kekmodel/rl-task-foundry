@@ -41,8 +41,28 @@ from rl_task_foundry.synthesis.contracts import (
     ToolTimeoutBehavior,
     VerifierContract,
 )
+from rl_task_foundry.synthesis.registration_policy import (
+    ArtifactKind,
+    RegistrationError,
+    validate_generated_module,
+)
+from rl_task_foundry.synthesis.runtime_policy import (
+    ExecutionLane,
+    RegistrationDbAccessStrategy,
+    RegistrationLanePlan,
+    RegistrationWorkerMode,
+    RuntimeIsolationPlan,
+    build_runtime_isolation_plan,
+)
+from rl_task_foundry.synthesis.subprocess_pool import (
+    RegistrationSubprocessError,
+    RegistrationSubprocessPool,
+    RegistrationSubprocessResult,
+    RegistrationWorkerHandle,
+)
 
 __all__ = [
+    "ArtifactKind",
     "AnchorQueryContract",
     "CategoryTaxonomy",
     "ConstraintKind",
@@ -71,6 +91,15 @@ __all__ = [
     "OutputFieldContract",
     "OutputFieldType",
     "OutputSchemaContract",
+    "ExecutionLane",
+    "RegistrationDbAccessStrategy",
+    "RegistrationError",
+    "RegistrationLanePlan",
+    "RegistrationSubprocessError",
+    "RegistrationSubprocessPool",
+    "RegistrationSubprocessResult",
+    "RegistrationWorkerHandle",
+    "RegistrationWorkerMode",
     "ShadowIndependenceRequirement",
     "ShadowPromptStrategy",
     "ShadowVerifierContract",
@@ -82,4 +111,7 @@ __all__ = [
     "ToolParameterType",
     "ToolTimeoutBehavior",
     "VerifierContract",
+    "RuntimeIsolationPlan",
+    "build_runtime_isolation_plan",
+    "validate_generated_module",
 ]
