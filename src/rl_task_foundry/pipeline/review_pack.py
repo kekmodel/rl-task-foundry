@@ -39,19 +39,23 @@ class ReviewPackBuilder:
                 task_specs = await factory.generate(
                     graph,
                     catalog,
-                    limit=limit,
+                    limit=max(limit * 3, limit),
                     path_ids=path_ids,
                 )
             else:
-                task_specs = list(task_specs[:limit])
+                task_specs = list(task_specs)
 
             entries: list[dict[str, Any]] = []
             for raw_task in task_specs:
+                if len(entries) >= limit:
+                    break
                 artifact = await orchestrator.build_review_artifact(
                     raw_task,
                     graph=graph,
                     catalog=catalog,
                 )
+                if artifact.package.task.question_source == "seed_fallback":
+                    continue
                 entries.append(
                     self._entry(artifact)
                 )

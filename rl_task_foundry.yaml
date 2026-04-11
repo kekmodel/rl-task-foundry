@@ -82,6 +82,7 @@ task_composer:
   negative_outcome_ratio: 0.2
   max_attempts_per_anchor: 6
   anchor_samples_per_source: 3
+  anchor_sampling_order: "hash"
   question_temperature: 1.0
   question_validation_temperature: 0.0
   family_min_required_hops:

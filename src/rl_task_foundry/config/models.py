@@ -85,6 +85,7 @@ class TaskComposerConfig(StrictModel):
     negative_outcome_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
     max_attempts_per_anchor: int = 6
     anchor_samples_per_source: int = Field(default=3, ge=1)
+    anchor_sampling_order: Literal["hash", "pk"] = "hash"
     question_temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     question_validation_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     family_min_required_hops: dict[str, int] = Field(default_factory=dict)

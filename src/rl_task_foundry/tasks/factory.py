@@ -566,15 +566,6 @@ class TierATaskFactory:
                 await conn.execute(statement)
             sql = self._compile_anchor_sampling_sql(graph, path, contract, limit=limit)
             rows = await conn.fetch(sql)
-            if not rows and contract.question_family == "aggregate_verification":
-                fallback_sql = self._compile_anchor_sampling_sql(
-                    graph,
-                    path,
-                    contract,
-                    limit=limit,
-                    min_related_count=1,
-                )
-                rows = await conn.fetch(fallback_sql)
         finally:
             await conn.close()
         return [row["anchor_pk"] for row in rows]
@@ -586,7 +577,6 @@ class TierATaskFactory:
         contract: TaskContractDraft,
         *,
         limit: int,
-        min_related_count: int = 2,
     ) -> str:
         root_table = graph.get_table(path.root_table, schema_name=path.edges[0].source_schema)
         root_alias = _alias_for_index(0)
@@ -600,21 +590,20 @@ class TierATaskFactory:
             )
             target_pk = target_table.primary_key[0]
             distinct_target_sql = _distinct_target_value_expression(target_alias, target_table)
-            having_clause = (
-                f"HAVING COUNT(DISTINCT {distinct_target_sql}) > 1"
-                if min_related_count <= 2
-                else f"HAVING COUNT(DISTINCT {distinct_target_sql}) >= {int(min_related_count)}"
-            )
-            if min_related_count == 1:
-                having_clause = f"HAVING COUNT(DISTINCT {distinct_target_sql}) >= 1"
+            order_projection = self._sample_order_projection(root_pk_sql)
+            order_clause = self._sample_subquery_order_clause()
             return readonly_query(
                 f"""
-                SELECT {root_pk_sql} AS anchor_pk
-                {_render_from_and_joins(path)}
-                WHERE {target_alias}.{quote_ident(target_pk)} IS NOT NULL
-                GROUP BY {root_pk_sql}
-                {having_clause}
-                ORDER BY {root_pk_sql} ASC
+                SELECT base.anchor_pk
+                FROM (
+                  SELECT {root_pk_sql} AS anchor_pk
+                  {order_projection}
+                  {_render_from_and_joins(path)}
+                  WHERE {target_alias}.{quote_ident(target_pk)} IS NOT NULL
+                  GROUP BY {root_pk_sql}
+                  HAVING COUNT(DISTINCT {distinct_target_sql}) > 1
+                ) AS base
+                {order_clause}
                 LIMIT {int(limit)}
                 """
             )
@@ -642,29 +631,42 @@ class TierATaskFactory:
                 predicates.append(f"{target_alias}.{quote_ident(column_name)} IS NOT NULL")
             value_predicate = " AND ".join(predicates) if predicates else "TRUE"
         if field.type.startswith("list[") and contract.outcome_type == "answer":
+            order_projection = self._sample_order_projection(root_pk_sql)
+            order_clause = self._sample_subquery_order_clause()
             return readonly_query(
                 f"""
-                SELECT {root_pk_sql} AS anchor_pk
-                {_render_from_and_joins(path)}
-                WHERE {value_predicate}
-                GROUP BY {root_pk_sql}
-                HAVING COUNT(DISTINCT {target_alias}.{quote_ident(column_name)}) > 1
-                ORDER BY {root_pk_sql} ASC
+                SELECT base.anchor_pk
+                FROM (
+                  SELECT {root_pk_sql} AS anchor_pk
+                  {order_projection}
+                  {_render_from_and_joins(path)}
+                  WHERE {value_predicate}
+                  GROUP BY {root_pk_sql}
+                  HAVING COUNT(DISTINCT {target_alias}.{quote_ident(column_name)}) > 1
+                ) AS base
+                {order_clause}
                 LIMIT {int(limit)}
                 """
             )
         if contract.outcome_type == "answer":
+            order_projection = self._sample_order_projection(root_pk_sql)
+            order_clause = self._sample_subquery_order_clause()
             return readonly_query(
                 f"""
-                SELECT DISTINCT {root_pk_sql} AS anchor_pk
-                {_render_from_and_joins(path)}
-                WHERE {value_predicate}
-                ORDER BY anchor_pk ASC
+                SELECT base.anchor_pk
+                FROM (
+                  SELECT DISTINCT {root_pk_sql} AS anchor_pk
+                  {order_projection}
+                  {_render_from_and_joins(path)}
+                  WHERE {value_predicate}
+                ) AS base
+                {order_clause}
                 LIMIT {int(limit)}
                 """
             )
         outer_root_alias = "a0"
         outer_root_pk_sql = f"{outer_root_alias}.{quote_ident(root_pk)}"
+        inline_order_clause = self._sample_inline_order_clause(outer_root_pk_sql)
         return readonly_query(
             f"""
             SELECT {outer_root_pk_sql} AS anchor_pk
@@ -675,7 +677,7 @@ class TierATaskFactory:
               WHERE {root_pk_sql} = {outer_root_pk_sql}
                 AND {value_predicate}
             )
-            ORDER BY anchor_pk ASC
+            {inline_order_clause}
             LIMIT {int(limit)}
             """
         )
@@ -900,6 +902,21 @@ class TierATaskFactory:
         if raw_value is None:
             return 0
         return max(0, int(raw_value))
+
+    def _sample_order_projection(self, root_pk_sql: str) -> str:
+        if self.task_config.anchor_sampling_order == "hash":
+            return f', md5(({root_pk_sql})::text) AS "__ord_hash"'
+        return ""
+
+    def _sample_subquery_order_clause(self) -> str:
+        if self.task_config.anchor_sampling_order == "hash":
+            return 'ORDER BY base."__ord_hash" ASC, base.anchor_pk ASC'
+        return "ORDER BY base.anchor_pk ASC"
+
+    def _sample_inline_order_clause(self, root_pk_sql: str) -> str:
+        if self.task_config.anchor_sampling_order == "hash":
+            return f"ORDER BY md5(({root_pk_sql})::text) ASC, anchor_pk ASC"
+        return "ORDER BY anchor_pk ASC"
 
     def _timeline_contract_enabled(self) -> bool:
         return self.task_config.label_tier != "A" and self.tool_compiler.allow_timelines

@@ -162,3 +162,84 @@ def test_review_pack_builder_writes_jsonl_and_markdown(monkeypatch, tmp_path):
     assert "inspect_region_info" in markdown
     assert "지금 제 주문이 연결된 지역 정보가 어디인지 알려주세요." in markdown
     assert "<summary>Answer Key</summary>" in markdown
+
+
+def test_review_pack_builder_skips_seed_fallback_entries(monkeypatch, tmp_path):
+    config = load_config(Path("rl_task_foundry.yaml"))
+    builder = ReviewPackBuilder(config)
+    good_task = _task()
+    fallback_task = _task().model_copy(update={"task_id": "task_review_2"})
+
+    path = PathSpec(
+        path_id="orders.addresses",
+        root_table="orders",
+        tables=["orders", "addresses"],
+        edges=[],
+        hop_count=1,
+        difficulty_features={"required_hops": 1, "fanout_product": 1.0, "shortcut_count": 0},
+    )
+    catalog = PathCatalog(paths=[path])
+
+    canonical_bundle = ToolBundle(
+        bundle_id="orders.addresses::canonical::L1",
+        path_id="orders.addresses",
+        tool_level=1,
+        tools=[],
+    )
+
+    def _artifact(task: TaskSpec, *, question_source: str) -> ReviewArtifact:
+        package = TaskPackage(
+            task=task.model_copy(
+                update={
+                    "question": f"{task.task_id} question",
+                    "question_source": question_source,
+                    "question_generation_metadata": {"status": "accepted"},
+                    "presented_tool_bundle_id": f"{task.task_id}::bundle",
+                }
+            ),
+            presented_tool_bundle=PresentedToolBundle(
+                bundle_id=f"{task.task_id}::bundle",
+                canonical_bundle_id=canonical_bundle.bundle_id,
+                path_id="orders.addresses",
+                tool_level=2,
+                question_family="status_lookup",
+                outcome_type="answer",
+                generation_metadata={"presentation_strategy": "task_context_model_generated"},
+                tools=[],
+            ),
+            presentation_options=[],
+        )
+        truth = GroundTruth(
+            task_id=task.task_id,
+            verification_sql="SELECT 1",
+            canonical_answer={"city": "sasebo"},
+            answer_schema_version="v1",
+        )
+        return ReviewArtifact(
+            task=task,
+            path=path,
+            package=package,
+            canonical_bundle=canonical_bundle,
+            ground_truth=truth,
+            question_context={},
+        )
+
+    class _FakeOrchestrator:
+        async def load_graph_and_catalog(self):
+            return object(), catalog
+
+        async def build_review_artifact(self, raw_task, *, graph=None, catalog=None):
+            del graph, catalog
+            if raw_task.task_id == "task_review_2":
+                return _artifact(raw_task, question_source="seed_fallback")
+            return _artifact(raw_task, question_source="model_generated")
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("rl_task_foundry.pipeline.review_pack.Orchestrator", lambda _config: _FakeOrchestrator())
+
+    entries = asyncio.run(builder.build_entries(limit=2, task_specs=[good_task, fallback_task]))
+
+    assert len(entries) == 1
+    assert entries[0]["task_id"] == "task_review_1"

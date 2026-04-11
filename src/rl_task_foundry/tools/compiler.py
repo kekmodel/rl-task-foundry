@@ -516,12 +516,12 @@ def _tool_description(
     max_list_cardinality: int | None = None,
 ) -> str:
     descriptions = {
-        "lookup": "Return the related details for the requested item.",
+        "lookup": "Fetch the matching related details.",
         "list_related": (
-            "Return a deterministic bounded list of related details for the requested item."
+            "Browse a deterministic bounded list of matching related details."
         ),
-        "count": "Return how many related results are available for the requested item.",
-        "exists": "Return whether any related result exists for the requested item.",
+        "count": "Count how many matching related results exist.",
+        "exists": "Check whether any matching related result exists.",
     }
     suffix = ""
     if kind == "list_related" and max_list_cardinality is not None:
