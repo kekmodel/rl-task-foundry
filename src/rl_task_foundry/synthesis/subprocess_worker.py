@@ -73,6 +73,79 @@ class _ToolCallCounter:
     count: int = 0
 
 
+@dataclass(slots=True)
+class _ValueReadCounter:
+    count: int = 0
+
+
+class _TrackedDict(dict[str, Any]):
+    def __init__(self, source: dict[str, Any], tracker: _ValueReadCounter) -> None:
+        self._tracker = tracker
+        super().__init__({key: _track_runtime_value(value, tracker) for key, value in source.items()})
+
+    def __getitem__(self, key: object) -> Any:
+        self._tracker.count += 1
+        return super().__getitem__(key)
+
+    def get(self, key: object, default: Any = None) -> Any:
+        self._tracker.count += 1
+        return super().get(key, default)
+
+    def items(self):
+        self._tracker.count += 1
+        return super().items()
+
+    def keys(self):
+        self._tracker.count += 1
+        return super().keys()
+
+    def values(self):
+        self._tracker.count += 1
+        return super().values()
+
+    def __contains__(self, key: object) -> bool:
+        self._tracker.count += 1
+        return super().__contains__(key)
+
+    def __iter__(self):
+        self._tracker.count += 1
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._tracker.count += 1
+        return super().__len__()
+
+
+class _TrackedList(list[Any]):
+    def __init__(self, source: list[Any], tracker: _ValueReadCounter) -> None:
+        self._tracker = tracker
+        super().__init__(_track_runtime_value(value, tracker) for value in source)
+
+    def __getitem__(self, index: int | slice) -> Any:
+        self._tracker.count += 1
+        return super().__getitem__(index)
+
+    def __iter__(self):
+        self._tracker.count += 1
+        return super().__iter__()
+
+    def __contains__(self, value: object) -> bool:
+        self._tracker.count += 1
+        return super().__contains__(value)
+
+    def __len__(self) -> int:
+        self._tracker.count += 1
+        return super().__len__()
+
+
+def _track_runtime_value(value: Any, tracker: _ValueReadCounter) -> Any:
+    if isinstance(value, dict):
+        return _TrackedDict(value, tracker)
+    if isinstance(value, list):
+        return _TrackedList(value, tracker)
+    return value
+
+
 def _set_memory_limit(memory_limit_mb: int | None) -> None:
     if resource is None or not memory_limit_mb:
         return
@@ -128,6 +201,10 @@ def _verifier_probe_error_payload(
     missing_fact_keys: list[str] | None = None,
     extra_fact_keys: list[str] | None = None,
     fetch_facts_tool_calls: int | None = None,
+    fetch_facts_answer_reads: int | None = None,
+    facts_match_answer_reads: int | None = None,
+    facts_match_facts_reads: int | None = None,
+    check_constraints_facts_reads: int | None = None,
     verify_tool_calls: int | None = None,
     facts_match_result: bool | None = None,
     check_constraints_result: bool | None = None,
@@ -142,6 +219,10 @@ def _verifier_probe_error_payload(
         "missing_fact_keys": missing_fact_keys or [],
         "extra_fact_keys": extra_fact_keys or [],
         "fetch_facts_tool_calls": fetch_facts_tool_calls,
+        "fetch_facts_answer_reads": fetch_facts_answer_reads,
+        "facts_match_answer_reads": facts_match_answer_reads,
+        "facts_match_facts_reads": facts_match_facts_reads,
+        "check_constraints_facts_reads": check_constraints_facts_reads,
         "verify_tool_calls": verify_tool_calls,
         "facts_match_result": facts_match_result,
         "check_constraints_result": check_constraints_result,
@@ -162,6 +243,10 @@ def _self_consistency_error_payload(
     extra_fact_keys: list[str] | None = None,
     solution_tool_calls: int | None = None,
     verifier_tool_calls: int | None = None,
+    fetch_facts_answer_reads: int | None = None,
+    facts_match_answer_reads: int | None = None,
+    facts_match_facts_reads: int | None = None,
+    check_constraints_facts_reads: int | None = None,
     facts_match_result: bool | None = None,
     check_constraints_result: bool | None = None,
     verify_result: bool | None = None,
@@ -181,6 +266,10 @@ def _self_consistency_error_payload(
         "check_constraints_result": check_constraints_result,
         "verify_result": verify_result,
         "errors": [error.model_dump(mode="json")],
+        "fetch_facts_answer_reads": fetch_facts_answer_reads,
+        "facts_match_answer_reads": facts_match_answer_reads,
+        "facts_match_facts_reads": facts_match_facts_reads,
+        "check_constraints_facts_reads": check_constraints_facts_reads,
     }
 
 
@@ -642,6 +731,10 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             "missing_fact_keys": [],
             "extra_fact_keys": [],
             "fetch_facts_tool_calls": None,
+            "fetch_facts_answer_reads": None,
+            "facts_match_answer_reads": None,
+            "facts_match_facts_reads": None,
+            "check_constraints_facts_reads": None,
             "verify_tool_calls": None,
             "facts_match_result": None,
             "check_constraints_result": None,
@@ -661,10 +754,11 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
         tool_names = _public_tool_names(tool_source)
 
         fetch_tools = _VerifierProbeTools(tool_names)
+        fetch_answer_reads = _ValueReadCounter()
         facts, _ = asyncio.run(
             _invoke_entrypoint(
                 function=fetch_facts,
-                args=[answer_sample, fetch_tools],
+                args=[_track_runtime_value(answer_sample, fetch_answer_reads), fetch_tools],
                 kwargs={},
                 call_count_limit=call_count_limit,
             )
@@ -676,6 +770,7 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
                 detail="fetch_facts() must return a dict of materialized facts.",
                 expected_fact_keys=expected_fact_keys,
                 fetch_facts_tool_calls=fetch_tools.call_count,
+                fetch_facts_answer_reads=fetch_answer_reads.count,
             )
 
         actual_fact_keys = sorted(str(key) for key in facts)
@@ -683,18 +778,27 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
         missing_keys = [key for key in expected_keys if key not in actual_fact_keys]
         extra_keys = [key for key in actual_fact_keys if key not in expected_keys]
 
+        facts_match_answer_reads = _ValueReadCounter()
+        facts_match_facts_reads = _ValueReadCounter()
         facts_match_result, _ = asyncio.run(
             _invoke_entrypoint(
                 function=facts_match,
-                args=[answer_sample, facts],
+                args=[
+                    _track_runtime_value(answer_sample, facts_match_answer_reads),
+                    _track_runtime_value(facts, facts_match_facts_reads),
+                ],
                 kwargs={},
                 call_count_limit=call_count_limit,
             )
         )
+        check_constraints_facts_reads = _ValueReadCounter()
         check_constraints_result, _ = asyncio.run(
             _invoke_entrypoint(
                 function=check_constraints,
-                args=[answer_sample, facts],
+                args=[
+                    answer_sample,
+                    _track_runtime_value(facts, check_constraints_facts_reads),
+                ],
                 kwargs={},
                 call_count_limit=call_count_limit,
             )
@@ -741,6 +845,10 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
             fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             verify_tool_calls=verify_tools.call_count,
             check_constraints_result=check_constraints_result
             if isinstance(check_constraints_result, bool)
@@ -757,6 +865,10 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
             fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             verify_tool_calls=verify_tools.call_count,
             facts_match_result=facts_match_result,
             verify_result=verify_result if isinstance(verify_result, bool) else None,
@@ -771,6 +883,10 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
             fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             verify_tool_calls=verify_tools.call_count,
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
@@ -785,6 +901,10 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
             fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             verify_tool_calls=verify_tools.call_count,
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
@@ -801,6 +921,10 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
             fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             verify_tool_calls=verify_tools.call_count,
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
@@ -815,6 +939,10 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
         "missing_fact_keys": [],
         "extra_fact_keys": [],
         "fetch_facts_tool_calls": fetch_tools.call_count,
+        "fetch_facts_answer_reads": fetch_answer_reads.count,
+        "facts_match_answer_reads": facts_match_answer_reads.count,
+        "facts_match_facts_reads": facts_match_facts_reads.count,
+        "check_constraints_facts_reads": check_constraints_facts_reads.count,
         "verify_tool_calls": verify_tools.call_count,
         "facts_match_result": facts_match_result,
         "check_constraints_result": check_constraints_result,
@@ -869,6 +997,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             "expected_fact_keys": expected_fact_keys,
             "missing_fact_keys": [],
             "extra_fact_keys": [],
+            "fetch_facts_answer_reads": None,
+            "facts_match_answer_reads": None,
+            "facts_match_facts_reads": None,
+            "check_constraints_facts_reads": None,
             "facts_match_result": None,
             "check_constraints_result": None,
             "verify_result": None,
@@ -901,9 +1033,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
 
         verifier_tools_counter = _ToolCallCounter()
         verifier_tools = _build_sync_tool_facade(tool_source, call_counter=verifier_tools_counter)
+        fetch_answer_reads = _ValueReadCounter()
         facts, _ = _invoke_entrypoint_sync(
             function=fetch_facts,
-            args=[answer, verifier_tools],
+            args=[_track_runtime_value(answer, fetch_answer_reads), verifier_tools],
             kwargs={},
             call_count_limit=call_count_limit,
         )
@@ -916,6 +1049,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
                 expected_fact_keys=expected_fact_keys,
                 solution_tool_calls=solution_tools_counter.count,
                 verifier_tool_calls=verifier_tools_counter.count,
+                fetch_facts_answer_reads=fetch_answer_reads.count,
             )
 
         actual_fact_keys = sorted(str(key) for key in facts)
@@ -923,15 +1057,21 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
         missing_keys = [key for key in expected_keys if key not in actual_fact_keys]
         extra_keys = [key for key in actual_fact_keys if key not in expected_keys]
 
+        facts_match_answer_reads = _ValueReadCounter()
+        facts_match_facts_reads = _ValueReadCounter()
         facts_match_result, _ = _invoke_entrypoint_sync(
             function=facts_match,
-            args=[answer, facts],
+            args=[
+                _track_runtime_value(answer, facts_match_answer_reads),
+                _track_runtime_value(facts, facts_match_facts_reads),
+            ],
             kwargs={},
             call_count_limit=call_count_limit,
         )
+        check_constraints_facts_reads = _ValueReadCounter()
         check_constraints_result, _ = _invoke_entrypoint_sync(
             function=check_constraints,
-            args=[answer, facts],
+            args=[answer, _track_runtime_value(facts, check_constraints_facts_reads)],
             kwargs={},
             call_count_limit=call_count_limit,
         )
@@ -976,6 +1116,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             check_constraints_result=check_constraints_result
             if isinstance(check_constraints_result, bool)
             else None,
@@ -993,6 +1137,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             facts_match_result=facts_match_result,
             verify_result=verify_result if isinstance(verify_result, bool) else None,
         )
@@ -1008,6 +1156,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
         )
@@ -1023,6 +1175,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
             verify_result=verify_result,
@@ -1040,6 +1196,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
             verify_result=verify_result,
@@ -1055,6 +1215,10 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
         "expected_fact_keys": expected_keys,
         "missing_fact_keys": [],
         "extra_fact_keys": [],
+        "fetch_facts_answer_reads": fetch_answer_reads.count,
+        "facts_match_answer_reads": facts_match_answer_reads.count,
+        "facts_match_facts_reads": facts_match_facts_reads.count,
+        "check_constraints_facts_reads": check_constraints_facts_reads.count,
         "facts_match_result": facts_match_result,
         "check_constraints_result": check_constraints_result,
         "verify_result": verify_result,

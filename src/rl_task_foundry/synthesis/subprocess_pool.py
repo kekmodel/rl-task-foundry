@@ -48,6 +48,10 @@ class RegistrationVerifierProbeResult(StrictModel):
     missing_fact_keys: list[str] = []
     extra_fact_keys: list[str] = []
     fetch_facts_tool_calls: int | None = None
+    fetch_facts_answer_reads: int | None = None
+    facts_match_answer_reads: int | None = None
+    facts_match_facts_reads: int | None = None
+    check_constraints_facts_reads: int | None = None
     verify_tool_calls: int | None = None
     facts_match_result: bool | None = None
     check_constraints_result: bool | None = None
@@ -65,6 +69,10 @@ class RegistrationSelfConsistencyResult(StrictModel):
     expected_fact_keys: list[str] = []
     missing_fact_keys: list[str] = []
     extra_fact_keys: list[str] = []
+    fetch_facts_answer_reads: int | None = None
+    facts_match_answer_reads: int | None = None
+    facts_match_facts_reads: int | None = None
+    check_constraints_facts_reads: int | None = None
     facts_match_result: bool | None = None
     check_constraints_result: bool | None = None
     verify_result: bool | None = None

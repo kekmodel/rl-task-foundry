@@ -115,6 +115,10 @@ class RegistrationArtifactDiagnostics(StrictModel):
     probe_missing_fact_keys: list[str] = Field(default_factory=list)
     probe_extra_fact_keys: list[str] = Field(default_factory=list)
     probe_fetch_facts_tool_calls: int | None = None
+    probe_fetch_facts_answer_reads: int | None = None
+    probe_facts_match_answer_reads: int | None = None
+    probe_facts_match_facts_reads: int | None = None
+    probe_check_constraints_facts_reads: int | None = None
     probe_verify_tool_calls: int | None = None
     probe_facts_match_result: bool | None = None
     probe_check_constraints_result: bool | None = None
@@ -234,6 +238,18 @@ def _artifact_diagnostics(result: ArtifactRegistrationResult) -> RegistrationArt
         probe_missing_fact_keys=list(probe.missing_fact_keys) if probe is not None else [],
         probe_extra_fact_keys=list(probe.extra_fact_keys) if probe is not None else [],
         probe_fetch_facts_tool_calls=probe.fetch_facts_tool_calls if probe is not None else None,
+        probe_fetch_facts_answer_reads=probe.fetch_facts_answer_reads
+        if probe is not None
+        else None,
+        probe_facts_match_answer_reads=probe.facts_match_answer_reads
+        if probe is not None
+        else None,
+        probe_facts_match_facts_reads=probe.facts_match_facts_reads
+        if probe is not None
+        else None,
+        probe_check_constraints_facts_reads=probe.check_constraints_facts_reads
+        if probe is not None
+        else None,
         probe_verify_tool_calls=probe.verify_tool_calls if probe is not None else None,
         probe_facts_match_result=probe.facts_match_result if probe is not None else None,
         probe_check_constraints_result=probe.check_constraints_result if probe is not None else None,
@@ -263,6 +279,14 @@ def _weak_signal_codes(result: ArtifactRegistrationResult) -> list[str]:
     if probe is not None:
         if probe.fetch_facts_tool_calls == 0:
             weak_signals.append("probe_fetch_facts_missing_tool_usage")
+        if probe.fetch_facts_answer_reads == 0:
+            weak_signals.append("probe_fetch_facts_missing_answer_usage")
+        if probe.facts_match_answer_reads == 0:
+            weak_signals.append("probe_facts_match_missing_answer_usage")
+        if probe.facts_match_facts_reads == 0:
+            weak_signals.append("probe_facts_match_missing_facts_usage")
+        if probe.check_constraints_facts_reads == 0:
+            weak_signals.append("probe_check_constraints_missing_facts_usage")
         if probe.missing_fact_keys or probe.extra_fact_keys:
             weak_signals.append("probe_facts_schema_key_drift")
     return _dedupe_preserving_order(weak_signals)

@@ -325,6 +325,10 @@ def _passing_self_consistency_result() -> RegistrationSelfConsistencyResult:
         verifier_tool_calls=1,
         fetch_facts_return_keys=[],
         expected_fact_keys=[],
+        fetch_facts_answer_reads=1,
+        facts_match_answer_reads=1,
+        facts_match_facts_reads=1,
+        check_constraints_facts_reads=1,
         facts_match_result=True,
         check_constraints_result=True,
         verify_result=True,
@@ -334,6 +338,12 @@ def _passing_self_consistency_result() -> RegistrationSelfConsistencyResult:
 def _failing_self_consistency_result(
     *,
     error_codes: list[str] | None = None,
+    solution_tool_calls: int | None = 1,
+    verifier_tool_calls: int | None = 1,
+    fetch_facts_answer_reads: int | None = 1,
+    facts_match_answer_reads: int | None = 1,
+    facts_match_facts_reads: int | None = 1,
+    check_constraints_facts_reads: int | None = 1,
     facts_match_result: bool | None = True,
     check_constraints_result: bool | None = False,
     verify_result: bool | None = False,
@@ -346,10 +356,14 @@ def _failing_self_consistency_result(
             for code in (error_codes or [])
         ],
         answer={"assignments": []},
-        solution_tool_calls=1,
-        verifier_tool_calls=1,
+        solution_tool_calls=solution_tool_calls,
+        verifier_tool_calls=verifier_tool_calls,
         fetch_facts_return_keys=["city"],
         expected_fact_keys=["city"],
+        fetch_facts_answer_reads=fetch_facts_answer_reads,
+        facts_match_answer_reads=facts_match_answer_reads,
+        facts_match_facts_reads=facts_match_facts_reads,
+        check_constraints_facts_reads=check_constraints_facts_reads,
         facts_match_result=facts_match_result,
         check_constraints_result=check_constraints_result,
         verify_result=verify_result,
@@ -741,6 +755,7 @@ async def test_synthesis_agent_runtime_retries_on_self_consistency_failure(monke
     checks = iter(
         [
             _failing_self_consistency_result(
+                solution_tool_calls=0,
                 facts_match_result=True,
                 check_constraints_result=False,
                 verify_result=False,
@@ -771,6 +786,10 @@ async def test_synthesis_agent_runtime_retries_on_self_consistency_failure(monke
     assert artifact_requests[0].latest_self_consistency_diagnostics is None
     assert artifact_requests[1].latest_self_consistency_diagnostics is not None
     assert artifact_requests[1].latest_self_consistency_diagnostics.verify_result is False
+    assert (
+        "solution_missing_tool_usage"
+        in artifact_requests[1].latest_self_consistency_diagnostics.weak_signal_codes
+    )
     assert [attempt.outcome for attempt in draft.self_consistency_attempts] == [
         SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
         SynthesisSelfConsistencyOutcome.PASSED,
@@ -779,6 +798,10 @@ async def test_synthesis_agent_runtime_retries_on_self_consistency_failure(monke
     assert (
         draft.self_consistency_attempts[0].self_consistency_diagnostics.check_constraints_result
         is False
+    )
+    assert (
+        "solution_missing_tool_usage"
+        in draft.self_consistency_attempts[0].self_consistency_diagnostics.weak_signal_codes
     )
     assert draft.self_consistency_diagnostics.passed is True
     assert draft.environment.quality_metrics.self_consistency_pass is True
@@ -805,6 +828,7 @@ async def test_synthesis_agent_runtime_raises_after_self_consistency_budget_exha
 
     async def _fake_self_consistency(self, *, bundle, proposed_environment):
         return _failing_self_consistency_result(
+            solution_tool_calls=0,
             facts_match_result=True,
             check_constraints_result=False,
             verify_result=False,

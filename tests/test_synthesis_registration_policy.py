@@ -682,7 +682,18 @@ async def run_self_test(tools):
 
 
 def test_registration_subprocess_pool_runs_solution_verifier_self_consistency_check() -> None:
-    async def _run() -> tuple[bool | None, bool | None, bool | None, int | None, int | None]:
+    async def _run(
+        ) -> tuple[
+            bool | None,
+            bool | None,
+            bool | None,
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+            int | None,
+        ]:
         config = load_config("rl_task_foundry.yaml")
         pool = await RegistrationSubprocessPool.start(config)
         try:
@@ -720,6 +731,10 @@ def check_constraints(answer, facts):
                 result.verify_result,
                 result.solution_tool_calls,
                 result.verifier_tool_calls,
+                result.fetch_facts_answer_reads,
+                result.facts_match_answer_reads,
+                result.facts_match_facts_reads,
+                result.check_constraints_facts_reads,
             )
         finally:
             await pool.close()
@@ -730,12 +745,24 @@ def check_constraints(answer, facts):
         verify_result,
         solution_tool_calls,
         verifier_tool_calls,
+        fetch_facts_answer_reads,
+        facts_match_answer_reads,
+        facts_match_facts_reads,
+        check_constraints_facts_reads,
     ) = asyncio.run(_run())
     assert facts_match_result is True
     assert check_constraints_result is True
     assert verify_result is True
     assert solution_tool_calls is not None
     assert verifier_tool_calls is not None
+    assert fetch_facts_answer_reads is not None
+    assert fetch_facts_answer_reads >= 1
+    assert facts_match_answer_reads is not None
+    assert facts_match_answer_reads >= 1
+    assert facts_match_facts_reads is not None
+    assert facts_match_facts_reads >= 1
+    assert check_constraints_facts_reads is not None
+    assert check_constraints_facts_reads >= 1
 
 
 def test_registration_subprocess_pool_reports_failed_self_consistency_check() -> None:
@@ -787,7 +814,7 @@ def check_constraints(answer, facts):
 
 
 def test_registration_runner_passes_valid_bundle() -> None:
-    async def _run() -> tuple[str, bool, bool, int, int, int, list[str]]:
+    async def _run() -> tuple[str, bool, bool, int, int, int, int, int, int, int, list[str]]:
         config = load_config("rl_task_foundry.yaml")
         bundle = GeneratedArtifactBundle(
             tool_source="""
@@ -829,6 +856,10 @@ def solve(tools):
             report.verifier.verifier_hybrid_analysis.facts_match_answer_references,
             report.verifier.verifier_hybrid_analysis.facts_match_facts_references,
             report.verifier.verifier_hybrid_analysis.check_constraints_facts_references,
+            report.verifier.verifier_execution_probe.fetch_facts_answer_reads,
+            report.verifier.verifier_execution_probe.facts_match_answer_reads,
+            report.verifier.verifier_execution_probe.facts_match_facts_reads,
+            report.verifier.verifier_execution_probe.check_constraints_facts_reads,
             report.verifier.verifier_execution_probe.fetch_facts_return_keys,
         )
 
@@ -840,6 +871,10 @@ def solve(tools):
         facts_match_answer_references,
         facts_match_facts_references,
         check_constraints_facts_references,
+        probe_fetch_facts_answer_reads,
+        probe_facts_match_answer_reads,
+        probe_facts_match_facts_reads,
+        probe_check_constraints_facts_reads,
         fetch_facts_return_keys,
     ) = asyncio.run(_run())
     assert status == RegistrationBundleStatus.PASSED
@@ -849,6 +884,10 @@ def solve(tools):
     assert facts_match_answer_references >= 1
     assert facts_match_facts_references >= 1
     assert check_constraints_facts_references >= 1
+    assert probe_fetch_facts_answer_reads >= 1
+    assert probe_facts_match_answer_reads >= 1
+    assert probe_facts_match_facts_reads >= 1
+    assert probe_check_constraints_facts_reads >= 1
     assert fetch_facts_return_keys == ["city"]
 
 

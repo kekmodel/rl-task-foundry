@@ -231,6 +231,7 @@ class SynthesisSelfConsistencyOutcome(StrEnum):
 class SynthesisSelfConsistencyDiagnostics(StrictModel):
     passed: bool
     error_codes: list[str] = Field(default_factory=list)
+    weak_signal_codes: list[str] = Field(default_factory=list)
     answer: object | None = None
     solution_tool_calls: int | None = None
     verifier_tool_calls: int | None = None
@@ -238,6 +239,10 @@ class SynthesisSelfConsistencyDiagnostics(StrictModel):
     expected_fact_keys: list[str] = Field(default_factory=list)
     missing_fact_keys: list[str] = Field(default_factory=list)
     extra_fact_keys: list[str] = Field(default_factory=list)
+    fetch_facts_answer_reads: int | None = None
+    facts_match_answer_reads: int | None = None
+    facts_match_facts_reads: int | None = None
+    check_constraints_facts_reads: int | None = None
     facts_match_result: bool | None = None
     check_constraints_result: bool | None = None
     verify_result: bool | None = None
@@ -697,6 +702,11 @@ class SynthesisAgentRuntime:
                     "self_consistency_errors="
                     + ",".join(self_consistency_diagnostics.error_codes)
                 )
+            if self_consistency_diagnostics.weak_signal_codes:
+                detail_parts.append(
+                    "self_consistency_weak_signals="
+                    + ",".join(self_consistency_diagnostics.weak_signal_codes)
+                )
             if self_consistency_diagnostics.facts_match_result is not None:
                 detail_parts.append(
                     f"facts_match={self_consistency_diagnostics.facts_match_result}"
@@ -789,9 +799,23 @@ class SynthesisAgentRuntime:
     def _build_self_consistency_diagnostics(
         result: RegistrationSelfConsistencyResult,
     ) -> SynthesisSelfConsistencyDiagnostics:
+        weak_signal_codes: list[str] = []
+        if result.solution_tool_calls == 0:
+            weak_signal_codes.append("solution_missing_tool_usage")
+        if result.verifier_tool_calls == 0:
+            weak_signal_codes.append("verifier_missing_tool_usage")
+        if result.fetch_facts_answer_reads == 0:
+            weak_signal_codes.append("fetch_facts_missing_answer_usage_runtime")
+        if result.facts_match_answer_reads == 0:
+            weak_signal_codes.append("facts_match_missing_answer_usage_runtime")
+        if result.facts_match_facts_reads == 0:
+            weak_signal_codes.append("facts_match_missing_facts_usage_runtime")
+        if result.check_constraints_facts_reads == 0:
+            weak_signal_codes.append("check_constraints_missing_facts_usage_runtime")
         return SynthesisSelfConsistencyDiagnostics(
             passed=not result.errors and bool(result.verify_result),
             error_codes=[error.code for error in result.errors],
+            weak_signal_codes=weak_signal_codes,
             answer=result.answer,
             solution_tool_calls=result.solution_tool_calls,
             verifier_tool_calls=result.verifier_tool_calls,
@@ -799,6 +823,10 @@ class SynthesisAgentRuntime:
             expected_fact_keys=list(result.expected_fact_keys),
             missing_fact_keys=list(result.missing_fact_keys),
             extra_fact_keys=list(result.extra_fact_keys),
+            fetch_facts_answer_reads=result.fetch_facts_answer_reads,
+            facts_match_answer_reads=result.facts_match_answer_reads,
+            facts_match_facts_reads=result.facts_match_facts_reads,
+            check_constraints_facts_reads=result.check_constraints_facts_reads,
             facts_match_result=result.facts_match_result,
             check_constraints_result=result.check_constraints_result,
             verify_result=result.verify_result,

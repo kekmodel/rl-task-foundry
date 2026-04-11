@@ -258,6 +258,7 @@ Acceptance:
 - 직전 registration diagnostics를 다음 artifact attempt input에 주입
 - registration 통과 후 `solve(tools)` + primary verifier 실제 실행
 - 직전 self-consistency diagnostics를 다음 artifact attempt input에 주입
+- self-consistency diagnostics에 tool call 수와 stage별 runtime read count를 포함
 - budget 소진 시 typed `SynthesisSelfConsistencyError`로 attempt history를 반환
 - infeasible discard path
 - discard consumes budget 정책
