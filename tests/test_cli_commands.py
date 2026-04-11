@@ -1,4 +1,6 @@
 import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -6,6 +8,13 @@ from typer.testing import CliRunner
 from rl_task_foundry.cli import app
 from rl_task_foundry.infra.storage import bootstrap_run_db, connect_run_db, record_accepted_example, record_event, record_run, record_task, record_verification_result
 from rl_task_foundry.pipeline.orchestrator import RunSummary
+from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.orchestrator import SynthesisOrchestrationStep
+from rl_task_foundry.synthesis.runner import SynthesisRegistryRunSummary
+from rl_task_foundry.synthesis.scheduler import (
+    SynthesisSchedulerDecision,
+    SynthesisSelectionStatus,
+)
 from rl_task_foundry.tasks.models import TaskSpec
 
 
@@ -35,6 +44,79 @@ def test_cli_validate_config_command():
     assert "registration_guards=timeout_s=30,memory_limit_mb=256,call_count_limit=256" in normalized
     assert "estimated_total_db_connections=44" in normalized
     assert "registration_policy_adr=docs/adr/0001-custom-ast-preflight.md" in normalized
+
+
+def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            [
+                {
+                    "db_id": "sakila",
+                    "categories": ["assignment"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    @dataclass
+    class _DummyRunner:
+        _config: object
+
+        async def run_steps(self, registry, *, max_steps, checkpoint_namespace):
+            captured["registry"] = registry
+            captured["max_steps"] = max_steps
+            captured["checkpoint_namespace"] = checkpoint_namespace
+            return SynthesisRegistryRunSummary(
+                checkpoint_namespace=checkpoint_namespace,
+                requested_steps=max_steps,
+                executed_steps=1,
+                total_pairs=1,
+                initially_processed_pairs=0,
+                processed_pairs_after_run=1,
+                generated_drafts=1,
+                remaining_pairs=0,
+                generated_env_ids=["env_assignment_deadbeef"],
+                steps=[
+                    SynthesisOrchestrationStep(
+                        decision=SynthesisSchedulerDecision(
+                            status=SynthesisSelectionStatus.READY,
+                            db_id="sakila",
+                            category=CategoryTaxonomy.ASSIGNMENT,
+                            reason="selected next available db/category pair",
+                        )
+                    )
+                ],
+            )
+
+        async def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr("rl_task_foundry.cli.SynthesisRegistryRunner", _DummyRunner)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-synthesis-registry",
+            str(registry_path),
+            "--max-steps",
+            "2",
+            "--checkpoint-namespace",
+            "cli_registry_test",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "synthesis registry run complete" in result.stdout
+    assert "checkpoint_namespace=cli_registry_test" in result.stdout
+    assert "generated_drafts=1" in result.stdout
+    assert "remaining_pairs=0" in result.stdout
+    assert "last_status=ready" in result.stdout
+    assert captured["max_steps"] == 2
+    assert captured["checkpoint_namespace"] == "cli_registry_test"
+    assert captured["closed"] is True
 
 
 def test_cli_generate_task_specs_writes_jsonl(monkeypatch, tmp_path):

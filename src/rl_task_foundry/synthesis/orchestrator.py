@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from rl_task_foundry.schema.graph import SchemaGraph
+from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryStatus,
@@ -42,6 +43,8 @@ class SynthesisRuntimeHandle(Protocol):
 class SynthesisDbRegistryEntry:
     db_id: str
     categories: list[CategoryTaxonomy]
+    database: DatabaseConfig | None = None
+    domain: DomainConfig | None = None
     graph: SchemaGraph | None = None
 
 
@@ -52,7 +55,7 @@ class SynthesisOrchestrationStep:
     draft: SynthesisEnvironmentDraft | None = None
 
 
-RuntimeFactory = Callable[[str], SynthesisRuntimeHandle]
+RuntimeFactory = Callable[[SynthesisDbRegistryEntry], SynthesisRuntimeHandle]
 
 
 @dataclass(slots=True)
@@ -113,7 +116,7 @@ class SynthesisOrchestrator:
         assert step.decision.db_id is not None
         assert step.decision.category is not None
         entry = next(item for item in registry if item.db_id == step.decision.db_id)
-        runtime = self._runtime_for(step.decision.db_id)
+        runtime = self._runtime_for(entry)
         draft = await runtime.synthesize_environment_draft(
             db_id=entry.db_id,
             requested_category=step.decision.category,
@@ -130,9 +133,9 @@ class SynthesisOrchestrator:
             await runtime.close()
         self._runtimes.clear()
 
-    def _runtime_for(self, db_id: str) -> SynthesisRuntimeHandle:
-        runtime = self._runtimes.get(db_id)
+    def _runtime_for(self, entry: SynthesisDbRegistryEntry) -> SynthesisRuntimeHandle:
+        runtime = self._runtimes.get(entry.db_id)
         if runtime is None:
-            runtime = self.runtime_factory(db_id)
-            self._runtimes[db_id] = runtime
+            runtime = self.runtime_factory(entry)
+            self._runtimes[entry.db_id] = runtime
         return runtime

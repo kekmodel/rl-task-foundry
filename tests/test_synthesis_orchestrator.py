@@ -69,7 +69,7 @@ def _backed_off_status(
 
 @pytest.mark.asyncio
 async def test_synthesis_orchestrator_choose_next_builds_snapshots_without_runtime() -> None:
-    orchestrator = SynthesisOrchestrator(runtime_factory=lambda _db_id: _FakeRuntime())
+    orchestrator = SynthesisOrchestrator(runtime_factory=lambda _entry: _FakeRuntime())
 
     step = await orchestrator.choose_next(
         [
@@ -105,7 +105,7 @@ async def test_synthesis_orchestrator_build_snapshots_uses_cached_runtime_status
             )
         }
     )
-    orchestrator = SynthesisOrchestrator(runtime_factory=lambda _db_id: runtime)
+    orchestrator = SynthesisOrchestrator(runtime_factory=lambda _entry: runtime)
     orchestrator._runtimes["sakila"] = runtime
 
     snapshots = await orchestrator.build_snapshots(
@@ -130,7 +130,8 @@ async def test_synthesis_orchestrator_build_snapshots_uses_cached_runtime_status
 async def test_synthesis_orchestrator_run_next_uses_cached_runtime_per_db() -> None:
     created: dict[str, _FakeRuntime] = {}
 
-    def _factory(db_id: str) -> _FakeRuntime:
+    def _factory(entry: SynthesisDbRegistryEntry) -> _FakeRuntime:
+        db_id = entry.db_id
         runtime = _FakeRuntime(draft_result=SimpleNamespace(env_id=f"env-{db_id}"))
         created[db_id] = runtime
         return runtime
@@ -163,7 +164,8 @@ async def test_synthesis_orchestrator_run_next_uses_cached_runtime_per_db() -> N
 async def test_synthesis_orchestrator_run_next_rotates_across_dbs() -> None:
     created: dict[str, _FakeRuntime] = {}
 
-    def _factory(db_id: str) -> _FakeRuntime:
+    def _factory(entry: SynthesisDbRegistryEntry) -> _FakeRuntime:
+        db_id = entry.db_id
         runtime = _FakeRuntime(draft_result=SimpleNamespace(env_id=f"env-{db_id}"))
         created[db_id] = runtime
         return runtime
@@ -205,7 +207,7 @@ async def test_synthesis_orchestrator_run_next_returns_backoff_without_synthesiz
             )
         }
     )
-    orchestrator = SynthesisOrchestrator(runtime_factory=lambda _db_id: runtime)
+    orchestrator = SynthesisOrchestrator(runtime_factory=lambda _entry: runtime)
     orchestrator._runtimes["sakila"] = runtime
 
     step = await orchestrator.run_next(
@@ -226,7 +228,8 @@ async def test_synthesis_orchestrator_run_next_returns_backoff_without_synthesiz
 async def test_synthesis_orchestrator_close_closes_cached_runtimes() -> None:
     created: dict[str, _FakeRuntime] = {}
 
-    def _factory(db_id: str) -> _FakeRuntime:
+    def _factory(entry: SynthesisDbRegistryEntry) -> _FakeRuntime:
+        db_id = entry.db_id
         runtime = _FakeRuntime()
         created[db_id] = runtime
         return runtime

@@ -18,6 +18,10 @@ from rl_task_foundry.pipeline.orchestrator import Orchestrator
 from rl_task_foundry.pipeline.review_pack import ReviewPackBuilder
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.schema.path_catalog import build_path_catalog
+from rl_task_foundry.synthesis.runner import (
+    SynthesisRegistryRunner,
+    load_synthesis_registry,
+)
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 from rl_task_foundry.tasks.composer import ComposeRequest, TaskComposer
 from rl_task_foundry.tasks.factory import TierATaskFactory
@@ -149,6 +153,49 @@ def bootstrap_run_db(config_path: Path = Path("rl_task_foundry.yaml")) -> None:
     config = load_config(config_path)
     snapshot = ensure_checkpoint(config.output.run_db_path)
     console.print(f"[green]run.db ready[/green]: {snapshot.run_db_path}")
+
+
+@app.command("run-synthesis-registry")
+def run_synthesis_registry(
+    registry_path: Path,
+    max_steps: int = 10,
+    checkpoint_namespace: str = "synthesis_registry",
+    config_path: Path = Path("rl_task_foundry.yaml"),
+) -> None:
+    """Run the synthesis multi-db registry loop for a bounded number of steps."""
+
+    async def _run() -> None:
+        config = load_config(config_path)
+        registry = load_synthesis_registry(registry_path)
+        if not registry:
+            raise typer.BadParameter("registry file is empty")
+        runner = SynthesisRegistryRunner(config)
+        try:
+            summary = await runner.run_steps(
+                registry,
+                max_steps=max_steps,
+                checkpoint_namespace=checkpoint_namespace,
+            )
+        finally:
+            await runner.close()
+
+        console.print(f"[green]synthesis registry run complete[/green]: {registry_path}")
+        console.print(f"checkpoint_namespace={summary.checkpoint_namespace}")
+        console.print(f"requested_steps={summary.requested_steps}")
+        console.print(f"executed_steps={summary.executed_steps}")
+        console.print(f"total_pairs={summary.total_pairs}")
+        console.print(f"initially_processed_pairs={summary.initially_processed_pairs}")
+        console.print(f"processed_pairs_after_run={summary.processed_pairs_after_run}")
+        console.print(f"generated_drafts={summary.generated_drafts}")
+        console.print(f"remaining_pairs={summary.remaining_pairs}")
+        if summary.generated_env_ids:
+            console.print(f"generated_env_ids={summary.generated_env_ids}")
+        if summary.last_decision is not None:
+            console.print(f"last_status={summary.last_decision.status}")
+            console.print(f"last_db_id={summary.last_decision.db_id}")
+            console.print(f"last_category={summary.last_decision.category}")
+
+    asyncio.run(_run())
 
 
 @app.command("check-db")

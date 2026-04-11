@@ -108,6 +108,12 @@ from rl_task_foundry.synthesis.orchestrator import (
     SynthesisOrchestrator,
     SynthesisRuntimeHandle,
 )
+from rl_task_foundry.synthesis.runner import (
+    SynthesisRegistryFileEntry,
+    SynthesisRegistryRunSummary,
+    SynthesisRegistryRunner,
+    load_synthesis_registry,
+)
 from rl_task_foundry.synthesis.subprocess_pool import (
     RegistrationExecutionResult,
     RegistrationSelfConsistencyResult,
@@ -199,6 +205,9 @@ __all__ = [
     "SynthesisSelfConsistencyError",
     "SynthesisSelfConsistencyOutcome",
     "SynthesisRuntimeHandle",
+    "SynthesisRegistryFileEntry",
+    "SynthesisRegistryRunSummary",
+    "SynthesisRegistryRunner",
     "SynthesisSchedulerDecision",
     "SynthesisSelectionStatus",
     "SynthesisStageRequest",
@@ -215,6 +224,7 @@ __all__ = [
     "VerifierContract",
     "RuntimeIsolationPlan",
     "build_runtime_isolation_plan",
+    "load_synthesis_registry",
     "run_registration_bundle",
     "summarize_schema_graph",
     "validate_generated_module",
