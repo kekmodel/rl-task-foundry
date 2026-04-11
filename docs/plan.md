@@ -403,6 +403,25 @@ Acceptance:
 - v1은 accepted draft를 filesystem bundle + sqlite exact-signature index로 durable commit할 수 있다
 - v1은 registry snapshot과 semantic dedup candidate를 조회할 수 있다
 
+### Milestone 12: Coverage Planner
+
+목표:
+
+- registry inventory 대비 부족한 `db x category x difficulty band` cell을 계획적으로 채운다
+
+작업:
+
+- coverage target config source-of-truth
+- zero-count cell을 포함한 coverage deficit planner
+- pair-level aggregate deficit ranking
+- coverage plan CLI surface
+
+Acceptance:
+
+- planner가 registry file의 db/category inventory를 기준으로 zero-count cell까지 포함한 deficit plan을 계산한다
+- planner가 `db x category` pair별 total deficit을 정렬해서 다음 scheduler priority 입력으로 넘길 수 있다
+- tracked difficulty band와 per-band target이 config source-of-truth로 고정된다
+
 ### Cross-Cutting Workstream: Review Pack and Observability
 
 이건 마지막 milestone이 아니라 전 과정에 걸친 cross-cutting requirement다.

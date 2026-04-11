@@ -113,6 +113,9 @@ synthesis:
     max_self_consistency_iterations: 5
     max_consecutive_category_discards: 3
     category_backoff_duration_s: 3600
+  coverage_planner:
+    target_count_per_band: 3
+    include_unset_band: false
   registration_workers:
     worker_count: 2
     connections_per_worker: 2

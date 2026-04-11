@@ -180,8 +180,16 @@ class SynthesisRuntimeConfig(StrictModel):
     category_backoff_duration_s: int = Field(default=3600, ge=1)
 
 
+class SynthesisCoveragePlannerConfig(StrictModel):
+    target_count_per_band: int = Field(default=3, ge=1)
+    include_unset_band: bool = False
+
+
 class SynthesisConfig(StrictModel):
     runtime: SynthesisRuntimeConfig = Field(default_factory=SynthesisRuntimeConfig)
+    coverage_planner: SynthesisCoveragePlannerConfig = Field(
+        default_factory=SynthesisCoveragePlannerConfig
+    )
     registration_workers: RegistrationWorkerConfig = Field(
         default_factory=RegistrationWorkerConfig
     )

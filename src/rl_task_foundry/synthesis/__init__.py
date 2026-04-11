@@ -122,6 +122,12 @@ from rl_task_foundry.synthesis.environment_registry import (
     bucketize_difficulty_vector,
     estimate_semantic_similarity,
 )
+from rl_task_foundry.synthesis.coverage_planner import (
+    SynthesisCoverageCellPlan,
+    SynthesisCoveragePairPlan,
+    SynthesisCoveragePlan,
+    SynthesisCoveragePlanner,
+)
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryFileEntry,
     SynthesisRegistryRunOutcome,
@@ -165,6 +171,10 @@ __all__ = [
     "EnvironmentRegistryRecord",
     "EnvironmentRegistrySnapshot",
     "EnvironmentRegistryWriter",
+    "SynthesisCoverageCellPlan",
+    "SynthesisCoveragePairPlan",
+    "SynthesisCoveragePlan",
+    "SynthesisCoveragePlanner",
     "EnvironmentQualityMetrics",
     "EnvironmentStatus",
     "FactCardinality",

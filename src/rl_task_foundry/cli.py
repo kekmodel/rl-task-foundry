@@ -22,6 +22,7 @@ from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunner,
     load_synthesis_registry,
 )
+from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
@@ -124,6 +125,7 @@ def validate_config(
         f"{config.synthesis.runtime.category_backoff_duration_s}"
     )
     runtime_plan = build_runtime_isolation_plan(config)
+    coverage_planner = SynthesisCoveragePlanner.for_config(config)
     console.print(
         "registration_lane="
         f"mode={runtime_plan.registration_lane.worker_mode},"
@@ -150,6 +152,15 @@ def validate_config(
         f"exact_enabled={config.dedup.exact_enabled},"
         f"near_dup_enabled={config.dedup.near_dup_enabled},"
         f"minhash_threshold={config.dedup.minhash_threshold}"
+    )
+    console.print(
+        "synthesis_coverage="
+        "target_count_per_band="
+        f"{config.synthesis.coverage_planner.target_count_per_band},"
+        "include_unset_band="
+        f"{config.synthesis.coverage_planner.include_unset_band},"
+        "tracked_bands="
+        f"{'|'.join(band.value for band in coverage_planner.tracked_bands)}"
     )
     console.print(f"solvers={_solver_summary(config)}")
 
@@ -258,6 +269,54 @@ def show_synthesis_environment_registry(
             "env="
             f"{record.env_id}|{record.db_id}|{record.category.value}"
             f"|{record.difficulty_band.value}|{record.status.value}"
+        )
+
+
+@app.command("plan-synthesis-coverage")
+def plan_synthesis_coverage(
+    registry_path: Path,
+    limit: int = 10,
+    config_path: Path = Path("rl_task_foundry.yaml"),
+) -> None:
+    """Print the current registry coverage deficit plan against the db/category inventory."""
+
+    config = load_config(config_path)
+    registry = load_synthesis_registry(registry_path)
+    if not registry:
+        raise typer.BadParameter("registry file is empty")
+    environment_registry = EnvironmentRegistryWriter.for_config(config)
+    planner = SynthesisCoveragePlanner.for_config(config)
+    plan = planner.build_plan(registry, environment_registry.coverage_entries())
+
+    console.print(f"[green]synthesis coverage plan[/green]: {registry_path}")
+    console.print(
+        f"tracked_bands={'|'.join(band.value for band in plan.tracked_bands)}"
+    )
+    console.print(f"target_count_per_band={plan.target_count_per_band}")
+    console.print(f"total_pairs={plan.total_pairs}")
+    console.print(f"total_cells={plan.total_cells}")
+    console.print(f"satisfied_cells={plan.satisfied_cells}")
+    console.print(f"deficit_cells={plan.deficit_cells}")
+    console.print(f"deficit_pairs={plan.deficit_pairs}")
+    console.print(f"total_deficit={plan.total_deficit}")
+    for pair in plan.pair_plans[: max(0, limit)]:
+        if pair.total_deficit == 0:
+            continue
+        missing_bands = ",".join(band.value for band in pair.missing_bands) or "-"
+        console.print(
+            "pair_gap="
+            f"{pair.db_id}|{pair.category.value}|deficit={pair.total_deficit}"
+            f"|current={pair.total_current_count}|target={pair.total_target_count}"
+            f"|missing_bands={missing_bands}"
+        )
+    for cell in plan.cell_plans[: max(0, limit)]:
+        if cell.deficit == 0:
+            continue
+        console.print(
+            "cell_gap="
+            f"{cell.db_id}|{cell.category.value}|{cell.difficulty_band.value}"
+            f"|current={cell.current_count}|target={cell.target_count}"
+            f"|deficit={cell.deficit}"
         )
 
 

@@ -22,6 +22,8 @@ def test_load_config_uses_solver_replicas_source_of_truth():
     assert config.synthesis.runtime.max_self_consistency_iterations == 5
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
     assert config.synthesis.runtime.category_backoff_duration_s == 3600
+    assert config.synthesis.coverage_planner.target_count_per_band == 3
+    assert config.synthesis.coverage_planner.include_unset_band is False
     assert config.synthesis.registration_workers.worker_count == 2
     assert config.synthesis.registration_workers.max_db_connections == 4
     assert config.estimated_total_db_connections == 44

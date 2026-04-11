@@ -1017,6 +1017,13 @@ v1 registry는 read/query surface도 제공한다.
 - structured coverage snapshot
 - semantic dedup candidate export
 
+v1 coverage planner는 registry inventory를 기준으로 deficit plan도 계산한다.
+
+- source-of-truth target은 `synthesis.coverage_planner.target_count_per_band`다
+- 기본 tracked band는 `low, medium, high`이고 `unset`은 opt-in이다
+- planner는 zero-count cell도 포함해서 `db_id x category x difficulty band` deficit을 계산한다
+- planner는 `db_id x category` pair-level aggregate deficit도 같이 계산해서 다음 scheduler priority 입력으로 재사용할 수 있어야 한다
+
 ## Review Pack
 
 review pack은 mandatory production gate가 아니다.  

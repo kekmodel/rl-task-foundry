@@ -57,6 +57,10 @@ def test_cli_validate_config_command():
     assert "estimated_total_db_connections=44" in normalized
     assert "registration_policy_adr=docs/adr/0001-custom-ast-preflight.md" in normalized
     assert "dedup=exact_enabled=True,near_dup_enabled=True,minhash_threshold=0.9" in normalized
+    assert (
+        "synthesis_coverage=target_count_per_band=3,include_unset_band=False,"
+        "tracked_bands=low|medium|high"
+    ) in normalized
 
 
 def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
@@ -226,6 +230,61 @@ def test_cli_show_synthesis_environment_registry_reports_snapshot(monkeypatch) -
     assert "semantic_candidates=1" in result.stdout
     assert "coverage=sakila|assignment|medium|2" in result.stdout
     assert "env=env_assignment_deadbeef|sakila|assignment|medium|draft" in result.stdout
+
+
+def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> None:
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            [
+                {
+                    "db_id": "sakila",
+                    "categories": ["assignment", "itinerary"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    @dataclass
+    class _DummyRegistry:
+        def coverage_entries(self, *, db_id=None, category=None):
+            assert db_id is None
+            assert category is None
+            return [
+                EnvironmentRegistryCoverageEntry(
+                    db_id="sakila",
+                    category=CategoryTaxonomy.ASSIGNMENT,
+                    difficulty_band=DifficultyBand.MEDIUM,
+                    count=2,
+                )
+            ]
+
+    monkeypatch.setattr(
+        "rl_task_foundry.cli.EnvironmentRegistryWriter.for_config",
+        lambda _config: _DummyRegistry(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "plan-synthesis-coverage",
+            str(registry_path),
+            "--limit",
+            "10",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "synthesis coverage plan" in result.stdout
+    assert "tracked_bands=low|medium|high" in result.stdout
+    assert "target_count_per_band=3" in result.stdout
+    assert "total_pairs=2" in result.stdout
+    assert "deficit_cells=6" in result.stdout
+    assert "deficit_pairs=2" in result.stdout
+    assert "total_deficit=16" in result.stdout
+    assert "pair_gap=sakila|itinerary|deficit=9" in result.stdout
+    assert "cell_gap=sakila|assignment|medium|current=2|target=3|deficit=1" in result.stdout
 
 
 def test_cli_generate_task_specs_writes_jsonl(monkeypatch, tmp_path):
