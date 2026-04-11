@@ -36,6 +36,12 @@ class DifficultyAxis(StrEnum):
     CANDIDATE_WIDTH = "candidate_width"
 
 
+class DifficultyAxisUnit(StrEnum):
+    COUNT = "count"
+    NORMALIZED_SCORE = "normalized_score"
+    DAYS = "days"
+
+
 class EnvironmentStatus(StrEnum):
     DRAFT = "draft"
     ACCEPTED = "accepted"
@@ -80,9 +86,32 @@ class ToolParameterType(StrEnum):
     OBJECT = "object"
 
 
+class ToolEmptyResultBehavior(StrEnum):
+    RETURN_EMPTY = "return_empty"
+    RETURN_NULL = "return_null"
+    RAISE_NOT_FOUND = "raise_not_found"
+
+
+class ToolTimeoutBehavior(StrEnum):
+    RAISE_TIMEOUT = "raise_timeout"
+    RETURN_ERROR = "return_error"
+
+
 class FactCardinality(StrEnum):
     ONE = "one"
     MANY = "many"
+
+
+class FactValueType(StrEnum):
+    STR = "str"
+    INT = "int"
+    FLOAT = "float"
+    BOOL = "bool"
+    DATE = "date"
+    DATETIME = "datetime"
+    LIST_STR = "list[str]"
+    LIST_INT = "list[int]"
+    LIST_FLOAT = "list[float]"
 
 
 class ShadowPromptStrategy(StrEnum):
@@ -101,6 +130,73 @@ class InstanceSamplingStrategy(StrEnum):
     DETERMINISTIC_HASH = "deterministic_hash"
     GRID = "grid"
     STRATIFIED_HASH = "stratified_hash"
+
+
+class DifficultyAxisSpec(StrictModel):
+    axis: DifficultyAxis
+    unit: DifficultyAxisUnit
+    description: str
+    integral_only: bool = False
+    minimum: float = 0.0
+    maximum: float | None = None
+
+
+DIFFICULTY_AXIS_SPECS: dict[DifficultyAxis, DifficultyAxisSpec] = {
+    DifficultyAxis.SLOT_COUNT: DifficultyAxisSpec(
+        axis=DifficultyAxis.SLOT_COUNT,
+        unit=DifficultyAxisUnit.COUNT,
+        description="Number of answer slots or entity selections required.",
+        integral_only=True,
+        minimum=1.0,
+    ),
+    DifficultyAxis.CONSTRAINT_COUNT: DifficultyAxisSpec(
+        axis=DifficultyAxis.CONSTRAINT_COUNT,
+        unit=DifficultyAxisUnit.COUNT,
+        description="Count of hard constraints enforced by the verifier.",
+        integral_only=True,
+        minimum=0.0,
+    ),
+    DifficultyAxis.CONDITIONAL_DEPTH: DifficultyAxisSpec(
+        axis=DifficultyAxis.CONDITIONAL_DEPTH,
+        unit=DifficultyAxisUnit.COUNT,
+        description="Maximum nesting depth of conditional constraints.",
+        integral_only=True,
+        minimum=0.0,
+    ),
+    DifficultyAxis.THRESHOLD_TIGHTNESS: DifficultyAxisSpec(
+        axis=DifficultyAxis.THRESHOLD_TIGHTNESS,
+        unit=DifficultyAxisUnit.NORMALIZED_SCORE,
+        description="Normalized strictness of numeric thresholds from 0.0 to 1.0.",
+        integral_only=False,
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    DifficultyAxis.UNIQUENESS_SCOPE: DifficultyAxisSpec(
+        axis=DifficultyAxis.UNIQUENESS_SCOPE,
+        unit=DifficultyAxisUnit.COUNT,
+        description="Number of slots or entities participating in uniqueness constraints.",
+        integral_only=True,
+        minimum=0.0,
+    ),
+    DifficultyAxis.TEMPORAL_SPAN: DifficultyAxisSpec(
+        axis=DifficultyAxis.TEMPORAL_SPAN,
+        unit=DifficultyAxisUnit.DAYS,
+        description="Temporal horizon expressed in days or normalized day-equivalent units.",
+        integral_only=True,
+        minimum=0.0,
+    ),
+    DifficultyAxis.CANDIDATE_WIDTH: DifficultyAxisSpec(
+        axis=DifficultyAxis.CANDIDATE_WIDTH,
+        unit=DifficultyAxisUnit.COUNT,
+        description="Approximate width of the candidate search space available to the solver.",
+        integral_only=True,
+        minimum=0.0,
+    ),
+}
+
+
+ScalarRuntimeValue = str | int | float | bool | date | datetime | None
+RuntimeValue = ScalarRuntimeValue | list[ScalarRuntimeValue]
 
 
 class ToolParameterContract(StrictModel):
@@ -172,6 +268,7 @@ class ConstraintSummaryItem(StrictModel):
     kind: ConstraintKind
     summary: str
     hard: bool = True
+    representation_role: Literal["review_summary"] = "review_summary"
 
 
 class ToolContract(StrictModel):
@@ -182,6 +279,8 @@ class ToolContract(StrictModel):
     async_callable: Literal[True] = True
     connection_parameter: Literal["conn"] = "conn"
     read_only: Literal[True] = True
+    empty_result_behavior: ToolEmptyResultBehavior = ToolEmptyResultBehavior.RETURN_EMPTY
+    timeout_behavior: ToolTimeoutBehavior = ToolTimeoutBehavior.RAISE_TIMEOUT
 
 
 class TaskContract(StrictModel):
@@ -190,7 +289,19 @@ class TaskContract(StrictModel):
     output_schema: OutputSchemaContract
     constraint_summary: list[ConstraintSummaryItem] = Field(default_factory=list)
     difficulty_vector: dict[DifficultyAxis, float] = Field(default_factory=dict)
-    instance_parameters: dict[str, object] = Field(default_factory=dict)
+    instance_parameters: dict[str, RuntimeValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_difficulty_vector(self) -> TaskContract:
+        for axis, value in self.difficulty_vector.items():
+            spec = DIFFICULTY_AXIS_SPECS[axis]
+            if value < spec.minimum:
+                raise ValueError(f"{axis.value} must be >= {spec.minimum}")
+            if spec.maximum is not None and value > spec.maximum:
+                raise ValueError(f"{axis.value} must be <= {spec.maximum}")
+            if spec.integral_only and not float(value).is_integer():
+                raise ValueError(f"{axis.value} must be an integer-valued difficulty axis")
+        return self
 
 
 class SolutionContract(StrictModel):
@@ -203,7 +314,7 @@ class FactSpec(StrictModel):
     key: str
     entity_ref: str
     attribute: str
-    value_type: str = Field(min_length=1)
+    value_type: FactValueType
     nullable: bool = False
     cardinality: FactCardinality = FactCardinality.ONE
 
@@ -324,8 +435,8 @@ class InstanceSpaceContract(StrictModel):
 
 class InstanceContract(StrictModel):
     instance_id: str
-    anchor_values: dict[str, object] = Field(default_factory=dict)
-    parameter_values: dict[str, object] = Field(default_factory=dict)
+    anchor_values: dict[str, RuntimeValue] = Field(default_factory=dict)
+    parameter_values: dict[str, RuntimeValue] = Field(default_factory=dict)
     expected_solution_fingerprint: str | None = None
 
 
@@ -339,19 +450,35 @@ class CrossInstanceSet(StrictModel):
         instance_ids = [instance.instance_id for instance in self.instances]
         if len(set(instance_ids)) != len(instance_ids):
             raise ValueError("cross-instance sets must not reuse instance_id values")
+        if self.require_distinct_solution_fingerprints:
+            fingerprints = [
+                instance.expected_solution_fingerprint
+                for instance in self.instances
+                if instance.expected_solution_fingerprint is not None
+            ]
+            if len(set(fingerprints)) != len(fingerprints):
+                raise ValueError(
+                    "cross-instance solution fingerprints must be distinct when required"
+                )
         return self
 
 
 class EnvironmentQualityMetrics(StrictModel):
     self_consistency_pass: bool = False
-    shadow_disagreement_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    solver_pass_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    solver_ci_low: float = Field(default=0.0, ge=0.0, le=1.0)
-    solver_ci_high: float = Field(default=1.0, ge=0.0, le=1.0)
+    shadow_disagreement_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_ci_low: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_ci_high: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _validate_interval(self) -> EnvironmentQualityMetrics:
-        if self.solver_ci_low > self.solver_ci_high:
+        if (self.solver_ci_low is None) != (self.solver_ci_high is None):
+            raise ValueError("solver CI bounds must both be set or both be omitted")
+        if (
+            self.solver_ci_low is not None
+            and self.solver_ci_high is not None
+            and self.solver_ci_low > self.solver_ci_high
+        ):
             raise ValueError("solver_ci_low must be <= solver_ci_high")
         return self
 

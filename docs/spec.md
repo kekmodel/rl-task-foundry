@@ -263,6 +263,23 @@ DifficultyAxes:
 - difficulty crank는 monotonic vector를 가져야 한다
 - 종료 조건은 pass-rate band 수렴 또는 iteration budget 소진이다
 
+축 의미:
+
+- `SLOT_COUNT`
+  - solver가 채워야 하는 slot 또는 entity selection 수
+- `CONSTRAINT_COUNT`
+  - verifier가 강제하는 hard constraint 수
+- `CONDITIONAL_DEPTH`
+  - 조건 분기의 최대 중첩 깊이
+- `THRESHOLD_TIGHTNESS`
+  - 0.0~1.0 normalized strictness
+- `UNIQUENESS_SCOPE`
+  - uniqueness가 동시에 걸리는 slot/entity 범위 수
+- `TEMPORAL_SPAN`
+  - day-equivalent horizon
+- `CANDIDATE_WIDTH`
+  - 탐색해야 하는 후보 폭
+
 ## Tool Contract
 
 generated tool은 아래 signature를 가져야 한다.
@@ -272,6 +289,18 @@ async def tool_name(conn, **kwargs) -> Any
 ```
 
 tool은 read-only DB mediation layer만 통해 동작한다.
+
+### Error Behavior
+
+tool contract는 success schema만이 아니라 empty/timeout 동작도 명시해야 한다.
+
+- empty result behavior
+  - `return_empty`
+  - `return_null`
+  - `raise_not_found`
+- timeout behavior
+  - `raise_timeout`
+  - `return_error`
 
 ### Tool Reuse Policy
 
@@ -297,6 +326,9 @@ answer는 flat field에 제한되지 않는다.
 - object
 - list[object]
 - nested structures
+
+`constraint_summary`는 review pack / observability용 human-readable summary다.  
+실제 authoritative constraint semantics는 verifier code가 책임진다.
 
 ## Solution Contract
 
@@ -406,10 +438,22 @@ FactSpec:
   key: str
   entity_ref: str
   attribute: str
-  value_type: str
+  value_type: str  # enum constrained
   nullable: bool
   cardinality: one | many
 ```
+
+허용 value type:
+
+- `str`
+- `int`
+- `float`
+- `bool`
+- `date`
+- `datetime`
+- `list[str]`
+- `list[int]`
+- `list[float]`
 
 `fetch_facts()`는 반드시 이 schema에 맞는 dict를 반환해야 한다.
 

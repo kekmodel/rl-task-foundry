@@ -23,6 +23,11 @@ clean-break rewrite 이전 baseline review pack snapshot은 아래 artifact로 �
 - path-centric generator의 마지막 qualitative baseline
 - 이후 synthesis-agent rewrite와 직접 비교 가능한 artifact
 
+portable reference:
+
+- `review_packs/20260411-114636-aggregate-focus-v2/review_pack.md`
+- `review_packs/20260411-114636-aggregate-focus-v2/review_pack.jsonl`
+
 ## Infra Regression Baseline
 
 rewrite 중 계속 보호할 baseline green suite는 아래다.

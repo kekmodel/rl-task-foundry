@@ -12,11 +12,14 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintSummaryItem,
     CrossInstanceSet,
     DifficultyAxis,
+    DIFFICULTY_AXIS_SPECS,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnumParameterSpace,
     FactCardinality,
+    FactValueType,
     FactSpec,
+    FloatRangeParameterSpace,
     InstanceContract,
     InstanceSamplingContract,
     InstanceSamplingStrategy,
@@ -31,8 +34,10 @@ from rl_task_foundry.synthesis.contracts import (
     SolutionContract,
     TaskContract,
     ToolContract,
+    ToolEmptyResultBehavior,
     ToolParameterContract,
     ToolParameterType,
+    ToolTimeoutBehavior,
     VerifierContract,
 )
 
@@ -63,14 +68,14 @@ def _build_facts_schema() -> MaterializedFactsSchema:
                 key="hotel_price",
                 entity_ref="day_2.hotel",
                 attribute="price",
-                value_type="float",
+                value_type=FactValueType.FLOAT,
                 cardinality=FactCardinality.ONE,
             ),
             FactSpec(
                 key="restaurant_ratings",
                 entity_ref="day_2.restaurants",
                 attribute="rating",
-                value_type="float",
+                value_type=FactValueType.FLOAT,
                 nullable=False,
                 cardinality=FactCardinality.MANY,
             ),
@@ -98,6 +103,35 @@ def test_output_schema_rejects_invalid_scalar_children() -> None:
         )
 
 
+def test_output_schema_requires_enum_values_for_enum_fields() -> None:
+    with pytest.raises(ValidationError):
+        OutputFieldContract(name="tier", type=OutputFieldType.ENUM)
+
+
+def test_tool_parameter_contract_requires_enum_values_for_enum_types() -> None:
+    with pytest.raises(ValidationError):
+        ToolParameterContract(name="bucket", type=ToolParameterType.ENUM)
+
+
+def test_tool_parameter_contract_rejects_enum_values_for_non_enum_types() -> None:
+    with pytest.raises(ValidationError):
+        ToolParameterContract(
+            name="city",
+            type=ToolParameterType.STRING,
+            enum_values=["seoul"],
+        )
+
+
+def test_fact_spec_rejects_unknown_value_type() -> None:
+    with pytest.raises(ValidationError):
+        FactSpec(
+            key="bad",
+            entity_ref="slot.hotel",
+            attribute="price",
+            value_type="weird_thing",
+        )
+
+
 def test_instance_space_supports_contract_shapes() -> None:
     instance_space = InstanceSpaceContract(
         anchor_query=AnchorQueryContract(
@@ -118,6 +152,19 @@ def test_instance_space_supports_contract_shapes() -> None:
     assert instance_space.instance_count == 3
     assert instance_space.parameters["budget_bucket"].kind == "enum"
     assert instance_space.parameters["day_count"].kind == "int_range"
+
+
+def test_anchor_query_contract_requires_unique_outputs() -> None:
+    with pytest.raises(ValidationError):
+        AnchorQueryContract(
+            sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
+            outputs=["anchor_id", "anchor_id"],
+        )
+
+
+def test_float_range_parameter_space_rejects_invalid_bounds() -> None:
+    with pytest.raises(ValidationError):
+        FloatRangeParameterSpace(min=10.0, max=5.0)
 
 
 def test_environment_contract_round_trips_with_core_artifacts() -> None:
@@ -202,6 +249,21 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
     assert round_tripped.task.category is CategoryTaxonomy.ITINERARY
     assert round_tripped.shadow_verifier.official_judgment is False
     assert round_tripped.verifier.fetch_facts_function == "fetch_facts"
+    assert round_tripped.quality_metrics.shadow_disagreement_rate is None
+
+
+def test_task_contract_rejects_fractional_integral_difficulty_axis() -> None:
+    with pytest.raises(ValidationError):
+        TaskContract(
+            question="일정표를 만들어 주세요.",
+            category=CategoryTaxonomy.ITINERARY,
+            output_schema=_build_output_schema(),
+            difficulty_vector={DifficultyAxis.SLOT_COUNT: 2.5},
+        )
+
+
+def test_difficulty_axis_specs_cover_every_axis() -> None:
+    assert set(DIFFICULTY_AXIS_SPECS) == set(DifficultyAxis)
 
 
 def test_environment_contract_rejects_task_category_mismatch() -> None:
@@ -238,6 +300,20 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
         )
 
 
+def test_tool_contract_defaults_error_behavior() -> None:
+    tool = ToolContract(
+        name="get_hotels_by_city",
+        return_schema=OutputFieldContract(
+            name="hotels",
+            type=OutputFieldType.LIST,
+            items=OutputFieldContract(name="hotel", type=OutputFieldType.STRING),
+        ),
+    )
+
+    assert tool.empty_result_behavior is ToolEmptyResultBehavior.RETURN_EMPTY
+    assert tool.timeout_behavior is ToolTimeoutBehavior.RAISE_TIMEOUT
+
+
 def test_cross_instance_set_requires_unique_instance_ids() -> None:
     with pytest.raises(ValidationError):
         CrossInstanceSet(
@@ -245,4 +321,45 @@ def test_cross_instance_set_requires_unique_instance_ids() -> None:
                 InstanceContract(instance_id="instance_1"),
                 InstanceContract(instance_id="instance_1"),
             ]
+        )
+
+
+def test_cross_instance_set_rejects_duplicate_solution_fingerprints_when_required() -> None:
+    with pytest.raises(ValidationError):
+        CrossInstanceSet(
+            instances=[
+                InstanceContract(
+                    instance_id="instance_1",
+                    expected_solution_fingerprint="sha256:abc",
+                ),
+                InstanceContract(
+                    instance_id="instance_2",
+                    expected_solution_fingerprint="sha256:abc",
+                ),
+            ]
+        )
+
+
+def test_environment_quality_metrics_allow_unmeasured_state() -> None:
+    metrics = EnvironmentQualityMetrics()
+
+    assert metrics.shadow_disagreement_rate is None
+    assert metrics.solver_pass_rate is None
+    assert metrics.solver_ci_low is None
+    assert metrics.solver_ci_high is None
+
+
+def test_environment_quality_metrics_require_both_ci_bounds_together() -> None:
+    with pytest.raises(ValidationError):
+        EnvironmentQualityMetrics(solver_ci_low=0.2)
+
+
+def test_instance_contract_rejects_non_serializable_anchor_values() -> None:
+    class _Sentinel:
+        pass
+
+    with pytest.raises(ValidationError):
+        InstanceContract(
+            instance_id="instance_1",
+            anchor_values={"customer_id": _Sentinel()},
         )

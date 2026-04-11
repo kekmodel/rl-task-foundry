@@ -4,6 +4,10 @@
 
 status: `ACTIVE`
 
+owner:
+
+- release owner / rewrite lead가 freeze 상태 유지와 해제 판단을 맡는다
+
 effective_from:
 
 - `2026-04-11`
