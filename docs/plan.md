@@ -190,12 +190,15 @@ Acceptance:
 - `check_constraints(answer, facts)`
 - aggregate는 `check_constraints()`에서만 계산한다는 규칙 고정
 - Stage 2/3에서 tool call 금지 enforcement
+- `verify()`의 3-stage orchestration 강제
+- registration report에 verifier/shadow verifier stage analysis 기록
 - Runtime instrumentation으로 factual claim vs tool usage 로그 수집
 
 Acceptance:
 
 - pure-hardcoded verifier는 reject된다
 - Stage 2/3에서 tool 재호출 verifier는 reject된다
+- `verify()`가 staged pipeline을 생략하면 reject된다
 - materialized facts schema가 verifier artifact에 포함된다
 - aggregate constraint가 raw facts만으로 재계산된다
 

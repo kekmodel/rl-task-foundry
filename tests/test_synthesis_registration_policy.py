@@ -16,6 +16,26 @@ from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_pla
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
 
 
+def _valid_verifier_source() -> str:
+    return """
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    city = answer.get("city")
+    return {"city": tools.lookup_city(city)}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return bool(facts.get("city"))
+"""
+
+
 def test_registration_policy_accepts_valid_tool_module() -> None:
     policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
     errors = validate_generated_module(
@@ -186,6 +206,110 @@ def verify(answer, tools):
     assert any(error.code == "missing_fetch_facts_function" for error in errors)
     assert any(error.code == "missing_facts_match_function" for error in errors)
     assert any(error.code == "missing_check_constraints_function" for error in errors)
+
+
+def test_registration_policy_rejects_verifier_without_tool_grounded_fetch_facts() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"city": answer.get("city")}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+        kind=ArtifactKind.VERIFIER_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "fetch_facts_tools_call_required" for error in errors)
+
+
+def test_registration_policy_rejects_verifier_without_stage_pipeline() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def verify(answer, tools):
+    return True
+
+def fetch_facts(answer, tools):
+    return {"city": tools.lookup_city(answer.get("city"))}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+        kind=ArtifactKind.VERIFIER_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "verify_missing_stage_call" for error in errors)
+
+
+def test_registration_policy_rejects_tool_calls_in_pure_verifier_stages() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"city": tools.lookup_city(answer.get("city"))}
+
+def facts_match_answer_claims(answer, facts):
+    expected = tools.lookup_city(answer.get("city"))
+    return expected == facts.get("city")
+
+def check_constraints(answer, facts):
+    return tools.is_city_allowed(facts.get("city"))
+""",
+        kind=ArtifactKind.VERIFIER_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "facts_match_answer_claims_tools_call_forbidden" for error in errors)
+    assert any(error.code == "check_constraints_tools_call_forbidden" for error in errors)
+
+
+def test_registration_policy_rejects_preaggregated_fetch_facts_metrics() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    rows = tools.lookup_cities(answer.get("cities", []))
+    return {"city_count": len(rows)}
+
+def facts_match_answer_claims(answer, facts):
+    return True
+
+def check_constraints(answer, facts):
+    return facts.get("city_count", 0) > 0
+""",
+        kind=ArtifactKind.VERIFIER_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "fetch_facts_aggregate_call_forbidden" for error in errors)
 
 
 def test_registration_policy_accepts_valid_tool_self_test_module() -> None:
@@ -489,40 +613,22 @@ async def run_self_test(tools):
 def solve(tools):
     return {"city": "sasebo"}
 """,
-            verifier_source="""
-def verify(answer, tools):
-    return True
-
-def fetch_facts(answer, tools):
-    return {"city": answer.get("city")}
-
-def facts_match_answer_claims(answer, facts):
-    return answer.get("city") == facts.get("city")
-
-def check_constraints(answer, facts):
-    return True
-""",
-            shadow_verifier_source="""
-def verify(answer, tools):
-    return True
-
-def fetch_facts(answer, tools):
-    return {"city": answer.get("city")}
-
-def facts_match_answer_claims(answer, facts):
-    return answer.get("city") == facts.get("city")
-
-def check_constraints(answer, facts):
-    return True
-""",
+            verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_verifier_source(),
         )
         report = await run_registration_bundle(config=config, bundle=bundle)
-        return report.status, report.tool_self_test.executed, report.tool_self_test.passed
+        return (
+            report.status,
+            report.tool_self_test.executed,
+            report.tool_self_test.passed,
+            report.verifier.verifier_hybrid_analysis.fetch_facts_tool_calls,
+        )
 
-    status, executed, self_test_passed = asyncio.run(_run())
+    status, executed, self_test_passed, fetch_facts_tool_calls = asyncio.run(_run())
     assert status == RegistrationBundleStatus.PASSED
     assert executed is True
     assert self_test_passed is True
+    assert fetch_facts_tool_calls == 1
 
 
 def test_registration_runner_fails_when_static_validation_fails() -> None:
@@ -541,32 +647,8 @@ async def run_self_test(tools):
 def solve(answer, tools):
     return {"city": "sasebo"}
 """,
-            verifier_source="""
-def verify(answer, tools):
-    return True
-
-def fetch_facts(answer, tools):
-    return {"city": answer.get("city")}
-
-def facts_match_answer_claims(answer, facts):
-    return answer.get("city") == facts.get("city")
-
-def check_constraints(answer, facts):
-    return True
-""",
-            shadow_verifier_source="""
-def verify(answer, tools):
-    return True
-
-def fetch_facts(answer, tools):
-    return {"city": answer.get("city")}
-
-def facts_match_answer_claims(answer, facts):
-    return answer.get("city") == facts.get("city")
-
-def check_constraints(answer, facts):
-    return True
-""",
+            verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_verifier_source(),
         )
         report = await run_registration_bundle(config=config, bundle=bundle)
         return report.status, report.tool_self_test.executed, report.solution.static_errors[0].code
@@ -595,32 +677,8 @@ async def run_self_test(tools):
 def solve(tools):
     return {"city": "sasebo"}
 """,
-            verifier_source="""
-def verify(answer, tools):
-    return True
-
-def fetch_facts(answer, tools):
-    return {"city": answer.get("city")}
-
-def facts_match_answer_claims(answer, facts):
-    return answer.get("city") == facts.get("city")
-
-def check_constraints(answer, facts):
-    return True
-""",
-            shadow_verifier_source="""
-def verify(answer, tools):
-    return True
-
-def fetch_facts(answer, tools):
-    return {"city": answer.get("city")}
-
-def facts_match_answer_claims(answer, facts):
-    return answer.get("city") == facts.get("city")
-
-def check_constraints(answer, facts):
-    return True
-""",
+            verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_verifier_source(),
         )
         report = await run_registration_bundle(config=config, bundle=bundle)
         return report.status, report.tool_self_test.execution_errors[0].code

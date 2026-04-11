@@ -10,6 +10,8 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
     RegistrationError,
+    VerifierHybridAnalysis,
+    analyze_verifier_module,
     validate_generated_module,
 )
 from rl_task_foundry.synthesis.subprocess_pool import (
@@ -47,6 +49,7 @@ class ArtifactRegistrationResult(StrictModel):
     artifact_name: RegistrationArtifactName
     artifact_kind: ArtifactKind
     static_errors: list[RegistrationError] = Field(default_factory=list)
+    verifier_hybrid_analysis: VerifierHybridAnalysis | None = None
     execution_required: bool = False
     executed: bool = False
     execution_errors: list[RegistrationError] = Field(default_factory=list)
@@ -126,6 +129,10 @@ async def run_registration_bundle(
             kind=ArtifactKind.VERIFIER_MODULE,
             policy=policy,
         ),
+        verifier_hybrid_analysis=analyze_verifier_module(
+            bundle.verifier_source,
+            kind=ArtifactKind.VERIFIER_MODULE,
+        ),
     )
     shadow_verifier = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.SHADOW_VERIFIER,
@@ -134,6 +141,10 @@ async def run_registration_bundle(
             bundle.shadow_verifier_source,
             kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
             policy=policy,
+        ),
+        verifier_hybrid_analysis=analyze_verifier_module(
+            bundle.shadow_verifier_source,
+            kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
         ),
     )
 

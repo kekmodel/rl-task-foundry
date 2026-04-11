@@ -6,7 +6,7 @@ import ast
 from enum import StrEnum
 from typing import Iterable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from rl_task_foundry.config.models import RegistrationPolicyConfig
 
@@ -32,6 +32,22 @@ class RegistrationError(StrictModel):
     suggestion: str | None = None
 
 
+class VerifierHybridAnalysis(StrictModel):
+    verify_stage_calls: dict[str, int] = Field(
+        default_factory=lambda: {
+            "fetch_facts": 0,
+            "facts_match_answer_claims": 0,
+            "check_constraints": 0,
+        }
+    )
+    fetch_facts_tool_calls: int = 0
+    fetch_facts_aggregate_calls: int = 0
+    facts_match_tools_references: int = 0
+    facts_match_tools_calls: int = 0
+    check_constraints_tools_references: int = 0
+    check_constraints_tools_calls: int = 0
+
+
 def validate_generated_module(
     source: str,
     *,
@@ -52,12 +68,30 @@ def validate_generated_module(
             )
         ]
 
+    _annotate_ast_parents(tree)
     visitor = _PolicyVisitor(policy)
     visitor.visit(tree)
     errors = _validate_top_level_statements(tree)
     errors.extend(visitor.errors)
     errors.extend(_validate_module_signature(tree, kind=kind, policy=policy))
     return errors
+
+
+def analyze_verifier_module(
+    source: str,
+    *,
+    kind: ArtifactKind,
+) -> VerifierHybridAnalysis | None:
+    if kind not in {ArtifactKind.VERIFIER_MODULE, ArtifactKind.SHADOW_VERIFIER_MODULE}:
+        return None
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    _annotate_ast_parents(tree)
+    functions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    public_functions = [node for node in functions if not node.name.startswith("_")]
+    return _build_verifier_hybrid_analysis(public_functions)
 
 
 class _PolicyVisitor(ast.NodeVisitor):
@@ -386,6 +420,7 @@ def _validate_module_signature(
                 invalid_code="check_constraints_signature_invalid",
             )
         )
+        errors.extend(_validate_verifier_hybrid_contract(public_functions))
         return errors
 
     return errors
@@ -454,8 +489,248 @@ def _require_named_function(
     return errors
 
 
+def _validate_verifier_hybrid_contract(
+    functions: Iterable[ast.FunctionDef | ast.AsyncFunctionDef],
+) -> list[RegistrationError]:
+    function_map = {function.name: function for function in functions}
+    verify = function_map.get("verify")
+    fetch_facts = function_map.get("fetch_facts")
+    facts_match = function_map.get("facts_match_answer_claims")
+    check_constraints = function_map.get("check_constraints")
+    if not all([verify, fetch_facts, facts_match, check_constraints]):
+        return []
+
+    errors: list[RegistrationError] = []
+    errors.extend(_validate_verify_stage_pipeline(verify))
+    errors.extend(_validate_fetch_facts_stage(fetch_facts))
+    errors.extend(
+        _validate_pure_verifier_stage(
+            facts_match,
+            stage_name="facts_match_answer_claims",
+        )
+    )
+    errors.extend(
+        _validate_pure_verifier_stage(
+            check_constraints,
+            stage_name="check_constraints",
+        )
+    )
+    return errors
+
+
+def _validate_verify_stage_pipeline(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[RegistrationError]:
+    errors: list[RegistrationError] = []
+    call_counts = _count_named_calls(
+        function,
+        {"fetch_facts", "facts_match_answer_claims", "check_constraints"},
+    )
+    for stage_name, call_count in call_counts.items():
+        if call_count < 1:
+            errors.append(
+                RegistrationError(
+                    code="verify_missing_stage_call",
+                    line=function.lineno,
+                    col=function.col_offset,
+                    node_type=type(function).__name__,
+                    detail=f"verify() must call '{stage_name}' exactly through the staged verifier pipeline.",
+                    suggestion="Orchestrate verify() as fetch_facts(...) -> facts_match_answer_claims(...) -> check_constraints(...).",
+                )
+            )
+    for call in _call_nodes(function):
+        call_name = _call_name(call.func)
+        if call_name.startswith("tools.") or call_name.startswith("tools["):
+            errors.append(
+                RegistrationError(
+                    code="verify_tools_call_forbidden",
+                    line=getattr(call, "lineno", None),
+                    col=getattr(call, "col_offset", None),
+                    node_type=type(call).__name__,
+                    detail="verify() must not call tools directly; tool-grounded fact fetching belongs in fetch_facts().",
+                    suggestion="Move direct tool calls into fetch_facts(answer, tools).",
+                )
+            )
+    return errors
+
+
+def _validate_fetch_facts_stage(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[RegistrationError]:
+    errors: list[RegistrationError] = []
+    tool_calls = [
+        call
+        for call in _call_nodes(function)
+        if _call_name(call.func).startswith("tools.") or _call_name(call.func).startswith("tools[")
+    ]
+    if not tool_calls:
+        errors.append(
+            RegistrationError(
+                code="fetch_facts_tools_call_required",
+                line=function.lineno,
+                col=function.col_offset,
+                node_type=type(function).__name__,
+                detail="fetch_facts() must materialize DB-grounded facts via at least one tools.* call.",
+                suggestion="Look up factual attributes through tools inside fetch_facts(answer, tools).",
+            )
+        )
+    for call in _call_nodes(function):
+        call_name = _call_name(call.func)
+        if call_name in {"facts_match_answer_claims", "check_constraints", "verify"}:
+            errors.append(
+                RegistrationError(
+                    code="fetch_facts_stage_call_forbidden",
+                    line=getattr(call, "lineno", None),
+                    col=getattr(call, "col_offset", None),
+                    node_type=type(call).__name__,
+                    detail="fetch_facts() must not call other verifier stages.",
+                    suggestion="Keep fetch_facts(answer, tools) limited to tool-grounded fact materialization.",
+                )
+            )
+        if call_name in {"sum", "min", "max", "len", "any", "all", "sorted"}:
+            errors.append(
+                RegistrationError(
+                    code="fetch_facts_aggregate_call_forbidden",
+                    line=getattr(call, "lineno", None),
+                    col=getattr(call, "col_offset", None),
+                    node_type=type(call).__name__,
+                    detail=f"fetch_facts() must not pre-compute aggregate metric '{call_name}()'.",
+                    suggestion="Return raw per-entity facts from fetch_facts() and compute aggregates inside check_constraints().",
+                )
+            )
+    return errors
+
+
+def _validate_pure_verifier_stage(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    stage_name: str,
+) -> list[RegistrationError]:
+    errors: list[RegistrationError] = []
+    forbidden_stage_calls = {
+        "fetch_facts",
+        "facts_match_answer_claims",
+        "check_constraints",
+        "verify",
+    }
+    forbidden_stage_calls.discard(stage_name)
+    for call in _call_nodes(function):
+        call_name = _call_name(call.func)
+        if call_name.startswith("tools.") or call_name.startswith("tools["):
+            errors.append(
+                RegistrationError(
+                    code=f"{stage_name}_tools_call_forbidden",
+                    line=getattr(call, "lineno", None),
+                    col=getattr(call, "col_offset", None),
+                    node_type=type(call).__name__,
+                    detail=f"{stage_name}() must be a pure function over answer and facts; direct tool calls are forbidden.",
+                    suggestion=f"Move tool-grounded fact lookups into fetch_facts(answer, tools) before calling {stage_name}().",
+                )
+            )
+        if call_name in forbidden_stage_calls:
+            errors.append(
+                RegistrationError(
+                    code=f"{stage_name}_stage_call_forbidden",
+                    line=getattr(call, "lineno", None),
+                    col=getattr(call, "col_offset", None),
+                    node_type=type(call).__name__,
+                    detail=f"{stage_name}() must not call other verifier stages.",
+                    suggestion=f"Keep {stage_name}() focused on its own stage-local logic.",
+                )
+            )
+    for name in _name_loads(function, "tools"):
+        errors.append(
+            RegistrationError(
+                code=f"{stage_name}_tools_reference_forbidden",
+                line=getattr(name, "lineno", None),
+                col=getattr(name, "col_offset", None),
+                node_type=type(name).__name__,
+                detail=f"{stage_name}() must not reference tools directly.",
+                suggestion=f"Use only answer and facts inside {stage_name}().",
+            )
+        )
+    return errors
+
+
 def _arg_names(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     return [arg.arg for arg in function.args.args]
+
+
+def _build_verifier_hybrid_analysis(
+    functions: Iterable[ast.FunctionDef | ast.AsyncFunctionDef],
+) -> VerifierHybridAnalysis:
+    function_map = {function.name: function for function in functions}
+    analysis = VerifierHybridAnalysis()
+    verify = function_map.get("verify")
+    fetch_facts = function_map.get("fetch_facts")
+    facts_match = function_map.get("facts_match_answer_claims")
+    check_constraints = function_map.get("check_constraints")
+    if verify is not None:
+        analysis.verify_stage_calls = _count_named_calls(
+            verify,
+            {"fetch_facts", "facts_match_answer_claims", "check_constraints"},
+        )
+    if fetch_facts is not None:
+        analysis.fetch_facts_tool_calls = _count_tools_calls(fetch_facts)
+        aggregate_counts = _count_named_calls(
+            fetch_facts,
+            {"sum", "min", "max", "len", "any", "all", "sorted"},
+        )
+        analysis.fetch_facts_aggregate_calls = sum(aggregate_counts.values())
+    if facts_match is not None:
+        analysis.facts_match_tools_calls = _count_tools_calls(facts_match)
+        analysis.facts_match_tools_references = len(_name_loads(facts_match, "tools"))
+    if check_constraints is not None:
+        analysis.check_constraints_tools_calls = _count_tools_calls(check_constraints)
+        analysis.check_constraints_tools_references = len(
+            _name_loads(check_constraints, "tools")
+        )
+    return analysis
+
+
+def _count_named_calls(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    names: set[str],
+) -> dict[str, int]:
+    counts = {name: 0 for name in names}
+    for call in _call_nodes(function):
+        call_name = _call_name(call.func)
+        if call_name in counts:
+            counts[call_name] += 1
+    return counts
+
+
+def _count_tools_calls(function: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
+    return sum(
+        1
+        for call in _call_nodes(function)
+        if _call_name(call.func).startswith("tools.")
+        or _call_name(call.func).startswith("tools[")
+    )
+
+
+def _call_nodes(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Call]:
+    return [node for node in ast.walk(function) if isinstance(node, ast.Call)]
+
+
+def _name_loads(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    name: str,
+) -> list[ast.Name]:
+    matches: list[ast.Name] = []
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Name):
+            continue
+        if node.id != name:
+            continue
+        if _is_annotation_node(node):
+            continue
+        parent = getattr(node, "_policy_parent", None)
+        parent_field = getattr(node, "_policy_parent_field", None)
+        if isinstance(parent, ast.Attribute) and parent_field == "value":
+            continue
+        matches.append(node)
+    return matches
 
 
 def _call_name(node: ast.AST) -> str:
@@ -478,6 +753,19 @@ def _call_name(node: ast.AST) -> str:
             return f"{base}[<subscript>]"
         return f"{base}[{key!r}]"
     return "<unknown>"
+
+
+def _annotate_ast_parents(tree: ast.AST) -> None:
+    for parent in ast.walk(tree):
+        for field, value in ast.iter_fields(parent):
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        setattr(item, "_policy_parent", parent)
+                        setattr(item, "_policy_parent_field", field)
+            elif isinstance(value, ast.AST):
+                setattr(value, "_policy_parent", parent)
+                setattr(value, "_policy_parent_field", field)
 
 
 def _validate_top_level_statements(tree: ast.Module) -> list[RegistrationError]:
