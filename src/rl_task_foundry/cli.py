@@ -108,6 +108,12 @@ def validate_config(
         "selected_tool_level="
         f"{config.task_composer.selected_tool_level}"
     )
+    console.print(
+        "atomic_tools="
+        f"max_tool_count={config.atomic_tools.max_tool_count},"
+        f"bounded_result_limit={config.atomic_tools.bounded_result_limit},"
+        f"max_batch_values={config.atomic_tools.max_batch_values}"
+    )
     console.print(f"float_precision={config.verification.float_precision}")
     console.print(f"shadow_sample_rate={config.verification.shadow_sample_rate}")
     console.print(f"negative_outcome_ratio={config.task_composer.negative_outcome_ratio}")

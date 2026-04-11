@@ -38,6 +38,7 @@ def test_cli_validate_config_command():
     assert "composer=codex_oauth/gpt-5.4-mini" in normalized
     assert "label_tier=A" in normalized
     assert "selected_tool_level=1" in normalized
+    assert "atomic_tools=max_tool_count=256,bounded_result_limit=100,max_batch_values=128" in normalized
     assert "negative_outcome_ratio=0.2" in normalized
     assert "float_precision=6" in normalized
     assert "shadow_sample_rate=0.1" in normalized

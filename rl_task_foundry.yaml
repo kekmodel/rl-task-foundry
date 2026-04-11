@@ -71,6 +71,11 @@ tool_compiler:
   naming_temperature_l2: 1.0
   business_alias_overrides: {}
 
+atomic_tools:
+  max_tool_count: 256
+  bounded_result_limit: 100
+  max_batch_values: 128
+
 task_composer:
   label_tier: "A"
   question_families:

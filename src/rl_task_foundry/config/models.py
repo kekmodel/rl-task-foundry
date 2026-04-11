@@ -79,6 +79,12 @@ class ToolCompilerConfig(StrictModel):
     business_alias_overrides: dict[str, str] = Field(default_factory=dict)
 
 
+class AtomicToolConfig(StrictModel):
+    max_tool_count: int = Field(default=256, ge=8)
+    bounded_result_limit: int = Field(default=100, ge=1)
+    max_batch_values: int = Field(default=128, ge=1)
+
+
 class TaskComposerConfig(StrictModel):
     label_tier: Literal["A", "B"] = "A"
     question_families: list[str]
@@ -291,6 +297,7 @@ class AppConfig(StrictModel):
         default_factory=ProviderResilienceConfig
     )
     tool_compiler: ToolCompilerConfig
+    atomic_tools: AtomicToolConfig = Field(default_factory=AtomicToolConfig)
     task_composer: TaskComposerConfig
     synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
     solver_runtime: SolverRuntimeConfig
