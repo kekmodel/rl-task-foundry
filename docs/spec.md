@@ -478,6 +478,12 @@ v1 registration policy는 아래를 정적으로 enforce한다.
 registration report는 verifier/shadow verifier마다 stage analysis를 기록해,
 tool call count와 pure-stage 위반 여부를 diagnostics로 남긴다.
 
+runtime은 이 registration report를 그대로 버리지 않고 draft-level diagnostics로 승격한다.
+
+- 성공한 draft는 `registration_diagnostics`에 static/probe 분석 요약을 가진다
+- registration 실패는 `SynthesisRegistrationError(report, diagnostics)`로 승격되어 self-consistency loop가 실패 원인을 바로 읽을 수 있다
+- 즉 registration gate는 bool barrier이면서 동시에 다음 iteration을 위한 structured feedback channel이다
+
 v1 dynamic probe는 registration lane subprocess worker에서 아래를 추가 확인한다.
 
 - synthetic answer sample로 `fetch_facts()`, `facts_match_answer_claims()`, `check_constraints()`, `verify()`를 실제 실행한다

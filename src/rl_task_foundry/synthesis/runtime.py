@@ -39,9 +39,11 @@ from rl_task_foundry.synthesis.contracts import (
 from rl_task_foundry.synthesis.registration_runner import (
     GeneratedArtifactBundle,
     RegistrationArtifactName,
+    RegistrationBundleDiagnostics,
     RegistrationBundleReport,
     RegistrationBundleStatus,
     VerifierProbeSpec,
+    build_registration_diagnostics,
     run_registration_bundle,
 )
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
@@ -165,6 +167,7 @@ class SynthesisEnvironmentDraft(StrictModel):
     environment: EnvironmentContract
     artifacts: GeneratedArtifactBundle
     registration_report: RegistrationBundleReport
+    registration_diagnostics: RegistrationBundleDiagnostics
     stage_results: list[SynthesisStageResult] = Field(default_factory=list)
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
     tool_traces: list[SynthesisToolTraceEntry] = Field(default_factory=list)
@@ -199,6 +202,17 @@ class SynthesisCategoryMismatchError(SynthesisRuntimeError):
 
 class SynthesisRegistrationError(SynthesisRuntimeError):
     """Raised when generated artifacts fail registration validation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        report: RegistrationBundleReport | None = None,
+        diagnostics: RegistrationBundleDiagnostics | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.report = report
+        self.diagnostics = diagnostics
 
 
 class SynthesisDbBindingError(SynthesisRuntimeError):
@@ -371,7 +385,7 @@ class SynthesisAgentRuntime:
             raise SynthesisCategoryMismatchError(
                 "artifact generation returned a task with the wrong category"
             )
-        registration_report = await self._execute_registration_gate(
+        registration_report, registration_diagnostics = await self._execute_registration_gate(
             artifact_payload.artifacts,
             proposed_environment=artifact_payload.proposed_environment,
         )
@@ -394,6 +408,7 @@ class SynthesisAgentRuntime:
             environment=environment,
             artifacts=artifact_payload.artifacts,
             registration_report=registration_report,
+            registration_diagnostics=registration_diagnostics,
             stage_results=stage_results,
             memory=memory,
             tool_traces=tool_traces,
@@ -460,7 +475,7 @@ class SynthesisAgentRuntime:
         bundle: GeneratedArtifactBundle,
         *,
         proposed_environment: ProposedEnvironmentDraft,
-    ) -> RegistrationBundleReport:
+    ) -> tuple[RegistrationBundleReport, RegistrationBundleDiagnostics]:
         try:
             report = await self._run_registration_gate(
                 bundle=bundle,
@@ -468,9 +483,14 @@ class SynthesisAgentRuntime:
             )
         except Exception as exc:
             raise SynthesisRegistrationError("registration gate execution failed") from exc
+        diagnostics = build_registration_diagnostics(report)
         if report.status != RegistrationBundleStatus.PASSED:
-            raise SynthesisRegistrationError("generated artifacts failed registration validation")
-        return report
+            raise SynthesisRegistrationError(
+                "generated artifacts failed registration validation",
+                report=report,
+                diagnostics=diagnostics,
+            )
+        return report, diagnostics
 
     async def _run_registration_gate(
         self,

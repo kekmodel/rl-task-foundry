@@ -36,6 +36,7 @@ from rl_task_foundry.synthesis.registration_runner import (
     RegistrationBundleReport,
     RegistrationBundleStatus,
 )
+from rl_task_foundry.synthesis.registration_policy import RegistrationError, VerifierHybridAnalysis
 from rl_task_foundry.synthesis.runtime import (
     ArtifactGenerationOutput,
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
@@ -53,6 +54,7 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisStageResult,
     SynthesisToolTraceEntry,
 )
+from rl_task_foundry.synthesis.subprocess_pool import RegistrationVerifierProbeResult
 
 
 def _sample_graph() -> SchemaGraph:
@@ -261,10 +263,50 @@ def _passing_registration_report() -> RegistrationBundleReport:
         ),
     )
 
-
-def _failing_registration_report() -> RegistrationBundleReport:
-    report = _passing_registration_report()
-    return report.model_copy(update={"status": RegistrationBundleStatus.FAILED})
+def _diagnostic_registration_report(
+    *,
+    status: RegistrationBundleStatus = RegistrationBundleStatus.PASSED,
+    probe_error_codes: list[str] | None = None,
+) -> RegistrationBundleReport:
+    probe_errors = [
+        RegistrationError(code=code, detail=f"diagnostic error: {code}")
+        for code in (probe_error_codes or [])
+    ]
+    verifier = ArtifactRegistrationResult(
+        artifact_name=RegistrationArtifactName.VERIFIER,
+        artifact_kind=ArtifactKind.VERIFIER_MODULE,
+        probe_required=True,
+        probe_executed=True,
+        probe_errors=probe_errors,
+        verifier_hybrid_analysis=VerifierHybridAnalysis(
+            fetch_facts_tool_calls=1,
+            fetch_facts_answer_references=1,
+            facts_match_answer_references=1,
+            facts_match_facts_references=1,
+            check_constraints_facts_references=1,
+        ),
+        verifier_execution_probe=RegistrationVerifierProbeResult(
+            request_id="probe-1",
+            worker_pid=1234,
+            errors=probe_errors,
+            fetch_facts_return_keys=["city"],
+            expected_fact_keys=["city"],
+            fetch_facts_tool_calls=1,
+            verify_tool_calls=1,
+            facts_match_result=True,
+            check_constraints_result=True,
+            verify_result=True,
+        ),
+    )
+    return _passing_registration_report().model_copy(
+        update={
+            "status": status,
+            "verifier": verifier,
+            "shadow_verifier": verifier.model_copy(
+                update={"artifact_name": RegistrationArtifactName.SHADOW_VERIFIER}
+            ),
+        }
+    )
 
 
 class _FakeBackend:
@@ -344,7 +386,7 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
         assert bundle == _sample_artifacts()
         assert proposed_environment == _sample_proposed_environment()
-        return _passing_registration_report()
+        return _diagnostic_registration_report()
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
 
@@ -366,6 +408,10 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.environment.task_signature.startswith("sha256:")
     assert draft.environment.verifier_signature.startswith("sha256:")
     assert draft.registration_report.status == RegistrationBundleStatus.PASSED
+    assert draft.registration_diagnostics.status == RegistrationBundleStatus.PASSED
+    assert draft.registration_diagnostics.error_codes == []
+    assert draft.registration_diagnostics.verifier.fetch_facts_tool_calls == 1
+    assert draft.registration_diagnostics.verifier.probe_fetch_facts_return_keys == ["city"]
     assert [entry.phase for entry in draft.memory] == list(SynthesisPhase)
     assert draft.provider_status["codex_oauth"].observed_at.tzinfo is not None
 
@@ -487,16 +533,27 @@ async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
     )
 
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
-        return _failing_registration_report()
+        return _diagnostic_registration_report(
+            status=RegistrationBundleStatus.FAILED,
+            probe_error_codes=["facts_schema_keys_mismatch"],
+        )
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
 
-    with pytest.raises(SynthesisRegistrationError):
+    with pytest.raises(SynthesisRegistrationError) as exc_info:
         await runtime.synthesize_environment_draft(
             db_id="sakila",
             requested_category=CategoryTaxonomy.ASSIGNMENT,
             graph=_sample_graph(),
         )
+    assert exc_info.value.report is not None
+    assert exc_info.value.diagnostics is not None
+    assert exc_info.value.report.status == RegistrationBundleStatus.FAILED
+    assert exc_info.value.diagnostics.error_codes == ["facts_schema_keys_mismatch"]
+    assert exc_info.value.diagnostics.failing_artifacts == [
+        RegistrationArtifactName.VERIFIER,
+        RegistrationArtifactName.SHADOW_VERIFIER,
+    ]
 
 
 @pytest.mark.asyncio

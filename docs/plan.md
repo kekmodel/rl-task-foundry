@@ -195,6 +195,8 @@ Acceptance:
 - stage input usage (`answer`, `facts`) 정적 enforcement
 - registration report에 verifier/shadow verifier stage analysis 기록
 - subprocess verifier probe (`facts schema key match`, stage bool return, staged outcome consistency)
+- runtime draft는 registration diagnostics 요약을 포함한다
+- registration 실패는 report + diagnostics를 가진 typed error로 승격된다
 - Runtime instrumentation으로 factual claim vs tool usage 로그 수집
 
 Acceptance:

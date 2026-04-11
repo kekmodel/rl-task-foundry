@@ -88,6 +88,51 @@ class ArtifactRegistrationResult(StrictModel):
         return self.probe_executed and not self.probe_errors
 
 
+class RegistrationArtifactDiagnostics(StrictModel):
+    artifact_name: RegistrationArtifactName
+    passed: bool
+    static_passed: bool
+    runtime_passed: bool
+    probe_passed: bool
+    execution_required: bool = False
+    executed: bool = False
+    probe_required: bool = False
+    probe_executed: bool = False
+    static_error_codes: list[str] = Field(default_factory=list)
+    execution_error_codes: list[str] = Field(default_factory=list)
+    probe_error_codes: list[str] = Field(default_factory=list)
+    weak_signal_codes: list[str] = Field(default_factory=list)
+    verify_stage_calls: dict[str, int] = Field(default_factory=dict)
+    fetch_facts_tool_calls: int | None = None
+    fetch_facts_answer_references: int | None = None
+    facts_match_answer_references: int | None = None
+    facts_match_facts_references: int | None = None
+    check_constraints_facts_references: int | None = None
+    facts_match_constant_boolean_return: bool | None = None
+    check_constraints_constant_boolean_return: bool | None = None
+    probe_fetch_facts_return_keys: list[str] = Field(default_factory=list)
+    probe_expected_fact_keys: list[str] = Field(default_factory=list)
+    probe_missing_fact_keys: list[str] = Field(default_factory=list)
+    probe_extra_fact_keys: list[str] = Field(default_factory=list)
+    probe_fetch_facts_tool_calls: int | None = None
+    probe_verify_tool_calls: int | None = None
+    probe_facts_match_result: bool | None = None
+    probe_check_constraints_result: bool | None = None
+    probe_verify_result: bool | None = None
+
+
+class RegistrationBundleDiagnostics(StrictModel):
+    status: RegistrationBundleStatus
+    failing_artifacts: list[RegistrationArtifactName] = Field(default_factory=list)
+    error_codes: list[str] = Field(default_factory=list)
+    weak_signal_codes: list[str] = Field(default_factory=list)
+    tool: RegistrationArtifactDiagnostics
+    tool_self_test: RegistrationArtifactDiagnostics
+    solution: RegistrationArtifactDiagnostics
+    verifier: RegistrationArtifactDiagnostics
+    shadow_verifier: RegistrationArtifactDiagnostics
+
+
 class RegistrationBundleReport(StrictModel):
     status: RegistrationBundleStatus
     tool: ArtifactRegistrationResult
@@ -95,6 +140,143 @@ class RegistrationBundleReport(StrictModel):
     solution: ArtifactRegistrationResult
     verifier: ArtifactRegistrationResult
     shadow_verifier: ArtifactRegistrationResult
+
+
+def build_registration_diagnostics(
+    report: RegistrationBundleReport,
+) -> RegistrationBundleDiagnostics:
+    tool = _artifact_diagnostics(report.tool)
+    tool_self_test = _artifact_diagnostics(report.tool_self_test)
+    solution = _artifact_diagnostics(report.solution)
+    verifier = _artifact_diagnostics(report.verifier)
+    shadow_verifier = _artifact_diagnostics(report.shadow_verifier)
+    artifacts = [tool, tool_self_test, solution, verifier, shadow_verifier]
+    return RegistrationBundleDiagnostics(
+        status=report.status,
+        failing_artifacts=[artifact.artifact_name for artifact in artifacts if not artifact.passed],
+        error_codes=_dedupe_preserving_order(
+            [
+                *tool.static_error_codes,
+                *tool.execution_error_codes,
+                *tool.probe_error_codes,
+                *tool_self_test.static_error_codes,
+                *tool_self_test.execution_error_codes,
+                *tool_self_test.probe_error_codes,
+                *solution.static_error_codes,
+                *solution.execution_error_codes,
+                *solution.probe_error_codes,
+                *verifier.static_error_codes,
+                *verifier.execution_error_codes,
+                *verifier.probe_error_codes,
+                *shadow_verifier.static_error_codes,
+                *shadow_verifier.execution_error_codes,
+                *shadow_verifier.probe_error_codes,
+            ]
+        ),
+        weak_signal_codes=_dedupe_preserving_order(
+            [
+                *tool.weak_signal_codes,
+                *tool_self_test.weak_signal_codes,
+                *solution.weak_signal_codes,
+                *verifier.weak_signal_codes,
+                *shadow_verifier.weak_signal_codes,
+            ]
+        ),
+        tool=tool,
+        tool_self_test=tool_self_test,
+        solution=solution,
+        verifier=verifier,
+        shadow_verifier=shadow_verifier,
+    )
+
+
+def _artifact_diagnostics(result: ArtifactRegistrationResult) -> RegistrationArtifactDiagnostics:
+    analysis = result.verifier_hybrid_analysis
+    probe = result.verifier_execution_probe
+    return RegistrationArtifactDiagnostics(
+        artifact_name=result.artifact_name,
+        passed=result.passed,
+        static_passed=result.static_passed,
+        runtime_passed=result.runtime_passed,
+        probe_passed=result.probe_passed,
+        execution_required=result.execution_required,
+        executed=result.executed,
+        probe_required=result.probe_required,
+        probe_executed=result.probe_executed,
+        static_error_codes=[error.code for error in result.static_errors],
+        execution_error_codes=[error.code for error in result.execution_errors],
+        probe_error_codes=[error.code for error in result.probe_errors],
+        weak_signal_codes=_weak_signal_codes(result),
+        verify_stage_calls=dict(analysis.verify_stage_calls) if analysis is not None else {},
+        fetch_facts_tool_calls=analysis.fetch_facts_tool_calls if analysis is not None else None,
+        fetch_facts_answer_references=analysis.fetch_facts_answer_references
+        if analysis is not None
+        else None,
+        facts_match_answer_references=analysis.facts_match_answer_references
+        if analysis is not None
+        else None,
+        facts_match_facts_references=analysis.facts_match_facts_references
+        if analysis is not None
+        else None,
+        check_constraints_facts_references=analysis.check_constraints_facts_references
+        if analysis is not None
+        else None,
+        facts_match_constant_boolean_return=analysis.facts_match_constant_boolean_return
+        if analysis is not None
+        else None,
+        check_constraints_constant_boolean_return=analysis.check_constraints_constant_boolean_return
+        if analysis is not None
+        else None,
+        probe_fetch_facts_return_keys=list(probe.fetch_facts_return_keys)
+        if probe is not None
+        else [],
+        probe_expected_fact_keys=list(probe.expected_fact_keys) if probe is not None else [],
+        probe_missing_fact_keys=list(probe.missing_fact_keys) if probe is not None else [],
+        probe_extra_fact_keys=list(probe.extra_fact_keys) if probe is not None else [],
+        probe_fetch_facts_tool_calls=probe.fetch_facts_tool_calls if probe is not None else None,
+        probe_verify_tool_calls=probe.verify_tool_calls if probe is not None else None,
+        probe_facts_match_result=probe.facts_match_result if probe is not None else None,
+        probe_check_constraints_result=probe.check_constraints_result if probe is not None else None,
+        probe_verify_result=probe.verify_result if probe is not None else None,
+    )
+
+
+def _weak_signal_codes(result: ArtifactRegistrationResult) -> list[str]:
+    analysis = result.verifier_hybrid_analysis
+    probe = result.verifier_execution_probe
+    weak_signals: list[str] = []
+    if analysis is not None:
+        if analysis.fetch_facts_tool_calls == 0:
+            weak_signals.append("fetch_facts_missing_tool_usage")
+        if analysis.fetch_facts_answer_references == 0:
+            weak_signals.append("fetch_facts_missing_answer_usage")
+        if analysis.facts_match_answer_references == 0:
+            weak_signals.append("facts_match_missing_answer_usage")
+        if analysis.facts_match_facts_references == 0:
+            weak_signals.append("facts_match_missing_facts_usage")
+        if analysis.check_constraints_facts_references == 0:
+            weak_signals.append("check_constraints_missing_facts_usage")
+        if analysis.facts_match_constant_boolean_return:
+            weak_signals.append("facts_match_constant_boolean")
+        if analysis.check_constraints_constant_boolean_return:
+            weak_signals.append("check_constraints_constant_boolean")
+    if probe is not None:
+        if probe.fetch_facts_tool_calls == 0:
+            weak_signals.append("probe_fetch_facts_missing_tool_usage")
+        if probe.missing_fact_keys or probe.extra_fact_keys:
+            weak_signals.append("probe_facts_schema_key_drift")
+    return _dedupe_preserving_order(weak_signals)
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        deduped.append(value)
+        seen.add(value)
+    return deduped
 
 
 async def run_registration_bundle(
