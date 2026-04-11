@@ -108,6 +108,13 @@ from rl_task_foundry.synthesis.orchestrator import (
     SynthesisOrchestrator,
     SynthesisRuntimeHandle,
 )
+from rl_task_foundry.synthesis.environment_registry import (
+    DifficultyBand,
+    EnvironmentRegistryCommitResult,
+    EnvironmentRegistryCommitStatus,
+    EnvironmentRegistryWriter,
+    bucketize_difficulty_vector,
+)
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryFileEntry,
     SynthesisRegistryRunOutcome,
@@ -140,9 +147,13 @@ __all__ = [
     "DifficultyAxisSpec",
     "DifficultyAxisUnit",
     "DIFFICULTY_AXIS_SPECS",
+    "DifficultyBand",
     "DerivedBucketParameterSpace",
     "EnumParameterSpace",
     "EnvironmentContract",
+    "EnvironmentRegistryCommitResult",
+    "EnvironmentRegistryCommitStatus",
+    "EnvironmentRegistryWriter",
     "EnvironmentQualityMetrics",
     "EnvironmentStatus",
     "FactCardinality",
@@ -227,6 +238,7 @@ __all__ = [
     "ToolTimeoutBehavior",
     "VerifierContract",
     "RuntimeIsolationPlan",
+    "bucketize_difficulty_vector",
     "build_runtime_isolation_plan",
     "load_synthesis_registry",
     "run_registration_bundle",

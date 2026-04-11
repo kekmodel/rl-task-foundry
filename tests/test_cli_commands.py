@@ -14,6 +14,7 @@ from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunSummary,
     SynthesisRegistryStepSummary,
 )
+from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryCommitStatus
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
     SynthesisSelectionStatus,
@@ -81,8 +82,14 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                 initially_processed_pairs=0,
                 processed_pairs_after_run=1,
                 generated_drafts=1,
+                registry_committed_envs=1,
+                registry_duplicate_envs=0,
                 remaining_pairs=0,
                 generated_env_ids=["env_assignment_deadbeef"],
+                committed_env_ids=["env_assignment_deadbeef"],
+                duplicate_env_ids=[],
+                registry_root_dir=Path("artifacts/environments"),
+                registry_index_db_path=Path("artifacts/environment_registry.db"),
                 steps=[
                     SynthesisRegistryStepSummary(
                         decision=SynthesisSchedulerDecision(
@@ -90,7 +97,11 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                             db_id="sakila",
                             category=CategoryTaxonomy.ASSIGNMENT,
                             reason="selected next available db/category pair",
-                        )
+                        ),
+                        draft_env_id="env_assignment_deadbeef",
+                        draft_created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
+                        registry_status=EnvironmentRegistryCommitStatus.COMMITTED,
+                        registry_env_id="env_assignment_deadbeef",
                     )
                 ],
             )
@@ -117,6 +128,8 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert "outcome=completed_all" in result.stdout
     assert "checkpoint_namespace=cli_registry_test" in result.stdout
     assert "generated_drafts=1" in result.stdout
+    assert "registry_committed_envs=1" in result.stdout
+    assert "registry_duplicate_envs=0" in result.stdout
     assert "remaining_pairs=0" in result.stdout
     assert "last_status=ready" in result.stdout
     assert captured["max_steps"] == 2

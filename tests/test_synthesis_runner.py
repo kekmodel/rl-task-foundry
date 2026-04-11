@@ -11,6 +11,11 @@ import pytest
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.environment_registry import (
+    DifficultyBand,
+    EnvironmentRegistryCommitResult,
+    EnvironmentRegistryCommitStatus,
+)
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunOutcome,
@@ -60,6 +65,27 @@ class _FakeRuntime:
         self.closed = True
 
 
+@dataclass(slots=True)
+class _FakeRegistry:
+    root_dir: Path
+    index_db_path: Path
+    commit_results: list[EnvironmentRegistryCommitResult] = field(default_factory=list)
+    committed_drafts: list[object] = field(default_factory=list)
+
+    def commit_draft(self, draft: object) -> EnvironmentRegistryCommitResult:
+        self.committed_drafts.append(draft)
+        if self.commit_results:
+            return self.commit_results.pop(0)
+        env_id = draft.environment.env_id
+        return EnvironmentRegistryCommitResult(
+            status=EnvironmentRegistryCommitStatus.COMMITTED,
+            env_id=env_id,
+            exact_signature=f"sha256:{env_id}",
+            difficulty_band=DifficultyBand.UNSET,
+            filesystem_path=self.root_dir / env_id,
+        )
+
+
 def _config_with_run_db(tmp_path: Path):
     config = load_config(Path("rl_task_foundry.yaml"))
     output = config.output.model_copy(
@@ -104,7 +130,15 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
         )
     ]
 
-    runner = SynthesisRegistryRunner(config, runtime_factory=_factory)
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=_factory,
+        environment_registry=fake_registry,
+    )
     try:
         summary = await runner.run_steps(
             registry,
@@ -118,9 +152,15 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     assert summary.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
     assert summary.processed_pairs_after_run == 2
     assert summary.generated_drafts == 2
+    assert summary.registry_committed_envs == 2
+    assert summary.registry_duplicate_envs == 0
     assert summary.remaining_pairs == 0
     assert len(summary.generated_env_ids) == 2
+    assert summary.committed_env_ids == summary.generated_env_ids
+    assert summary.registry_root_dir == fake_registry.root_dir
+    assert summary.registry_index_db_path == fake_registry.index_db_path
     assert summary.steps[0].draft_env_id is not None
+    assert summary.steps[0].registry_status == EnvironmentRegistryCommitStatus.COMMITTED
     assert not hasattr(summary.steps[0], "draft")
     assert created["sakila"].synthesize_calls == [
         ("sakila", CategoryTaxonomy.ASSIGNMENT, None),
@@ -130,6 +170,10 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     runner2 = SynthesisRegistryRunner(
         _config_with_run_db(tmp_path),
         runtime_factory=lambda _entry: pytest.fail("runtime should not be created on resume"),
+        environment_registry=_FakeRegistry(
+            root_dir=tmp_path / "environments",
+            index_db_path=tmp_path / "environment_registry.db",
+        ),
     )
     try:
         resumed = await runner2.run_steps(
@@ -144,6 +188,8 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     assert resumed.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
     assert resumed.processed_pairs_after_run == 2
     assert resumed.generated_drafts == 0
+    assert resumed.registry_committed_envs == 0
+    assert resumed.registry_duplicate_envs == 0
     assert resumed.remaining_pairs == 0
     assert resumed.last_decision is None
 
@@ -159,7 +205,15 @@ async def test_synthesis_registry_runner_stops_on_backoff_decision(tmp_path: Pat
             )
         }
     )
-    runner = SynthesisRegistryRunner(config, runtime_factory=lambda _entry: runtime)
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=lambda _entry: runtime,
+        environment_registry=fake_registry,
+    )
     runner.orchestrator._runtimes["sakila"] = runtime
 
     try:
@@ -178,6 +232,7 @@ async def test_synthesis_registry_runner_stops_on_backoff_decision(tmp_path: Pat
 
     assert summary.outcome == SynthesisRegistryRunOutcome.ALL_BACKED_OFF
     assert summary.generated_drafts == 0
+    assert summary.registry_committed_envs == 0
     assert summary.remaining_pairs == 1
     assert summary.last_decision is not None
     assert summary.last_decision.status == SynthesisSelectionStatus.BACKOFF
@@ -187,7 +242,15 @@ async def test_synthesis_registry_runner_stops_on_backoff_decision(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_synthesis_registry_runner_reports_max_steps_reached(tmp_path: Path) -> None:
     config = _config_with_run_db(tmp_path)
-    runner = SynthesisRegistryRunner(config, runtime_factory=lambda _entry: _FakeRuntime())
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=lambda _entry: _FakeRuntime(),
+        environment_registry=fake_registry,
+    )
 
     try:
         summary = await runner.run_steps(
@@ -205,9 +268,55 @@ async def test_synthesis_registry_runner_reports_max_steps_reached(tmp_path: Pat
 
     assert summary.outcome == SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
     assert summary.generated_drafts == 1
+    assert summary.registry_committed_envs == 1
     assert summary.remaining_pairs == 1
     assert summary.last_decision is not None
     assert summary.last_decision.status == SynthesisSelectionStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_synthesis_registry_runner_tracks_registry_duplicates(tmp_path: Path) -> None:
+    config = _config_with_run_db(tmp_path)
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+        commit_results=[
+            EnvironmentRegistryCommitResult(
+                status=EnvironmentRegistryCommitStatus.DUPLICATE,
+                env_id="env_existing",
+                exact_signature="sha256:existing",
+                difficulty_band=DifficultyBand.UNSET,
+                filesystem_path=tmp_path / "environments" / "env_existing",
+                duplicate_of_env_id="env_existing",
+            )
+        ],
+    )
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=lambda _entry: _FakeRuntime(),
+        environment_registry=fake_registry,
+    )
+
+    try:
+        summary = await runner.run_steps(
+            [
+                SynthesisDbRegistryEntry(
+                    db_id="sakila",
+                    categories=[CategoryTaxonomy.ASSIGNMENT],
+                )
+            ],
+            max_steps=1,
+            checkpoint_namespace="synthesis_duplicate_commit",
+        )
+    finally:
+        await runner.close()
+
+    assert summary.generated_drafts == 1
+    assert summary.registry_committed_envs == 0
+    assert summary.registry_duplicate_envs == 1
+    assert summary.duplicate_env_ids == ["env_existing"]
+    assert summary.steps[0].registry_status == EnvironmentRegistryCommitStatus.DUPLICATE
+    assert summary.steps[0].registry_env_id == "env_existing"
 
 
 @pytest.mark.asyncio
@@ -222,7 +331,15 @@ async def test_synthesis_registry_runner_preserves_category_order_across_checkpo
         created[entry.db_id] = runtime
         return runtime
 
-    runner = SynthesisRegistryRunner(config, runtime_factory=_factory)
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=_factory,
+        environment_registry=fake_registry,
+    )
     try:
         summary = await runner.run_steps(
             [
@@ -326,7 +443,14 @@ def test_synthesis_registry_runner_default_runtime_factory_applies_entry_overrid
 @pytest.mark.asyncio
 async def test_synthesis_registry_runner_rejects_duplicate_db_ids(tmp_path: Path) -> None:
     config = _config_with_run_db(tmp_path)
-    runner = SynthesisRegistryRunner(config, runtime_factory=lambda _entry: _FakeRuntime())
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=lambda _entry: _FakeRuntime(),
+        environment_registry=_FakeRegistry(
+            root_dir=tmp_path / "environments",
+            index_db_path=tmp_path / "environment_registry.db",
+        ),
+    )
 
     try:
         with pytest.raises(ValueError, match="duplicate db_id"):

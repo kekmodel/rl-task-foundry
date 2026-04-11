@@ -953,6 +953,9 @@ shared graph cache와 registration pool 초기화는 내부 async lock으로 보
 
 registry는 filesystem + sqlite index의 이중 구조를 가진다.
 
+v1 구현은 `output.traces_dir.parent / environments` 아래에 filesystem bundle을 쓰고,
+`output.traces_dir.parent / environment_registry.db`에 sqlite index를 유지한다.
+
 ### SQLite Index
 
 최소 기록 항목:
@@ -982,9 +985,7 @@ registry는 filesystem + sqlite index의 이중 구조를 가진다.
 dedup은 두 단계다.
 
 1. exact dedup
-   - normalized tool signature
-   - normalized task signature
-   - normalized verifier AST signature
+   - v1은 `db_id + tool_signature + task_signature + verifier_signature`의 exact signature를 sqlite unique key로 사용한다
 2. semantic dedup
    - task embedding
    - constraint summary embedding

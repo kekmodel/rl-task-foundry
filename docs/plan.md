@@ -397,6 +397,7 @@ Acceptance:
 
 - near-duplicate environment를 exact + semantic 두 단계로 잡을 수 있다
 - category/difficulty coverage를 계산하고 skew를 볼 수 있다
+- v1은 accepted draft를 filesystem bundle + sqlite exact-signature index로 durable commit할 수 있다
 
 ### Cross-Cutting Workstream: Review Pack and Observability
 

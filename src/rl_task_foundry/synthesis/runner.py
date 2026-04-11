@@ -15,6 +15,11 @@ from pydantic import Field
 from rl_task_foundry.config.models import AppConfig, DatabaseConfig, DomainConfig
 from rl_task_foundry.infra.checkpoint import CheckpointStore, ensure_checkpoint
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, StrictModel
+from rl_task_foundry.synthesis.environment_registry import (
+    EnvironmentRegistryCommitResult,
+    EnvironmentRegistryCommitStatus,
+    EnvironmentRegistryWriter,
+)
 from rl_task_foundry.synthesis.orchestrator import (
     SynthesisDbRegistryEntry,
     SynthesisOrchestrator,
@@ -54,6 +59,8 @@ class SynthesisRegistryStepSummary:
     decision: SynthesisSchedulerDecision
     draft_env_id: str | None = None
     draft_created_at: datetime | None = None
+    registry_status: EnvironmentRegistryCommitStatus | None = None
+    registry_env_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -66,8 +73,14 @@ class SynthesisRegistryRunSummary:
     initially_processed_pairs: int
     processed_pairs_after_run: int
     generated_drafts: int
+    registry_committed_envs: int
+    registry_duplicate_envs: int
     remaining_pairs: int
     generated_env_ids: list[str] = field(default_factory=list)
+    committed_env_ids: list[str] = field(default_factory=list)
+    duplicate_env_ids: list[str] = field(default_factory=list)
+    registry_root_dir: Path | None = None
+    registry_index_db_path: Path | None = None
     steps: list[SynthesisRegistryStepSummary] = field(default_factory=list)
 
     @property
@@ -87,12 +100,15 @@ class SynthesisRegistryRunner:
 
     base_config: AppConfig
     runtime_factory: Callable[[SynthesisDbRegistryEntry], SynthesisRuntimeHandle] | None = None
+    environment_registry: EnvironmentRegistryWriter | None = None
     checkpoint: CheckpointStore | None = None
     orchestrator: SynthesisOrchestrator | None = None
 
     def __post_init__(self) -> None:
         if self.checkpoint is None:
             self.checkpoint = ensure_checkpoint(self.base_config.output.run_db_path)
+        if self.environment_registry is None:
+            self.environment_registry = EnvironmentRegistryWriter.for_config(self.base_config)
         if self.orchestrator is None:
             self.orchestrator = SynthesisOrchestrator(
                 runtime_factory=self.runtime_factory or self._build_runtime
@@ -118,7 +134,11 @@ class SynthesisRegistryRunner:
                 initially_processed_pairs=0,
                 processed_pairs_after_run=0,
                 generated_drafts=0,
+                registry_committed_envs=0,
+                registry_duplicate_envs=0,
                 remaining_pairs=0,
+                registry_root_dir=self.environment_registry.root_dir,
+                registry_index_db_path=self.environment_registry.index_db_path,
             )
 
         total_pairs = sum(len(entry.categories) for entry in registry)
@@ -128,11 +148,16 @@ class SynthesisRegistryRunner:
         )
         steps: list[SynthesisRegistryStepSummary] = []
         generated_env_ids: list[str] = []
+        committed_env_ids: list[str] = []
+        duplicate_env_ids: list[str] = []
         executed_steps = 0
         generated_drafts = 0
+        registry_committed_envs = 0
+        registry_duplicate_envs = 0
         processed_pairs_after_run = initially_processed_pairs
         orchestrator = self.orchestrator
         checkpoint = self.checkpoint
+        environment_registry = self.environment_registry
         outcome: SynthesisRegistryRunOutcome | None = None
 
         for _ in range(max_steps):
@@ -156,11 +181,14 @@ class SynthesisRegistryRunner:
 
             assert step.decision.db_id is not None
             assert step.decision.category is not None
+            commit_result = environment_registry.commit_draft(step.draft)
             steps.append(
                 SynthesisRegistryStepSummary(
                     decision=step.decision,
                     draft_env_id=step.draft.environment.env_id,
                     draft_created_at=step.draft.created_at,
+                    registry_status=commit_result.status,
+                    registry_env_id=commit_result.env_id,
                 )
             )
             checkpoint.mark_processed(
@@ -169,14 +197,21 @@ class SynthesisRegistryRunner:
                 payload={
                     "db_id": step.decision.db_id,
                     "category": step.decision.category.value,
-                    "env_id": step.draft.environment.env_id,
+                    "env_id": commit_result.env_id,
                     "created_at": step.draft.created_at.isoformat(),
+                    "registry_status": commit_result.status.value,
                 },
             )
             checkpoint.flush()
             generated_drafts += 1
             processed_pairs_after_run += 1
             generated_env_ids.append(step.draft.environment.env_id)
+            if commit_result.status == EnvironmentRegistryCommitStatus.COMMITTED:
+                registry_committed_envs += 1
+                committed_env_ids.append(commit_result.env_id)
+            else:
+                registry_duplicate_envs += 1
+                duplicate_env_ids.append(commit_result.env_id)
             pending_registry = self._strip_processed_pair(
                 pending_registry,
                 db_id=step.decision.db_id,
@@ -202,8 +237,14 @@ class SynthesisRegistryRunner:
             initially_processed_pairs=initially_processed_pairs,
             processed_pairs_after_run=processed_pairs_after_run,
             generated_drafts=generated_drafts,
+            registry_committed_envs=registry_committed_envs,
+            registry_duplicate_envs=registry_duplicate_envs,
             remaining_pairs=remaining_pairs,
             generated_env_ids=generated_env_ids,
+            committed_env_ids=committed_env_ids,
+            duplicate_env_ids=duplicate_env_ids,
+            registry_root_dir=environment_registry.root_dir,
+            registry_index_db_path=environment_registry.index_db_path,
             steps=steps,
         )
 

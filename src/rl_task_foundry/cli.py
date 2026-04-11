@@ -188,9 +188,19 @@ def run_synthesis_registry(
         console.print(f"initially_processed_pairs={summary.initially_processed_pairs}")
         console.print(f"processed_pairs_after_run={summary.processed_pairs_after_run}")
         console.print(f"generated_drafts={summary.generated_drafts}")
+        console.print(f"registry_committed_envs={summary.registry_committed_envs}")
+        console.print(f"registry_duplicate_envs={summary.registry_duplicate_envs}")
         console.print(f"remaining_pairs={summary.remaining_pairs}")
+        if summary.registry_root_dir is not None:
+            console.print(f"registry_root_dir={summary.registry_root_dir}")
+        if summary.registry_index_db_path is not None:
+            console.print(f"registry_index_db_path={summary.registry_index_db_path}")
         if summary.generated_env_ids:
             console.print(f"generated_env_ids={summary.generated_env_ids}")
+        if summary.committed_env_ids:
+            console.print(f"committed_env_ids={summary.committed_env_ids}")
+        if summary.duplicate_env_ids:
+            console.print(f"duplicate_env_ids={summary.duplicate_env_ids}")
         if summary.last_decision is not None:
             console.print(f"last_status={summary.last_decision.status}")
             console.print(f"last_db_id={summary.last_decision.db_id}")
