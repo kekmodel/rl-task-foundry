@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -252,7 +253,7 @@ def test_environment_registry_writer_deduplicates_semantic_minhash(tmp_path: Pat
     writer = EnvironmentRegistryWriter(
         root_dir=tmp_path / "environments",
         index_db_path=tmp_path / "environment_registry.db",
-        minhash_threshold=0.9,
+        minhash_threshold=0.85,
     )
     first = _sample_draft(
         "env_assignment_registrytest_a",
@@ -262,6 +263,7 @@ def test_environment_registry_writer_deduplicates_semantic_minhash(tmp_path: Pat
     )
     second = _sample_draft(
         "env_assignment_registrytest_b",
+        question="고객 배정 계획을 세워 주세요.",
         tool_signature="sha256:tool_b",
         task_signature="sha256:task_b",
         verifier_signature="sha256:verifier_b",
@@ -275,8 +277,61 @@ def test_environment_registry_writer_deduplicates_semantic_minhash(tmp_path: Pat
     assert duplicate.duplicate_reason == EnvironmentRegistryDuplicateReason.MINHASH
     assert duplicate.duplicate_of_env_id == "env_assignment_registrytest_a"
     assert duplicate.semantic_similarity is not None
-    assert duplicate.semantic_similarity >= 0.9
+    assert 0.85 <= duplicate.semantic_similarity < 1.0
     assert writer.environment_count() == 1
+
+
+def test_environment_registry_writer_respects_near_dup_disabled(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+        near_dup_enabled=False,
+        minhash_threshold=0.85,
+    )
+    first = _sample_draft(
+        "env_assignment_registrytest_a",
+        tool_signature="sha256:tool_a",
+        task_signature="sha256:task_a",
+        verifier_signature="sha256:verifier_a",
+    )
+    second = _sample_draft(
+        "env_assignment_registrytest_b",
+        question="고객 배정 계획을 세워 주세요.",
+        tool_signature="sha256:tool_b",
+        task_signature="sha256:task_b",
+        verifier_signature="sha256:verifier_b",
+    )
+
+    committed_a = writer.commit_draft(first)
+    committed_b = writer.commit_draft(second)
+
+    assert committed_a.status == EnvironmentRegistryCommitStatus.COMMITTED
+    assert committed_b.status == EnvironmentRegistryCommitStatus.COMMITTED
+    assert writer.environment_count() == 2
+
+
+def test_environment_registry_writer_persists_semantic_minhash_signature(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    writer.commit_draft(_sample_draft())
+
+    conn = sqlite3.connect(writer.index_db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT semantic_dedup_text, semantic_dedup_text_version, semantic_minhash_signature
+            FROM environments
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    assert "question:고객 배정 계획을 만들어 주세요." in row[0]
+    assert row[1] == 1
+    assert len(row[2]) > 10
 
 
 def test_environment_registry_snapshot_and_semantic_candidates(tmp_path: Path) -> None:
@@ -402,3 +457,25 @@ def test_estimate_semantic_similarity_is_high_for_same_semantics() -> None:
     )
 
     assert estimate_semantic_similarity(first, second) >= 0.9
+
+
+def test_estimate_semantic_similarity_tracks_non_identical_near_duplicates() -> None:
+    first = build_semantic_dedup_text(
+        _sample_draft(
+            "env_assignment_similarity_a",
+            question="고객 배정 계획을 만들어 주세요.",
+        ).environment
+    )
+    second = build_semantic_dedup_text(
+        _sample_draft(
+            "env_assignment_similarity_b",
+            question="고객 배정 계획을 세워 주세요.",
+            tool_signature="sha256:tool_b",
+            task_signature="sha256:task_b",
+            verifier_signature="sha256:verifier_b",
+        ).environment
+    )
+
+    similarity = estimate_semantic_similarity(first, second)
+
+    assert 0.85 <= similarity < 1.0

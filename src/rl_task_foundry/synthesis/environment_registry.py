@@ -41,6 +41,9 @@ SCHEMA_STATEMENTS = (
         task_signature TEXT NOT NULL,
         verifier_signature TEXT NOT NULL,
         exact_signature TEXT NOT NULL UNIQUE,
+        semantic_dedup_text TEXT NOT NULL DEFAULT '',
+        semantic_dedup_text_version INTEGER NOT NULL DEFAULT 1,
+        semantic_minhash_signature TEXT NOT NULL DEFAULT '[]',
         filesystem_path TEXT NOT NULL,
         payload_json TEXT NOT NULL
     )
@@ -59,6 +62,7 @@ INDEX_STATEMENTS = (
 )
 
 MINHASH_NUM_PERM = 128
+SEMANTIC_DEDUP_TEXT_VERSION = 1
 
 
 class EnvironmentRegistryCommitStatus(StrEnum):
@@ -135,6 +139,12 @@ class EnvironmentRegistrySnapshot:
 
 @dataclass(slots=True)
 class EnvironmentRegistryWriter:
+    """Durable accepted-environment registry.
+
+    This writer is not safe for concurrent multi-writer use. The intended v1
+    deployment model is a single registry writer lane that serializes commits.
+    """
+
     root_dir: Path
     index_db_path: Path
     exact_dedup_enabled: bool = True
@@ -164,6 +174,10 @@ class EnvironmentRegistryWriter:
         env = draft.environment
         exact_signature = self._exact_signature(draft)
         difficulty_band = bucketize_difficulty_vector(env.difficulty_vector)
+        semantic_text = build_semantic_dedup_text(env)
+        semantic_signature = _encode_minhash_signature(
+            _build_minhash(semantic_text, num_perm=self.minhash_num_perm)
+        )
         if self.exact_dedup_enabled:
             existing = self._lookup_duplicate(exact_signature)
             if existing is not None:
@@ -180,7 +194,8 @@ class EnvironmentRegistryWriter:
             semantic_duplicate = self._lookup_semantic_duplicate(
                 db_id=env.db_id,
                 category=env.category,
-                semantic_text=build_semantic_dedup_text(env),
+                semantic_text=semantic_text,
+                semantic_signature=semantic_signature,
             )
             if semantic_duplicate is not None:
                 return EnvironmentRegistryCommitResult(
@@ -201,7 +216,13 @@ class EnvironmentRegistryWriter:
         if final_dir.exists():
             raise FileExistsError(f"environment directory already exists: {final_dir}")
 
-        self._write_environment_bundle(temp_dir, draft, exact_signature, difficulty_band)
+        self._write_environment_bundle(
+            temp_dir,
+            draft,
+            exact_signature,
+            difficulty_band,
+            semantic_text,
+        )
 
         try:
             with self._connect() as conn:
@@ -226,6 +247,31 @@ class EnvironmentRegistryWriter:
                         duplicate_of_env_id=row["env_id"],
                         duplicate_reason=EnvironmentRegistryDuplicateReason.EXACT,
                     )
+                if self.near_dup_enabled:
+                    semantic_duplicate = self._lookup_semantic_duplicate(
+                        db_id=env.db_id,
+                        category=env.category,
+                        semantic_text=semantic_text,
+                        semantic_signature=semantic_signature,
+                        conn=conn,
+                    )
+                    if semantic_duplicate is not None:
+                        conn.rollback()
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        return EnvironmentRegistryCommitResult(
+                            status=EnvironmentRegistryCommitStatus.DUPLICATE,
+                            env_id=semantic_duplicate["env_id"],
+                            exact_signature=exact_signature,
+                            difficulty_band=DifficultyBand(
+                                semantic_duplicate["difficulty_band"]
+                            ),
+                            filesystem_path=Path(semantic_duplicate["filesystem_path"]),
+                            duplicate_of_env_id=semantic_duplicate["env_id"],
+                            duplicate_reason=EnvironmentRegistryDuplicateReason.MINHASH,
+                            semantic_similarity=float(
+                                semantic_duplicate["semantic_similarity"]
+                            ),
+                        )
 
                 temp_dir.rename(final_dir)
                 conn.execute(
@@ -243,10 +289,13 @@ class EnvironmentRegistryWriter:
                         task_signature,
                         verifier_signature,
                         exact_signature,
+                        semantic_dedup_text,
+                        semantic_dedup_text_version,
+                        semantic_minhash_signature,
                         filesystem_path,
                         payload_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         env.env_id,
@@ -261,12 +310,16 @@ class EnvironmentRegistryWriter:
                         env.task_signature,
                         env.verifier_signature,
                         exact_signature,
+                        semantic_text,
+                        SEMANTIC_DEDUP_TEXT_VERSION,
+                        semantic_signature,
                         str(final_dir),
                         json.dumps(
                             self._build_registry_payload(
                                 draft=draft,
                                 exact_signature=exact_signature,
                                 difficulty_band=difficulty_band,
+                                semantic_text=semantic_text,
                             ),
                             ensure_ascii=False,
                             sort_keys=True,
@@ -485,40 +538,48 @@ class EnvironmentRegistryWriter:
         db_id: str,
         category: CategoryTaxonomy,
         semantic_text: str,
+        semantic_signature: str,
+        conn: sqlite3.Connection | None = None,
     ) -> dict[str, object] | None:
-        target = _build_minhash(semantic_text, num_perm=self.minhash_num_perm)
         best_match: dict[str, object] | None = None
-        with self._connect() as conn:
-            rows = conn.execute(
+        manages_connection = conn is None
+        connection = conn or self._connect()
+        try:
+            rows = connection.execute(
                 """
-                SELECT env_id, difficulty_band, filesystem_path, payload_json
+                SELECT
+                    env_id,
+                    difficulty_band,
+                    filesystem_path,
+                    semantic_dedup_text,
+                    semantic_dedup_text_version,
+                    semantic_minhash_signature,
+                    payload_json
                 FROM environments
                 WHERE db_id = ? AND category = ?
                 """,
                 (db_id, category.value),
             ).fetchall()
-        for row in rows:
-            payload = self._parse_payload(row["payload_json"])
-            existing_text = _optional_string(payload.get("semantic_dedup_text"))
-            if not existing_text:
-                existing_text = _fallback_semantic_text(
+            for row in rows:
+                similarity = self._semantic_similarity_for_row(
+                    row=row,
                     category=category,
-                    question=_optional_string(payload.get("question")),
-                    constraint_summaries=_constraint_summaries_from_payload(payload),
+                    semantic_text=semantic_text,
+                    semantic_signature=semantic_signature,
                 )
-            similarity = target.jaccard(
-                _build_minhash(existing_text, num_perm=self.minhash_num_perm)
-            )
-            if similarity < self.minhash_threshold:
-                continue
-            if best_match is None or similarity > float(best_match["semantic_similarity"]):
-                best_match = {
-                    "env_id": str(row["env_id"]),
-                    "difficulty_band": str(row["difficulty_band"]),
-                    "filesystem_path": str(row["filesystem_path"]),
-                    "semantic_similarity": similarity,
-                }
-        return best_match
+                if similarity < self.minhash_threshold:
+                    continue
+                if best_match is None or similarity > float(best_match["semantic_similarity"]):
+                    best_match = {
+                        "env_id": str(row["env_id"]),
+                        "difficulty_band": str(row["difficulty_band"]),
+                        "filesystem_path": str(row["filesystem_path"]),
+                        "semantic_similarity": similarity,
+                    }
+            return best_match
+        finally:
+            if manages_connection:
+                connection.close()
 
     def _has_env_row(self, env_id: str) -> bool:
         with self._connect() as conn:
@@ -534,6 +595,7 @@ class EnvironmentRegistryWriter:
         draft: SynthesisEnvironmentDraft,
         exact_signature: str,
         difficulty_band: DifficultyBand,
+        semantic_text: str,
     ) -> None:
         directory.mkdir(parents=True, exist_ok=False)
         environment_payload = draft.environment.model_dump(mode="json")
@@ -577,7 +639,8 @@ class EnvironmentRegistryWriter:
                 {
                     "exact_signature": exact_signature,
                     "difficulty_band": difficulty_band.value,
-                    "semantic_dedup_text": build_semantic_dedup_text(draft.environment),
+                    "semantic_dedup_text": semantic_text,
+                    "semantic_dedup_text_version": SEMANTIC_DEDUP_TEXT_VERSION,
                     "registration_status": draft.registration_report.status.value,
                     "registration_error_codes": draft.registration_diagnostics.error_codes,
                     "self_consistency_passed": draft.self_consistency_diagnostics.passed,
@@ -614,6 +677,7 @@ class EnvironmentRegistryWriter:
         draft: SynthesisEnvironmentDraft,
         exact_signature: str,
         difficulty_band: DifficultyBand,
+        semantic_text: str,
     ) -> dict[str, Any]:
         env = draft.environment
         return {
@@ -633,8 +697,41 @@ class EnvironmentRegistryWriter:
             "constraint_summary": [
                 item.model_dump(mode="json") for item in env.task.constraint_summary
             ],
-            "semantic_dedup_text": build_semantic_dedup_text(env),
+            "semantic_dedup_text": semantic_text,
+            "semantic_dedup_text_version": SEMANTIC_DEDUP_TEXT_VERSION,
         }
+
+    def _semantic_similarity_for_row(
+        self,
+        *,
+        row: sqlite3.Row,
+        category: CategoryTaxonomy,
+        semantic_text: str,
+        semantic_signature: str,
+    ) -> float:
+        signature = _optional_string(row["semantic_minhash_signature"])
+        version = row["semantic_dedup_text_version"]
+        if (
+            signature
+            and int(version) == SEMANTIC_DEDUP_TEXT_VERSION
+            and _signature_length(signature) == self.minhash_num_perm
+        ):
+            return _estimate_signature_similarity(semantic_signature, signature)
+        payload = self._parse_payload(row["payload_json"])
+        existing_text = _optional_string(row["semantic_dedup_text"]) or _optional_string(
+            payload.get("semantic_dedup_text")
+        )
+        if not existing_text:
+            existing_text = _fallback_semantic_text(
+                category=category,
+                question=_optional_string(payload.get("question")),
+                constraint_summaries=_constraint_summaries_from_payload(payload),
+            )
+        return estimate_semantic_similarity(
+            semantic_text,
+            existing_text,
+            num_perm=self.minhash_num_perm,
+        )
 
     def _count_environments(
         self,
@@ -684,9 +781,37 @@ class EnvironmentRegistryWriter:
         with self._connect() as conn:
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
+            self._ensure_environment_column(
+                conn,
+                "semantic_dedup_text",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_environment_column(
+                conn,
+                "semantic_dedup_text_version",
+                f"INTEGER NOT NULL DEFAULT {SEMANTIC_DEDUP_TEXT_VERSION}",
+            )
+            self._ensure_environment_column(
+                conn,
+                "semantic_minhash_signature",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
             for statement in INDEX_STATEMENTS:
                 conn.execute(statement)
             conn.commit()
+
+    @staticmethod
+    def _ensure_environment_column(
+        conn: sqlite3.Connection,
+        column_name: str,
+        definition_sql: str,
+    ) -> None:
+        columns = conn.execute("PRAGMA table_info(environments)").fetchall()
+        if any(str(row["name"]) == column_name for row in columns):
+            return
+        conn.execute(
+            f"ALTER TABLE environments ADD COLUMN {column_name} {definition_sql}"
+        )
 
     def _increment_coverage_counter(self, conn: sqlite3.Connection, key: str) -> None:
         conn.execute(
@@ -749,8 +874,9 @@ def estimate_semantic_similarity(
     *,
     num_perm: int = MINHASH_NUM_PERM,
 ) -> float:
-    return _build_minhash(left_text, num_perm=num_perm).jaccard(
-        _build_minhash(right_text, num_perm=num_perm)
+    return _estimate_signature_similarity(
+        _encode_minhash_signature(_build_minhash(left_text, num_perm=num_perm)),
+        _encode_minhash_signature(_build_minhash(right_text, num_perm=num_perm)),
     )
 
 
@@ -809,6 +935,38 @@ def _build_minhash(text: str, *, num_perm: int) -> MinHash:
     for token in _semantic_shingles(text):
         minhash.update(token.encode("utf-8"))
     return minhash
+
+
+def _encode_minhash_signature(minhash: MinHash) -> str:
+    return json.dumps(minhash.hashvalues.tolist(), separators=(",", ":"))
+
+
+def _decode_minhash_signature(signature: str) -> tuple[int, ...]:
+    try:
+        values = json.loads(signature)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(values, list):
+        return ()
+    decoded: list[int] = []
+    for value in values:
+        if not isinstance(value, int):
+            return ()
+        decoded.append(value)
+    return tuple(decoded)
+
+
+def _estimate_signature_similarity(left_signature: str, right_signature: str) -> float:
+    left = _decode_minhash_signature(left_signature)
+    right = _decode_minhash_signature(right_signature)
+    if not left or len(left) != len(right):
+        return 0.0
+    matches = sum(1 for left_value, right_value in zip(left, right, strict=False) if left_value == right_value)
+    return matches / len(left)
+
+
+def _signature_length(signature: str) -> int:
+    return len(_decode_minhash_signature(signature))
 
 
 def _semantic_shingles(text: str) -> tuple[str, ...]:

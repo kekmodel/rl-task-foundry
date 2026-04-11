@@ -986,10 +986,13 @@ dedup은 두 단계다.
 
 1. exact dedup
    - v1은 `db_id + tool_signature + task_signature + verifier_signature`의 exact signature를 sqlite unique key로 사용한다
+   - `instance_space`는 exact dedup key에 포함하지 않는다. environment identity는 task/tool/verifier contract 기준으로 보고, `instance_space`는 runtime variation surface로 취급한다
 2. semantic dedup
    - v1은 같은 `db_id x category` 안에서 `semantic_dedup_text`의 MinHash similarity로 near-duplicate를 판정한다
    - `minhash_threshold`는 config source-of-truth다
+   - v1은 commit 시 MinHash signature를 sqlite에 저장하고 lookup 시 재사용한다
    - registry는 semantic candidate document를 durable하게 저장하고 query surface를 제공한다
+   - v1 shingling은 normalized word 3-gram 기준이라 Korean phrasing variation에서는 false negative가 남을 수 있다
 
 minor naming variation으로 near-duplicate가 통과하면 안 된다.
 
