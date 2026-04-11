@@ -225,6 +225,38 @@ quality_metrics:
   solver_ci_high: float
 ```
 
+### Proposed vs Materialized Environment
+
+artifact generation phase에서 agent가 직접 반환하는 객체는 완전한 `EnvironmentContract`가 아니다.
+
+- agent는 `proposed_environment`만 제안한다
+- `proposed_environment`에는 agent-authored field만 들어간다
+  - `tools`
+  - `task`
+  - `solution`
+  - `tool_self_test`
+  - `verifier`
+  - `shadow_verifier`
+  - `instance_space`
+  - `cross_instance_set`
+- runtime은 registration gate가 통과된 뒤에만 `EnvironmentContract`를 materialize한다
+
+runtime-owned trust field는 agent가 제안하지 않는다.
+
+- `env_id`
+- `db_id`
+- `domain`
+- `category`
+- `created_at`
+- `generator_version`
+- `tool_signature`
+- `task_signature`
+- `verifier_signature`
+- `status`
+- `quality_metrics`
+
+materialization 시점에는 runtime이 위 필드를 다시 계산하고, 최종 payload를 `EnvironmentContract.model_validate(...)`로 재검증한다.
+
 ## Task Category Taxonomy
 
 category는 agent가 완전히 자유 텍스트를 만들지 않는다. runtime taxonomy에 매핑한다.
@@ -699,6 +731,18 @@ container는 v1 필수는 아니지만 subprocess isolation은 registration lane
 - sample row inspection
 - domain/category proposal
 
+phase output contract:
+
+- `SchemaExplorationOutput`
+  - `domain_hypothesis`
+  - `candidate_categories`
+  - `memory_summary`
+
+운영 규칙:
+
+- `candidate_categories`는 비어 있으면 안 된다
+- category inference는 반드시 이 structured output을 입력으로 사용한다
+
 ### Stage 2: 4-Tuple Synthesis
 
 agent는 아래를 함께 만든다.
@@ -707,6 +751,20 @@ agent는 아래를 함께 만든다.
 - `task.json`
 - `solution.py`
 - `verifier.py`
+
+artifact generation phase output contract:
+
+- `ArtifactGenerationOutput`
+  - `proposed_environment`
+  - `artifacts`
+  - `memory_summary`
+
+운영 규칙:
+
+- `proposed_environment`는 trust field를 포함하지 않는다
+- registration bundle runner가 먼저 통과해야 한다
+- registration 실패 시 draft는 materialize되지 않는다
+- registration이 통과된 뒤 runtime이 trust field를 채워 `EnvironmentContract`를 만든다
 
 ### Stage 3: Self-Consistency Iterate
 
@@ -823,8 +881,10 @@ Milestone 3 skeleton의 기본 구현은 `models.composer`를 synthesis backend 
 phase별 backend list를 주입해 circuit breaker 이후 healthy provider로 fallback할 수 있게 한다.
 또 각 phase는 explicit memory entry와 tool trace entry를 남긴다.
 `previous_outputs`는 phase별 authoritative structured output이고, `memory`는 retry/fallback을 포함한 compressed execution summary다.
-artifact generation 응답은 registration bundle runner를 통과한 뒤에만 draft로 승격되며,
+artifact generation 응답은 `proposed_environment + artifacts` 구조를 사용하고,
+registration bundle runner를 통과한 뒤에만 draft로 승격된다.
 `env_id`, signatures, `status`, `quality_metrics`, `generator_version` 같은 trust field는 runtime이 재생성한다.
+runtime 인스턴스는 v1에서 single-db다. 즉 하나의 `SynthesisAgentRuntime`은 첫 호출의 `db_id`에 bind되며, 다른 `db_id`를 처리하려면 새 runtime 인스턴스를 생성한다.
 
 ## Environment Registry
 

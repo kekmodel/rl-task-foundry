@@ -14,8 +14,6 @@ from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
-    EnvironmentContract,
-    EnvironmentQualityMetrics,
     EnvironmentStatus,
     MaterializedFactsSchema,
     OutputFieldContract,
@@ -40,9 +38,11 @@ from rl_task_foundry.synthesis.runtime import (
     ArtifactGenerationOutput,
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
     CategoryInferenceOutput,
+    ProposedEnvironmentDraft,
     SchemaExplorationOutput,
     SynthesisAgentRuntime,
     SynthesisCategoryMismatchError,
+    SynthesisDbBindingError,
     SynthesisMemoryEntry,
     SynthesisPhase,
     SynthesisRegistrationError,
@@ -125,9 +125,9 @@ def _sample_graph() -> SchemaGraph:
     )
 
 
-def _sample_environment(
+def _sample_proposed_environment(
     category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
-) -> EnvironmentContract:
+) -> ProposedEnvironmentDraft:
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(
             name="assignments",
@@ -144,19 +144,7 @@ def _sample_environment(
         ),
         primary_output_format="json_array",
     )
-    return EnvironmentContract(
-        env_id="agent_supplied_env",
-        db_id="spoof_db",
-        domain="spoof_domain",
-        category=category,
-        difficulty_vector={},
-        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        generator_version="agent-generated",
-        tool_signature="tool_sig_agent",
-        task_signature="task_sig_agent",
-        verifier_signature="verifier_sig_agent",
-        status=EnvironmentStatus.ACCEPTED,
-        quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
+    return ProposedEnvironmentDraft(
         tools=[
             ToolContract(
                 name="get_customer_assignments",
@@ -234,7 +222,7 @@ def _payloads(
             memory_summary="category selected",
         ),
         SynthesisPhase.ARTIFACT_GENERATION: ArtifactGenerationOutput(
-            environment=_sample_environment(category),
+            proposed_environment=_sample_proposed_environment(category),
             artifacts=_sample_artifacts(),
             memory_summary="artifacts generated",
         ),
@@ -242,7 +230,9 @@ def _payloads(
 
 
 def _passing_registration_report() -> RegistrationBundleReport:
-    def _artifact_result(name: RegistrationArtifactName, kind: ArtifactKind) -> ArtifactRegistrationResult:
+    def _artifact_result(
+        name: RegistrationArtifactName, kind: ArtifactKind
+    ) -> ArtifactRegistrationResult:
         executed = name == RegistrationArtifactName.TOOL_SELF_TEST
         return ArtifactRegistrationResult(
             artifact_name=name,
@@ -359,6 +349,7 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.environment.domain == config.domain.name
     assert draft.environment.generator_version == CURRENT_SYNTHESIS_GENERATOR_VERSION
     assert draft.environment.env_id.startswith("env_assignment_")
+    assert len(draft.environment.env_id.split("_")[-1]) == 16
     assert draft.environment.quality_metrics.self_consistency_pass is False
     assert draft.environment.tool_signature.startswith("sha256:")
     assert draft.environment.task_signature.startswith("sha256:")
@@ -369,7 +360,9 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback(monkeypatch):
+async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback(
+    monkeypatch,
+):
     config = load_config("rl_task_foundry.yaml")
     failing = _FakeBackend(
         provider_name="codex_oauth",
@@ -435,6 +428,41 @@ async def test_synthesis_agent_runtime_rejects_category_mismatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_synthesis_agent_runtime_rejects_wrong_task_category_in_artifact_generation(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml")
+    mismatched = _sample_proposed_environment(CategoryTaxonomy.OTHER)
+    payloads = _payloads()
+    payloads[SynthesisPhase.ARTIFACT_GENERATION] = ArtifactGenerationOutput(
+        proposed_environment=mismatched,
+        artifacts=_sample_artifacts(),
+        memory_summary="artifacts generated",
+    )
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=payloads,
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle):
+        return _passing_registration_report()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
+    with pytest.raises(SynthesisCategoryMismatchError):
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
     config = load_config("rl_task_foundry.yaml")
     backend = _FakeBackend(
@@ -461,7 +489,35 @@ async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_introspects_graph_once_when_not_provided(monkeypatch):
+async def test_synthesis_agent_runtime_wraps_registration_gate_exceptions(monkeypatch):
+    config = load_config("rl_task_foundry.yaml")
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle):
+        raise RuntimeError("worker crashed")
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
+    with pytest.raises(SynthesisRegistrationError):
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_introspects_graph_once_when_not_provided(
+    monkeypatch,
+):
     config = load_config("rl_task_foundry.yaml")
     backend = _FakeBackend(
         provider_name="codex_oauth",
@@ -500,6 +556,37 @@ async def test_synthesis_agent_runtime_introspects_graph_once_when_not_provided(
     assert draft_one.schema_summary["edge_count"] == 1
     assert draft_two.schema_summary["edge_count"] == 1
     assert introspect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_is_single_db_per_instance(monkeypatch):
+    config = load_config("rl_task_foundry.yaml")
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle):
+        return _passing_registration_report()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
+    await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+    with pytest.raises(SynthesisDbBindingError):
+        await runtime.synthesize_environment_draft(
+            db_id="northwind",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
 
 
 @pytest.mark.asyncio

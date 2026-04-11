@@ -23,8 +23,9 @@ def build_synthesis_phase_instructions(phase: SynthesisPhase) -> str:
             "environment draft and explain the reasoning in structured JSON."
         )
     return (
-        f"{common} Produce an environment draft payload that contains a valid "
-        "`environment` object and an `artifacts` object."
+        f"{common} Produce an artifact-generation payload that contains a valid "
+        "`proposed_environment` object with only agent-authored fields and an "
+        "`artifacts` object."
     )
 
 

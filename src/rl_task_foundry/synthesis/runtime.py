@@ -20,10 +20,18 @@ from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
+    CrossInstanceSet,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
+    InstanceSpaceContract,
+    ShadowVerifierContract,
+    SolutionContract,
     StrictModel,
+    TaskContract,
+    ToolContract,
+    ToolSelfTestContract,
+    VerifierContract,
 )
 from rl_task_foundry.synthesis.registration_runner import (
     GeneratedArtifactBundle,
@@ -73,7 +81,7 @@ class SynthesisToolTraceEntry(StrictModel):
 
 class SchemaExplorationOutput(StrictModel):
     domain_hypothesis: str
-    candidate_categories: list[CategoryTaxonomy] = Field(default_factory=list)
+    candidate_categories: list[CategoryTaxonomy] = Field(min_length=1)
     memory_summary: str = "schema exploration completed"
 
 
@@ -83,8 +91,19 @@ class CategoryInferenceOutput(StrictModel):
     memory_summary: str = "category inference completed"
 
 
+class ProposedEnvironmentDraft(StrictModel):
+    tools: list[ToolContract] = Field(default_factory=list)
+    task: TaskContract
+    solution: SolutionContract
+    tool_self_test: ToolSelfTestContract = Field(default_factory=ToolSelfTestContract)
+    verifier: VerifierContract
+    shadow_verifier: ShadowVerifierContract
+    instance_space: InstanceSpaceContract
+    cross_instance_set: CrossInstanceSet = Field(default_factory=CrossInstanceSet)
+
+
 class ArtifactGenerationOutput(StrictModel):
-    environment: EnvironmentContract
+    proposed_environment: ProposedEnvironmentDraft
     artifacts: GeneratedArtifactBundle
     memory_summary: str = "artifact generation completed"
 
@@ -161,6 +180,10 @@ class SynthesisRegistrationError(SynthesisRuntimeError):
     """Raised when generated artifacts fail registration validation."""
 
 
+class SynthesisDbBindingError(SynthesisRuntimeError):
+    """Raised when a runtime instance is reused for a different logical database id."""
+
+
 def summarize_schema_graph(graph: SchemaGraph, *, max_tables: int = 32) -> dict[str, object]:
     table_summaries: list[dict[str, object]] = []
     limited_tables = graph.tables[:max_tables]
@@ -210,6 +233,7 @@ class SynthesisAgentRuntime:
     _registration_pool: RegistrationSubprocessPool | None = field(
         default=None, init=False, repr=False
     )
+    _bound_db_id: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.phase_backends is None:
@@ -249,6 +273,7 @@ class SynthesisAgentRuntime:
         requested_category: CategoryTaxonomy,
         graph: SchemaGraph | None = None,
     ) -> SynthesisEnvironmentDraft:
+        self._bind_db_id(db_id)
         resolved_graph = graph if graph is not None else await self._introspect_graph()
         schema_summary = summarize_schema_graph(resolved_graph)
 
@@ -290,19 +315,18 @@ class SynthesisAgentRuntime:
 
         artifact_payload = previous_outputs[SynthesisPhase.ARTIFACT_GENERATION]
         assert isinstance(artifact_payload, ArtifactGenerationOutput)
+        registration_report = await self._execute_registration_gate(
+            artifact_payload.artifacts
+        )
+
         materialized_at = datetime.now(timezone.utc)
         environment = self._materialize_environment(
-            raw_environment=artifact_payload.environment,
+            proposed_environment=artifact_payload.proposed_environment,
             artifacts=artifact_payload.artifacts,
             db_id=db_id,
             requested_category=requested_category,
             created_at=materialized_at,
         )
-        registration_report = await self._run_registration_gate(
-            bundle=artifact_payload.artifacts
-        )
-        if registration_report.status != RegistrationBundleStatus.PASSED:
-            raise SynthesisRegistrationError("generated artifacts failed registration validation")
 
         return SynthesisEnvironmentDraft(
             created_at=materialized_at,
@@ -371,6 +395,18 @@ class SynthesisAgentRuntime:
         self._graph_cache = await introspector.introspect()
         return self._graph_cache
 
+    async def _execute_registration_gate(
+        self,
+        bundle: GeneratedArtifactBundle,
+    ) -> RegistrationBundleReport:
+        try:
+            report = await self._run_registration_gate(bundle=bundle)
+        except Exception as exc:
+            raise SynthesisRegistrationError("registration gate execution failed") from exc
+        if report.status != RegistrationBundleStatus.PASSED:
+            raise SynthesisRegistrationError("generated artifacts failed registration validation")
+        return report
+
     async def _run_registration_gate(
         self,
         *,
@@ -387,22 +423,21 @@ class SynthesisAgentRuntime:
     def _materialize_environment(
         self,
         *,
-        raw_environment: EnvironmentContract,
+        proposed_environment: ProposedEnvironmentDraft,
         artifacts: GeneratedArtifactBundle,
         db_id: str,
         requested_category: CategoryTaxonomy,
         created_at: datetime,
     ) -> EnvironmentContract:
-        if raw_environment.category != requested_category:
-            raise SynthesisCategoryMismatchError(
-                "artifact generation returned an environment with the wrong category"
-            )
-        if raw_environment.task.category != requested_category:
+        if proposed_environment.task.category != requested_category:
             raise SynthesisCategoryMismatchError(
                 "artifact generation returned a task with the wrong category"
             )
-        task_signature = self._signature_for_payload(raw_environment.task.model_dump(mode="json"))
-        tool_signature = self._signature_for_text(artifacts.tool_source)
+        task_payload = proposed_environment.task.model_dump(mode="python")
+        task_signature = self._signature_for_payload(task_payload)
+        tool_signature = self._signature_for_text(
+            artifacts.tool_source + "\n---self-test---\n" + artifacts.tool_self_test_source
+        )
         verifier_signature = self._signature_for_text(
             artifacts.verifier_source + "\n---shadow---\n" + artifacts.shadow_verifier_source
         )
@@ -413,22 +448,36 @@ class SynthesisAgentRuntime:
             tool_signature=tool_signature,
             verifier_signature=verifier_signature,
         )
-        return raw_environment.model_copy(
-            update={
+        payload = proposed_environment.model_dump(mode="python")
+        payload.update(
+            {
                 "env_id": env_id,
                 "db_id": db_id,
                 "domain": self.config.domain.name,
                 "category": requested_category,
+                "difficulty_vector": proposed_environment.task.difficulty_vector,
                 "created_at": created_at,
                 "generator_version": CURRENT_SYNTHESIS_GENERATOR_VERSION,
                 "tool_signature": tool_signature,
                 "task_signature": task_signature,
                 "verifier_signature": verifier_signature,
                 "status": EnvironmentStatus.DRAFT,
-                "quality_metrics": EnvironmentQualityMetrics(),
-                "task": raw_environment.task.model_copy(update={"category": requested_category}),
+                "quality_metrics": EnvironmentQualityMetrics().model_dump(mode="python"),
+                "task": proposed_environment.task.model_copy(
+                    update={"category": requested_category}
+                ).model_dump(mode="python"),
             }
         )
+        return EnvironmentContract.model_validate(payload)
+
+    def _bind_db_id(self, db_id: str) -> None:
+        if self._bound_db_id is None:
+            self._bound_db_id = db_id
+            return
+        if self._bound_db_id != db_id:
+            raise SynthesisDbBindingError(
+                "SynthesisAgentRuntime instances are single-db; create a new runtime per db_id"
+            )
 
     @staticmethod
     def _signature_for_text(source: str) -> str:
@@ -452,5 +501,5 @@ class SynthesisAgentRuntime:
             f"{db_id}|{category.value}|{task_signature}|{tool_signature}|{verifier_signature}".encode(
                 "utf-8"
             )
-        ).hexdigest()[:12]
+        ).hexdigest()[:16]
         return f"env_{category.value}_{digest}"

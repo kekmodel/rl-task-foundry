@@ -162,14 +162,19 @@ Acceptance:
 - provider resilience reuse
 - synthesis runtime config (`max_turns`, `tracing`, `sdk_sessions_enabled`, `explicit_memory_window`)
 - default skeleton은 `models.composer`를 synthesis backend model로 재사용하고, phase별 fallback backend 주입을 허용한다
+- artifact generation은 full environment가 아니라 `proposed_environment`를 반환한다
 - artifact generation 직후 registration bundle runner를 통과시켜야 draft를 반환한다
+- registration이 통과된 뒤 runtime이 `EnvironmentContract`를 materialize한다
 - environment trust field (`env_id`, signatures, status, quality_metrics, generator_version`)는 runtime이 재생성한다
+- runtime은 materialization payload를 다시 `EnvironmentContract`로 validate한다
+- runtime 인스턴스는 single-db다. 여러 DB를 처리할 때는 DB별로 runtime 인스턴스를 분리한다
 
 Acceptance:
 
 - 단일 DB에서 단일 category에 대해 environment draft 하나를 생성할 수 있다
 - provider circuit breaker / cooldown / quota rebalance가 synthesis runtime에도 적용된다
 - draft는 structured phase output을 통해 생성되고 registration gate를 통과한 artifact만 포함한다
+- agent는 trust field를 제안하지 않고, runtime이 authoritative environment metadata를 채운다
 
 ### Milestone 4: Hybrid A + Hybrid B Enforcement
 
