@@ -364,11 +364,13 @@ Acceptance:
 - retry / backoff / starvation protection
 - checkpoint / resume
 - v1 `SynthesisDomainScheduler` helper로 `category_status()` snapshot 소비
+- v1 `SynthesisOrchestrator` thin skeleton으로 `registry -> snapshot build -> scheduler decision -> single-db runtime.run_next` 흐름 연결
 
 Acceptance:
 
 - DB가 동적으로 추가되어도 scheduler가 처리할 수 있다
 - DB 간 task가 섞이지 않는다
+- orchestrator가 db별 runtime cache를 유지하고 선택된 db에만 draft 생성을 위임한다
 
 ### Milestone 11: Environment Registry, Dedup, Coverage
 
