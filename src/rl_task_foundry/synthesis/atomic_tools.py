@@ -1,4 +1,10 @@
-"""Deterministic db-level atomic tool generation from a schema graph."""
+"""Deterministic db-level atomic tool generation from a schema graph.
+
+This module intentionally duplicates a few tiny helpers that also exist under the
+legacy ``rl_task_foundry.tools`` directory. The duplication is temporary and
+keeps the atomic-tool transition free of imports from the path-centric stack that
+will be deleted in C11.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +17,6 @@ from pydantic import Field
 
 from rl_task_foundry.config.models import AtomicToolConfig, StrictModel
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
-from rl_task_foundry.tools.sql_templates import quote_ident, quote_table, readonly_query
-from rl_task_foundry.tools.text_utils import humanize_identifier, singularize_token
 
 _TEXT_TYPES = {
     "bpchar",
@@ -1015,3 +1019,30 @@ def _ordered_param_names(params_schema: dict[str, Any]) -> list[str]:
     ordered = [name for name in required if name in properties]
     ordered.extend(name for name in properties if name not in ordered)
     return ordered
+
+
+def readonly_query(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def quote_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def quote_table(schema_name: str, table_name: str) -> str:
+    return f"{quote_ident(schema_name)}.{quote_ident(table_name)}"
+
+
+def singularize_token(token: str) -> str:
+    if token.endswith("ies") and len(token) > 3:
+        return token[:-3] + "y"
+    if token.endswith("s") and not token.endswith("ss") and len(token) > 1:
+        return token[:-1]
+    return token
+
+
+def humanize_identifier(identifier: str) -> str:
+    parts = [part for part in identifier.replace("-", "_").split("_") if part]
+    if not parts:
+        return identifier.strip()
+    return " ".join(parts)

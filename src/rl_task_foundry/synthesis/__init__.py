@@ -1,5 +1,12 @@
 """Contracts and runtime helpers for the synthesis-agent rewrite."""
 
+from rl_task_foundry.synthesis.atomic_tools import (
+    AtomicToolBundle,
+    AtomicToolDefinition,
+    AtomicToolFamily,
+    AtomicToolGenerator,
+    AtomicToolResultMode,
+)
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
@@ -148,6 +155,11 @@ from rl_task_foundry.synthesis.subprocess_pool import (
 __all__ = [
     "ArtifactKind",
     "ArtifactGenerationOutput",
+    "AtomicToolBundle",
+    "AtomicToolDefinition",
+    "AtomicToolFamily",
+    "AtomicToolGenerator",
+    "AtomicToolResultMode",
     "AnchorQueryContract",
     "CategoryTaxonomy",
     "CategoryInferenceOutput",

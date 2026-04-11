@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import ast
 import json
+from pathlib import Path
+
+import sqlglot
 
 from rl_task_foundry.config.load import load_config
 from rl_task_foundry.config.models import AtomicToolConfig
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
-from rl_task_foundry.tools.atomic_generator import (
+from rl_task_foundry.synthesis import atomic_tools as atomic_tools_module
+from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
     AtomicToolGenerator,
 )
@@ -299,3 +304,50 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
     assert "UPDATE" not in bundle.source
     assert "DELETE" not in bundle.source
 
+
+def test_generated_atomic_tool_source_is_ast_valid_and_async_conn_first() -> None:
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+
+    module = ast.parse(bundle.source)
+    async_defs = [node for node in module.body if isinstance(node, ast.AsyncFunctionDef)]
+
+    assert len(async_defs) == len(bundle.tools)
+    assert all(node.args.args for node in async_defs)
+    assert all(node.args.args[0].arg == "conn" for node in async_defs)
+
+
+def test_generated_atomic_tool_sql_parses_under_postgres_dialect() -> None:
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+
+    for tool in bundle.tools:
+        parsed = sqlglot.parse_one(tool.sql, dialect="postgres")
+        assert parsed is not None
+
+
+def test_atomic_tool_names_do_not_leak_task_intent_keywords() -> None:
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    forbidden_keywords = {
+        "assignment",
+        "itinerary",
+        "recommendation",
+        "roster",
+        "schedule",
+        "trip",
+        "budget",
+    }
+
+    for tool in bundle.tools:
+        assert all(keyword not in tool.name for keyword in forbidden_keywords)
+
+
+def test_atomic_tools_module_has_zero_legacy_tool_imports() -> None:
+    module_source = Path(atomic_tools_module.__file__).read_text(encoding="utf-8")
+    module = ast.parse(module_source)
+    imported_modules: set[str] = set()
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported_modules.add(node.module)
+
+    assert all(not name.startswith("rl_task_foundry.tools") for name in imported_modules)
