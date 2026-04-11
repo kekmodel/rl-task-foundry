@@ -13,6 +13,7 @@ from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.runner import (
+    SynthesisRegistryRunOutcome,
     SynthesisRegistryRunSummary,
     SynthesisRegistryRunner,
     load_synthesis_registry,
@@ -114,10 +115,13 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
         await runner.close()
 
     assert summary.initially_processed_pairs == 0
+    assert summary.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
     assert summary.processed_pairs_after_run == 2
     assert summary.generated_drafts == 2
     assert summary.remaining_pairs == 0
     assert len(summary.generated_env_ids) == 2
+    assert summary.steps[0].draft_env_id is not None
+    assert not hasattr(summary.steps[0], "draft")
     assert created["sakila"].synthesize_calls == [
         ("sakila", CategoryTaxonomy.ASSIGNMENT, None),
         ("sakila", CategoryTaxonomy.ITINERARY, None),
@@ -137,11 +141,11 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
         await runner2.close()
 
     assert resumed.initially_processed_pairs == 2
+    assert resumed.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
     assert resumed.processed_pairs_after_run == 2
     assert resumed.generated_drafts == 0
     assert resumed.remaining_pairs == 0
-    assert resumed.last_decision is not None
-    assert resumed.last_decision.status == SynthesisSelectionStatus.EMPTY
+    assert resumed.last_decision is None
 
 
 @pytest.mark.asyncio
@@ -172,11 +176,77 @@ async def test_synthesis_registry_runner_stops_on_backoff_decision(tmp_path: Pat
     finally:
         await runner.close()
 
+    assert summary.outcome == SynthesisRegistryRunOutcome.ALL_BACKED_OFF
     assert summary.generated_drafts == 0
     assert summary.remaining_pairs == 1
     assert summary.last_decision is not None
     assert summary.last_decision.status == SynthesisSelectionStatus.BACKOFF
     assert runtime.synthesize_calls == []
+
+
+@pytest.mark.asyncio
+async def test_synthesis_registry_runner_reports_max_steps_reached(tmp_path: Path) -> None:
+    config = _config_with_run_db(tmp_path)
+    runner = SynthesisRegistryRunner(config, runtime_factory=lambda _entry: _FakeRuntime())
+
+    try:
+        summary = await runner.run_steps(
+            [
+                SynthesisDbRegistryEntry(
+                    db_id="sakila",
+                    categories=[CategoryTaxonomy.ASSIGNMENT, CategoryTaxonomy.ITINERARY],
+                )
+            ],
+            max_steps=1,
+            checkpoint_namespace="synthesis_budget",
+        )
+    finally:
+        await runner.close()
+
+    assert summary.outcome == SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
+    assert summary.generated_drafts == 1
+    assert summary.remaining_pairs == 1
+    assert summary.last_decision is not None
+    assert summary.last_decision.status == SynthesisSelectionStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_synthesis_registry_runner_preserves_category_order_across_checkpoint_shrinks(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_run_db(tmp_path)
+    created: dict[str, _FakeRuntime] = {}
+
+    def _factory(entry: SynthesisDbRegistryEntry) -> _FakeRuntime:
+        runtime = _FakeRuntime()
+        created[entry.db_id] = runtime
+        return runtime
+
+    runner = SynthesisRegistryRunner(config, runtime_factory=_factory)
+    try:
+        summary = await runner.run_steps(
+            [
+                SynthesisDbRegistryEntry(
+                    db_id="sakila",
+                    categories=[
+                        CategoryTaxonomy.ASSIGNMENT,
+                        CategoryTaxonomy.ITINERARY,
+                        CategoryTaxonomy.BUNDLE_SELECTION,
+                    ],
+                )
+            ],
+            max_steps=3,
+            checkpoint_namespace="synthesis_rr_order",
+        )
+    finally:
+        await runner.close()
+
+    assert summary.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
+    assert created["sakila"].synthesize_calls == [
+        ("sakila", CategoryTaxonomy.ASSIGNMENT, None),
+        ("sakila", CategoryTaxonomy.ITINERARY, None),
+        ("sakila", CategoryTaxonomy.BUNDLE_SELECTION, None),
+    ]
 
 
 def test_load_synthesis_registry_accepts_database_and_domain_overrides(tmp_path: Path) -> None:
@@ -214,6 +284,22 @@ def test_load_synthesis_registry_accepts_database_and_domain_overrides(tmp_path:
     assert entry.domain == DomainConfig(name="sales_ops", language="ko")
 
 
+def test_load_synthesis_registry_rejects_duplicate_db_ids(tmp_path: Path) -> None:
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            [
+                {"db_id": "sakila", "categories": ["assignment"]},
+                {"db_id": "sakila", "categories": ["itinerary"]},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate db_id"):
+        load_synthesis_registry(registry_path)
+
+
 def test_synthesis_registry_runner_default_runtime_factory_applies_entry_overrides(
     tmp_path: Path,
 ) -> None:
@@ -235,3 +321,28 @@ def test_synthesis_registry_runner_default_runtime_factory_applies_entry_overrid
 
     assert runtime.config.database.dsn == "postgresql://northwind:northwind@127.0.0.1:5434/northwind"
     assert runtime.config.domain.name == "sales_ops"
+
+
+@pytest.mark.asyncio
+async def test_synthesis_registry_runner_rejects_duplicate_db_ids(tmp_path: Path) -> None:
+    config = _config_with_run_db(tmp_path)
+    runner = SynthesisRegistryRunner(config, runtime_factory=lambda _entry: _FakeRuntime())
+
+    try:
+        with pytest.raises(ValueError, match="duplicate db_id"):
+            await runner.run_steps(
+                [
+                    SynthesisDbRegistryEntry(
+                        db_id="sakila",
+                        categories=[CategoryTaxonomy.ASSIGNMENT],
+                    ),
+                    SynthesisDbRegistryEntry(
+                        db_id="sakila",
+                        categories=[CategoryTaxonomy.ITINERARY],
+                    ),
+                ],
+                max_steps=1,
+                checkpoint_namespace="synthesis_duplicate",
+            )
+    finally:
+        await runner.close()

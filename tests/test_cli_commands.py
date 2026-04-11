@@ -9,8 +9,11 @@ from rl_task_foundry.cli import app
 from rl_task_foundry.infra.storage import bootstrap_run_db, connect_run_db, record_accepted_example, record_event, record_run, record_task, record_verification_result
 from rl_task_foundry.pipeline.orchestrator import RunSummary
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
-from rl_task_foundry.synthesis.orchestrator import SynthesisOrchestrationStep
-from rl_task_foundry.synthesis.runner import SynthesisRegistryRunSummary
+from rl_task_foundry.synthesis.runner import (
+    SynthesisRegistryRunOutcome,
+    SynthesisRegistryRunSummary,
+    SynthesisRegistryStepSummary,
+)
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
     SynthesisSelectionStatus,
@@ -70,6 +73,7 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
             captured["max_steps"] = max_steps
             captured["checkpoint_namespace"] = checkpoint_namespace
             return SynthesisRegistryRunSummary(
+                outcome=SynthesisRegistryRunOutcome.COMPLETED_ALL,
                 checkpoint_namespace=checkpoint_namespace,
                 requested_steps=max_steps,
                 executed_steps=1,
@@ -80,7 +84,7 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                 remaining_pairs=0,
                 generated_env_ids=["env_assignment_deadbeef"],
                 steps=[
-                    SynthesisOrchestrationStep(
+                    SynthesisRegistryStepSummary(
                         decision=SynthesisSchedulerDecision(
                             status=SynthesisSelectionStatus.READY,
                             db_id="sakila",
@@ -110,6 +114,7 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert "synthesis registry run complete" in result.stdout
+    assert "outcome=completed_all" in result.stdout
     assert "checkpoint_namespace=cli_registry_test" in result.stdout
     assert "generated_drafts=1" in result.stdout
     assert "remaining_pairs=0" in result.stdout

@@ -180,6 +180,7 @@ def run_synthesis_registry(
             await runner.close()
 
         console.print(f"[green]synthesis registry run complete[/green]: {registry_path}")
+        console.print(f"outcome={summary.outcome}")
         console.print(f"checkpoint_namespace={summary.checkpoint_namespace}")
         console.print(f"requested_steps={summary.requested_steps}")
         console.print(f"executed_steps={summary.executed_steps}")

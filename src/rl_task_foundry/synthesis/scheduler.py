@@ -57,7 +57,8 @@ class SynthesisDomainScheduler:
 
     _last_selected_db_id: str | None = None
     _db_order: list[str] = field(default_factory=list)
-    _category_cursors: dict[str, int] = field(default_factory=dict)
+    _category_orders: dict[str, list[CategoryTaxonomy]] = field(default_factory=dict)
+    _last_selected_categories: dict[str, CategoryTaxonomy] = field(default_factory=dict)
 
     def choose_next(
         self,
@@ -73,9 +74,14 @@ class SynthesisDomainScheduler:
         observed_at = now or datetime.now(timezone.utc)
         snapshot_by_db_id = {snapshot.db_id: snapshot for snapshot in snapshots}
         current_db_ids = [snapshot.db_id for snapshot in snapshots]
-        self._category_cursors = {
-            db_id: cursor
-            for db_id, cursor in self._category_cursors.items()
+        self._category_orders = {
+            db_id: order
+            for db_id, order in self._category_orders.items()
+            if db_id in snapshot_by_db_id
+        }
+        self._last_selected_categories = {
+            db_id: category
+            for db_id, category in self._last_selected_categories.items()
             if db_id in snapshot_by_db_id
         }
         ordered_db_ids = self._ordered_db_ids(current_db_ids)
@@ -83,16 +89,22 @@ class SynthesisDomainScheduler:
 
         for db_id in ordered_db_ids:
             snapshot = snapshot_by_db_id[db_id]
-            category_count = len(snapshot.categories)
-            category_start = self._category_cursors.get(snapshot.db_id, 0) % category_count
+            ordered_categories = self._ordered_categories(snapshot.db_id, snapshot.categories)
+            category_count = len(ordered_categories)
+            last_selected_category = self._last_selected_categories.get(snapshot.db_id)
+            category_start = 0
+            if last_selected_category in ordered_categories:
+                category_start = (ordered_categories.index(last_selected_category) + 1) % category_count
+            current_category_set = set(snapshot.categories)
             for category_offset in range(category_count):
-                category_index = (category_start + category_offset) % category_count
-                category = snapshot.categories[category_index]
+                category = ordered_categories[(category_start + category_offset) % category_count]
+                if category not in current_category_set:
+                    continue
                 status = snapshot.category_status.get(category)
                 if status is None or not status.backed_off:
                     self._last_selected_db_id = snapshot.db_id
                     self._db_order = list(current_db_ids)
-                    self._category_cursors[snapshot.db_id] = (category_index + 1) % category_count
+                    self._last_selected_categories[snapshot.db_id] = category
                     return SynthesisSchedulerDecision(
                         status=SynthesisSelectionStatus.READY,
                         db_id=snapshot.db_id,
@@ -139,4 +151,17 @@ class SynthesisDomainScheduler:
                 ordered.append(db_id)
                 seen.add(db_id)
         self._db_order = list(current_db_ids)
+        return ordered
+
+    def _ordered_categories(
+        self,
+        db_id: str,
+        current_categories: list[CategoryTaxonomy],
+    ) -> list[CategoryTaxonomy]:
+        previous_order = self._category_orders.get(db_id, [])
+        ordered = list(previous_order)
+        for category in current_categories:
+            if category not in ordered:
+                ordered.append(category)
+        self._category_orders[db_id] = ordered
         return ordered

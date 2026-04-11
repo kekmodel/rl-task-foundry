@@ -96,6 +96,43 @@ def test_synthesis_domain_scheduler_preserves_db_turn_when_snapshot_list_mutates
     assert (second.db_id, second.category) == ("chinook", CategoryTaxonomy.ITINERARY)
 
 
+def test_synthesis_domain_scheduler_preserves_category_order_when_snapshot_shrinks() -> None:
+    scheduler = SynthesisDomainScheduler()
+    initial = [
+        SynthesisDbSnapshot(
+            db_id="sakila",
+            categories=[
+                CategoryTaxonomy.ASSIGNMENT,
+                CategoryTaxonomy.ITINERARY,
+                CategoryTaxonomy.BUNDLE_SELECTION,
+            ],
+        )
+    ]
+    after_first = [
+        SynthesisDbSnapshot(
+            db_id="sakila",
+            categories=[
+                CategoryTaxonomy.ITINERARY,
+                CategoryTaxonomy.BUNDLE_SELECTION,
+            ],
+        )
+    ]
+    after_second = [
+        SynthesisDbSnapshot(
+            db_id="sakila",
+            categories=[CategoryTaxonomy.BUNDLE_SELECTION],
+        )
+    ]
+
+    first = scheduler.choose_next(initial)
+    second = scheduler.choose_next(after_first)
+    third = scheduler.choose_next(after_second)
+
+    assert (first.db_id, first.category) == ("sakila", CategoryTaxonomy.ASSIGNMENT)
+    assert (second.db_id, second.category) == ("sakila", CategoryTaxonomy.ITINERARY)
+    assert (third.db_id, third.category) == ("sakila", CategoryTaxonomy.BUNDLE_SELECTION)
+
+
 def test_synthesis_domain_scheduler_skips_backed_off_category_within_db() -> None:
     scheduler = SynthesisDomainScheduler()
     now = datetime(2026, 4, 12, tzinfo=timezone.utc)

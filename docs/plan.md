@@ -373,6 +373,7 @@ Acceptance:
 - DB 간 task가 섞이지 않는다
 - orchestrator가 db별 runtime cache를 유지하고 선택된 db에만 draft 생성을 위임한다
 - runner가 성공한 `db_id x category` pair를 checkpoint에 기록하고 resume 시 다시 생성하지 않는다
+- runner summary가 typed run outcome과 lightweight step summary를 제공한다
 
 ### Milestone 11: Environment Registry, Dedup, Coverage
 

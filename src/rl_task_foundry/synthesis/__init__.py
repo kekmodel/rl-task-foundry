@@ -110,8 +110,10 @@ from rl_task_foundry.synthesis.orchestrator import (
 )
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryFileEntry,
+    SynthesisRegistryRunOutcome,
     SynthesisRegistryRunSummary,
     SynthesisRegistryRunner,
+    SynthesisRegistryStepSummary,
     load_synthesis_registry,
 )
 from rl_task_foundry.synthesis.subprocess_pool import (
@@ -206,8 +208,10 @@ __all__ = [
     "SynthesisSelfConsistencyOutcome",
     "SynthesisRuntimeHandle",
     "SynthesisRegistryFileEntry",
+    "SynthesisRegistryRunOutcome",
     "SynthesisRegistryRunSummary",
     "SynthesisRegistryRunner",
+    "SynthesisRegistryStepSummary",
     "SynthesisSchedulerDecision",
     "SynthesisSelectionStatus",
     "SynthesisStageRequest",
