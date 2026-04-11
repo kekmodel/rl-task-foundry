@@ -9,6 +9,14 @@ from rl_task_foundry.cli import app
 from rl_task_foundry.infra.storage import bootstrap_run_db, connect_run_db, record_accepted_example, record_event, record_run, record_task, record_verification_result
 from rl_task_foundry.pipeline.orchestrator import RunSummary
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.environment_registry import (
+    DifficultyBand,
+    EnvironmentRegistryCoverageEntry,
+    EnvironmentRegistryRecord,
+    EnvironmentRegistrySnapshot,
+    SemanticDedupCandidate,
+)
+from rl_task_foundry.synthesis.contracts import EnvironmentStatus
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunOutcome,
     SynthesisRegistryRunSummary,
@@ -135,6 +143,88 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert captured["max_steps"] == 2
     assert captured["checkpoint_namespace"] == "cli_registry_test"
     assert captured["closed"] is True
+
+
+def test_cli_show_synthesis_environment_registry_reports_snapshot(monkeypatch) -> None:
+    @dataclass
+    class _DummyRegistry:
+        root_dir: Path = Path("artifacts/environments")
+        index_db_path: Path = Path("artifacts/environment_registry.db")
+
+        def snapshot(self, *, limit, db_id=None, category=None):
+            assert limit == 5
+            assert db_id == "sakila"
+            assert category == CategoryTaxonomy.ASSIGNMENT
+            return EnvironmentRegistrySnapshot(
+                environment_count=2,
+                coverage=[
+                    EnvironmentRegistryCoverageEntry(
+                        db_id="sakila",
+                        category=CategoryTaxonomy.ASSIGNMENT,
+                        difficulty_band=DifficultyBand.MEDIUM,
+                        count=2,
+                    )
+                ],
+                recent_environments=[
+                    EnvironmentRegistryRecord(
+                        env_id="env_assignment_deadbeef",
+                        db_id="sakila",
+                        domain="service_operations",
+                        category=CategoryTaxonomy.ASSIGNMENT,
+                        difficulty_band=DifficultyBand.MEDIUM,
+                        created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
+                        status=EnvironmentStatus.DRAFT,
+                        generator_version="milestone-test",
+                        exact_signature="sha256:deadbeef",
+                        filesystem_path=Path("artifacts/environments/env_assignment_deadbeef"),
+                        question="고객 배정을 해줘",
+                    )
+                ],
+            )
+
+        def semantic_dedup_candidates(self, *, limit, db_id=None, category=None):
+            assert limit == 5
+            assert db_id == "sakila"
+            assert category == CategoryTaxonomy.ASSIGNMENT
+            return [
+                SemanticDedupCandidate(
+                    env_id="env_assignment_deadbeef",
+                    db_id="sakila",
+                    domain="service_operations",
+                    category=CategoryTaxonomy.ASSIGNMENT,
+                    difficulty_band=DifficultyBand.MEDIUM,
+                    question="고객 배정을 해줘",
+                    constraint_summaries=("같은 고객을 중복 배정하지 않는다.",),
+                    semantic_text="question:고객 배정을 해줘",
+                    filesystem_path=Path("artifacts/environments/env_assignment_deadbeef"),
+                )
+            ]
+
+    monkeypatch.setattr(
+        "rl_task_foundry.cli.EnvironmentRegistryWriter.for_config",
+        lambda _config: _DummyRegistry(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "show-synthesis-environment-registry",
+            "--limit",
+            "5",
+            "--db-id",
+            "sakila",
+            "--category",
+            "assignment",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "synthesis environment registry" in result.stdout
+    assert "environment_count=2" in result.stdout
+    assert "coverage_cells=1" in result.stdout
+    assert "semantic_candidates=1" in result.stdout
+    assert "coverage=sakila|assignment|medium|2" in result.stdout
+    assert "env=env_assignment_deadbeef|sakila|assignment|medium|draft" in result.stdout
 
 
 def test_cli_generate_task_specs_writes_jsonl(monkeypatch, tmp_path):

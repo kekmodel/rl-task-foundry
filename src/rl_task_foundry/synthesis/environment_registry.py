@@ -10,10 +10,18 @@ from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.contracts import (
+    CategoryTaxonomy,
+    EnvironmentContract,
+    EnvironmentStatus,
+    OutputFieldContract,
+    OutputFieldType,
+)
 from rl_task_foundry.synthesis.runtime import SynthesisEnvironmentDraft
 
 SCHEMA_STATEMENTS = (
@@ -69,6 +77,49 @@ class EnvironmentRegistryCommitResult:
     difficulty_band: DifficultyBand
     filesystem_path: Path
     duplicate_of_env_id: str | None = None
+
+
+@dataclass(slots=True)
+class EnvironmentRegistryRecord:
+    env_id: str
+    db_id: str
+    domain: str
+    category: CategoryTaxonomy
+    difficulty_band: DifficultyBand
+    created_at: datetime
+    status: EnvironmentStatus
+    generator_version: str
+    exact_signature: str
+    filesystem_path: Path
+    question: str | None = None
+
+
+@dataclass(slots=True)
+class EnvironmentRegistryCoverageEntry:
+    db_id: str
+    category: CategoryTaxonomy
+    difficulty_band: DifficultyBand
+    count: int
+
+
+@dataclass(slots=True)
+class SemanticDedupCandidate:
+    env_id: str
+    db_id: str
+    domain: str
+    category: CategoryTaxonomy
+    difficulty_band: DifficultyBand
+    question: str | None
+    constraint_summaries: tuple[str, ...]
+    semantic_text: str
+    filesystem_path: Path
+
+
+@dataclass(slots=True)
+class EnvironmentRegistrySnapshot:
+    environment_count: int
+    coverage: list[EnvironmentRegistryCoverageEntry]
+    recent_environments: list[EnvironmentRegistryRecord]
 
 
 @dataclass(slots=True)
@@ -174,14 +225,11 @@ class EnvironmentRegistryWriter:
                         exact_signature,
                         str(final_dir),
                         json.dumps(
-                            {
-                                "env_id": env.env_id,
-                                "db_id": env.db_id,
-                                "domain": env.domain,
-                                "category": env.category.value,
-                                "difficulty_band": difficulty_band.value,
-                                "created_at": env.created_at.isoformat(),
-                            },
+                            self._build_registry_payload(
+                                draft=draft,
+                                exact_signature=exact_signature,
+                                difficulty_band=difficulty_band,
+                            ),
                             ensure_ascii=False,
                             sort_keys=True,
                         ),
@@ -207,15 +255,180 @@ class EnvironmentRegistryWriter:
             filesystem_path=final_dir,
         )
 
-    def environment_count(self) -> int:
-        with self._connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS count FROM environments").fetchone()
-        return int(row["count"])
+    def environment_count(
+        self,
+        *,
+        db_id: str | None = None,
+        category: CategoryTaxonomy | None = None,
+    ) -> int:
+        return self._count_environments(db_id=db_id, category=category)
 
     def coverage_snapshot(self) -> dict[str, int]:
+        return {
+            (
+                f"db={entry.db_id}|category={entry.category.value}"
+                f"|difficulty_band={entry.difficulty_band.value}"
+            ): entry.count
+            for entry in self.coverage_entries()
+        }
+
+    def coverage_entries(
+        self,
+        *,
+        db_id: str | None = None,
+        category: CategoryTaxonomy | None = None,
+    ) -> list[EnvironmentRegistryCoverageEntry]:
+        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        query = (
+            """
+            SELECT db_id, category, difficulty_band, COUNT(*) AS count
+            FROM environments
+            """
+            + where_sql
+            + """
+            GROUP BY db_id, category, difficulty_band
+            ORDER BY db_id, category, difficulty_band
+            """
+        )
         with self._connect() as conn:
-            rows = conn.execute("SELECT key, value FROM coverage_counters").fetchall()
-        return {str(row["key"]): int(row["value"]) for row in rows}
+            rows = conn.execute(query, params).fetchall()
+        return [
+            EnvironmentRegistryCoverageEntry(
+                db_id=str(row["db_id"]),
+                category=CategoryTaxonomy(str(row["category"])),
+                difficulty_band=DifficultyBand(str(row["difficulty_band"])),
+                count=int(row["count"]),
+            )
+            for row in rows
+        ]
+
+    def list_environments(
+        self,
+        *,
+        limit: int = 20,
+        db_id: str | None = None,
+        category: CategoryTaxonomy | None = None,
+    ) -> list[EnvironmentRegistryRecord]:
+        if limit <= 0:
+            return []
+        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        query = (
+            """
+            SELECT
+                env_id,
+                db_id,
+                domain,
+                category,
+                difficulty_band,
+                created_at,
+                status,
+                generator_version,
+                exact_signature,
+                filesystem_path,
+                payload_json
+            FROM environments
+            """
+            + where_sql
+            + """
+            ORDER BY created_at DESC, env_id DESC
+            LIMIT ?
+            """
+        )
+        with self._connect() as conn:
+            rows = conn.execute(query, (*params, limit)).fetchall()
+        records: list[EnvironmentRegistryRecord] = []
+        for row in rows:
+            payload = self._parse_payload(row["payload_json"])
+            records.append(
+                EnvironmentRegistryRecord(
+                    env_id=str(row["env_id"]),
+                    db_id=str(row["db_id"]),
+                    domain=str(row["domain"]),
+                    category=CategoryTaxonomy(str(row["category"])),
+                    difficulty_band=DifficultyBand(str(row["difficulty_band"])),
+                    created_at=datetime.fromisoformat(str(row["created_at"])),
+                    status=EnvironmentStatus(str(row["status"])),
+                    generator_version=str(row["generator_version"]),
+                    exact_signature=str(row["exact_signature"]),
+                    filesystem_path=Path(str(row["filesystem_path"])),
+                    question=_optional_string(payload.get("question")),
+                )
+            )
+        return records
+
+    def semantic_dedup_candidates(
+        self,
+        *,
+        limit: int = 20,
+        db_id: str | None = None,
+        category: CategoryTaxonomy | None = None,
+    ) -> list[SemanticDedupCandidate]:
+        if limit <= 0:
+            return []
+        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        query = (
+            """
+            SELECT
+                env_id,
+                db_id,
+                domain,
+                category,
+                difficulty_band,
+                filesystem_path,
+                payload_json
+            FROM environments
+            """
+            + where_sql
+            + """
+            ORDER BY created_at DESC, env_id DESC
+            LIMIT ?
+            """
+        )
+        with self._connect() as conn:
+            rows = conn.execute(query, (*params, limit)).fetchall()
+        candidates: list[SemanticDedupCandidate] = []
+        for row in rows:
+            payload = self._parse_payload(row["payload_json"])
+            question = _optional_string(payload.get("question"))
+            constraint_summaries = _constraint_summaries_from_payload(payload)
+            semantic_text = _optional_string(payload.get("semantic_dedup_text"))
+            if not semantic_text:
+                semantic_text = _fallback_semantic_text(
+                    category=CategoryTaxonomy(str(row["category"])),
+                    question=question,
+                    constraint_summaries=constraint_summaries,
+                )
+            candidates.append(
+                SemanticDedupCandidate(
+                    env_id=str(row["env_id"]),
+                    db_id=str(row["db_id"]),
+                    domain=str(row["domain"]),
+                    category=CategoryTaxonomy(str(row["category"])),
+                    difficulty_band=DifficultyBand(str(row["difficulty_band"])),
+                    question=question,
+                    constraint_summaries=constraint_summaries,
+                    semantic_text=semantic_text,
+                    filesystem_path=Path(str(row["filesystem_path"])),
+                )
+            )
+        return candidates
+
+    def snapshot(
+        self,
+        *,
+        limit: int = 20,
+        db_id: str | None = None,
+        category: CategoryTaxonomy | None = None,
+    ) -> EnvironmentRegistrySnapshot:
+        return EnvironmentRegistrySnapshot(
+            environment_count=self._count_environments(db_id=db_id, category=category),
+            coverage=self.coverage_entries(db_id=db_id, category=category),
+            recent_environments=self.list_environments(
+                limit=limit,
+                db_id=db_id,
+                category=category,
+            ),
+        )
 
     def _lookup_duplicate(self, exact_signature: str) -> sqlite3.Row | None:
         with self._connect() as conn:
@@ -285,6 +498,7 @@ class EnvironmentRegistryWriter:
                 {
                     "exact_signature": exact_signature,
                     "difficulty_band": difficulty_band.value,
+                    "semantic_dedup_text": build_semantic_dedup_text(draft.environment),
                     "registration_status": draft.registration_report.status.value,
                     "registration_error_codes": draft.registration_diagnostics.error_codes,
                     "self_consistency_passed": draft.self_consistency_diagnostics.passed,
@@ -314,6 +528,78 @@ class EnvironmentRegistryWriter:
             ]
         )
         return f"sha256:{sha256(material.encode('utf-8')).hexdigest()}"
+
+    def _build_registry_payload(
+        self,
+        *,
+        draft: SynthesisEnvironmentDraft,
+        exact_signature: str,
+        difficulty_band: DifficultyBand,
+    ) -> dict[str, Any]:
+        env = draft.environment
+        return {
+            "env_id": env.env_id,
+            "db_id": env.db_id,
+            "domain": env.domain,
+            "category": env.category.value,
+            "difficulty_band": difficulty_band.value,
+            "created_at": env.created_at.isoformat(),
+            "status": env.status.value,
+            "generator_version": env.generator_version,
+            "exact_signature": exact_signature,
+            "question": env.task.question,
+            "difficulty_vector": {
+                axis.value: float(value) for axis, value in env.difficulty_vector.items()
+            },
+            "constraint_summary": [
+                item.model_dump(mode="json") for item in env.task.constraint_summary
+            ],
+            "semantic_dedup_text": build_semantic_dedup_text(env),
+        }
+
+    def _count_environments(
+        self,
+        *,
+        db_id: str | None,
+        category: CategoryTaxonomy | None,
+    ) -> int:
+        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM environments " + where_sql,
+                params,
+            ).fetchone()
+        return int(row["count"])
+
+    @staticmethod
+    def _build_filters(
+        *,
+        db_id: str | None,
+        category: CategoryTaxonomy | None,
+    ) -> tuple[str, tuple[object, ...]]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if db_id is not None:
+            clauses.append("db_id = ?")
+            params.append(db_id)
+        if category is not None:
+            clauses.append("category = ?")
+            params.append(category.value)
+        if not clauses:
+            return "", ()
+        return "WHERE " + " AND ".join(clauses), tuple(params)
+
+    @staticmethod
+    def _parse_payload(raw: object) -> dict[str, Any]:
+        if not isinstance(raw, str):
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+        return {}
 
     def _bootstrap(self) -> None:
         with self._connect() as conn:
@@ -351,3 +637,78 @@ def bucketize_difficulty_vector(difficulty_vector: dict[object, float]) -> Diffi
     if total <= 8.0:
         return DifficultyBand.MEDIUM
     return DifficultyBand.HIGH
+
+
+def build_semantic_dedup_text(environment: EnvironmentContract) -> str:
+    task = environment.task
+    output_shape = ", ".join(_flatten_output_schema(task.output_schema.root))
+    constraints = " | ".join(
+        f"{item.kind.value}:{item.key}:{item.summary}" for item in task.constraint_summary
+    )
+    difficulty = ", ".join(
+        f"{axis.value}={float(value):g}"
+        for axis, value in sorted(
+            task.difficulty_vector.items(),
+            key=lambda item: item[0].value,
+        )
+    )
+    lines = [
+        f"db_id:{environment.db_id}",
+        f"domain:{environment.domain}",
+        f"category:{task.category.value}",
+        f"question:{task.question}",
+        f"output_schema:{output_shape or '<empty>'}",
+        f"constraints:{constraints or '<none>'}",
+        f"difficulty:{difficulty or '<unset>'}",
+    ]
+    return "\n".join(lines)
+
+
+def _flatten_output_schema(field: OutputFieldContract, *, prefix: str = "") -> list[str]:
+    path = f"{prefix}.{field.name}" if prefix else field.name
+    if field.type == OutputFieldType.OBJECT:
+        if not field.fields:
+            return [f"{path}:object"]
+        values: list[str] = []
+        for child in field.fields:
+            values.extend(_flatten_output_schema(child, prefix=path))
+        return values
+    if field.type == OutputFieldType.LIST:
+        if field.items is None:
+            return [f"{path}[]:list"]
+        return _flatten_output_schema(field.items, prefix=f"{path}[]")
+    return [f"{path}:{field.type.value}"]
+
+
+def _optional_string(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _constraint_summaries_from_payload(payload: dict[str, Any]) -> tuple[str, ...]:
+    raw = payload.get("constraint_summary")
+    if not isinstance(raw, list):
+        return ()
+    summaries: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        summary = item.get("summary")
+        if isinstance(summary, str) and summary:
+            summaries.append(summary)
+    return tuple(summaries)
+
+
+def _fallback_semantic_text(
+    *,
+    category: CategoryTaxonomy,
+    question: str | None,
+    constraint_summaries: tuple[str, ...],
+) -> str:
+    parts = [
+        f"category:{category.value}",
+        f"question:{question or '<missing>'}",
+        "constraints:" + (" | ".join(constraint_summaries) or "<none>"),
+    ]
+    return "\n".join(parts)

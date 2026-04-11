@@ -987,6 +987,8 @@ dedup은 두 단계다.
 1. exact dedup
    - v1은 `db_id + tool_signature + task_signature + verifier_signature`의 exact signature를 sqlite unique key로 사용한다
 2. semantic dedup
+   - v1은 registry가 `semantic_dedup_text` candidate document를 durable하게 저장하고 조회 surface를 제공한다
+   - 이후 embedding lane이 이 candidate document를 사용해 near-duplicate를 판정한다
    - task embedding
    - constraint summary embedding
 
@@ -1006,6 +1008,12 @@ coverage는 아래 grid로 본다.
 - `db_id x category x difficulty band`
 
 difficulty band는 difficulty vector를 bucketized한 결과다.
+
+v1 registry는 read/query surface도 제공한다.
+
+- recent environment listing
+- structured coverage snapshot
+- semantic dedup candidate export
 
 ## Review Pack
 

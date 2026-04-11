@@ -22,6 +22,8 @@ from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunner,
     load_synthesis_registry,
 )
+from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 from rl_task_foundry.tasks.composer import ComposeRequest, TaskComposer
 from rl_task_foundry.tasks.factory import TierATaskFactory
@@ -207,6 +209,50 @@ def run_synthesis_registry(
             console.print(f"last_category={summary.last_decision.category}")
 
     asyncio.run(_run())
+
+
+@app.command("show-synthesis-environment-registry")
+def show_synthesis_environment_registry(
+    config_path: Path = Path("rl_task_foundry.yaml"),
+    limit: int = 10,
+    db_id: str | None = None,
+    category: str | None = None,
+) -> None:
+    """Print the current durable synthesis environment registry snapshot."""
+
+    config = load_config(config_path)
+    registry = EnvironmentRegistryWriter.for_config(config)
+    resolved_category = None
+    if category is not None:
+        try:
+            resolved_category = CategoryTaxonomy(category)
+        except ValueError as exc:
+            raise typer.BadParameter(f"unknown synthesis category: {category}") from exc
+
+    snapshot = registry.snapshot(limit=limit, db_id=db_id, category=resolved_category)
+    semantic_candidates = registry.semantic_dedup_candidates(
+        limit=limit,
+        db_id=db_id,
+        category=resolved_category,
+    )
+
+    console.print("[green]synthesis environment registry[/green]")
+    console.print(f"root_dir={registry.root_dir}")
+    console.print(f"index_db_path={registry.index_db_path}")
+    console.print(f"environment_count={snapshot.environment_count}")
+    console.print(f"coverage_cells={len(snapshot.coverage)}")
+    console.print(f"semantic_candidates={len(semantic_candidates)}")
+    for entry in snapshot.coverage:
+        console.print(
+            "coverage="
+            f"{entry.db_id}|{entry.category.value}|{entry.difficulty_band.value}|{entry.count}"
+        )
+    for record in snapshot.recent_environments:
+        console.print(
+            "env="
+            f"{record.env_id}|{record.db_id}|{record.category.value}"
+            f"|{record.difficulty_band.value}|{record.status.value}"
+        )
 
 
 @app.command("check-db")

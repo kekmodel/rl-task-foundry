@@ -27,8 +27,12 @@ from rl_task_foundry.synthesis.contracts import (
 )
 from rl_task_foundry.synthesis.environment_registry import (
     DifficultyBand,
+    EnvironmentRegistryCoverageEntry,
     EnvironmentRegistryCommitStatus,
+    EnvironmentRegistrySnapshot,
     EnvironmentRegistryWriter,
+    SemanticDedupCandidate,
+    build_semantic_dedup_text,
     bucketize_difficulty_vector,
 )
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
@@ -46,8 +50,16 @@ from rl_task_foundry.synthesis.runtime import (
 )
 
 
-def _sample_draft(tmp_env_id: str = "env_assignment_registrytest") -> SynthesisEnvironmentDraft:
-    created_at = datetime(2026, 4, 12, tzinfo=timezone.utc)
+def _sample_draft(
+    tmp_env_id: str = "env_assignment_registrytest",
+    *,
+    db_id: str = "sakila",
+    category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
+    question: str = "고객 배정 계획을 만들어 주세요.",
+    created_at: datetime | None = None,
+    difficulty_vector: dict[DifficultyAxis, float] | None = None,
+) -> SynthesisEnvironmentDraft:
+    created_at = created_at or datetime(2026, 4, 12, tzinfo=timezone.utc)
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(
             name="assignment",
@@ -59,8 +71,8 @@ def _sample_draft(tmp_env_id: str = "env_assignment_registrytest") -> SynthesisE
         )
     )
     task = TaskContract(
-        question="고객 배정 계획을 만들어 주세요.",
-        category=CategoryTaxonomy.ASSIGNMENT,
+        question=question,
+        category=category,
         output_schema=output_schema,
         constraint_summary=[
             ConstraintSummaryItem(
@@ -69,16 +81,17 @@ def _sample_draft(tmp_env_id: str = "env_assignment_registrytest") -> SynthesisE
                 summary="같은 고객을 중복 배정하지 않는다.",
             )
         ],
-        difficulty_vector={
+        difficulty_vector=difficulty_vector
+        or {
             DifficultyAxis.SLOT_COUNT: 2.0,
             DifficultyAxis.CONSTRAINT_COUNT: 2.0,
         },
     )
     environment = EnvironmentContract(
         env_id=tmp_env_id,
-        db_id="sakila",
+        db_id=db_id,
         domain="service_operations",
-        category=CategoryTaxonomy.ASSIGNMENT,
+        category=category,
         difficulty_vector=task.difficulty_vector,
         created_at=created_at,
         generator_version="test-version",
@@ -146,10 +159,10 @@ def _sample_draft(tmp_env_id: str = "env_assignment_registrytest") -> SynthesisE
     )
     return SynthesisEnvironmentDraft(
         created_at=created_at,
-        db_id="sakila",
-        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        db_id=db_id,
+        requested_category=category,
         schema_summary={"included_table_count": 2},
-        selected_category=CategoryTaxonomy.ASSIGNMENT,
+        selected_category=category,
         environment=environment,
         artifacts=GeneratedArtifactBundle(
             tool_source="async def get_assignments(conn, customer_id):\n    return []\n",
@@ -227,3 +240,107 @@ def test_environment_registry_writer_deduplicates_exact_signature(tmp_path: Path
     assert writer.coverage_snapshot() == {
         "db=sakila|category=assignment|difficulty_band=medium": 1
     }
+
+
+def test_environment_registry_snapshot_and_semantic_candidates(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    first = _sample_draft(
+        "env_assignment_registrytest",
+        created_at=datetime(2026, 4, 12, 10, tzinfo=timezone.utc),
+    )
+    second = _sample_draft(
+        "env_itinerary_registrytest",
+        category=CategoryTaxonomy.ITINERARY,
+        question="3일 여정을 짜 주세요.",
+        created_at=datetime(2026, 4, 12, 11, tzinfo=timezone.utc),
+        difficulty_vector={DifficultyAxis.SLOT_COUNT: 9.0},
+    )
+
+    writer.commit_draft(first)
+    writer.commit_draft(second)
+
+    snapshot = writer.snapshot(limit=5)
+    candidates = writer.semantic_dedup_candidates(limit=5)
+
+    assert isinstance(snapshot, EnvironmentRegistrySnapshot)
+    assert snapshot.environment_count == 2
+    assert snapshot.coverage == [
+        EnvironmentRegistryCoverageEntry(
+            db_id="sakila",
+            category=CategoryTaxonomy.ASSIGNMENT,
+            difficulty_band=DifficultyBand.MEDIUM,
+            count=1,
+        ),
+        EnvironmentRegistryCoverageEntry(
+            db_id="sakila",
+            category=CategoryTaxonomy.ITINERARY,
+            difficulty_band=DifficultyBand.HIGH,
+            count=1,
+        ),
+    ]
+    assert [record.env_id for record in snapshot.recent_environments] == [
+        "env_itinerary_registrytest",
+        "env_assignment_registrytest",
+    ]
+    assert [candidate.env_id for candidate in candidates] == [
+        "env_itinerary_registrytest",
+        "env_assignment_registrytest",
+    ]
+    assert isinstance(candidates[0], SemanticDedupCandidate)
+    assert "question:3일 여정을 짜 주세요." in candidates[0].semantic_text
+    assert candidates[0].constraint_summaries == ("같은 고객을 중복 배정하지 않는다.",)
+
+
+def test_environment_registry_snapshot_filters_by_db_and_category(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    writer.commit_draft(_sample_draft("env_sakila_assignment", db_id="sakila"))
+    writer.commit_draft(
+        _sample_draft(
+            "env_northwind_assignment",
+            db_id="northwind",
+            created_at=datetime(2026, 4, 12, 11, tzinfo=timezone.utc),
+        )
+    )
+    writer.commit_draft(
+        _sample_draft(
+            "env_northwind_itinerary",
+            db_id="northwind",
+            category=CategoryTaxonomy.ITINERARY,
+            created_at=datetime(2026, 4, 12, 12, tzinfo=timezone.utc),
+        )
+    )
+
+    snapshot = writer.snapshot(
+        limit=5,
+        db_id="northwind",
+        category=CategoryTaxonomy.ASSIGNMENT,
+    )
+    candidates = writer.semantic_dedup_candidates(
+        limit=5,
+        db_id="northwind",
+        category=CategoryTaxonomy.ASSIGNMENT,
+    )
+
+    assert snapshot.environment_count == 1
+    assert [entry.db_id for entry in snapshot.coverage] == ["northwind"]
+    assert [entry.category for entry in snapshot.coverage] == [CategoryTaxonomy.ASSIGNMENT]
+    assert [record.env_id for record in snapshot.recent_environments] == [
+        "env_northwind_assignment"
+    ]
+    assert [candidate.env_id for candidate in candidates] == ["env_northwind_assignment"]
+
+
+def test_build_semantic_dedup_text_includes_question_and_schema() -> None:
+    draft = _sample_draft()
+
+    text = build_semantic_dedup_text(draft.environment)
+
+    assert "question:고객 배정 계획을 만들어 주세요." in text
+    assert "constraints:uniqueness:unique_customer:같은 고객을 중복 배정하지 않는다." in text
+    assert "output_schema:assignment.customer:string" in text
