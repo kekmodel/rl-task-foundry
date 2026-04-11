@@ -84,6 +84,18 @@ class SynthesisProviderStatus(StrictModel):
     cooldown_remaining_s: float
 
 
+class SynthesisCategoryStatus(StrictModel):
+    db_id: str
+    category: CategoryTaxonomy
+    consecutive_discards: int
+    backed_off: bool
+    backoff_until: datetime | None = None
+    backoff_remaining_s: float = 0.0
+    last_outcome: SynthesisSelfConsistencyOutcome | None = None
+    last_error_codes: list[str] = Field(default_factory=list)
+    last_updated_at: datetime | None = None
+
+
 class SynthesisMemoryEntry(StrictModel):
     phase: SynthesisPhase
     provider: str
@@ -293,20 +305,28 @@ class SynthesisCategoryBackoffError(SynthesisRuntimeError):
         category: CategoryTaxonomy,
         consecutive_discards: int,
         backoff_until: datetime,
+        last_outcome: SynthesisSelfConsistencyOutcome | None = None,
+        last_error_codes: list[str] | None = None,
     ) -> None:
         super().__init__(message)
         self.db_id = db_id
         self.category = category
         self.consecutive_discards = consecutive_discards
         self.backoff_until = backoff_until
+        self.last_outcome = last_outcome
+        self.last_error_codes = list(last_error_codes or [])
 
 
 @dataclass(slots=True)
 class _CategoryFailureState:
     consecutive_discards: int = 0
     backoff_until: datetime | None = None
+    last_outcome: SynthesisSelfConsistencyOutcome | None = None
+    last_error_codes: list[str] = field(default_factory=list)
+    last_updated_at: datetime | None = None
 
 
+SynthesisCategoryStatus.model_rebuild()
 SynthesisStageRequest.model_rebuild()
 SynthesisEnvironmentDraft.model_rebuild()
 
@@ -537,8 +557,27 @@ class SynthesisAgentRuntime:
                 tool_traces=tool_traces,
                 provider_status=self.provider_status(),
             )
-        except (SynthesisCategoryMismatchError, SynthesisSelfConsistencyError):
-            await self._record_category_discard(db_id, requested_category)
+        except SynthesisCategoryMismatchError:
+            await self._record_category_discard(
+                db_id,
+                requested_category,
+                outcome=SynthesisSelfConsistencyOutcome.CATEGORY_MISMATCH,
+                error_codes=["category_mismatch"],
+            )
+            raise
+        except SynthesisSelfConsistencyError as exc:
+            last_attempt = exc.attempts[-1] if exc.attempts else None
+            error_codes: list[str] = []
+            if exc.last_registration_diagnostics is not None:
+                error_codes.extend(exc.last_registration_diagnostics.error_codes)
+            if exc.last_self_consistency_diagnostics is not None:
+                error_codes.extend(exc.last_self_consistency_diagnostics.error_codes)
+            await self._record_category_discard(
+                db_id,
+                requested_category,
+                outcome=last_attempt.outcome if last_attempt is not None else None,
+                error_codes=error_codes,
+            )
             raise
 
     async def close(self) -> None:
@@ -551,6 +590,49 @@ class SynthesisAgentRuntime:
             provider_name: _snapshot_to_status(breaker.snapshot())
             for provider_name, breaker in self._breakers.items()
         }
+
+    async def category_status(
+        self,
+        *,
+        db_id: str | None = None,
+    ) -> dict[CategoryTaxonomy, SynthesisCategoryStatus]:
+        resolved_db_id = db_id or self._bound_db_id
+        if resolved_db_id is None:
+            return {}
+        if self._bound_db_id is not None and resolved_db_id != self._bound_db_id:
+            raise SynthesisDbBindingError(
+                "SynthesisAgentRuntime instances are single-db; create a new runtime per db_id"
+            )
+        now = datetime.now(timezone.utc)
+        async with self._category_state_lock:
+            expired = [
+                key
+                for key, state in self._category_failures.items()
+                if key[0] == resolved_db_id
+                and state.backoff_until is not None
+                and state.backoff_until <= now
+            ]
+            for key in expired:
+                del self._category_failures[key]
+            statuses: dict[CategoryTaxonomy, SynthesisCategoryStatus] = {}
+            for (state_db_id, category), state in self._category_failures.items():
+                if state_db_id != resolved_db_id:
+                    continue
+                remaining = 0.0
+                if state.backoff_until is not None:
+                    remaining = max(0.0, (state.backoff_until - now).total_seconds())
+                statuses[category] = SynthesisCategoryStatus(
+                    db_id=state_db_id,
+                    category=category,
+                    consecutive_discards=state.consecutive_discards,
+                    backed_off=state.backoff_until is not None and state.backoff_until > now,
+                    backoff_until=state.backoff_until,
+                    backoff_remaining_s=remaining,
+                    last_outcome=state.last_outcome,
+                    last_error_codes=list(state.last_error_codes),
+                    last_updated_at=state.last_updated_at,
+                )
+            return statuses
 
     async def _ensure_category_available(
         self,
@@ -573,22 +655,30 @@ class SynthesisAgentRuntime:
                 category=category,
                 consecutive_discards=state.consecutive_discards,
                 backoff_until=state.backoff_until,
+                last_outcome=state.last_outcome,
+                last_error_codes=state.last_error_codes,
             )
 
     async def _record_category_discard(
         self,
         db_id: str,
         category: CategoryTaxonomy,
+        *,
+        outcome: SynthesisSelfConsistencyOutcome | None,
+        error_codes: list[str] | None = None,
     ) -> None:
         async with self._category_state_lock:
             key = (db_id, category)
             state = self._category_failures.get(key, _CategoryFailureState())
             state.consecutive_discards += 1
+            state.last_outcome = outcome
+            state.last_error_codes = list(error_codes or [])
+            state.last_updated_at = datetime.now(timezone.utc)
             if (
                 state.consecutive_discards
                 >= self.config.synthesis.runtime.max_consecutive_category_discards
             ):
-                state.backoff_until = datetime.now(timezone.utc) + timedelta(
+                state.backoff_until = state.last_updated_at + timedelta(
                     seconds=self.config.synthesis.runtime.category_backoff_duration_s
                 )
             self._category_failures[key] = state

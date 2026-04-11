@@ -264,6 +264,7 @@ Acceptance:
 - discard consumes budget 정책
 - `db_id x category` failure counter와 backoff queue
 - `max_consecutive_category_discards` / `category_backoff_duration_s` config로 local runtime backoff enforce
+- scheduler가 읽을 수 있도록 runtime category status snapshot을 노출
 - tool change -> solution/verifier invalidation policy
 - verifier weakening 금지 규칙
 - one-axis-per-step difficulty crank

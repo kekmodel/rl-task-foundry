@@ -1004,6 +1004,14 @@ async def test_synthesis_agent_runtime_enters_category_backoff_after_consecutive
             graph=_sample_graph(),
         )
 
+    status = await runtime.category_status()
+    assert status[CategoryTaxonomy.ASSIGNMENT].consecutive_discards == 1
+    assert status[CategoryTaxonomy.ASSIGNMENT].backed_off is True
+    assert (
+        status[CategoryTaxonomy.ASSIGNMENT].last_outcome
+        == SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED
+    )
+
     with pytest.raises(SynthesisCategoryBackoffError) as exc_info:
         await runtime.synthesize_environment_draft(
             db_id="sakila",
@@ -1013,7 +1021,79 @@ async def test_synthesis_agent_runtime_enters_category_backoff_after_consecutive
 
     assert exc_info.value.consecutive_discards == 1
     assert exc_info.value.backoff_until > datetime.now(timezone.utc)
+    assert exc_info.value.last_outcome == SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED
     assert backend.calls.count(SynthesisPhase.ARTIFACT_GENERATION) == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_category_status_resets_after_success(monkeypatch):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 1
+    config.synthesis.runtime.max_consecutive_category_discards = 2
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    checks = iter(
+        [
+            _failing_self_consistency_result(
+                solution_tool_calls=0,
+                facts_match_result=True,
+                check_constraints_result=False,
+                verify_result=False,
+            ),
+            _passing_self_consistency_result(),
+        ]
+    )
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return next(checks)
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    with pytest.raises(SynthesisSelfConsistencyError):
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    status = await runtime.category_status()
+    assert status[CategoryTaxonomy.ASSIGNMENT].consecutive_discards == 1
+    assert status[CategoryTaxonomy.ASSIGNMENT].backed_off is False
+    assert status[CategoryTaxonomy.ASSIGNMENT].last_error_codes == []
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    assert draft.environment.quality_metrics.self_consistency_pass is True
+    assert await runtime.category_status() == {}
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_category_status_requires_bound_db_match():
+    config = load_config("rl_task_foundry.yaml")
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [] for phase in SynthesisPhase},
+    )
+    await runtime._bind_db_id("sakila")
+
+    with pytest.raises(SynthesisDbBindingError):
+        await runtime.category_status(db_id="northwind")
 
 
 @pytest.mark.asyncio
