@@ -1,30 +1,30 @@
-# Plan 3: Synthesis-Agent Hybrid Rewrite Plan
+# Plan 4: Synthesis-Agent Hybrid Rewrite Plan
 
 ## Objective
 
 이 계획의 목적은 RL Task Foundry를 `path-centric task generator`에서  
 `synthesis-agent driven environment generator`로 전면 재설계하는 것이다.
 
-새 시스템은 임의의 read-only PostgreSQL DB를 등록하면, 해당 DB에 대해 compositional task environment를 자동 생성하고, hybrid verifier 기반 quality gate를 통과한 환경만 registry에 누적한다.
+새 시스템은 read-only PostgreSQL DB를 등록하면, compositional task environment를 자동 생성하고, hybrid verifier 기반 quality gate를 통과한 environment만 registry에 누적한다.
 
 ## Rewrite Ground Rules
 
 1. task generation 관련 코드의 incremental polishing은 중단한다
-2. 먼저 문서와 core contract를 고정한다
-3. 그 다음 proof environment 하나를 끝까지 만든다
+2. 먼저 spec과 core contracts를 고정한다
+3. 그 다음 proof environment를 하나 끝까지 증명한다
 4. generalized factory는 proof environment 이후로 미룬다
 5. infra / solver / orchestration skeleton은 최대한 유지한다
 
 ## Deliverable
 
-Plan 3가 끝나면 아래가 가능해야 한다.
+Plan 4가 끝나면 아래가 가능해야 한다.
 
 1. DB registry에 새 DB를 등록한다
-2. scheduler가 DB를 하나 선택해 synthesis loop를 돈다
+2. scheduler가 DB를 선택해 synthesis loop를 돈다
 3. synthesis agent가 environment 4-tuple을 생성한다
 4. code registration policy가 generated code를 검사한다
 5. self-consistency, shadow verifier, cross-instance, solver pass-rate quality gate를 통과한 environment만 registry에 커밋한다
-6. review pack에서 compositional task quality를 사람이 지속적으로 확인할 수 있다
+6. review pack으로 환경 품질을 사람이 spot-check할 수 있다
 
 ## Explicit Non-Deliverable
 
@@ -67,86 +67,76 @@ Plan 3가 끝나면 아래가 가능해야 한다.
 - `tools/naming_eval.py`
 - `verification/compare.py`
 
-## Milestones
+## Execution Order
 
-### Milestone A: Freeze, Baseline, and Registry Foundations
+이 계획은 아래 순서로 실행한다.
 
-목표:
-
-- rewrite 기간의 baseline과 registry contract를 고정한다
+### Phase 0: Freeze and Baseline
 
 작업:
 
 - latest review pack을 baseline snapshot으로 기록
 - current green suite를 infra regression baseline으로 명시
-- environment registry directory layout 설계
-- sqlite registry index schema 설계
-- DB registry metadata schema 설계
-
-산출물:
-
-- `docs/spec.md`
-- `docs/plan.md`
-- registry schema draft
+- production training 금지 상태를 문서와 runbook에 기록
 
 Acceptance:
 
-- baseline snapshot path가 문서에 기록돼 있다
-- registry schema가 env/db/category/difficulty/status/pass-rate를 표현할 수 있다
+- baseline snapshot path가 명시돼 있다
+- baseline suite가 회귀 기준으로 남아 있다
 
-### Milestone B: Core Contracts
+### Milestone 1: Core Contracts
 
 목표:
 
-- environment generation의 핵심 타입을 고정한다
+- synthesis pipeline의 핵심 타입을 고정한다
 
 작업:
 
 - `EnvironmentContract`
 - `ToolContract`
 - `TaskContract`
+- `SolutionContract`
 - `VerifierContract`
 - `ShadowVerifierContract`
+- `InstanceSpaceContract`
 - `CrossInstanceSet`
+- `MaterializedFactsSchema`
+- `DifficultyAxes`
 
-필수 요구:
+핵심 결정:
 
-- environment directory 레이아웃과 1:1 대응
-- function signature contract 포함
-- metadata hash / provenance fields 포함
+- facts dict schema는 verifier contract의 일부다
+- solution은 oracle/reference 전용이다
+- difficulty는 vector다
 
 Acceptance:
 
-- environment 하나를 코드 없이 JSON/YAML만으로 기술할 수 있다
-- verifier stage separation을 타입으로 표현할 수 있다
+- one environment를 코드 없이 JSON/YAML spec으로 기술할 수 있다
+- fact stage / constraint stage 경계를 타입으로 표현할 수 있다
 
-### Milestone C: Code Registration Policy
+### Milestone 2: Code Registration Policy and Runtime Isolation
 
 목표:
 
-- generated Python code를 안전하게 등록 / 실행할 수 있게 한다
+- generated code를 등록/실행할 안전한 경계를 만든다
 
 작업:
 
-- AST import allowlist
-- forbidden builtins / attributes
-- forbidden syntax rules
-- function signature validation
-- runtime timeout contract
-- call-count / memory guard contract
-- readonly DB mediation contract
-
-파일 후보:
-
-- 신규 `synthesis/registration_policy.py`
-- `infra/` runtime wrappers
+- AST preflight rules
+- dunder / reflection / dynamic attribute 금지
+- import allowlist
+- signature validation
+- registration error schema
+- subprocess execution contract
+- timeout / process-memory limit / call-count guard
+- custom AST preflight implementation 선택과 RestrictedPython 비채택 사유 문서화
 
 Acceptance:
 
-- 허용되지 않은 import / file I/O / subprocess / eval이 등록 단계에서 차단된다
-- tool / solution / verifier signature mismatch는 즉시 reject된다
+- 허용되지 않은 import / file I/O / reflection / raw DB connect가 등록 단계에서 reject된다
+- generated code는 subprocess에서만 실행된다
 
-### Milestone D: Synthesis Agent Runtime
+### Milestone 3: Synthesis Agent Runtime Skeleton
 
 목표:
 
@@ -157,55 +147,58 @@ Acceptance:
 - schema exploration phase
 - category inference phase
 - tool/task/solution/verifier generation phase
-- repair / retry loop
 - explicit memory / tool trace contract
-
-재사용:
-
-- `solver/backend_openai_agents.py` 구조
-- `submit_result()` 개념 대신 environment draft finalization event
+- provider resilience reuse
 
 Acceptance:
 
 - 단일 DB에서 단일 category에 대해 environment draft 하나를 생성할 수 있다
+- provider circuit breaker / cooldown / quota rebalance가 synthesis runtime에도 적용된다
 
-### Milestone E: Hybrid A + Hybrid B Enforcement
+### Milestone 4: Hybrid A + Hybrid B Enforcement
 
 목표:
 
-- verifier 신뢰도의 핵심 제약을 enforced contract로 만든다
+- verifier 신뢰도의 기본 제약을 enforced contract로 만든다
 
 작업:
 
-- fact check must use tools
-- fact stage / constraint stage separation
-- static analyzer로 verifier body 검사
-- runtime instrumentation으로 tool usage trace 수집
+- `fetch_facts(answer, tools) -> facts`
+- `facts_match_answer_claims(answer, facts)`
+- `check_constraints(answer, facts)`
+- Stage 2/3에서 tool call 금지 enforcement
+- Runtime instrumentation으로 factual claim vs tool usage 로그 수집
 
 Acceptance:
 
-- pure-hardcoded verifier는 등록 단계에서 reject된다
-- fact-free constraint-only verifier는 reject된다
+- pure-hardcoded verifier는 reject된다
+- Stage 2/3에서 tool 재호출 verifier는 reject된다
+- materialized facts schema가 verifier artifact에 포함된다
 
-### Milestone F: Proof Environment Vertical Slice
+### Milestone 5: Proof Environment Vertical Slice
 
 목표:
 
 - compositional proof environment 하나를 end-to-end로 통과시킨다
 
+운영 결정:
+
+- first proof DB는 synthetic fixture DB를 쓴다
+- Sakila는 proof DB로 쓰지 않는다
+
 권장 proof task:
 
-- trip planning 비슷한 fixture
+- itinerary 또는 assignment
 - 3개 이상 slot
 - uniqueness
 - conditional threshold
 - locality constraint
-- answer schema는 `list[object]`
+- `list[object]` answer
 
 작업:
 
-- fixture DB 또는 synthetic DB 준비
-- tools synthesis
+- synthetic fixture DB 구축
+- tool synthesis
 - task synthesis
 - solution synthesis
 - verifier synthesis
@@ -214,10 +207,30 @@ Acceptance:
 Acceptance:
 
 - solution이 verifier를 통과한다
-- verifier는 hybrid A/B 제약을 만족한다
-- review pack에서 사람이 봐도 compositional task로 인정된다
+- verifier는 hybrid A/B를 만족한다
+- review pack에서 사람이 봐도 compositional task다
 
-### Milestone G: Hybrid C + Hybrid D
+### Milestone 6: Self-Consistency Policy and Difficulty Escalation
+
+목표:
+
+- synthesis loop의 종료 조건과 난이도 crank를 명시적 policy로 구현한다
+
+작업:
+
+- `max_self_consistency_iterations`
+- infeasible discard path
+- tool change -> solution/verifier invalidation policy
+- verifier weakening 금지 규칙
+- one-axis-per-step difficulty crank
+- crank termination policy
+
+Acceptance:
+
+- verifier relaxation으로만 통과하는 gaming이 reject된다
+- difficulty vector가 monotonic하게 증가한다
+
+### Milestone 7: Hybrid C + Hybrid D
 
 목표:
 
@@ -225,21 +238,28 @@ Acceptance:
 
 작업:
 
-- independent shadow verifier generation
-- disagreement logging
-- instance parameterization
-- cross-instance validation loop
+- shadow prompt strategy 2종 구현
+- session separation
+- temperature separation
+- instance_space contract
+- deterministic instance sampler
+- instance별 서로 다른 valid solution 확인
 
 Acceptance:
 
 - shadow disagreement rate가 측정된다
-- instance별 서로 다른 valid solution을 verifier가 correctly accept한다
+- instance별 다른 valid solution이 verifier에 의해 correctly accepted된다
 
-### Milestone H: Quality Gate 5-Stage Pipeline
+주의:
+
+- model family diversity는 proof stage optional이다
+- second family backend가 준비되면 production accepted env에서 mandatory로 승격한다
+
+### Milestone 8: Quality Gate 5-Stage Pipeline
 
 목표:
 
-- 전체 quality filter를 orchestrated pipeline으로 만든다
+- environment acceptance를 orchestrated gate로 만든다
 
 단계:
 
@@ -252,15 +272,16 @@ Acceptance:
 작업:
 
 - stage별 rejection reason schema
-- stage별 retry / discard policy
+- retry / discard policy
 - CI-based early termination
+- 공식 pass/fail은 primary verifier, shadow는 diagnostics only로 명시
 
 Acceptance:
 
 - environment는 5단계를 모두 통과해야 accepted 된다
 - rejection reason이 structured하게 남는다
 
-### Milestone I: Domain Scheduler and Multi-DB Production Loop
+### Milestone 9: Domain Scheduler
 
 목표:
 
@@ -269,7 +290,7 @@ Acceptance:
 작업:
 
 - DB add/remove contract
-- round-robin / priority scheduler
+- round-robin / priority queue
 - per-DB progress tracking
 - retry / backoff / starvation protection
 - checkpoint / resume
@@ -279,7 +300,7 @@ Acceptance:
 - DB가 동적으로 추가되어도 scheduler가 처리할 수 있다
 - DB 간 task가 섞이지 않는다
 
-### Milestone J: Environment Registry, Dedup, Coverage
+### Milestone 10: Environment Registry, Dedup, Coverage
 
 목표:
 
@@ -289,45 +310,33 @@ Acceptance:
 
 - filesystem registry
 - sqlite index
-- dedup signatures
-- coverage counters
-- generator versioning
+- WAL + single-writer append queue 정책
+- exact dedup
+- semantic dedup
+- category taxonomy mapping
+- difficulty-band coverage counters
+- generator version compatibility policy
 
 Acceptance:
 
-- 같은 DB 안에서 near-duplicate environment를 감지할 수 있다
-- category / difficulty coverage를 계산할 수 있다
+- near-duplicate environment를 exact + semantic 두 단계로 잡을 수 있다
+- category/difficulty coverage를 계산하고 skew를 볼 수 있다
 
-### Milestone K: Review Pack and Observability
+### Cross-Cutting Workstream: Review Pack and Observability
 
-목표:
-
-- 사람이 계속 품질을 볼 수 있는 artifact loop를 고정한다
+이건 마지막 milestone이 아니라 전 과정에 걸친 cross-cutting requirement다.
 
 작업:
 
 - review pack에 constraint summary 추가
-- verifier summary / shadow summary 추가
+- verifier / shadow summary 추가
 - instance summary 추가
 - environment-level metrics 노출
+- quality taxonomy 기록 포맷 고정
 
 Acceptance:
 
-- review pack만 봐도 environment 품질과 verifier contract를 이해할 수 있다
-
-## First Proof Sequence
-
-실제 구현 순서는 아래가 좋다.
-
-1. core contracts
-2. registration policy
-3. synthesis runtime skeleton
-4. hybrid A/B enforcement
-5. proof environment vertical slice
-6. hybrid C/D
-7. quality gate pipeline
-8. scheduler
-9. registry / dedup / coverage
+- 각 milestone마다 small review batch를 생성해 정성 평가할 수 있다
 
 ## Quality Filter Defaults
 
@@ -343,6 +352,8 @@ quality_filter:
   shadow_disagreement_threshold: 0.05
   min_cross_instances: 3
   require_all_instances_pass_verifier_consistency: true
+  max_self_consistency_iterations: 5
+  max_difficulty_cranks: 6
 ```
 
 품질 우선이므로 비용 상한은 낮은 우선순위다.
@@ -365,10 +376,21 @@ quality_filter:
 신규 테스트는 아래 중심으로 시작한다.
 
 - registration policy AST rejection
+- subprocess isolation contract
 - verifier stage separation
 - self-consistency loop
+- difficulty crank monotonicity
 - cross-instance checker stability
 - proof environment binary verification
+
+### Layer 3: Tool Self-Test
+
+agent-generated tools는 self-consistency 전에 self-test를 통과해야 한다.
+
+- happy-path lookup
+- empty result behavior
+- timeout behavior
+- deterministic ordering
 
 ## Review Strategy
 
@@ -392,13 +414,13 @@ quality_filter:
 - verifier는 DB-grounded deterministic binary reward를 준다
 - shadow / cross-instance / pass-rate 품질 필터가 모두 동작한다
 - arbitrary DB를 registry에 추가해도 pipeline이 돌아간다
+- 최근 review pack 10개 중 최소 7개가 “예시 수준 이상” 품질로 평가된다
 
 ## Stop Conditions
 
 아래 중 하나면 구현을 멈추고 문서로 돌아간다.
 
 - verifier가 다시 self-consistent but ungrounded Python checker로 흐를 때
-- question만 자연스럽고 contract는 여전히 lookup일 때
+- fact/constraint stage 경계가 흐려질 때
 - proof environment 없이 generalized factory부터 만들려 할 때
 - review pack 품질이 낮은데도 green tests만으로 진행하려 할 때
-
