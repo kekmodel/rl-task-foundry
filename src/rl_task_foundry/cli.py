@@ -18,6 +18,7 @@ from rl_task_foundry.pipeline.orchestrator import Orchestrator
 from rl_task_foundry.pipeline.review_pack import ReviewPackBuilder
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.schema.path_catalog import build_path_catalog
+from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 from rl_task_foundry.tasks.composer import ComposeRequest, TaskComposer
 from rl_task_foundry.tasks.factory import TierATaskFactory
 from rl_task_foundry.tasks.models import TaskSpec
@@ -103,6 +104,19 @@ def validate_config(
     console.print(f"float_precision={config.verification.float_precision}")
     console.print(f"shadow_sample_rate={config.verification.shadow_sample_rate}")
     console.print(f"negative_outcome_ratio={config.task_composer.negative_outcome_ratio}")
+    runtime_plan = build_runtime_isolation_plan(config)
+    console.print(
+        "registration_lane="
+        f"workers={runtime_plan.registration_lane.worker_count},"
+        f"connections_per_worker={runtime_plan.registration_lane.connections_per_worker},"
+        f"max_db_connections={runtime_plan.registration_lane.max_db_connections}"
+    )
+    console.print(
+        "solver_lane="
+        f"main_process={runtime_plan.production_solver_lane.main_process_execution},"
+        f"per_tool_subprocess={runtime_plan.production_solver_lane.per_tool_subprocess_roundtrip}"
+    )
+    console.print(f"estimated_total_db_connections={runtime_plan.estimated_total_db_connections}")
     console.print(f"solvers={_solver_summary(config)}")
 
 

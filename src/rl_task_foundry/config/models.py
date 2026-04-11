@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -23,6 +23,7 @@ class DatabaseConfig(StrictModel):
     idle_tx_timeout_ms: int = 5000
     solver_pool_size: int = 32
     control_pool_size: int = 8
+    max_total_connections: int | None = Field(default=None, ge=1)
 
 
 class DomainConfig(StrictModel):
@@ -109,6 +110,73 @@ class TaskComposerConfig(StrictModel):
         ]
     )
     causal_min_scalar_hops: int = Field(default=3, ge=2)
+
+
+class RegistrationWorkerConfig(StrictModel):
+    worker_count: int = Field(default=2, ge=1)
+    connections_per_worker: int = Field(default=2, ge=1)
+    task_timeout_s: int = Field(default=30, ge=1)
+    memory_limit_mb: int = Field(default=256, ge=64)
+    call_count_limit: int = Field(default=256, ge=1)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def max_db_connections(self) -> int:
+        return self.worker_count * self.connections_per_worker
+
+
+class RegistrationPolicyConfig(StrictModel):
+    allowed_import_roots: list[str] = Field(
+        default_factory=lambda: [
+            "collections",
+            "datetime",
+            "decimal",
+            "json",
+            "math",
+            "re",
+            "typing",
+        ]
+    )
+    forbidden_module_roots: list[str] = Field(
+        default_factory=lambda: [
+            "asyncpg",
+            "os",
+            "pathlib",
+            "psycopg",
+            "psycopg2",
+            "socket",
+            "sqlalchemy",
+            "subprocess",
+            "sys",
+        ]
+    )
+    forbidden_symbols: list[str] = Field(
+        default_factory=lambda: [
+            "__import__",
+            "compile",
+            "eval",
+            "exec",
+            "getattr",
+            "globals",
+            "locals",
+            "open",
+            "setattr",
+            "type",
+            "vars",
+        ]
+    )
+    forbid_dunder_access: bool = True
+    require_subprocess_lane: bool = True
+    enforce_async_tool_functions: bool = True
+
+
+class SynthesisConfig(StrictModel):
+    registration_workers: RegistrationWorkerConfig = Field(
+        default_factory=RegistrationWorkerConfig
+    )
+    registration_policy: RegistrationPolicyConfig = Field(
+        default_factory=RegistrationPolicyConfig
+    )
 
 
 class SolverRuntimeConfig(StrictModel):
@@ -205,6 +273,7 @@ class AppConfig(StrictModel):
     )
     tool_compiler: ToolCompilerConfig
     task_composer: TaskComposerConfig
+    synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
     solver_runtime: SolverRuntimeConfig
     calibration: CalibrationConfig
     verification: VerificationConfig
@@ -212,3 +281,23 @@ class AppConfig(StrictModel):
     budget: BudgetConfig
     privacy: PrivacyConfig
     output: OutputConfig
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def estimated_total_db_connections(self) -> int:
+        return (
+            self.database.solver_pool_size
+            + self.database.control_pool_size
+            + self.synthesis.registration_workers.max_db_connections
+        )
+
+    @model_validator(mode="after")
+    def _validate_connection_budget(self) -> AppConfig:
+        if (
+            self.database.max_total_connections is not None
+            and self.estimated_total_db_connections > self.database.max_total_connections
+        ):
+            raise ValueError(
+                "estimated_total_db_connections exceeds database.max_total_connections"
+            )
+        return self

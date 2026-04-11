@@ -104,6 +104,48 @@ task_composer:
     - "(^|_)(status|category|type|kind|title|label|code|language|method|channel|plan|tier|level|provider|carrier|reason|option|mode|format|service|policy|destination)($|_)"
   causal_min_scalar_hops: 3
 
+synthesis:
+  registration_workers:
+    worker_count: 2
+    connections_per_worker: 2
+    task_timeout_s: 30
+    memory_limit_mb: 256
+    call_count_limit: 256
+  registration_policy:
+    allowed_import_roots:
+      - "collections"
+      - "datetime"
+      - "decimal"
+      - "json"
+      - "math"
+      - "re"
+      - "typing"
+    forbidden_module_roots:
+      - "asyncpg"
+      - "os"
+      - "pathlib"
+      - "psycopg"
+      - "psycopg2"
+      - "socket"
+      - "sqlalchemy"
+      - "subprocess"
+      - "sys"
+    forbidden_symbols:
+      - "__import__"
+      - "compile"
+      - "eval"
+      - "exec"
+      - "getattr"
+      - "globals"
+      - "locals"
+      - "open"
+      - "setattr"
+      - "type"
+      - "vars"
+    forbid_dunder_access: true
+    require_subprocess_lane: true
+    enforce_async_tool_functions: true
+
 solver_runtime:
   max_turns: 16
   structured_output_required: true

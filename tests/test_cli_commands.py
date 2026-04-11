@@ -19,6 +19,9 @@ def test_cli_validate_config_command():
     assert "negative_outcome_ratio=0.2" in result.stdout
     assert "float_precision=6" in result.stdout
     assert "shadow_sample_rate=0.1" in result.stdout
+    assert "registration_lane=workers=2,connections_per_worker=2,max_db_connections=4" in result.stdout
+    assert "solver_lane=main_process=True,per_tool_subprocess=False" in result.stdout
+    assert "estimated_total_db_connections=44" in result.stdout
 
 
 def test_cli_generate_task_specs_writes_jsonl(monkeypatch, tmp_path):
