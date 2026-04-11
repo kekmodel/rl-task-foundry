@@ -6,16 +6,17 @@ import hashlib
 import re
 from typing import Literal
 
-from rl_task_foundry.schema.graph import SchemaGraph
+from rl_task_foundry.schema.graph import ForeignKeyEdge, SchemaGraph
 from rl_task_foundry.schema.path_catalog import PathCatalog, PathSpec
 from rl_task_foundry.tools.models import ToolBundle, ToolParameter, ToolSpec
-from rl_task_foundry.tools.text_utils import singularize_token
+from rl_task_foundry.tools.text_utils import humanize_identifier, singularize_token
 from rl_task_foundry.tools.sql_templates import (
     compile_anchor_parameters,
     compile_aggregate_sql,
     compile_count_sql,
     compile_exists_sql,
     compile_list_related_sql,
+    compile_reverse_count_sql,
     compile_lookup_sql,
     compile_timeline_sql,
 )
@@ -237,6 +238,33 @@ def compile_path_tools(
                 semantic_key=f"{path.path_id}:count",
                 name_source=_name_source_for_level(tool_level),
             ),
+            *[
+                ToolSpec(
+                    name=_reverse_count_tool_name(
+                        path,
+                        tool_level,
+                        relation_edge,
+                        business_alias_overrides=business_alias_overrides,
+                    ),
+                    description=_reverse_count_tool_description(
+                        tool_level,
+                        relation_edge,
+                    ),
+                    sql_template=compile_reverse_count_sql(
+                        graph,
+                        path,
+                        relation_edge=relation_edge,
+                    ),
+                    parameters=parameters,
+                    output_fields=["count"],
+                    path_id=path.path_id,
+                    kind="count",
+                    tool_level=tool_level,
+                    semantic_key=reverse_count_semantic_key(path, relation_edge),
+                    name_source=_name_source_for_level(tool_level),
+                )
+                for relation_edge in _reverse_count_capabilities(graph, path)
+            ],
             ToolSpec(
                 name=_tool_name(
                     "exists",
@@ -435,6 +463,39 @@ def _timeline_capabilities(graph: SchemaGraph, path: PathSpec) -> list[str]:
     ]
 
 
+def _reverse_count_capabilities(graph: SchemaGraph, path: PathSpec) -> list[ForeignKeyEdge]:
+    target_edge = path.edges[-1]
+    target_table = graph.get_table(
+        target_edge.target_table,
+        schema_name=target_edge.target_schema,
+    )
+    if not target_table.primary_key:
+        return []
+    capabilities: list[ForeignKeyEdge] = []
+    for relation_edge in graph.edges_to(
+        target_edge.target_table,
+        schema_name=target_edge.target_schema,
+    ):
+        source_table = graph.get_table(
+            relation_edge.source_table,
+            schema_name=relation_edge.source_schema,
+        )
+        if not source_table.primary_key:
+            continue
+        capabilities.append(relation_edge)
+    return sorted(
+        capabilities,
+        key=lambda edge: (edge.source_table, edge.constraint_name),
+    )
+
+
+def reverse_count_semantic_key(path: PathSpec, relation_edge: ForeignKeyEdge) -> str:
+    return (
+        f"{path.path_id}:count_related:"
+        f"{relation_edge.source_table}:{relation_edge.constraint_name}"
+    )
+
+
 def _tool_name(
     kind: Literal["lookup", "list_related", "count", "exists"],
     path: PathSpec,
@@ -464,6 +525,31 @@ def _tool_name(
             "exists": f"has_{target_alias}_match",
         }
         return name_map[kind]
+    raise AssertionError(f"Unsupported tool level: {tool_level}")
+
+
+def _reverse_count_tool_name(
+    path: PathSpec,
+    tool_level: ToolLevel,
+    relation_edge: ForeignKeyEdge,
+    *,
+    business_alias_overrides: dict[str, str] | None = None,
+) -> str:
+    root = _slug(path.tables[0])
+    pivot = _slug(path.tables[-1])
+    child = _slug(relation_edge.source_table)
+    via = "_".join(_slug(table_name) for table_name in path.tables[1:-1])
+    via_suffix = f"_via_{via}" if via else ""
+
+    if tool_level == 1:
+        if child == root:
+            return f"count_peer_{child}_for_{root}_by_{pivot}{via_suffix}"
+        return f"count_{child}_for_{root}_by_{pivot}{via_suffix}"
+    if tool_level == 2:
+        child_alias = _business_alias(relation_edge.source_table, overrides=business_alias_overrides)
+        if child == root:
+            return f"count_peer_{child_alias}_matches"
+        return f"count_{child_alias}_matches"
     raise AssertionError(f"Unsupported tool level: {tool_level}")
 
 
@@ -527,6 +613,18 @@ def _tool_description(
     if kind == "list_related" and max_list_cardinality is not None:
         suffix = f" Maximum {max_list_cardinality} rows."
     return f"L{tool_level} {kind} tool. {descriptions[kind]}{suffix}"
+
+
+def _reverse_count_tool_description(
+    tool_level: ToolLevel,
+    relation_edge: ForeignKeyEdge,
+) -> str:
+    child_label = humanize_identifier(singularize_token(relation_edge.source_table))
+    pivot_label = humanize_identifier(singularize_token(relation_edge.target_table))
+    return (
+        f"L{tool_level} count tool. "
+        f"Count how many related {child_label} results share the same {pivot_label} context."
+    )
 
 
 def _aggregate_tool_description(

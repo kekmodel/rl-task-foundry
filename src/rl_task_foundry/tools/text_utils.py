@@ -39,6 +39,86 @@ _PLACE_LIKE_TOKENS = {
     "office",
     "station",
 }
+_KO_ENTITY_LABELS = {
+    "address": "주소",
+    "booking": "예약",
+    "branch": "지점",
+    "case": "건",
+    "category": "분류",
+    "city": "도시",
+    "country": "국가",
+    "customer": "고객",
+    "employee": "직원",
+    "inventory": "재고 항목",
+    "invoice": "청구서",
+    "language": "언어",
+    "location": "위치",
+    "member": "회원",
+    "order": "주문",
+    "payment": "결제",
+    "person": "사람",
+    "profile": "프로필",
+    "rental": "대여",
+    "request": "요청",
+    "shipment": "배송",
+    "staff": "직원",
+    "store": "매장",
+    "student": "학생",
+    "teacher": "교사",
+    "ticket": "티켓",
+    "transaction": "거래",
+    "user": "사용자",
+}
+_EN_ENTITY_LABELS = {
+    "address": "address",
+    "booking": "booking",
+    "branch": "branch",
+    "case": "case",
+    "category": "category",
+    "city": "city",
+    "country": "country",
+    "customer": "customer",
+    "employee": "employee",
+    "inventory": "inventory item",
+    "invoice": "invoice",
+    "language": "language",
+    "location": "location",
+    "member": "member",
+    "order": "order",
+    "payment": "payment",
+    "person": "person",
+    "profile": "profile",
+    "rental": "rental",
+    "request": "request",
+    "shipment": "shipment",
+    "staff": "staff member",
+    "store": "store",
+    "student": "student",
+    "teacher": "teacher",
+    "ticket": "ticket",
+    "transaction": "transaction",
+    "user": "user",
+}
+_KO_COUNT_PHRASES = {
+    "booking": "예약 내역",
+    "invoice": "청구 내역",
+    "order": "주문 내역",
+    "payment": "결제 내역",
+    "rental": "대여 내역",
+    "request": "요청 내역",
+    "shipment": "배송 내역",
+    "transaction": "거래 내역",
+}
+_EN_COUNT_PHRASES = {
+    "booking": "booking history",
+    "invoice": "invoice history",
+    "order": "order history",
+    "payment": "payment history",
+    "rental": "rental history",
+    "request": "request history",
+    "shipment": "shipment history",
+    "transaction": "transaction history",
+}
 
 
 def singularize_token(token: str) -> str:
@@ -73,35 +153,44 @@ def count_unit_hint_for_identifier(identifier: str) -> str:
     return "items"
 
 
+def localized_entity_label(identifier: str, *, language: str) -> str:
+    token = singularize_token(identifier.strip().lower())
+    if language == "ko":
+        return _KO_ENTITY_LABELS.get(token, humanize_identifier(token))
+    return _EN_ENTITY_LABELS.get(token, humanize_identifier(token))
+
+
 def default_count_target_label(identifier: str, *, language: str) -> str:
     """Return a user-facing target label for count questions."""
 
-    unit = count_unit_hint_for_identifier(identifier)
-    if language == "ko":
-        if unit == "people":
-            return "사람"
-        if unit == "cases":
-            return "건"
-        if unit == "places":
-            return "장소"
-    else:
-        if unit == "people":
-            return "people"
-        if unit == "cases":
-            return "cases"
-        if unit == "places":
-            return "locations"
-    return humanize_identifier(singularize_token(identifier))
+    return localized_entity_label(identifier, language=language)
 
 
-def count_phrase_reference(identifier: str) -> str:
+def count_phrase_reference(identifier: str, *, language: str = "en") -> str:
     """Return a neutral concept phrase for aggregate question composition."""
 
-    unit = count_unit_hint_for_identifier(identifier)
+    token = singularize_token(identifier.strip().lower())
+    if language == "ko":
+        if token in _KO_COUNT_PHRASES:
+            return _KO_COUNT_PHRASES[token]
+    else:
+        if token in _EN_COUNT_PHRASES:
+            return _EN_COUNT_PHRASES[token]
+
+    label = localized_entity_label(token, language=language)
+    unit = count_unit_hint_for_identifier(token)
+    if language == "ko":
+        if unit == "people":
+            return f"{label} 수"
+        if unit == "cases":
+            return f"{label} 건수"
+        if unit == "places":
+            return f"{label} 수"
+        return label
     if unit == "people":
-        return "people involved in this"
+        return f"{label} count"
     if unit == "cases":
-        return "relevant cases"
+        return f"{label} count"
     if unit == "places":
-        return "locations involved in this"
-    return humanize_identifier(singularize_token(identifier))
+        return f"{label} count"
+    return label

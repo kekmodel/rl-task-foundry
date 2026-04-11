@@ -56,6 +56,9 @@ def _family_shape_guidance(
         "count_target_reference": style_guide.get("count_target_reference"),
         "count_phrase_reference": style_guide.get("count_phrase_reference"),
         "count_unit_hint": style_guide.get("count_unit_hint"),
+        "count_reference_reference": style_guide.get("count_reference_reference"),
+        "count_reference_self_like": style_guide.get("count_reference_self_like"),
+        "count_request_frame": style_guide.get("count_request_frame"),
         "answer_labels": style_guide.get("answer_labels", []),
         "answer_shape": style_guide.get("answer_shape"),
         "family_goal": family_hint.get("goal"),
@@ -78,6 +81,9 @@ def _quality_examples(
     count_target = str(style_guide.get("count_target_reference", "item")).strip() or "item"
     count_phrase = str(style_guide.get("count_phrase_reference", "")).strip()
     count_unit = str(style_guide.get("count_unit_hint", "items")).strip() or "items"
+    count_reference = str(style_guide.get("count_reference_reference", "")).strip()
+    count_request_frame = str(style_guide.get("count_request_frame", "")).strip()
+    count_reference_self_like = bool(style_guide.get("count_reference_self_like"))
     if domain.language == "ko":
         common_avoid = [
             "연결된 값을 확인해줘.",
@@ -123,6 +129,22 @@ def _quality_examples(
                 ],
             }
         if task.question_family == "aggregate_verification":
+            if count_request_frame:
+                if count_unit == "cases":
+                    return {
+                        "avoid": common_avoid,
+                        "prefer": [
+                            f"{count_request_frame}이 총 몇 건인지 알려주세요.",
+                            f"{count_request_frame}이 얼마나 되는지 알려주세요.",
+                        ],
+                    }
+                return {
+                    "avoid": common_avoid,
+                    "prefer": [
+                        f"{count_request_frame}이 얼마나 되는지 알려주세요.",
+                        f"{count_request_frame}을 확인해 주세요.",
+                    ],
+                }
             if count_unit == "people":
                 return {
                     "avoid": common_avoid,
@@ -143,8 +165,16 @@ def _quality_examples(
                 return {
                     "avoid": common_avoid,
                     "prefer": [
-                        "이와 관련된 건이 몇 건인지 알려주세요.",
-                        "제 상황에 해당하는 건수가 얼마나 되는지 확인해 주세요.",
+                        (
+                            f"제 {count_target} 내역이 총 몇 건인지 알려주세요."
+                            if count_reference_self_like
+                            else f"같은 {count_reference or '기준'}으로 묶이는 {count_target}이 몇 건인지 알려주세요."
+                        ),
+                        (
+                            f"제가 이용한 {count_target} 내역이 얼마나 되는지 알려주세요."
+                            if count_reference_self_like
+                            else f"제 상황과 연결된 {count_target} 건수를 확인해 주세요."
+                        ),
                     ],
                 }
             return {
@@ -206,6 +236,14 @@ def _quality_examples(
             ],
         }
     if task.question_family == "aggregate_verification":
+        if count_request_frame:
+            return {
+                "avoid": common_avoid,
+                "prefer": [
+                    f"Can you tell me how many items are in {count_request_frame}?",
+                    f"What is the total count for {count_request_frame}?",
+                ],
+            }
         if count_unit == "people":
             return {
                 "avoid": common_avoid,
@@ -226,8 +264,16 @@ def _quality_examples(
             return {
                 "avoid": common_avoid,
                 "prefer": [
-                    "How many relevant cases are associated with this?",
-                    "Can you tell me how many relevant cases there are?",
+                    (
+                        f"How many {count_target} do I have in total?"
+                        if count_reference_self_like
+                        else f"How many {count_target} share the same {count_reference or 'context'} here?"
+                    ),
+                    (
+                        f"Can you tell me the total number of {count_target} in my history?"
+                        if count_reference_self_like
+                        else f"Can you tell me how many related {count_target} there are in this context?"
+                    ),
                 ],
             }
         return {
@@ -280,6 +326,8 @@ def _question_prompt(
         "If the style guide includes a count phrase reference, prefer that concept or a natural paraphrase when the raw target label feels awkward. "
         "If the style guide includes a count target reference and count unit hint, use them to form a natural counting phrase "
         "(for example, people -> how many people / 몇 명, cases -> how many cases / 몇 건) instead of generic item-count wording. "
+        "If the style guide includes a count reference context, make the grouping context clear in user-facing language without mentioning joins or database structure. "
+        "If the style guide includes a count request frame, prefer that phrasing over literal expressions like 'same customer' or 'same context'. "
         "If writing in Korean, do not leave raw English schema tokens like city, status, language, or count in the final question "
         "unless they are naturally used as end-user product terms. Prefer natural Korean wording. "
         "Do not mention tables, columns, joins, paths, anchors, records, IDs, internal tool names, or database terminology. "

@@ -64,6 +64,47 @@ def compile_count_sql(graph: SchemaGraph, path: PathSpec) -> str:
     )
 
 
+def compile_reverse_count_sql(
+    graph: SchemaGraph,
+    path: PathSpec,
+    *,
+    relation_edge,
+) -> str:
+    """Compile a deterministic reverse-relation count query for a path terminal."""
+
+    root_table = _root_table_for_path(graph, path)
+    pivot_alias = _alias_for_index(path.hop_count)
+    related_alias = f"r{path.hop_count + 1}"
+    related_table = graph.get_table(
+        relation_edge.source_table,
+        schema_name=relation_edge.source_schema,
+    )
+    distinct_related_sql = _distinct_target_value_expression(related_alias, related_table)
+    join_predicates = " AND ".join(
+        f"{related_alias}.{quote_ident(source_column)} = "
+        f"{pivot_alias}.{quote_ident(target_column)}"
+        for source_column, target_column in zip(
+            relation_edge.source_columns,
+            relation_edge.target_columns,
+            strict=True,
+        )
+    )
+    related_pk_predicate = " AND ".join(
+        f"{related_alias}.{quote_ident(column_name)} IS NOT NULL"
+        for column_name in related_table.primary_key
+    )
+    return readonly_query(
+        f"""
+        SELECT COUNT(DISTINCT {distinct_related_sql})::bigint AS count
+        {_render_from_and_joins(path)}
+        JOIN {quote_table(relation_edge.source_schema, relation_edge.source_table)} AS {related_alias}
+          ON {join_predicates}
+        WHERE {_render_anchor_predicate(root_table)}
+          AND {related_pk_predicate}
+        """
+    )
+
+
 def compile_list_related_sql(
     graph: SchemaGraph,
     path: PathSpec,

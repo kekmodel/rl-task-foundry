@@ -27,6 +27,7 @@ class TaskSpec(StrictModel):
     question_generation_metadata: dict[str, object] = Field(default_factory=dict)
     outcome_type: Literal["answer", "no_result", "clarify", "deny"] = "answer"
     answer_schema: AnswerSchema
+    contract_metadata: dict[str, object] = Field(default_factory=dict)
     selected_path_id: str
     required_hops: int
     tool_level: Literal[1, 2] = 1

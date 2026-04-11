@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import re
 from typing import Literal
@@ -17,11 +17,14 @@ from rl_task_foundry.config.models import (
     VerificationConfig,
 )
 from rl_task_foundry.infra.db import control_session_settings
-from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph
+from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph
 from rl_task_foundry.schema.path_catalog import PathCatalog, PathSpec
 from rl_task_foundry.tasks.models import TaskSpec
 from rl_task_foundry.tasks.validator import TaskValidator
-from rl_task_foundry.tools.compiler import compile_canonical_tool_bundle
+from rl_task_foundry.tools.compiler import (
+    compile_canonical_tool_bundle,
+    reverse_count_semantic_key,
+)
 from rl_task_foundry.tools.sql_templates import (
     _alias_for_index,
     _distinct_target_value_expression,
@@ -34,6 +37,7 @@ from rl_task_foundry.tools.text_utils import humanize_identifier, singularize_to
 from rl_task_foundry.tools.text_utils import (
     count_unit_hint_for_identifier,
     default_count_target_label,
+    localized_entity_label,
 )
 from rl_task_foundry.truth.generator import TierAGroundTruthGenerator
 from rl_task_foundry.truth.schemas import AnswerField, AnswerSchema
@@ -97,6 +101,7 @@ class TaskContractDraft:
     question_family: str
     outcome_type: Literal["answer", "no_result", "clarify", "deny"]
     answer_schema: AnswerSchema
+    contract_metadata: dict[str, object] = field(default_factory=dict)
     field_label: str | None = None
     target_label: str | None = None
     count_unit_hint: str | None = None
@@ -394,7 +399,7 @@ class TierATaskFactory:
                     )
                 )
             elif family == "aggregate_verification":
-                drafts.append(self._count_contract_draft(path))
+                drafts.extend(self._reverse_count_contract_drafts(graph, path))
         return drafts
 
     def _list_contract_draft(
@@ -462,17 +467,64 @@ class TierATaskFactory:
             target_label=target_table_label,
         )
 
-    def _count_contract_draft(self, path: PathSpec) -> TaskContractDraft:
-        raw_target_label = singularize_token(path.tables[-1])
-        target_human = default_count_target_label(raw_target_label, language=self.domain.language)
+    def _reverse_count_contract_drafts(
+        self,
+        graph: SchemaGraph,
+        path: PathSpec,
+    ) -> list[TaskContractDraft]:
+        target_edge = path.edges[-1]
+        reverse_edges = graph.edges_to(
+            target_edge.target_table,
+            schema_name=target_edge.target_schema,
+        )
+        drafts: list[TaskContractDraft] = []
+        for reverse_edge in reverse_edges:
+            source_table = graph.get_table(
+                reverse_edge.source_table,
+                schema_name=reverse_edge.source_schema,
+            )
+            if not source_table.primary_key:
+                continue
+            raw_target_label = singularize_token(reverse_edge.source_table)
+            target_human = default_count_target_label(
+                raw_target_label,
+                language=self.domain.language,
+            )
+            semantic_key = reverse_count_semantic_key(path, reverse_edge)
+            drafts.append(
+                self._count_contract_draft(
+                    path,
+                    reverse_edge=reverse_edge,
+                    semantic_key=semantic_key,
+                    target_human=target_human,
+                    row_estimate=int(source_table.row_estimate or 0),
+                )
+            )
+        return drafts
+
+    def _count_contract_draft(
+        self,
+        path: PathSpec,
+        *,
+        reverse_edge: ForeignKeyEdge,
+        semantic_key: str,
+        target_human: str,
+        row_estimate: int,
+    ) -> TaskContractDraft:
+        entity_token = singularize_token(reverse_edge.source_table)
+        field_name = f"{entity_token}_count"
+        reference_label = localized_entity_label(
+            reverse_edge.target_table,
+            language=self.domain.language,
+        )
         answer_schema = AnswerSchema(
             fields=[
                 AnswerField(
-                    name="related_count",
+                    name=field_name,
                     type="int",
                     canonicalizer="int_cast",
                     description=(
-                        f"Count of related {humanize_identifier(raw_target_label)} items."
+                        f"Count of {target_human} items sharing the same {reference_label} context."
                     ),
                     source_columns=["meta:count"],
                 )
@@ -482,8 +534,19 @@ class TierATaskFactory:
             question_family="aggregate_verification",
             outcome_type="answer",
             answer_schema=answer_schema,
+            contract_metadata={
+                "count_mode": "reverse_relation",
+                "count_relation_constraint": reverse_edge.constraint_name,
+                "count_relation_source_schema": reverse_edge.source_schema,
+                "count_relation_source_table": reverse_edge.source_table,
+                "count_reference_schema": reverse_edge.target_schema,
+                "count_reference_table": reverse_edge.target_table,
+                "count_semantic_key": semantic_key,
+                "count_candidate_row_estimate": row_estimate,
+                "count_entity_table": reverse_edge.source_table,
+            },
             target_label=target_human,
-            count_unit_hint=count_unit_hint_for_identifier(raw_target_label),
+            count_unit_hint=count_unit_hint_for_identifier(reverse_edge.source_table),
         )
 
     def _exists_contract_draft(
@@ -565,7 +628,10 @@ class TierATaskFactory:
             for statement in settings.timeout_sql:
                 await conn.execute(statement)
             sql = self._compile_anchor_sampling_sql(graph, path, contract, limit=limit)
-            rows = await conn.fetch(sql)
+            try:
+                rows = await conn.fetch(sql)
+            except Exception:
+                return []
         finally:
             await conn.close()
         return [row["anchor_pk"] for row in rows]
@@ -583,13 +649,27 @@ class TierATaskFactory:
         root_pk = root_table.primary_key[0]
         root_pk_sql = f"{root_alias}.{quote_ident(root_pk)}"
         if contract.question_family == "aggregate_verification":
+            relation_edge = self._resolve_count_relation_edge(graph, contract)
             target_alias = _alias_for_index(path.hop_count)
-            target_table = graph.get_table(
-                path.edges[-1].target_table,
-                schema_name=path.edges[-1].target_schema,
+            related_alias = f"r{path.hop_count + 1}"
+            related_table = graph.get_table(
+                relation_edge.source_table,
+                schema_name=relation_edge.source_schema,
             )
-            target_pk = target_table.primary_key[0]
-            distinct_target_sql = _distinct_target_value_expression(target_alias, target_table)
+            distinct_target_sql = _distinct_target_value_expression(related_alias, related_table)
+            join_predicates = " AND ".join(
+                f"{related_alias}.{quote_ident(source_column)} = "
+                f"{target_alias}.{quote_ident(target_column)}"
+                for source_column, target_column in zip(
+                    relation_edge.source_columns,
+                    relation_edge.target_columns,
+                    strict=True,
+                )
+            )
+            related_pk_predicate = " AND ".join(
+                f"{related_alias}.{quote_ident(column_name)} IS NOT NULL"
+                for column_name in related_table.primary_key
+            )
             order_projection = self._sample_order_projection(root_pk_sql)
             order_clause = self._sample_subquery_order_clause()
             return readonly_query(
@@ -599,7 +679,9 @@ class TierATaskFactory:
                   SELECT {root_pk_sql} AS anchor_pk
                   {order_projection}
                   {_render_from_and_joins(path)}
-                  WHERE {target_alias}.{quote_ident(target_pk)} IS NOT NULL
+                  JOIN {quote_table(relation_edge.source_schema, relation_edge.source_table)} AS {related_alias}
+                    ON {join_predicates}
+                  WHERE {related_pk_predicate}
                   GROUP BY {root_pk_sql}
                   HAVING COUNT(DISTINCT {distinct_target_sql}) > 1
                 ) AS base
@@ -682,6 +764,31 @@ class TierATaskFactory:
             """
         )
 
+    def _resolve_count_relation_edge(
+        self,
+        graph: SchemaGraph,
+        contract: TaskContractDraft,
+    ) -> ForeignKeyEdge:
+        metadata = contract.contract_metadata
+        if metadata.get("count_mode") != "reverse_relation":
+            raise ValueError("aggregate contract is missing reverse count relation metadata")
+        expected_constraint = str(metadata.get("count_relation_constraint", ""))
+        expected_schema = str(metadata.get("count_relation_source_schema", ""))
+        expected_table = str(metadata.get("count_relation_source_table", ""))
+        expected_reference_schema = str(metadata.get("count_reference_schema", ""))
+        expected_reference_table = str(metadata.get("count_reference_table", ""))
+        for edge in graph.edges_to(expected_reference_table, schema_name=expected_reference_schema):
+            if (
+                edge.constraint_name == expected_constraint
+                and edge.source_schema == expected_schema
+                and edge.source_table == expected_table
+            ):
+                return edge
+        raise KeyError(
+            f"reverse count relation not found for "
+            f"{expected_schema}.{expected_table} -> {expected_reference_schema}.{expected_reference_table}"
+        )
+
     def _build_task_spec(
         self,
         *,
@@ -707,6 +814,7 @@ class TierATaskFactory:
             outcome_type=contract.outcome_type,
             anchor_pk_value=anchor_pk_value,
             field_names=[field.name for field in contract.answer_schema.fields],
+            contract_key=str(contract.contract_metadata.get("count_semantic_key", "")),
         )
         return TaskSpec(
             task_id=task_id,
@@ -720,6 +828,7 @@ class TierATaskFactory:
             question=self._render_question(contract),
             outcome_type=contract.outcome_type,
             answer_schema=contract.answer_schema,
+            contract_metadata=dict(contract.contract_metadata),
             selected_path_id=path.path_id,
             required_hops=path.hop_count,
             tool_level=self.task_config.selected_tool_level,
@@ -774,10 +883,11 @@ class TierATaskFactory:
         field_label = contract.field_label or contract.target_label or "정보"
         target_label = contract.target_label or field_label
         scalar_focus_label = self._scalar_question_focus_label(contract)
+        count_reference = self._count_reference_label(contract)
         if contract.question_family == "status_lookup":
             shape = _answer_schema_shape(contract.answer_schema, question_family=contract.question_family)
             if shape == "exists":
-                return f"현재 {target_label}이 등록되어 있는지 알려주세요."
+                return f"현재 {_ko_subject_marked(target_label)} 등록되어 있는지 알려주세요."
             if shape == "record":
                 return f"현재 {target_label} 정보가 어떻게 되어 있는지 알려주세요."
             return f"현재 {field_label} 정보가 어떻게 되어 있는지 알려주세요."
@@ -788,17 +898,26 @@ class TierATaskFactory:
         if contract.question_family == "timeline_resolution":
             return f"가장 최근 {field_label} 시점이 언제인지 알려주세요."
         if contract.count_unit_hint == "people":
-            return "제 경우와 관련된 사람이 몇 명인지 알려주세요."
+            if count_reference is not None:
+                return f"같은 {count_reference}에 연결된 {_ko_subject_marked(target_label)} 몇 명인지 알려주세요."
+            return f"제 경우와 관련된 {_ko_subject_marked(target_label)} 몇 명인지 알려주세요."
         if contract.count_unit_hint == "cases":
-            return "제 경우와 관련된 건이 몇 건인지 알려주세요."
+            if count_reference is not None:
+                return f"같은 {count_reference}에 연결된 {_ko_subject_marked(target_label)} 몇 건인지 알려주세요."
+            return f"제 경우와 관련된 {_ko_subject_marked(target_label)} 몇 건인지 알려주세요."
         if contract.count_unit_hint == "places":
-            return "제 경우와 관련된 장소가 몇 곳인지 알려주세요."
-        return f"제 경우에 해당되는 {target_label}이 몇 개인지 알려주세요."
+            if count_reference is not None:
+                return f"같은 {count_reference}에 연결된 {_ko_subject_marked(target_label)} 몇 곳인지 알려주세요."
+            return f"제 경우와 관련된 {_ko_subject_marked(target_label)} 몇 곳인지 알려주세요."
+        if count_reference is not None:
+            return f"같은 {count_reference}에 연결된 {_ko_subject_marked(target_label)} 몇 개인지 알려주세요."
+        return f"제 경우에 해당되는 {_ko_subject_marked(target_label)} 몇 개인지 알려주세요."
 
     def _render_en_question(self, contract: TaskContractDraft) -> str:
         field_label = contract.field_label or contract.target_label or "information"
         target_label = contract.target_label or field_label
         scalar_focus_label = self._scalar_question_focus_label(contract)
+        count_reference = self._count_reference_label(contract)
         if contract.question_family == "status_lookup":
             shape = _answer_schema_shape(contract.answer_schema, question_family=contract.question_family)
             if shape == "exists":
@@ -813,11 +932,19 @@ class TierATaskFactory:
         if contract.question_family == "timeline_resolution":
             return f"Can you tell me when the latest {field_label} happened?"
         if contract.count_unit_hint == "people":
-            return "Can you tell me how many people are involved in my case?"
+            if count_reference is not None:
+                return f"Can you tell me how many {target_label} share the same {count_reference}?"
+            return f"Can you tell me how many {target_label} are involved in my case?"
         if contract.count_unit_hint == "cases":
-            return "Can you tell me how many relevant cases are associated with my case?"
+            if count_reference is not None:
+                return f"Can you tell me how many {target_label} share the same {count_reference}?"
+            return f"Can you tell me how many {target_label} are associated with my case?"
         if contract.count_unit_hint == "places":
-            return "Can you tell me how many locations are associated with my case?"
+            if count_reference is not None:
+                return f"Can you tell me how many {target_label} share the same {count_reference}?"
+            return f"Can you tell me how many {target_label} are associated with my case?"
+        if count_reference is not None:
+            return f"Can you tell me how many {target_label} share the same {count_reference}?"
         return f"Can you tell me how many {target_label} are associated with my case?"
 
     def _is_candidate_answer_column(self, column: ColumnProfile) -> bool:
@@ -921,6 +1048,12 @@ class TierATaskFactory:
     def _timeline_contract_enabled(self) -> bool:
         return self.task_config.label_tier != "A" and self.tool_compiler.allow_timelines
 
+    def _count_reference_label(self, contract: TaskContractDraft) -> str | None:
+        table_name = contract.contract_metadata.get("count_reference_table")
+        if not isinstance(table_name, str) or not table_name:
+            return None
+        return localized_entity_label(table_name, language=self.domain.language)
+
     @staticmethod
     def _scalar_question_focus_label(contract: TaskContractDraft) -> str:
         field_label = (contract.field_label or contract.target_label or "information").strip()
@@ -959,8 +1092,9 @@ def _task_id(
     outcome_type: str,
     anchor_pk_value: str,
     field_names: list[str],
+    contract_key: str = "",
 ) -> str:
-    payload = "|".join([path_id, question_family, outcome_type, anchor_pk_value, *field_names])
+    payload = "|".join([path_id, question_family, outcome_type, anchor_pk_value, contract_key, *field_names])
     digest = hashlib.blake2s(payload.encode("utf-8"), digest_size=6).hexdigest()
     return f"task::{question_family}::{digest}"
 
@@ -1067,13 +1201,17 @@ def _source_priority_key(
         question_family=source.contract.question_family,
     )
     if family == "aggregate_verification":
+        aggregate_target = str(
+            source.contract.contract_metadata.get("count_entity_table", source.path.tables[-1])
+        )
+        row_estimate = int(source.contract.contract_metadata.get("count_candidate_row_estimate", 0))
         discouraged_rank = int(
             _matches_any_pattern(
-                source.path.tables[-1],
+                aggregate_target,
                 aggregate_discouraged_target_patterns,
             )
         )
-        return (discouraged_rank, -fanout, -hop_count, source.path.path_id)
+        return (discouraged_rank, -row_estimate, -fanout, -hop_count, source.path.path_id)
     if family == "causal_chain":
         discouraged_rank = int(
             _matches_any_pattern(
@@ -1098,3 +1236,16 @@ def _matches_any_pattern(value: str, patterns: list[str]) -> bool:
         if pattern.search(normalized):
             return True
     return False
+
+
+def _ko_subject_marked(label: str) -> str:
+    stripped = label.strip()
+    if not stripped:
+        return label
+    last_char = stripped[-1]
+    codepoint = ord(last_char)
+    if 0xAC00 <= codepoint <= 0xD7A3:
+        has_batchim = (codepoint - 0xAC00) % 28 != 0
+        particle = "이" if has_batchim else "가"
+        return f"{stripped}{particle}"
+    return f"{stripped}가"

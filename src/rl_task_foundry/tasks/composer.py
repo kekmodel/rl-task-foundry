@@ -34,6 +34,7 @@ class ComposeRequest:
     task: TaskSpec
     path: PathSpec
     canonical_bundle: ToolBundle
+    source_canonical_bundle_id: str | None = None
     question_context: dict[str, object] = field(default_factory=dict)
     fallback_presented_bundle: ToolBundle | None = None
     distractor_bundles: list[ToolBundle] = field(default_factory=list)
@@ -60,31 +61,28 @@ class TaskComposer:
         self._naming_temperature_l2 = naming_temperature_l2
 
     async def compose(self, request: ComposeRequest) -> TaskPackage:
-        task = await self._compose_task_question(request)
+        focused_request = _task_focused_request(request)
+        task = await self._compose_task_question(focused_request)
         presented_bundle = await self._compose_presented_bundle(
-            ComposeRequest(
-                graph=request.graph,
-                task=task,
-                path=request.path,
-                canonical_bundle=request.canonical_bundle,
-                question_context=request.question_context,
-                fallback_presented_bundle=request.fallback_presented_bundle,
-                distractor_bundles=request.distractor_bundles,
-            )
+            replace(focused_request, task=task)
         )
         task, presented_bundle = await self._apply_task_package_judge(
-            request,
+            focused_request,
             task=task,
             presented_bundle=presented_bundle,
         )
+        source_canonical_bundle_id = (
+            focused_request.source_canonical_bundle_id
+            or focused_request.canonical_bundle.bundle_id
+        )
         base_bundle = PresentedToolBundle(
-            bundle_id=f"{request.canonical_bundle.bundle_id}::task::{task.task_id}::L1",
-            canonical_bundle_id=request.canonical_bundle.bundle_id,
-            path_id=request.path.path_id,
+            bundle_id=f"{focused_request.canonical_bundle.bundle_id}::task::{task.task_id}::L1",
+            canonical_bundle_id=source_canonical_bundle_id,
+            path_id=focused_request.path.path_id,
             tool_level=1,
             question_family=task.question_family,
             outcome_type=task.outcome_type,
-            tools=_present_tool(tool_bundle=request.canonical_bundle, role="core"),
+            tools=_present_tool(tool_bundle=focused_request.canonical_bundle, role="core"),
             generation_metadata={"presentation_strategy": "canonical_rule_based"},
         )
         task = task.model_copy(
@@ -271,8 +269,11 @@ class TaskComposer:
             request.canonical_bundle,
             request.task.tool_level,
         )
+        source_canonical_bundle_id = (
+            request.source_canonical_bundle_id or request.canonical_bundle.bundle_id
+        )
         generation_metadata: dict[str, object] = {
-            "canonical_bundle_id": request.canonical_bundle.bundle_id,
+            "canonical_bundle_id": source_canonical_bundle_id,
             "question_family": request.task.question_family,
             "tool_level": request.task.tool_level,
             "distractor_bundle_count": len(request.distractor_bundles),
@@ -394,7 +395,7 @@ class TaskComposer:
 
         return PresentedToolBundle(
             bundle_id=f"{core_bundle.bundle_id}::task::{request.task.task_id}",
-            canonical_bundle_id=request.canonical_bundle.bundle_id,
+            canonical_bundle_id=source_canonical_bundle_id,
             path_id=request.path.path_id,
             tool_level=request.task.tool_level,
             question_family=request.task.question_family,
@@ -439,6 +440,51 @@ def _retarget_bundle_level(
             for tool in bundle.tools
         ],
     )
+
+
+def _task_focused_request(request: ComposeRequest) -> ComposeRequest:
+    source_canonical_bundle_id = (
+        request.source_canonical_bundle_id or request.canonical_bundle.bundle_id
+    )
+    return ComposeRequest(
+        graph=request.graph,
+        task=request.task,
+        path=request.path,
+        canonical_bundle=_task_focused_core_bundle(request.task, request.canonical_bundle),
+        source_canonical_bundle_id=source_canonical_bundle_id,
+        question_context=request.question_context,
+        fallback_presented_bundle=(
+            _task_focused_core_bundle(request.task, request.fallback_presented_bundle)
+            if request.fallback_presented_bundle is not None
+            else None
+        ),
+        distractor_bundles=request.distractor_bundles,
+    )
+
+
+def _task_focused_core_bundle(task: TaskSpec, bundle: ToolBundle) -> ToolBundle:
+    count_semantic_key = task.contract_metadata.get("count_semantic_key")
+    if not (isinstance(count_semantic_key, str) and count_semantic_key):
+        return bundle
+    if _task_answer_shape(task) != "count":
+        return bundle
+    focused_tools = [
+        tool
+        for tool in bundle.tools
+        if tool.semantic_key == count_semantic_key
+    ]
+    if not focused_tools:
+        return bundle
+    return ToolBundle(
+        bundle_id=f"{bundle.bundle_id}::focus::{_focused_bundle_key_suffix(count_semantic_key)}",
+        path_id=bundle.path_id,
+        tool_level=bundle.tool_level,
+        tools=focused_tools,
+    )
+
+
+def _focused_bundle_key_suffix(semantic_key: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", semantic_key.lower()).strip("-")
 
 
 def _quality_feedback(evaluation) -> str:
@@ -535,6 +581,9 @@ def _provenance_requirements(
 
     answer_shape = _task_answer_shape(task)
     if answer_shape == "count":
+        semantic_key = task.contract_metadata.get("count_semantic_key")
+        if isinstance(semantic_key, str) and semantic_key:
+            return [f"semantic_key:{semantic_key}"]
         return _semantic_key_requirements(core_tools, kind="count")
     if answer_shape == "exists":
         return _semantic_key_requirements(core_tools, kind="exists")

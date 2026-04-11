@@ -23,6 +23,7 @@ from rl_task_foundry.tools.sql_templates import (
     _timeline_order_specs,
     compile_count_sql,
     compile_exists_sql,
+    compile_reverse_count_sql,
     quote_ident,
 )
 from rl_task_foundry.truth.canonicalize import canonicalize_answer
@@ -182,6 +183,17 @@ class TierAGroundTruthGenerator(GroundTruthGenerator):
         field = task.answer_schema.fields[0]
         if field.type != "int":
             raise ValueError("count ground truth field must have type 'int'")
+        if task.contract_metadata.get("count_mode") == "reverse_relation":
+            relation_edge = self._resolve_reverse_count_relation(task, path)
+            return QueryPlan(
+                strategy="count",
+                verification_sql=compile_reverse_count_sql(
+                    self.graph,
+                    path,
+                    relation_edge=relation_edge,
+                ),
+                projections=[],
+            )
         return QueryPlan(
             strategy="count",
             verification_sql=compile_count_sql(self.graph, path),
@@ -322,6 +334,26 @@ class TierAGroundTruthGenerator(GroundTruthGenerator):
         return {
             f"anchor_{task.anchor_pk_column}": _coerce_anchor_value(anchor_column, task.anchor_pk_value)
         }
+
+    def _resolve_reverse_count_relation(self, task: TaskSpec, path: PathSpec):
+        metadata = task.contract_metadata
+        expected_constraint = str(metadata.get("count_relation_constraint", ""))
+        expected_schema = str(metadata.get("count_relation_source_schema", ""))
+        expected_table = str(metadata.get("count_relation_source_table", ""))
+        for edge in self.graph.edges_to(
+            path.edges[-1].target_table,
+            schema_name=path.edges[-1].target_schema,
+        ):
+            if (
+                edge.constraint_name == expected_constraint
+                and edge.source_schema == expected_schema
+                and edge.source_table == expected_table
+            ):
+                return edge
+        raise KeyError(
+            f"reverse count relation not found for "
+            f"{expected_schema}.{expected_table} via {expected_constraint}"
+        )
 
 
 def _field_marker(field: AnswerField) -> str | None:

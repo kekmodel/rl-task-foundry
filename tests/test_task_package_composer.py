@@ -275,6 +275,101 @@ async def test_task_composer_marks_timeline_task_missing_timeline_tool_when_unav
     assert package.task.provenance_requirements == ["semantic_key:__missing_timeline_tool__"]
 
 
+@pytest.mark.asyncio
+async def test_task_composer_focuses_count_bundle_on_required_semantic_key(monkeypatch):
+    graph, path = _graph_and_path()
+    canonical_bundle = compile_canonical_tool_bundle(graph, path, max_list_cardinality=5)
+    fallback_bundle = compile_path_tools(graph, path, tool_level=2, max_list_cardinality=5)
+    target_count_tool = next(
+        tool for tool in canonical_bundle.tools if "count_related" in tool.semantic_key
+    )
+    captured: dict[str, object] = {}
+
+    async def _fake_generate_task_question(**_kwargs):
+        return "같은 배송에 연결된 주문이 몇 건인지 알려주세요."
+
+    async def _fake_generate_named_tool_bundle(**kwargs):
+        captured["semantic_keys"] = [tool.semantic_key for tool in kwargs["bundle"].tools]
+        bundle = kwargs["bundle"]
+        return replace(
+            bundle,
+            tools=[
+                replace(
+                    tool,
+                    name="count_shared_orders",
+                    description="Count the orders tied to the same shipment context.",
+                    name_source="model_generated",
+                )
+                for tool in bundle.tools
+            ],
+        )
+
+    monkeypatch.setattr(
+        "rl_task_foundry.tasks.composer.generate_task_question",
+        _fake_generate_task_question,
+    )
+    monkeypatch.setattr(
+        "rl_task_foundry.tasks.composer.generate_named_tool_bundle",
+        _fake_generate_named_tool_bundle,
+    )
+    monkeypatch.setattr(
+        "rl_task_foundry.tasks.composer.judge_task_package",
+        _passing_rubric_validation,
+    )
+
+    composer = TaskComposer(
+        domain=DomainConfig(name="customer_support", language="ko"),
+        provider=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="OPENAI_API_KEY",
+        ),
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+    )
+
+    package = await composer.compose(
+        ComposeRequest(
+            graph=graph,
+            task=_task(tool_level=2, question="같은 배송에 연결된 주문 수를 알려주세요.").model_copy(
+                update={
+                    "question_family": "aggregate_verification",
+                        "answer_schema": AnswerSchema(
+                            fields=[
+                                AnswerField(
+                                    name="order_count",
+                                    type="int",
+                                    canonicalizer="int",
+                                    source_columns=["meta:count"],
+                                )
+                            ]
+                    ),
+                    "contract_metadata": {"count_semantic_key": target_count_tool.semantic_key},
+                }
+            ),
+            path=path,
+            canonical_bundle=canonical_bundle,
+            question_context={"relationship_depth": 1},
+            fallback_presented_bundle=fallback_bundle,
+        )
+    )
+
+    core_semantic_keys = [
+        tool.semantic_key
+        for tool in package.presented_tool_bundle.tools
+        if tool.presentation_role == "core"
+    ]
+    base_semantic_keys = [
+        tool.semantic_key
+        for tool in package.presentation_options[0].tools
+        if tool.presentation_role == "core"
+    ]
+
+    assert captured["semantic_keys"] == [target_count_tool.semantic_key]
+    assert core_semantic_keys == [target_count_tool.semantic_key]
+    assert base_semantic_keys == [target_count_tool.semantic_key]
+    assert package.task.provenance_requirements == [f"semantic_key:{target_count_tool.semantic_key}"]
+
+
 def test_question_policy_rejects_raw_english_schema_tokens_in_korean():
     violations = _question_policy_violations(
         "제 inventory에 등록된 film 제목이 무엇인지 알려주세요.",

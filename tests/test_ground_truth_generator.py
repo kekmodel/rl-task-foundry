@@ -323,6 +323,50 @@ async def test_tier_a_ground_truth_generator_supports_count_and_exists(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_tier_a_ground_truth_generator_supports_reverse_count_contract(monkeypatch):
+    graph, catalog, _path = _graph_and_path()
+    generator = TierAGroundTruthGenerator(
+        database=_database_config(),
+        graph=graph,
+        catalog=catalog,
+    )
+
+    async def _fake_fetch_rows(sql, _params):
+        assert 'JOIN "public"."orders" AS r2' in sql
+        return [{"count": 3}]
+
+    monkeypatch.setattr(generator, "_fetch_rows", _fake_fetch_rows)
+
+    truth = await generator.generate(
+        _task(
+            answer_schema=AnswerSchema(
+                fields=[
+                    AnswerField(
+                        name="related_count",
+                        type="int",
+                        canonicalizer="identity",
+                        source_columns=["meta:count"],
+                    )
+                ]
+            ),
+        ).model_copy(
+            update={
+                "contract_metadata": {
+                    "count_mode": "reverse_relation",
+                    "count_relation_constraint": "orders_shipments_fk",
+                    "count_relation_source_schema": "public",
+                    "count_relation_source_table": "orders",
+                    "count_reference_schema": "public",
+                    "count_reference_table": "shipments",
+                }
+            }
+        )
+    )
+
+    assert truth.canonical_answer == {"related_count": 3}
+
+
+@pytest.mark.asyncio
 async def test_tier_a_ground_truth_generator_supports_no_result_branch(monkeypatch):
     graph, catalog, _path = _graph_and_path()
     generator = TierAGroundTruthGenerator(

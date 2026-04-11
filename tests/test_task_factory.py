@@ -517,7 +517,7 @@ def test_task_factory_applies_family_min_required_hops():
 
 def test_task_factory_prefers_aggregate_paths_with_count_gt_one():
     graph, catalog = _synthetic_graph()
-    path = catalog.get("orders.shipments.cities")
+    path = catalog.get("orders.shipments")
     factory = TierATaskFactory(
         database=load_config("rl_task_foundry.yaml").database,
         domain=DomainConfig(name="customer_support", language="en"),
@@ -536,24 +536,16 @@ def test_task_factory_prefers_aggregate_paths_with_count_gt_one():
         ),
         verification=VerificationConfig(float_precision=6),
     )
-    contract = TaskContractDraft(
-        question_family="aggregate_verification",
-        outcome_type="answer",
-        answer_schema=AnswerSchema(
-            fields=[
-                AnswerField(
-                    name="related_count",
-                    type="int",
-                    canonicalizer="int_cast",
-                    source_columns=["meta:count"],
-                )
-            ]
-        ),
-        target_label="city",
+    contract = next(
+        contract
+        for contract in factory._contract_drafts_for_path(graph, path)
+        if contract.question_family == "aggregate_verification"
+        and contract.contract_metadata.get("count_entity_table") == "orders"
     )
 
     sql = factory._compile_anchor_sampling_sql(graph, path, contract, limit=5)
 
+    assert 'JOIN "public"."orders" AS r2' in sql
     assert "GROUP BY" in sql
     assert "HAVING COUNT(DISTINCT" in sql
     assert "> 1" in sql
@@ -677,7 +669,7 @@ def test_task_factory_prefers_list_paths_with_multiple_distinct_values():
 @pytest.mark.asyncio
 async def test_task_factory_does_not_fallback_aggregate_sampling_to_count_one(monkeypatch):
     graph, catalog = _synthetic_graph()
-    path = catalog.get("orders.shipments.cities")
+    path = catalog.get("orders.shipments")
     factory = TierATaskFactory(
         database=load_config("rl_task_foundry.yaml").database,
         domain=DomainConfig(name="customer_support", language="en"),
@@ -696,20 +688,11 @@ async def test_task_factory_does_not_fallback_aggregate_sampling_to_count_one(mo
         ),
         verification=VerificationConfig(float_precision=6),
     )
-    contract = TaskContractDraft(
-        question_family="aggregate_verification",
-        outcome_type="answer",
-        answer_schema=AnswerSchema(
-            fields=[
-                AnswerField(
-                    name="related_count",
-                    type="int",
-                    canonicalizer="int_cast",
-                    source_columns=["meta:count"],
-                )
-            ]
-        ),
-        target_label="city",
+    contract = next(
+        contract
+        for contract in factory._contract_drafts_for_path(graph, path)
+        if contract.question_family == "aggregate_verification"
+        and contract.contract_metadata.get("count_entity_table") == "orders"
     )
 
     fetch_calls: list[str] = []
@@ -735,6 +718,76 @@ async def test_task_factory_does_not_fallback_aggregate_sampling_to_count_one(mo
 
     assert anchor_values == []
     assert len(fetch_calls) == 1
+
+
+def test_task_factory_builds_reverse_count_contract_metadata():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["aggregate_verification"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+
+    contracts = factory._contract_drafts_for_path(graph, path)
+    reverse_contract = next(
+        contract
+        for contract in contracts
+        if contract.contract_metadata.get("count_entity_table") == "orders"
+    )
+
+    assert reverse_contract.target_label == "order"
+    assert reverse_contract.count_unit_hint == "cases"
+    assert reverse_contract.answer_schema.fields[0].name == "order_count"
+    assert reverse_contract.contract_metadata["count_mode"] == "reverse_relation"
+    assert reverse_contract.contract_metadata["count_relation_source_table"] == "orders"
+    assert reverse_contract.contract_metadata["count_reference_table"] == "shipments"
+
+
+def test_task_factory_renders_reverse_count_questions_with_reference_context():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["aggregate_verification"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+
+    contract = next(
+        contract
+        for contract in factory._contract_drafts_for_path(graph, path)
+        if contract.contract_metadata.get("count_entity_table") == "orders"
+    )
+
+    assert factory._render_en_question(contract) == (
+        "Can you tell me how many order share the same shipment?"
+    )
 
 
 def test_task_factory_ignores_non_user_visible_answer_columns():

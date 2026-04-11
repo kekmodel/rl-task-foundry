@@ -153,6 +153,7 @@ def test_compile_path_tools_enforces_stable_semantics_across_levels():
         f"{path_id}:lookup",
         f"{path_id}:list_related",
         f"{path_id}:count",
+        f"{path_id}:count_related:orders:orders_shipments_fk",
         f"{path_id}:exists",
         f"{path_id}:aggregate:sum:amount",
         f"{path_id}:aggregate:avg:amount",
@@ -167,6 +168,9 @@ def test_compile_path_tools_enforces_stable_semantics_across_levels():
         assert l1_by_semantic[semantic_key].output_fields == l2_by_semantic[semantic_key].output_fields
 
     assert l1_by_semantic[f"{path_id}:lookup"].name != l2_by_semantic[f"{path_id}:lookup"].name
+    assert 'JOIN "public"."orders" AS r2' in l1_by_semantic[
+        f"{path_id}:count_related:orders:orders_shipments_fk"
+    ].sql_template
     assert l1_by_semantic[f"{path_id}:aggregate:sum:amount"].output_fields == ["sum_amount"]
     assert 'ROUND((SUM(t1."amount"))::numeric, 6) AS "sum_amount"' in l1_by_semantic[
         f"{path_id}:aggregate:sum:amount"

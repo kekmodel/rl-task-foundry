@@ -52,6 +52,7 @@ from rl_task_foundry.tools.text_utils import (
     count_phrase_reference,
     count_unit_hint_for_identifier,
     humanize_identifier,
+    localized_entity_label,
     singularize_token,
 )
 from rl_task_foundry.truth.generator import TierAGroundTruthGenerator, _prepare_asyncpg_query
@@ -1087,9 +1088,12 @@ class Orchestrator:
         ]
         answer_concept_reference = self._answer_concept_reference(task, path)
         answer_shape = self._answer_shape(task)
-        count_target_reference = self._count_target_reference(path)
-        count_phrase_reference = self._count_phrase_reference(path)
-        count_unit_hint = self._count_unit_hint(path)
+        count_target_reference = self._count_target_reference(task, path)
+        count_phrase_reference = self._count_phrase_reference(task, path)
+        count_unit_hint = self._count_unit_hint(task, path)
+        count_reference_reference = self._count_reference_reference(task, path)
+        count_reference_self_like = self._count_reference_is_self_like(task, path)
+        count_request_frame = self._count_request_frame(task, path)
         family_patterns = {
             "status_lookup": {
                 "goal": (
@@ -1173,6 +1177,9 @@ class Orchestrator:
             "count_target_reference": count_target_reference,
             "count_phrase_reference": count_phrase_reference,
             "count_unit_hint": count_unit_hint,
+            "count_reference_reference": count_reference_reference,
+            "count_reference_self_like": count_reference_self_like,
+            "count_request_frame": count_request_frame,
             "answer_labels": answer_labels,
             "answer_concept_reference": answer_concept_reference,
             "answer_shape": answer_shape,
@@ -1294,16 +1301,78 @@ class Orchestrator:
         return sorted(set(banned))
 
     @staticmethod
-    def _count_target_reference(path: PathSpec) -> str:
-        return humanize_identifier(singularize_token(path.tables[-1]))
+    def _count_target_reference(task: TaskSpec, path: PathSpec) -> str:
+        table_name = str(task.contract_metadata.get("count_entity_table", path.tables[-1]))
+        return localized_entity_label(table_name, language=task.language)
 
     @staticmethod
-    def _count_phrase_reference(path: PathSpec) -> str:
-        return count_phrase_reference(path.tables[-1])
+    def _count_phrase_reference(task: TaskSpec, path: PathSpec) -> str:
+        table_name = str(task.contract_metadata.get("count_entity_table", path.tables[-1]))
+        return count_phrase_reference(table_name, language=task.language)
 
     @staticmethod
-    def _count_unit_hint(path: PathSpec) -> str:
-        return count_unit_hint_for_identifier(path.tables[-1])
+    def _count_unit_hint(task: TaskSpec, path: PathSpec) -> str:
+        table_name = str(task.contract_metadata.get("count_entity_table", path.tables[-1]))
+        return count_unit_hint_for_identifier(table_name)
+
+    @staticmethod
+    def _count_reference_reference(task: TaskSpec, path: PathSpec) -> str:
+        table_name = str(task.contract_metadata.get("count_reference_table", path.tables[-1]))
+        return localized_entity_label(table_name, language=task.language)
+
+    @staticmethod
+    def _count_reference_is_self_like(task: TaskSpec, path: PathSpec) -> bool:
+        table_name = singularize_token(
+            str(task.contract_metadata.get("count_reference_table", path.tables[-1])).strip().lower()
+        )
+        return table_name in {
+            "customer",
+            "user",
+            "member",
+            "account",
+            "profile",
+            "person",
+            "patient",
+            "student",
+        }
+
+    def _count_request_frame(self, task: TaskSpec, path: PathSpec) -> str | None:
+        target_reference = self._count_target_reference(task, path)
+        count_phrase = self._count_phrase_reference(task, path)
+        count_reference = self._count_reference_reference(task, path)
+        unit_hint = self._count_unit_hint(task, path)
+        if self._count_reference_is_self_like(task, path):
+            if task.language == "ko":
+                if unit_hint == "cases":
+                    return f"제 {count_phrase}"
+                if unit_hint == "people":
+                    return f"제 상황을 처리하는 {target_reference}"
+                return f"제 {target_reference}"
+            if unit_hint == "cases":
+                return f"my {count_phrase}"
+            if unit_hint == "people":
+                return f"the {target_reference} handling this for me"
+            return f"my {target_reference}"
+        if self._anchor_is_self_like(task):
+            if task.language == "ko":
+                target_group = target_reference if target_reference.endswith("들") else f"{target_reference}들"
+                return f"제가 등록한 {target_group} 중 같은 {count_reference}에 있는 {target_reference}"
+            return f"my {target_reference} in the same {count_reference}"
+        return None
+
+    @staticmethod
+    def _anchor_is_self_like(task: TaskSpec) -> bool:
+        anchor = singularize_token(task.anchor_table.strip().lower())
+        return anchor in {
+            "customer",
+            "user",
+            "member",
+            "account",
+            "profile",
+            "person",
+            "patient",
+            "student",
+        }
 
     @staticmethod
     def _answer_concept_reference(task: TaskSpec, path: PathSpec) -> str | None:
