@@ -194,6 +194,7 @@ Acceptance:
 - trivial pure-stage verifier (`return True/False`) reject
 - stage input usage (`answer`, `facts`) 정적 enforcement
 - registration report에 verifier/shadow verifier stage analysis 기록
+- subprocess verifier probe (`facts schema key match`, stage bool return, staged outcome consistency)
 - Runtime instrumentation으로 factual claim vs tool usage 로그 수집
 
 Acceptance:
@@ -202,6 +203,8 @@ Acceptance:
 - Stage 2/3에서 tool 재호출 verifier는 reject된다
 - `verify()`가 staged pipeline을 생략하면 reject된다
 - `facts_match_answer_claims()` / `check_constraints()`가 constant boolean이면 reject된다
+- verifier probe에서 `fetch_facts()` key set이 facts schema와 어긋나면 reject된다
+- verifier probe에서 `verify()` 결과가 staged outcome과 어긋나면 reject된다
 - materialized facts schema가 verifier artifact에 포함된다
 - aggregate constraint가 raw facts만으로 재계산된다
 

@@ -341,8 +341,9 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         assert bundle == _sample_artifacts()
+        assert proposed_environment == _sample_proposed_environment()
         return _passing_registration_report()
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
@@ -390,7 +391,7 @@ async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback(
         phase_backends={phase: [failing, fallback] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
@@ -424,7 +425,7 @@ async def test_synthesis_agent_runtime_rejects_category_mismatch(monkeypatch):
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
@@ -459,7 +460,7 @@ async def test_synthesis_agent_runtime_rejects_wrong_task_category_in_artifact_g
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
@@ -485,7 +486,7 @@ async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _failing_registration_report()
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
@@ -511,7 +512,7 @@ async def test_synthesis_agent_runtime_wraps_registration_gate_exceptions(monkey
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         raise RuntimeError("worker crashed")
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
@@ -545,7 +546,7 @@ async def test_synthesis_agent_runtime_introspects_graph_once_when_not_provided(
         introspect_calls += 1
         return _sample_graph()
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
     monkeypatch.setattr(
@@ -581,7 +582,7 @@ async def test_synthesis_agent_runtime_is_single_db_per_instance(monkeypatch):
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
@@ -634,7 +635,7 @@ async def test_synthesis_agent_runtime_propagates_materialize_validation_failure
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
-    async def _fake_registration_gate(self, *, bundle):
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
     def _fake_model_validate(payload):

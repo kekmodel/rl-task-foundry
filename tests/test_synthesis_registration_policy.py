@@ -3,13 +3,20 @@ from __future__ import annotations
 import asyncio
 
 from rl_task_foundry.config import load_config
+from rl_task_foundry.synthesis.contracts import (
+    FactSpec,
+    FactValueType,
+    MaterializedFactsSchema,
+)
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
     validate_generated_module,
 )
 from rl_task_foundry.synthesis.registration_runner import (
     GeneratedArtifactBundle,
+    RegistrationArtifactName,
     RegistrationBundleStatus,
+    VerifierProbeSpec,
     run_registration_bundle,
 )
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
@@ -34,6 +41,19 @@ def facts_match_answer_claims(answer, facts):
 def check_constraints(answer, facts):
     return bool(facts.get("city"))
 """
+
+
+def _city_facts_schema() -> MaterializedFactsSchema:
+    return MaterializedFactsSchema(
+        facts=[
+            FactSpec(
+                key="city",
+                entity_ref="assignment.city",
+                attribute="name",
+                value_type=FactValueType.STR,
+            )
+        ]
+    )
 
 
 def test_registration_policy_accepts_valid_tool_module() -> None:
@@ -662,7 +682,7 @@ async def run_self_test(tools):
 
 
 def test_registration_runner_passes_valid_bundle() -> None:
-    async def _run() -> tuple[str, bool, bool, int, int, int]:
+    async def _run() -> tuple[str, bool, bool, int, int, int, list[str]]:
         config = load_config("rl_task_foundry.yaml")
         bundle = GeneratedArtifactBundle(
             tool_source="""
@@ -682,7 +702,20 @@ def solve(tools):
             verifier_source=_valid_verifier_source(),
             shadow_verifier_source=_valid_verifier_source(),
         )
-        report = await run_registration_bundle(config=config, bundle=bundle)
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            verifier_probe_specs={
+                RegistrationArtifactName.VERIFIER: VerifierProbeSpec(
+                    answer_sample={"city": "sample_city"},
+                    facts_schema=_city_facts_schema(),
+                ),
+                RegistrationArtifactName.SHADOW_VERIFIER: VerifierProbeSpec(
+                    answer_sample={"city": "sample_city"},
+                    facts_schema=_city_facts_schema(),
+                ),
+            },
+        )
         return (
             report.status,
             report.tool_self_test.executed,
@@ -691,6 +724,7 @@ def solve(tools):
             report.verifier.verifier_hybrid_analysis.facts_match_answer_references,
             report.verifier.verifier_hybrid_analysis.facts_match_facts_references,
             report.verifier.verifier_hybrid_analysis.check_constraints_facts_references,
+            report.verifier.verifier_execution_probe.fetch_facts_return_keys,
         )
 
     (
@@ -701,6 +735,7 @@ def solve(tools):
         facts_match_answer_references,
         facts_match_facts_references,
         check_constraints_facts_references,
+        fetch_facts_return_keys,
     ) = asyncio.run(_run())
     assert status == RegistrationBundleStatus.PASSED
     assert executed is True
@@ -709,6 +744,58 @@ def solve(tools):
     assert facts_match_answer_references >= 1
     assert facts_match_facts_references >= 1
     assert check_constraints_facts_references >= 1
+    assert fetch_facts_return_keys == ["city"]
+
+
+def test_registration_runner_fails_when_verifier_probe_detects_fact_schema_mismatch() -> None:
+    async def _run() -> tuple[str, str]:
+        config = load_config("rl_task_foundry.yaml")
+        bundle = GeneratedArtifactBundle(
+            tool_source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+""",
+            tool_self_test_source="""
+async def run_self_test(tools):
+    return {"ok": True}
+""",
+            solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+            verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"country": tools.lookup_city(answer.get("city"))}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("country")
+
+def check_constraints(answer, facts):
+    return bool(facts.get("country"))
+""",
+            shadow_verifier_source=_valid_verifier_source(),
+        )
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            verifier_probe_specs={
+                RegistrationArtifactName.VERIFIER: VerifierProbeSpec(
+                    answer_sample={"city": "sample_city"},
+                    facts_schema=_city_facts_schema(),
+                )
+            },
+        )
+        return report.status, report.verifier.probe_errors[0].code
+
+    status, error_code = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.FAILED
+    assert error_code == "facts_schema_keys_mismatch"
 
 
 def test_registration_runner_fails_when_static_validation_fails() -> None:

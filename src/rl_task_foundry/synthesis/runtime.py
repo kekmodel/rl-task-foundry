@@ -26,6 +26,8 @@ from rl_task_foundry.synthesis.contracts import (
     EnvironmentQualityMetrics,
     EnvironmentStatus,
     InstanceSpaceContract,
+    OutputFieldContract,
+    OutputFieldType,
     ShadowVerifierContract,
     SolutionContract,
     StrictModel,
@@ -36,8 +38,10 @@ from rl_task_foundry.synthesis.contracts import (
 )
 from rl_task_foundry.synthesis.registration_runner import (
     GeneratedArtifactBundle,
+    RegistrationArtifactName,
     RegistrationBundleReport,
     RegistrationBundleStatus,
+    VerifierProbeSpec,
     run_registration_bundle,
 )
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
@@ -241,6 +245,30 @@ def _snapshot_to_status(snapshot: ProviderCircuitSnapshot) -> SynthesisProviderS
     )
 
 
+def _sample_output_value(field: OutputFieldContract) -> object:
+    if field.type == OutputFieldType.OBJECT:
+        return {child.name: _sample_output_value(child) for child in field.fields}
+    if field.type == OutputFieldType.LIST:
+        if field.items is None:
+            return []
+        return [_sample_output_value(field.items)]
+    if field.type == OutputFieldType.STRING:
+        return "sample"
+    if field.type == OutputFieldType.INT:
+        return 1
+    if field.type == OutputFieldType.FLOAT:
+        return 1.0
+    if field.type == OutputFieldType.BOOL:
+        return True
+    if field.type == OutputFieldType.DATE:
+        return "2026-01-01"
+    if field.type == OutputFieldType.DATETIME:
+        return "2026-01-01T00:00:00Z"
+    if field.type == OutputFieldType.ENUM:
+        return field.enum_values[0] if field.enum_values else "enum_value"
+    return "sample"
+
+
 @dataclass(slots=True)
 class SynthesisAgentRuntime:
     """Single-db synthesis runtime with lock-protected shared state."""
@@ -344,7 +372,8 @@ class SynthesisAgentRuntime:
                 "artifact generation returned a task with the wrong category"
             )
         registration_report = await self._execute_registration_gate(
-            artifact_payload.artifacts
+            artifact_payload.artifacts,
+            proposed_environment=artifact_payload.proposed_environment,
         )
 
         materialized_at = datetime.now(timezone.utc)
@@ -429,9 +458,14 @@ class SynthesisAgentRuntime:
     async def _execute_registration_gate(
         self,
         bundle: GeneratedArtifactBundle,
+        *,
+        proposed_environment: ProposedEnvironmentDraft,
     ) -> RegistrationBundleReport:
         try:
-            report = await self._run_registration_gate(bundle=bundle)
+            report = await self._run_registration_gate(
+                bundle=bundle,
+                proposed_environment=proposed_environment,
+            )
         except Exception as exc:
             raise SynthesisRegistrationError("registration gate execution failed") from exc
         if report.status != RegistrationBundleStatus.PASSED:
@@ -442,6 +476,7 @@ class SynthesisAgentRuntime:
         self,
         *,
         bundle: GeneratedArtifactBundle,
+        proposed_environment: ProposedEnvironmentDraft,
     ) -> RegistrationBundleReport:
         if self._registration_pool is None:
             async with self._registration_lock:
@@ -453,6 +488,7 @@ class SynthesisAgentRuntime:
             config=self.config,
             bundle=bundle,
             pool=self._registration_pool,
+            verifier_probe_specs=self._build_verifier_probe_specs(proposed_environment),
         )
 
     def _materialize_environment(
@@ -500,6 +536,22 @@ class SynthesisAgentRuntime:
             }
         )
         return EnvironmentContract.model_validate(payload)
+
+    def _build_verifier_probe_specs(
+        self,
+        proposed_environment: ProposedEnvironmentDraft,
+    ) -> dict[RegistrationArtifactName, VerifierProbeSpec]:
+        answer_sample = _sample_output_value(proposed_environment.task.output_schema.root)
+        return {
+            RegistrationArtifactName.VERIFIER: VerifierProbeSpec(
+                answer_sample=answer_sample,
+                facts_schema=proposed_environment.verifier.facts_schema,
+            ),
+            RegistrationArtifactName.SHADOW_VERIFIER: VerifierProbeSpec(
+                answer_sample=answer_sample,
+                facts_schema=proposed_environment.shadow_verifier.facts_schema,
+            ),
+        }
 
     async def _bind_db_id(self, db_id: str) -> None:
         async with self._bind_lock:

@@ -113,6 +113,38 @@ def _execution_error_payload(
     }
 
 
+def _verifier_probe_error_payload(
+    *,
+    request_id: str | None,
+    code: str,
+    detail: str,
+    expected_fact_keys: list[str] | None = None,
+    fetch_facts_return_keys: list[str] | None = None,
+    missing_fact_keys: list[str] | None = None,
+    extra_fact_keys: list[str] | None = None,
+    fetch_facts_tool_calls: int | None = None,
+    verify_tool_calls: int | None = None,
+    facts_match_result: bool | None = None,
+    check_constraints_result: bool | None = None,
+    verify_result: bool | None = None,
+) -> dict[str, Any]:
+    error = RegistrationError(code=code, detail=detail)
+    return {
+        "request_id": request_id,
+        "worker_pid": os.getpid(),
+        "fetch_facts_return_keys": fetch_facts_return_keys or [],
+        "expected_fact_keys": expected_fact_keys or [],
+        "missing_fact_keys": missing_fact_keys or [],
+        "extra_fact_keys": extra_fact_keys or [],
+        "fetch_facts_tool_calls": fetch_facts_tool_calls,
+        "verify_tool_calls": verify_tool_calls,
+        "facts_match_result": facts_match_result,
+        "check_constraints_result": check_constraints_result,
+        "verify_result": verify_result,
+        "errors": [error.model_dump(mode="json")],
+    }
+
+
 def _handle_validate(payload: dict[str, Any]) -> dict[str, Any]:
     request_id = payload.get("request_id")
     try:
@@ -231,6 +263,18 @@ def _build_tool_facade(tool_source: str) -> SimpleNamespace:
     return facade
 
 
+def _public_tool_names(tool_source: str) -> set[str]:
+    namespace = _load_namespace(
+        source=tool_source,
+        artifact_kind=ArtifactKind.TOOL_MODULE,
+    )
+    return {
+        name
+        for name, value in namespace.items()
+        if callable(value) and not name.startswith("_")
+    }
+
+
 def _bind_tool_function(function: Callable[..., Any]) -> Callable[..., Any]:
     async def _bound(*args: Any, **kwargs: Any) -> Any:
         # Milestone 2 self-tests validate tool logic against a lightweight facade only.
@@ -241,6 +285,57 @@ def _bind_tool_function(function: Callable[..., Any]) -> Callable[..., Any]:
         return result
 
     return _bound
+
+
+class _VerifierProbeTools:
+    def __init__(self, tool_names: set[str]) -> None:
+        self._tool_names = tool_names
+        self.call_count = 0
+
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        def _bound(*args: Any, **kwargs: Any) -> Any:
+            self.call_count += 1
+            return _synthetic_tool_value(name, args=args, kwargs=kwargs)
+
+        return _bound
+
+
+def _synthetic_tool_value(
+    name: str,
+    *,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    scalar = _first_scalar(args, kwargs)
+    row = {
+        "tool": name,
+        "id": 1,
+        "name": str(scalar) if scalar is not None else f"{name}_name",
+        "value": scalar if scalar is not None else 1,
+        "city": "sample_city",
+        "country": "sample_country",
+        "status": "active",
+        "price": 100.0,
+        "rating": 4.0,
+        "count": 1,
+        "allowed": True,
+        "date": "2026-01-01",
+        "datetime": "2026-01-01T00:00:00Z",
+    }
+    if _looks_plural(name):
+        return [row]
+    return row
+
+
+def _looks_plural(name: str) -> bool:
+    return name.endswith("s") or name.startswith(("list_", "get_all_", "lookup_all_"))
+
+
+def _first_scalar(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    for value in list(args) + list(kwargs.values()):
+        if isinstance(value, (str, int, float, bool)):
+            return value
+    return None
 
 
 def _handle_execute(payload: dict[str, Any]) -> dict[str, Any]:
@@ -402,6 +497,227 @@ def _handle_tool_self_test(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
+    request_id = payload.get("request_id")
+    try:
+        policy = RegistrationPolicyConfig.model_validate(payload["policy"])
+        tool_source = payload["tool_source"]
+        verifier_source = payload["verifier_source"]
+        kind = ArtifactKind(payload["artifact_kind"])
+        answer_sample = payload["answer_sample"]
+        expected_fact_keys = list(payload.get("expected_fact_keys", []))
+        call_count_limit = int(payload["call_count_limit"])
+        memory_limit_mb = payload.get("memory_limit_mb")
+    except (KeyError, TypeError, ValueError, ValidationError) as exc:
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code="invalid_worker_request",
+            detail=f"Worker request validation failed: {exc}",
+        )
+
+    _set_memory_limit(memory_limit_mb)
+    errors = [
+        *validate_generated_module(
+            tool_source,
+            kind=ArtifactKind.TOOL_MODULE,
+            policy=policy,
+        ),
+        *validate_generated_module(
+            verifier_source,
+            kind=kind,
+            policy=policy,
+        ),
+    ]
+    if errors:
+        return {
+            "request_id": request_id,
+            "worker_pid": os.getpid(),
+            "fetch_facts_return_keys": [],
+            "expected_fact_keys": expected_fact_keys,
+            "missing_fact_keys": [],
+            "extra_fact_keys": [],
+            "fetch_facts_tool_calls": None,
+            "verify_tool_calls": None,
+            "facts_match_result": None,
+            "check_constraints_result": None,
+            "verify_result": None,
+            "errors": [error.model_dump(mode="json") for error in errors],
+        }
+
+    try:
+        namespace = _load_namespace(
+            source=verifier_source,
+            artifact_kind=kind,
+        )
+        fetch_facts = namespace["fetch_facts"]
+        facts_match = namespace["facts_match_answer_claims"]
+        check_constraints = namespace["check_constraints"]
+        verify = namespace["verify"]
+        tool_names = _public_tool_names(tool_source)
+
+        fetch_tools = _VerifierProbeTools(tool_names)
+        facts, _ = asyncio.run(
+            _invoke_entrypoint(
+                function=fetch_facts,
+                args=[answer_sample, fetch_tools],
+                kwargs={},
+                call_count_limit=call_count_limit,
+            )
+        )
+        if not isinstance(facts, dict):
+            return _verifier_probe_error_payload(
+                request_id=request_id,
+                code="fetch_facts_result_not_object",
+                detail="fetch_facts() must return a dict of materialized facts.",
+                expected_fact_keys=expected_fact_keys,
+                fetch_facts_tool_calls=fetch_tools.call_count,
+            )
+
+        actual_fact_keys = sorted(str(key) for key in facts)
+        expected_keys = sorted(str(key) for key in expected_fact_keys)
+        missing_keys = [key for key in expected_keys if key not in actual_fact_keys]
+        extra_keys = [key for key in actual_fact_keys if key not in expected_keys]
+
+        facts_match_result, _ = asyncio.run(
+            _invoke_entrypoint(
+                function=facts_match,
+                args=[answer_sample, facts],
+                kwargs={},
+                call_count_limit=call_count_limit,
+            )
+        )
+        check_constraints_result, _ = asyncio.run(
+            _invoke_entrypoint(
+                function=check_constraints,
+                args=[answer_sample, facts],
+                kwargs={},
+                call_count_limit=call_count_limit,
+            )
+        )
+        verify_tools = _VerifierProbeTools(tool_names)
+        verify_result, _ = asyncio.run(
+            _invoke_entrypoint(
+                function=verify,
+                args=[answer_sample, verify_tools],
+                kwargs={},
+                call_count_limit=call_count_limit,
+            )
+        )
+    except RuntimeError as exc:
+        detail = str(exc)
+        code = "execution_error"
+        if detail.startswith("call_count_limit_exceeded:"):
+            code = "call_count_limit_exceeded"
+        elif detail.startswith("missing_entrypoint:"):
+            code = "missing_entrypoint"
+        elif detail == "non_json_serializable_result":
+            code = "non_json_serializable_result"
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code=code,
+            detail=detail,
+            expected_fact_keys=expected_fact_keys,
+        )
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code="execution_error",
+            detail=f"{type(exc).__name__}: {exc}",
+            expected_fact_keys=expected_fact_keys,
+        )
+
+    if not isinstance(facts_match_result, bool):
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code="facts_match_result_not_bool",
+            detail="facts_match_answer_claims() must return a bool.",
+            expected_fact_keys=expected_keys,
+            fetch_facts_return_keys=actual_fact_keys,
+            missing_fact_keys=missing_keys,
+            extra_fact_keys=extra_keys,
+            fetch_facts_tool_calls=fetch_tools.call_count,
+            verify_tool_calls=verify_tools.call_count,
+            check_constraints_result=check_constraints_result
+            if isinstance(check_constraints_result, bool)
+            else None,
+            verify_result=verify_result if isinstance(verify_result, bool) else None,
+        )
+    if not isinstance(check_constraints_result, bool):
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code="check_constraints_result_not_bool",
+            detail="check_constraints() must return a bool.",
+            expected_fact_keys=expected_keys,
+            fetch_facts_return_keys=actual_fact_keys,
+            missing_fact_keys=missing_keys,
+            extra_fact_keys=extra_keys,
+            fetch_facts_tool_calls=fetch_tools.call_count,
+            verify_tool_calls=verify_tools.call_count,
+            facts_match_result=facts_match_result,
+            verify_result=verify_result if isinstance(verify_result, bool) else None,
+        )
+    if not isinstance(verify_result, bool):
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code="verify_result_not_bool",
+            detail="verify() must return a bool.",
+            expected_fact_keys=expected_keys,
+            fetch_facts_return_keys=actual_fact_keys,
+            missing_fact_keys=missing_keys,
+            extra_fact_keys=extra_keys,
+            fetch_facts_tool_calls=fetch_tools.call_count,
+            verify_tool_calls=verify_tools.call_count,
+            facts_match_result=facts_match_result,
+            check_constraints_result=check_constraints_result,
+        )
+    if missing_keys or extra_keys:
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code="facts_schema_keys_mismatch",
+            detail="fetch_facts() returned fact keys that do not match the declared facts schema.",
+            expected_fact_keys=expected_keys,
+            fetch_facts_return_keys=actual_fact_keys,
+            missing_fact_keys=missing_keys,
+            extra_fact_keys=extra_keys,
+            fetch_facts_tool_calls=fetch_tools.call_count,
+            verify_tool_calls=verify_tools.call_count,
+            facts_match_result=facts_match_result,
+            check_constraints_result=check_constraints_result,
+            verify_result=verify_result,
+        )
+    expected_verify_result = check_constraints_result if facts_match_result else False
+    if verify_result != expected_verify_result:
+        return _verifier_probe_error_payload(
+            request_id=request_id,
+            code="verify_stage_outcome_mismatch",
+            detail="verify() must reflect the staged pipeline outcome of facts_match_answer_claims() and check_constraints().",
+            expected_fact_keys=expected_keys,
+            fetch_facts_return_keys=actual_fact_keys,
+            missing_fact_keys=missing_keys,
+            extra_fact_keys=extra_keys,
+            fetch_facts_tool_calls=fetch_tools.call_count,
+            verify_tool_calls=verify_tools.call_count,
+            facts_match_result=facts_match_result,
+            check_constraints_result=check_constraints_result,
+            verify_result=verify_result,
+        )
+
+    return {
+        "request_id": request_id,
+        "worker_pid": os.getpid(),
+        "fetch_facts_return_keys": actual_fact_keys,
+        "expected_fact_keys": expected_keys,
+        "missing_fact_keys": [],
+        "extra_fact_keys": [],
+        "fetch_facts_tool_calls": fetch_tools.call_count,
+        "verify_tool_calls": verify_tools.call_count,
+        "facts_match_result": facts_match_result,
+        "check_constraints_result": check_constraints_result,
+        "verify_result": verify_result,
+        "errors": [],
+    }
+
+
 def _handle_request(line: str) -> dict[str, Any]:
     try:
         payload = json.loads(line)
@@ -423,6 +739,8 @@ def _handle_request(line: str) -> dict[str, Any]:
         }
     if request_type == "run_tool_self_test":
         return _handle_tool_self_test(payload)
+    if request_type == "probe_verifier_module":
+        return _handle_probe_verifier(payload)
     if request_type == "execute_module_entrypoint":
         return _handle_execute(payload)
     if request_type != "validate_module":

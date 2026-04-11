@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.contracts import MaterializedFactsSchema
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
     RegistrationError,
@@ -17,6 +18,7 @@ from rl_task_foundry.synthesis.registration_policy import (
 from rl_task_foundry.synthesis.subprocess_pool import (
     RegistrationExecutionResult,
     RegistrationSubprocessPool,
+    RegistrationVerifierProbeResult,
 )
 
 
@@ -45,6 +47,11 @@ class GeneratedArtifactBundle(StrictModel):
     shadow_verifier_source: str
 
 
+class VerifierProbeSpec(StrictModel):
+    answer_sample: object
+    facts_schema: MaterializedFactsSchema
+
+
 class ArtifactRegistrationResult(StrictModel):
     artifact_name: RegistrationArtifactName
     artifact_kind: ArtifactKind
@@ -55,10 +62,14 @@ class ArtifactRegistrationResult(StrictModel):
     execution_errors: list[RegistrationError] = Field(default_factory=list)
     execution_call_count: int | None = None
     execution_return_value: object | None = None
+    probe_required: bool = False
+    probe_executed: bool = False
+    probe_errors: list[RegistrationError] = Field(default_factory=list)
+    verifier_execution_probe: RegistrationVerifierProbeResult | None = None
 
     @property
     def passed(self) -> bool:
-        return self.static_passed and self.runtime_passed
+        return self.static_passed and self.runtime_passed and self.probe_passed
 
     @property
     def static_passed(self) -> bool:
@@ -69,6 +80,12 @@ class ArtifactRegistrationResult(StrictModel):
         if not self.execution_required:
             return True
         return self.executed and not self.execution_errors
+
+    @property
+    def probe_passed(self) -> bool:
+        if not self.probe_required:
+            return True
+        return self.probe_executed and not self.probe_errors
 
 
 class RegistrationBundleReport(StrictModel):
@@ -85,6 +102,7 @@ async def run_registration_bundle(
     config: AppConfig,
     bundle: GeneratedArtifactBundle,
     pool: RegistrationSubprocessPool | None = None,
+    verifier_probe_specs: dict[RegistrationArtifactName, VerifierProbeSpec] | None = None,
 ) -> RegistrationBundleReport:
     """Run Milestone 2 registration checks for a generated artifact bundle.
 
@@ -124,6 +142,8 @@ async def run_registration_bundle(
     verifier = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.VERIFIER,
         artifact_kind=ArtifactKind.VERIFIER_MODULE,
+        probe_required=verifier_probe_specs is not None
+        and RegistrationArtifactName.VERIFIER in verifier_probe_specs,
         static_errors=validate_generated_module(
             bundle.verifier_source,
             kind=ArtifactKind.VERIFIER_MODULE,
@@ -137,6 +157,8 @@ async def run_registration_bundle(
     shadow_verifier = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.SHADOW_VERIFIER,
         artifact_kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
+        probe_required=verifier_probe_specs is not None
+        and RegistrationArtifactName.SHADOW_VERIFIER in verifier_probe_specs,
         static_errors=validate_generated_module(
             bundle.shadow_verifier_source,
             kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
@@ -159,6 +181,36 @@ async def run_registration_bundle(
         tool_self_test.execution_errors = execution_result.errors
         tool_self_test.execution_call_count = execution_result.call_count
         tool_self_test.execution_return_value = execution_result.return_value
+
+    if verifier_probe_specs is not None and tool.static_passed:
+        pool = pool or await RegistrationSubprocessPool.start(config)
+        for artifact_result, artifact_name, verifier_source, artifact_kind in (
+            (
+                verifier,
+                RegistrationArtifactName.VERIFIER,
+                bundle.verifier_source,
+                ArtifactKind.VERIFIER_MODULE,
+            ),
+            (
+                shadow_verifier,
+                RegistrationArtifactName.SHADOW_VERIFIER,
+                bundle.shadow_verifier_source,
+                ArtifactKind.SHADOW_VERIFIER_MODULE,
+            ),
+        ):
+            probe_spec = verifier_probe_specs.get(artifact_name)
+            if probe_spec is None or not artifact_result.static_passed:
+                continue
+            probe_result = await pool.probe_verifier_module(
+                tool_source=bundle.tool_source,
+                verifier_source=verifier_source,
+                artifact_kind=artifact_kind,
+                answer_sample=probe_spec.answer_sample,
+                expected_fact_keys=[fact.key for fact in probe_spec.facts_schema.facts],
+            )
+            artifact_result.probe_executed = True
+            artifact_result.probe_errors = probe_result.errors
+            artifact_result.verifier_execution_probe = probe_result
 
     if owns_pool and pool is not None:
         await pool.close()

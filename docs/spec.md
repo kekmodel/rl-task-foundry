@@ -478,6 +478,16 @@ v1 registration policy는 아래를 정적으로 enforce한다.
 registration report는 verifier/shadow verifier마다 stage analysis를 기록해,
 tool call count와 pure-stage 위반 여부를 diagnostics로 남긴다.
 
+v1 dynamic probe는 registration lane subprocess worker에서 아래를 추가 확인한다.
+
+- synthetic answer sample로 `fetch_facts()`, `facts_match_answer_claims()`, `check_constraints()`, `verify()`를 실제 실행한다
+- `fetch_facts()` 반환값이 dict인지 확인한다
+- `fetch_facts()` 반환 key set이 declared facts schema key set과 일치하는지 확인한다
+- `facts_match_answer_claims()`, `check_constraints()`, `verify()`가 bool을 반환하는지 확인한다
+- `verify()`의 최종 결과가 staged outcome (`facts_match` 실패면 `False`, 아니면 `check_constraints`)와 일치하는지 확인한다
+
+이 probe는 full semantic correctness 증명이 아니라, weak verifier와 schema drift를 registration 시점에 조기 차단하는 defense-in-depth layer다.
+
 ### MaterializedFacts Contract
 
 environment는 `task.json`에 facts schema를 선언해야 한다.
