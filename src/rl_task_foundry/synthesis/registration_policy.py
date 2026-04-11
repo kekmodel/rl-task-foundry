@@ -42,10 +42,17 @@ class VerifierHybridAnalysis(StrictModel):
     )
     fetch_facts_tool_calls: int = 0
     fetch_facts_aggregate_calls: int = 0
+    fetch_facts_answer_references: int = 0
     facts_match_tools_references: int = 0
     facts_match_tools_calls: int = 0
+    facts_match_answer_references: int = 0
+    facts_match_facts_references: int = 0
+    facts_match_constant_boolean_return: bool = False
     check_constraints_tools_references: int = 0
     check_constraints_tools_calls: int = 0
+    check_constraints_answer_references: int = 0
+    check_constraints_facts_references: int = 0
+    check_constraints_constant_boolean_return: bool = False
 
 
 def validate_generated_module(
@@ -574,6 +581,17 @@ def _validate_fetch_facts_stage(
                 suggestion="Look up factual attributes through tools inside fetch_facts(answer, tools).",
             )
         )
+    if not _name_loads(function, "answer"):
+        errors.append(
+            RegistrationError(
+                code="fetch_facts_answer_reference_required",
+                line=function.lineno,
+                col=function.col_offset,
+                node_type=type(function).__name__,
+                detail="fetch_facts() must read from answer to decide which DB-grounded facts to materialize.",
+                suggestion="Use answer fields or slots to parameterize fetch_facts(answer, tools).",
+            )
+        )
     for call in _call_nodes(function):
         call_name = _call_name(call.func)
         if call_name in {"facts_match_answer_claims", "check_constraints", "verify"}:
@@ -649,6 +667,51 @@ def _validate_pure_verifier_stage(
                 suggestion=f"Use only answer and facts inside {stage_name}().",
             )
         )
+    if stage_name == "facts_match_answer_claims":
+        if not _name_loads(function, "answer"):
+            errors.append(
+                RegistrationError(
+                    code="facts_match_answer_claims_answer_reference_required",
+                    line=function.lineno,
+                    col=function.col_offset,
+                    node_type=type(function).__name__,
+                    detail="facts_match_answer_claims() must inspect the submitted answer.",
+                    suggestion="Compare answer claims against facts inside facts_match_answer_claims(answer, facts).",
+                )
+            )
+        if not _name_loads(function, "facts"):
+            errors.append(
+                RegistrationError(
+                    code="facts_match_answer_claims_facts_reference_required",
+                    line=function.lineno,
+                    col=function.col_offset,
+                    node_type=type(function).__name__,
+                    detail="facts_match_answer_claims() must inspect materialized facts.",
+                    suggestion="Use facts as the DB-grounded source of truth in facts_match_answer_claims(answer, facts).",
+                )
+            )
+    if stage_name == "check_constraints" and not _name_loads(function, "facts"):
+        errors.append(
+            RegistrationError(
+                code="check_constraints_facts_reference_required",
+                line=function.lineno,
+                col=function.col_offset,
+                node_type=type(function).__name__,
+                detail="check_constraints() must inspect materialized facts to enforce hard constraints.",
+                suggestion="Compute constraint satisfaction from facts inside check_constraints(answer, facts).",
+            )
+        )
+    if _returns_only_boolean_constants(function):
+        errors.append(
+            RegistrationError(
+                code=f"{stage_name}_constant_boolean_return_forbidden",
+                line=function.lineno,
+                col=function.col_offset,
+                node_type=type(function).__name__,
+                detail=f"{stage_name}() must not collapse to a constant boolean return.",
+                suggestion=f"Make {stage_name}() derive its judgment from answer/facts rather than returning a hardcoded boolean.",
+            )
+        )
     return errors
 
 
@@ -672,6 +735,7 @@ def _build_verifier_hybrid_analysis(
         )
     if fetch_facts is not None:
         analysis.fetch_facts_tool_calls = _count_tools_calls(fetch_facts)
+        analysis.fetch_facts_answer_references = len(_name_loads(fetch_facts, "answer"))
         aggregate_counts = _count_named_calls(
             fetch_facts,
             {"sum", "min", "max", "len", "any", "all", "sorted"},
@@ -680,10 +744,24 @@ def _build_verifier_hybrid_analysis(
     if facts_match is not None:
         analysis.facts_match_tools_calls = _count_tools_calls(facts_match)
         analysis.facts_match_tools_references = len(_name_loads(facts_match, "tools"))
+        analysis.facts_match_answer_references = len(_name_loads(facts_match, "answer"))
+        analysis.facts_match_facts_references = len(_name_loads(facts_match, "facts"))
+        analysis.facts_match_constant_boolean_return = _returns_only_boolean_constants(
+            facts_match
+        )
     if check_constraints is not None:
         analysis.check_constraints_tools_calls = _count_tools_calls(check_constraints)
         analysis.check_constraints_tools_references = len(
             _name_loads(check_constraints, "tools")
+        )
+        analysis.check_constraints_answer_references = len(
+            _name_loads(check_constraints, "answer")
+        )
+        analysis.check_constraints_facts_references = len(
+            _name_loads(check_constraints, "facts")
+        )
+        analysis.check_constraints_constant_boolean_return = _returns_only_boolean_constants(
+            check_constraints
         )
     return analysis
 
@@ -725,12 +803,23 @@ def _name_loads(
             continue
         if _is_annotation_node(node):
             continue
-        parent = getattr(node, "_policy_parent", None)
-        parent_field = getattr(node, "_policy_parent_field", None)
-        if isinstance(parent, ast.Attribute) and parent_field == "value":
-            continue
         matches.append(node)
     return matches
+
+
+def _returns_only_boolean_constants(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    returns = [node for node in ast.walk(function) if isinstance(node, ast.Return)]
+    if not returns:
+        return False
+    for node in returns:
+        value = node.value
+        if not isinstance(value, ast.Constant):
+            return False
+        if not isinstance(value.value, bool):
+            return False
+    return True
 
 
 def _call_name(node: ast.AST) -> str:

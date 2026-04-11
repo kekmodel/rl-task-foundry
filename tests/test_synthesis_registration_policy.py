@@ -234,6 +234,32 @@ def check_constraints(answer, facts):
     assert any(error.code == "fetch_facts_tools_call_required" for error in errors)
 
 
+def test_registration_policy_rejects_fetch_facts_without_answer_reference() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"city": tools.lookup_default_city()}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return facts.get("city") is not None
+""",
+        kind=ArtifactKind.VERIFIER_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "fetch_facts_answer_reference_required" for error in errors)
+
+
 def test_registration_policy_rejects_verifier_without_stage_pipeline() -> None:
     policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
     errors = validate_generated_module(
@@ -283,6 +309,46 @@ def check_constraints(answer, facts):
 
     assert any(error.code == "facts_match_answer_claims_tools_call_forbidden" for error in errors)
     assert any(error.code == "check_constraints_tools_call_forbidden" for error in errors)
+
+
+def test_registration_policy_rejects_trivial_pure_verifier_stages() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"city": tools.lookup_city(answer.get("city"))}
+
+def facts_match_answer_claims(answer, facts):
+    return True
+
+def check_constraints(answer, facts):
+    return False
+""",
+        kind=ArtifactKind.VERIFIER_MODULE,
+        policy=policy,
+    )
+
+    assert any(
+        error.code == "facts_match_answer_claims_constant_boolean_return_forbidden"
+        for error in errors
+    )
+    assert any(
+        error.code == "check_constraints_constant_boolean_return_forbidden"
+        for error in errors
+    )
+    assert any(
+        error.code == "facts_match_answer_claims_answer_reference_required" for error in errors
+    )
+    assert any(
+        error.code == "facts_match_answer_claims_facts_reference_required" for error in errors
+    )
+    assert any(error.code == "check_constraints_facts_reference_required" for error in errors)
 
 
 def test_registration_policy_rejects_preaggregated_fetch_facts_metrics() -> None:
@@ -596,7 +662,7 @@ async def run_self_test(tools):
 
 
 def test_registration_runner_passes_valid_bundle() -> None:
-    async def _run() -> tuple[str, bool, bool]:
+    async def _run() -> tuple[str, bool, bool, int, int, int]:
         config = load_config("rl_task_foundry.yaml")
         bundle = GeneratedArtifactBundle(
             tool_source="""
@@ -622,13 +688,27 @@ def solve(tools):
             report.tool_self_test.executed,
             report.tool_self_test.passed,
             report.verifier.verifier_hybrid_analysis.fetch_facts_tool_calls,
+            report.verifier.verifier_hybrid_analysis.facts_match_answer_references,
+            report.verifier.verifier_hybrid_analysis.facts_match_facts_references,
+            report.verifier.verifier_hybrid_analysis.check_constraints_facts_references,
         )
 
-    status, executed, self_test_passed, fetch_facts_tool_calls = asyncio.run(_run())
+    (
+        status,
+        executed,
+        self_test_passed,
+        fetch_facts_tool_calls,
+        facts_match_answer_references,
+        facts_match_facts_references,
+        check_constraints_facts_references,
+    ) = asyncio.run(_run())
     assert status == RegistrationBundleStatus.PASSED
     assert executed is True
     assert self_test_passed is True
     assert fetch_facts_tool_calls == 1
+    assert facts_match_answer_references >= 1
+    assert facts_match_facts_references >= 1
+    assert check_constraints_facts_references >= 1
 
 
 def test_registration_runner_fails_when_static_validation_fails() -> None:

@@ -470,6 +470,10 @@ v1 registration policy는 아래를 정적으로 enforce한다.
 - `fetch_facts()`는 `sum/min/max/len/any/all/sorted` 같은 aggregate helper로 pre-aggregated metric을 만들 수 없다
 - `facts_match_answer_claims()`와 `check_constraints()`는 `tools`를 참조하거나 호출할 수 없다
 - `facts_match_answer_claims()`와 `check_constraints()`는 다른 verifier stage를 호출할 수 없다
+- `fetch_facts()`는 `answer`를 읽어 materialization 대상을 정해야 한다
+- `facts_match_answer_claims()`는 `answer`와 `facts`를 모두 읽어야 한다
+- `check_constraints()`는 `facts`를 읽어야 한다
+- `facts_match_answer_claims()`와 `check_constraints()`는 constant `True` / `False` return으로 축약될 수 없다
 
 registration report는 verifier/shadow verifier마다 stage analysis를 기록해,
 tool call count와 pure-stage 위반 여부를 diagnostics로 남긴다.
