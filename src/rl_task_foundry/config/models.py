@@ -175,6 +175,7 @@ class SynthesisRuntimeConfig(StrictModel):
     tracing: bool = True
     sdk_sessions_enabled: bool = True
     explicit_memory_window: int = Field(default=8, ge=1)
+    max_self_consistency_iterations: int = Field(default=5, ge=1)
 
 
 class SynthesisConfig(StrictModel):

@@ -110,6 +110,7 @@ synthesis:
     tracing: true
     sdk_sessions_enabled: true
     explicit_memory_window: 8
+    max_self_consistency_iterations: 5
   registration_workers:
     worker_count: 2
     connections_per_worker: 2

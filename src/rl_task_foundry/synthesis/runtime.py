@@ -144,9 +144,11 @@ class SynthesisStageRequest(StrictModel):
     agent_role: str
     scenario_description: str
     requested_category: CategoryTaxonomy | None = None
+    attempt_index: int = 1
     schema_summary: dict[str, object] = Field(default_factory=dict)
     previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput] = Field(default_factory=dict)
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
+    latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
 
 
 class SynthesisStageResult(StrictModel):
@@ -168,6 +170,7 @@ class SynthesisEnvironmentDraft(StrictModel):
     artifacts: GeneratedArtifactBundle
     registration_report: RegistrationBundleReport
     registration_diagnostics: RegistrationBundleDiagnostics
+    self_consistency_attempts: list[SynthesisSelfConsistencyAttempt] = Field(default_factory=list)
     stage_results: list[SynthesisStageResult] = Field(default_factory=list)
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
     tool_traces: list[SynthesisToolTraceEntry] = Field(default_factory=list)
@@ -215,8 +218,42 @@ class SynthesisRegistrationError(SynthesisRuntimeError):
         self.diagnostics = diagnostics
 
 
+class SynthesisSelfConsistencyOutcome(StrEnum):
+    PASSED = "passed"
+    REGISTRATION_FAILED = "registration_failed"
+    CATEGORY_MISMATCH = "category_mismatch"
+
+
+class SynthesisSelfConsistencyAttempt(StrictModel):
+    attempt_index: int
+    outcome: SynthesisSelfConsistencyOutcome
+    provider: str
+    model: str
+    memory_summary: str
+    error_message: str | None = None
+    registration_diagnostics: RegistrationBundleDiagnostics | None = None
+
+
+class SynthesisSelfConsistencyError(SynthesisRuntimeError):
+    """Raised when artifact generation exhausts its self-consistency budget."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempts: list[SynthesisSelfConsistencyAttempt],
+        last_registration_diagnostics: RegistrationBundleDiagnostics | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+        self.last_registration_diagnostics = last_registration_diagnostics
+
+
 class SynthesisDbBindingError(SynthesisRuntimeError):
     """Raised when a runtime instance is reused for a different logical database id."""
+
+
+SynthesisEnvironmentDraft.model_rebuild()
 
 
 def summarize_schema_graph(graph: SchemaGraph, *, max_tables: int = 32) -> dict[str, object]:
@@ -351,7 +388,6 @@ class SynthesisAgentRuntime:
         for phase in (
             SynthesisPhase.SCHEMA_EXPLORATION,
             SynthesisPhase.CATEGORY_INFERENCE,
-            SynthesisPhase.ARTIFACT_GENERATION,
         ):
             request = SynthesisStageRequest(
                 phase=phase,
@@ -361,6 +397,7 @@ class SynthesisAgentRuntime:
                 agent_role=self.config.domain.agent_role,
                 scenario_description=self.config.domain.scenario_description,
                 requested_category=requested_category,
+                attempt_index=1,
                 schema_summary=schema_summary,
                 previous_outputs=previous_outputs,
                 memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
@@ -379,15 +416,19 @@ class SynthesisAgentRuntime:
                 "category inference result did not match the requested category"
             )
 
-        artifact_payload = previous_outputs[SynthesisPhase.ARTIFACT_GENERATION]
-        assert isinstance(artifact_payload, ArtifactGenerationOutput)
-        if artifact_payload.proposed_environment.task.category != requested_category:
-            raise SynthesisCategoryMismatchError(
-                "artifact generation returned a task with the wrong category"
-            )
-        registration_report, registration_diagnostics = await self._execute_registration_gate(
-            artifact_payload.artifacts,
-            proposed_environment=artifact_payload.proposed_environment,
+        (
+            artifact_payload,
+            registration_report,
+            registration_diagnostics,
+            self_consistency_attempts,
+        ) = await self._run_artifact_generation_with_self_consistency(
+            db_id=db_id,
+            requested_category=requested_category,
+            schema_summary=schema_summary,
+            previous_outputs=previous_outputs,
+            stage_results=stage_results,
+            memory=memory,
+            tool_traces=tool_traces,
         )
 
         materialized_at = datetime.now(timezone.utc)
@@ -409,6 +450,7 @@ class SynthesisAgentRuntime:
             artifacts=artifact_payload.artifacts,
             registration_report=registration_report,
             registration_diagnostics=registration_diagnostics,
+            self_consistency_attempts=self_consistency_attempts,
             stage_results=stage_results,
             memory=memory,
             tool_traces=tool_traces,
@@ -454,6 +496,133 @@ class SynthesisAgentRuntime:
             )
         raise SynthesisProviderUnavailableError(
             f"all providers are in cooldown for synthesis phase {request.phase.value}"
+        )
+
+    async def _run_artifact_generation_with_self_consistency(
+        self,
+        *,
+        db_id: str,
+        requested_category: CategoryTaxonomy,
+        schema_summary: dict[str, object],
+        previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput],
+        stage_results: list[SynthesisStageResult],
+        memory: list[SynthesisMemoryEntry],
+        tool_traces: list[SynthesisToolTraceEntry],
+    ) -> tuple[
+        ArtifactGenerationOutput,
+        RegistrationBundleReport,
+        RegistrationBundleDiagnostics,
+        list[SynthesisSelfConsistencyAttempt],
+    ]:
+        attempts: list[SynthesisSelfConsistencyAttempt] = []
+        latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
+        max_iterations = self.config.synthesis.runtime.max_self_consistency_iterations
+
+        for attempt_index in range(1, max_iterations + 1):
+            request = SynthesisStageRequest(
+                phase=SynthesisPhase.ARTIFACT_GENERATION,
+                db_id=db_id,
+                domain_name=self.config.domain.name,
+                user_role=self.config.domain.user_role,
+                agent_role=self.config.domain.agent_role,
+                scenario_description=self.config.domain.scenario_description,
+                requested_category=requested_category,
+                attempt_index=attempt_index,
+                schema_summary=schema_summary,
+                previous_outputs=previous_outputs,
+                memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
+                latest_registration_diagnostics=latest_registration_diagnostics,
+            )
+            result = await self._run_phase(request)
+            assert isinstance(result.payload, ArtifactGenerationOutput)
+            stage_results.append(result)
+            memory.append(result.memory_entry)
+            tool_traces.extend(result.tool_traces)
+
+            artifact_payload = result.payload
+            if artifact_payload.proposed_environment.task.category != requested_category:
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.CATEGORY_MISMATCH,
+                    provider=result.provider,
+                    model=result.model,
+                    memory_summary=result.memory_entry.summary,
+                    error_message="artifact generation returned a task with the wrong category",
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                latest_registration_diagnostics = None
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "artifact generation exhausted self-consistency budget on category mismatch",
+                        attempts=attempts,
+                    )
+                continue
+
+            try:
+                registration_report, registration_diagnostics = await self._execute_registration_gate(
+                    artifact_payload.artifacts,
+                    proposed_environment=artifact_payload.proposed_environment,
+                )
+            except SynthesisRegistrationError as exc:
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.REGISTRATION_FAILED,
+                    provider=result.provider,
+                    model=result.model,
+                    memory_summary=result.memory_entry.summary,
+                    error_message=str(exc),
+                    registration_diagnostics=exc.diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                latest_registration_diagnostics = exc.diagnostics
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "artifact generation exhausted self-consistency budget after registration failures",
+                        attempts=attempts,
+                        last_registration_diagnostics=exc.diagnostics,
+                    ) from exc
+                continue
+
+            passed_attempt = SynthesisSelfConsistencyAttempt(
+                attempt_index=attempt_index,
+                outcome=SynthesisSelfConsistencyOutcome.PASSED,
+                provider=result.provider,
+                model=result.model,
+                memory_summary=result.memory_entry.summary,
+                registration_diagnostics=registration_diagnostics,
+            )
+            attempts.append(passed_attempt)
+            return artifact_payload, registration_report, registration_diagnostics, attempts
+
+        raise SynthesisSelfConsistencyError(
+            "artifact generation exhausted self-consistency budget",
+            attempts=attempts,
+            last_registration_diagnostics=latest_registration_diagnostics,
+        )
+
+    @staticmethod
+    def _attempt_feedback_entry(
+        attempt: SynthesisSelfConsistencyAttempt,
+    ) -> SynthesisMemoryEntry:
+        diagnostics = attempt.registration_diagnostics
+        weak_signals = diagnostics.weak_signal_codes if diagnostics is not None else []
+        error_codes = diagnostics.error_codes if diagnostics is not None else []
+        detail_parts = [
+            f"self_consistency_attempt={attempt.attempt_index}",
+            f"outcome={attempt.outcome.value}",
+        ]
+        if error_codes:
+            detail_parts.append(f"errors={','.join(error_codes)}")
+        if weak_signals:
+            detail_parts.append(f"weak_signals={','.join(weak_signals)}")
+        return SynthesisMemoryEntry(
+            phase=SynthesisPhase.ARTIFACT_GENERATION,
+            provider="runtime",
+            model="self_consistency",
+            summary="; ".join(detail_parts),
+            turn_count=0,
         )
 
     async def _introspect_graph(self) -> SchemaGraph:

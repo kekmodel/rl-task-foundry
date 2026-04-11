@@ -808,6 +808,15 @@ artifact generation phase output contract:
 3. 실패 시 수정 제안
 4. iteration budget이 남아 있으면 다시 synthesize
 
+v1 runtime skeleton에서는 full solution/verifier self-consistency 전에,
+artifact generation phase에 대한 registration-driven retry를 먼저 구현한다.
+
+- schema exploration과 category inference는 한 번만 수행한다
+- artifact generation만 `attempt_index=1..N`으로 재실행한다
+- 직전 registration 실패의 `registration_diagnostics`를 다음 artifact attempt input에 넣는다
+- registration이 통과한 attempt만 materialize된다
+- budget을 다 쓰면 runtime은 `SynthesisSelfConsistencyError`로 실패 attempt와 마지막 diagnostics를 함께 올린다
+
 운영 규칙:
 
 - `max_self_consistency_iterations`를 가진다

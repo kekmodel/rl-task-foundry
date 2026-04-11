@@ -42,6 +42,7 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
         "requested_category": (
             request.requested_category.value if request.requested_category is not None else None
         ),
+        "attempt_index": request.attempt_index,
         "schema_summary": request.schema_summary,
         "previous_outputs": {
             phase.value: output.model_dump(mode="json")
@@ -50,5 +51,13 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
         "previous_outputs_role": "authoritative structured outputs from earlier phases",
         "memory": [entry.model_dump(mode="json") for entry in request.memory],
         "memory_role": "compressed execution summaries from earlier phase runs",
+        "latest_registration_diagnostics": (
+            request.latest_registration_diagnostics.model_dump(mode="json")
+            if request.latest_registration_diagnostics is not None
+            else None
+        ),
+        "latest_registration_diagnostics_role": (
+            "structured registration feedback from the most recent failed artifact attempt"
+        ),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)

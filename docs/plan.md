@@ -254,6 +254,9 @@ Acceptance:
 작업:
 
 - `max_self_consistency_iterations`
+- stage 1/2는 재사용하고 artifact generation phase만 재시도하는 v1 loop
+- 직전 registration diagnostics를 다음 artifact attempt input에 주입
+- budget 소진 시 typed `SynthesisSelfConsistencyError`로 attempt history를 반환
 - infeasible discard path
 - discard consumes budget 정책
 - `db_id x category` failure counter와 backoff queue

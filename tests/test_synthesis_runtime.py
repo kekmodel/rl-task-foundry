@@ -50,6 +50,8 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisMemoryEntry,
     SynthesisPhase,
     SynthesisRegistrationError,
+    SynthesisSelfConsistencyError,
+    SynthesisSelfConsistencyOutcome,
     SynthesisStageRequest,
     SynthesisStageResult,
     SynthesisToolTraceEntry,
@@ -323,6 +325,7 @@ class _FakeBackend:
         self.payloads = payloads
         self.fail_phases = fail_phases or set()
         self.calls: list[SynthesisPhase] = []
+        self.requests: list[SynthesisStageRequest] = []
 
     @property
     def provider_name(self) -> str:
@@ -334,6 +337,7 @@ class _FakeBackend:
 
     async def run_stage(self, request: SynthesisStageRequest) -> SynthesisStageResult:
         self.calls.append(request.phase)
+        self.requests.append(request)
         if request.phase in self.fail_phases:
             raise RuntimeError(f"{self.provider_name} failed")
         payload = self.payloads[request.phase]
@@ -488,7 +492,8 @@ async def test_synthesis_agent_runtime_rejects_category_mismatch(monkeypatch):
 async def test_synthesis_agent_runtime_rejects_wrong_task_category_in_artifact_generation(
     monkeypatch,
 ):
-    config = load_config("rl_task_foundry.yaml")
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 1
     mismatched = _sample_proposed_environment(CategoryTaxonomy.OTHER)
     payloads = _payloads()
     payloads[SynthesisPhase.ARTIFACT_GENERATION] = ArtifactGenerationOutput(
@@ -511,17 +516,21 @@ async def test_synthesis_agent_runtime_rejects_wrong_task_category_in_artifact_g
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
 
-    with pytest.raises(SynthesisCategoryMismatchError):
+    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
         await runtime.synthesize_environment_draft(
             db_id="sakila",
             requested_category=CategoryTaxonomy.ASSIGNMENT,
             graph=_sample_graph(),
         )
+    assert [attempt.outcome for attempt in exc_info.value.attempts] == [
+        SynthesisSelfConsistencyOutcome.CATEGORY_MISMATCH
+    ]
 
 
 @pytest.mark.asyncio
 async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
-    config = load_config("rl_task_foundry.yaml")
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 1
     backend = _FakeBackend(
         provider_name="codex_oauth",
         model_name="gpt-5.4-mini",
@@ -540,25 +549,125 @@ async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
 
-    with pytest.raises(SynthesisRegistrationError) as exc_info:
+    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
         await runtime.synthesize_environment_draft(
             db_id="sakila",
             requested_category=CategoryTaxonomy.ASSIGNMENT,
             graph=_sample_graph(),
         )
-    assert exc_info.value.report is not None
-    assert exc_info.value.diagnostics is not None
-    assert exc_info.value.report.status == RegistrationBundleStatus.FAILED
-    assert exc_info.value.diagnostics.error_codes == ["facts_schema_keys_mismatch"]
-    assert exc_info.value.diagnostics.failing_artifacts == [
+    assert exc_info.value.last_registration_diagnostics is not None
+    assert exc_info.value.last_registration_diagnostics.error_codes == [
+        "facts_schema_keys_mismatch"
+    ]
+    assert exc_info.value.last_registration_diagnostics.failing_artifacts == [
         RegistrationArtifactName.VERIFIER,
         RegistrationArtifactName.SHADOW_VERIFIER,
     ]
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_wraps_registration_gate_exceptions(monkeypatch):
+async def test_synthesis_agent_runtime_retries_artifact_generation_with_registration_feedback(
+    monkeypatch,
+):
     config = load_config("rl_task_foundry.yaml")
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+    reports = iter(
+        [
+            _diagnostic_registration_report(
+                status=RegistrationBundleStatus.FAILED,
+                probe_error_codes=["facts_schema_keys_mismatch"],
+            ),
+            _diagnostic_registration_report(),
+        ]
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return next(reports)
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    artifact_requests = [
+        request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
+    ]
+    assert [request.attempt_index for request in artifact_requests] == [1, 2]
+    assert artifact_requests[0].latest_registration_diagnostics is None
+    assert artifact_requests[1].latest_registration_diagnostics is not None
+    assert artifact_requests[1].latest_registration_diagnostics.error_codes == [
+        "facts_schema_keys_mismatch"
+    ]
+    assert [attempt.outcome for attempt in draft.self_consistency_attempts] == [
+        SynthesisSelfConsistencyOutcome.REGISTRATION_FAILED,
+        SynthesisSelfConsistencyOutcome.PASSED,
+    ]
+    assert (
+        draft.self_consistency_attempts[0].registration_diagnostics.error_codes
+        == ["facts_schema_keys_mismatch"]
+    )
+    assert backend.calls.count(SynthesisPhase.SCHEMA_EXPLORATION) == 1
+    assert backend.calls.count(SynthesisPhase.CATEGORY_INFERENCE) == 1
+    assert backend.calls.count(SynthesisPhase.ARTIFACT_GENERATION) == 2
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_raises_self_consistency_error_after_budget_exhausted(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 2
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report(
+            status=RegistrationBundleStatus.FAILED,
+            probe_error_codes=["facts_schema_keys_mismatch"],
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
+    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    assert [attempt.outcome for attempt in exc_info.value.attempts] == [
+        SynthesisSelfConsistencyOutcome.REGISTRATION_FAILED,
+        SynthesisSelfConsistencyOutcome.REGISTRATION_FAILED,
+    ]
+    assert exc_info.value.last_registration_diagnostics is not None
+    assert exc_info.value.last_registration_diagnostics.error_codes == [
+        "facts_schema_keys_mismatch"
+    ]
+    assert backend.calls.count(SynthesisPhase.ARTIFACT_GENERATION) == 2
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_wraps_registration_gate_exceptions(monkeypatch):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 1
     backend = _FakeBackend(
         provider_name="codex_oauth",
         model_name="gpt-5.4-mini",
@@ -574,12 +683,14 @@ async def test_synthesis_agent_runtime_wraps_registration_gate_exceptions(monkey
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
 
-    with pytest.raises(SynthesisRegistrationError):
+    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
         await runtime.synthesize_environment_draft(
             db_id="sakila",
             requested_category=CategoryTaxonomy.ASSIGNMENT,
             graph=_sample_graph(),
         )
+    assert exc_info.value.last_registration_diagnostics is None
+    assert exc_info.value.attempts[0].outcome == SynthesisSelfConsistencyOutcome.REGISTRATION_FAILED
 
 
 @pytest.mark.asyncio

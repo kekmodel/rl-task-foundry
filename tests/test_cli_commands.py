@@ -20,7 +20,10 @@ def test_cli_validate_config_command():
     assert "negative_outcome_ratio=0.2" in normalized
     assert "float_precision=6" in normalized
     assert "shadow_sample_rate=0.1" in normalized
-    assert "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=True,memory_window=8" in normalized
+    assert (
+        "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=True,"
+        "memory_window=8,max_self_consistency_iterations=5"
+    ) in normalized
     assert "registration_lane=" in normalized
     assert "workers=2" in normalized
     assert "connections_per_worker=2" in normalized

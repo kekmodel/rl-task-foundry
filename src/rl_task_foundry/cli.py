@@ -109,7 +109,9 @@ def validate_config(
         f"max_turns={config.synthesis.runtime.max_turns},"
         f"tracing={config.synthesis.runtime.tracing},"
         f"sdk_sessions_enabled={config.synthesis.runtime.sdk_sessions_enabled},"
-        f"memory_window={config.synthesis.runtime.explicit_memory_window}"
+        f"memory_window={config.synthesis.runtime.explicit_memory_window},"
+        "max_self_consistency_iterations="
+        f"{config.synthesis.runtime.max_self_consistency_iterations}"
     )
     runtime_plan = build_runtime_isolation_plan(config)
     console.print(
