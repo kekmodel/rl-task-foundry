@@ -168,6 +168,7 @@ Acceptance:
 - environment trust field (`env_id`, signatures, status, quality_metrics, generator_version`)는 runtime이 재생성한다
 - runtime은 materialization payload를 다시 `EnvironmentContract`로 validate한다
 - runtime 인스턴스는 single-db다. 여러 DB를 처리할 때는 DB별로 runtime 인스턴스를 분리한다
+- shared cache / registration pool initialization은 runtime 내부 async lock으로 직렬화한다
 
 Acceptance:
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
+    EnvironmentContract,
     EnvironmentStatus,
     MaterializedFactsSchema,
     OutputFieldContract,
@@ -39,6 +41,7 @@ from rl_task_foundry.synthesis.runtime import (
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
     CategoryInferenceOutput,
     ProposedEnvironmentDraft,
+    RUNTIME_OWNED_ENVIRONMENT_FIELDS,
     SchemaExplorationOutput,
     SynthesisAgentRuntime,
     SynthesisCategoryMismatchError,
@@ -316,6 +319,13 @@ class _FakeBackend:
         )
 
 
+def test_proposed_and_materialized_environment_schemas_align() -> None:
+    proposed_fields = set(ProposedEnvironmentDraft.model_fields)
+    materialized_fields = set(EnvironmentContract.model_fields)
+
+    assert proposed_fields == materialized_fields - RUNTIME_OWNED_ENVIRONMENT_FIELDS
+
+
 @pytest.mark.asyncio
 async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_trust_fields(
     monkeypatch,
@@ -584,6 +594,61 @@ async def test_synthesis_agent_runtime_is_single_db_per_instance(monkeypatch):
     with pytest.raises(SynthesisDbBindingError):
         await runtime.synthesize_environment_draft(
             db_id="northwind",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_rejects_concurrent_cross_db_binding(monkeypatch):
+    config = load_config("rl_task_foundry.yaml")
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={},
+    )
+
+    results = await asyncio.gather(
+        runtime._bind_db_id("sakila"),
+        runtime._bind_db_id("northwind"),
+        return_exceptions=True,
+    )
+
+    assert sum(result is None for result in results) == 1
+    errors = [result for result in results if isinstance(result, BaseException)]
+    assert len(errors) == 1
+    assert isinstance(errors[0], SynthesisDbBindingError)
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_propagates_materialize_validation_failures(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml")
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle):
+        return _passing_registration_report()
+
+    def _fake_model_validate(payload):
+        raise ValueError("forced validation failure")
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(
+        "rl_task_foundry.synthesis.runtime.EnvironmentContract.model_validate",
+        _fake_model_validate,
+    )
+
+    with pytest.raises(ValueError, match="forced validation failure"):
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
             requested_category=CategoryTaxonomy.ASSIGNMENT,
             graph=_sample_graph(),
         )

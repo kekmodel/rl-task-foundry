@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
@@ -42,6 +43,22 @@ from rl_task_foundry.synthesis.registration_runner import (
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
 
 CURRENT_SYNTHESIS_GENERATOR_VERSION = "milestone-3-runtime-v1"
+RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
+    {
+        "env_id",
+        "db_id",
+        "domain",
+        "category",
+        "difficulty_vector",
+        "created_at",
+        "generator_version",
+        "tool_signature",
+        "task_signature",
+        "verifier_signature",
+        "status",
+        "quality_metrics",
+    }
+)
 
 
 class SynthesisPhase(StrEnum):
@@ -226,6 +243,8 @@ def _snapshot_to_status(snapshot: ProviderCircuitSnapshot) -> SynthesisProviderS
 
 @dataclass(slots=True)
 class SynthesisAgentRuntime:
+    """Single-db synthesis runtime with lock-protected shared state."""
+
     config: AppConfig
     phase_backends: dict[SynthesisPhase, list[SynthesisStageBackend]] | None = None
     _breakers: dict[str, ProviderCircuitBreaker] = field(default_factory=dict, init=False, repr=False)
@@ -234,6 +253,11 @@ class SynthesisAgentRuntime:
         default=None, init=False, repr=False
     )
     _bound_db_id: str | None = field(default=None, init=False, repr=False)
+    _bind_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _graph_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _registration_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.phase_backends is None:
@@ -273,7 +297,7 @@ class SynthesisAgentRuntime:
         requested_category: CategoryTaxonomy,
         graph: SchemaGraph | None = None,
     ) -> SynthesisEnvironmentDraft:
-        self._bind_db_id(db_id)
+        await self._bind_db_id(db_id)
         resolved_graph = graph if graph is not None else await self._introspect_graph()
         schema_summary = summarize_schema_graph(resolved_graph)
 
@@ -315,6 +339,10 @@ class SynthesisAgentRuntime:
 
         artifact_payload = previous_outputs[SynthesisPhase.ARTIFACT_GENERATION]
         assert isinstance(artifact_payload, ArtifactGenerationOutput)
+        if artifact_payload.proposed_environment.task.category != requested_category:
+            raise SynthesisCategoryMismatchError(
+                "artifact generation returned a task with the wrong category"
+            )
         registration_report = await self._execute_registration_gate(
             artifact_payload.artifacts
         )
@@ -387,12 +415,15 @@ class SynthesisAgentRuntime:
     async def _introspect_graph(self) -> SchemaGraph:
         if self._graph_cache is not None:
             return self._graph_cache
-        introspector = PostgresSchemaIntrospector(
-            database=self.config.database,
-            default_visibility=self.config.privacy.default_visibility,
-            visibility_overrides=self.config.privacy.visibility_overrides,
-        )
-        self._graph_cache = await introspector.introspect()
+        async with self._graph_lock:
+            if self._graph_cache is not None:
+                return self._graph_cache
+            introspector = PostgresSchemaIntrospector(
+                database=self.config.database,
+                default_visibility=self.config.privacy.default_visibility,
+                visibility_overrides=self.config.privacy.visibility_overrides,
+            )
+            self._graph_cache = await introspector.introspect()
         return self._graph_cache
 
     async def _execute_registration_gate(
@@ -413,7 +444,11 @@ class SynthesisAgentRuntime:
         bundle: GeneratedArtifactBundle,
     ) -> RegistrationBundleReport:
         if self._registration_pool is None:
-            self._registration_pool = await RegistrationSubprocessPool.start(self.config)
+            async with self._registration_lock:
+                if self._registration_pool is None:
+                    self._registration_pool = await RegistrationSubprocessPool.start(
+                        self.config
+                    )
         return await run_registration_bundle(
             config=self.config,
             bundle=bundle,
@@ -429,10 +464,6 @@ class SynthesisAgentRuntime:
         requested_category: CategoryTaxonomy,
         created_at: datetime,
     ) -> EnvironmentContract:
-        if proposed_environment.task.category != requested_category:
-            raise SynthesisCategoryMismatchError(
-                "artifact generation returned a task with the wrong category"
-            )
         task_payload = proposed_environment.task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
         tool_signature = self._signature_for_text(
@@ -470,14 +501,15 @@ class SynthesisAgentRuntime:
         )
         return EnvironmentContract.model_validate(payload)
 
-    def _bind_db_id(self, db_id: str) -> None:
-        if self._bound_db_id is None:
-            self._bound_db_id = db_id
-            return
-        if self._bound_db_id != db_id:
-            raise SynthesisDbBindingError(
-                "SynthesisAgentRuntime instances are single-db; create a new runtime per db_id"
-            )
+    async def _bind_db_id(self, db_id: str) -> None:
+        async with self._bind_lock:
+            if self._bound_db_id is None:
+                self._bound_db_id = db_id
+                return
+            if self._bound_db_id != db_id:
+                raise SynthesisDbBindingError(
+                    "SynthesisAgentRuntime instances are single-db; create a new runtime per db_id"
+                )
 
     @staticmethod
     def _signature_for_text(source: str) -> str:
