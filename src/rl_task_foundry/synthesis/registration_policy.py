@@ -17,6 +17,7 @@ class StrictModel(BaseModel):
 
 class ArtifactKind(StrEnum):
     TOOL_MODULE = "tool_module"
+    TOOL_SELF_TEST_MODULE = "tool_self_test_module"
     SOLUTION_MODULE = "solution_module"
     VERIFIER_MODULE = "verifier_module"
     SHADOW_VERIFIER_MODULE = "shadow_verifier_module"
@@ -289,6 +290,16 @@ def _validate_module_signature(
             expected_args=["tools"],
             missing_code="missing_solve_function",
             invalid_code="solve_signature_invalid",
+        )
+
+    if kind is ArtifactKind.TOOL_SELF_TEST_MODULE:
+        return _require_named_function(
+            public_functions,
+            expected_name="run_self_test",
+            expected_async=True,
+            expected_args=["tools"],
+            missing_code="missing_run_self_test_function",
+            invalid_code="run_self_test_signature_invalid",
         )
 
     if kind in {ArtifactKind.VERIFIER_MODULE, ArtifactKind.SHADOW_VERIFIER_MODULE}:

@@ -102,6 +102,34 @@ def verify(answer, tools):
     assert any(error.code == "missing_check_constraints_function" for error in errors)
 
 
+def test_registration_policy_accepts_valid_tool_self_test_module() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+async def run_self_test(tools):
+    return {"ok": True}
+""",
+        kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
+        policy=policy,
+    )
+
+    assert errors == []
+
+
+def test_registration_policy_rejects_wrong_tool_self_test_signature() -> None:
+    policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
+    errors = validate_generated_module(
+        """
+def run_self_test():
+    return {"ok": True}
+""",
+        kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
+        policy=policy,
+    )
+
+    assert any(error.code == "run_self_test_signature_invalid" for error in errors)
+
+
 def test_runtime_isolation_plan_uses_lane_a_and_b_split() -> None:
     config = load_config("rl_task_foundry.yaml")
 
@@ -252,3 +280,57 @@ def solve(tools):
 
     error_code = asyncio.run(_run())
     assert error_code == "call_count_limit_exceeded"
+
+
+def test_registration_subprocess_pool_runs_tool_self_test() -> None:
+    async def _run() -> tuple[object | None, int | None]:
+        config = load_config("rl_task_foundry.yaml")
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.run_tool_self_test(
+                tool_source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+""",
+                self_test_source="""
+async def run_self_test(tools):
+    row = await tools.get_city(11)
+    assert row["city"] == "sasebo"
+    return {"ok": True, "customer_id": row["customer_id"]}
+""",
+            )
+            assert result.errors == []
+            return result.return_value, result.call_count
+        finally:
+            await pool.close()
+
+    return_value, call_count = asyncio.run(_run())
+    assert return_value == {"ok": True, "customer_id": 11}
+    assert call_count is not None
+    assert call_count >= 1
+
+
+def test_registration_subprocess_pool_reports_tool_self_test_failure() -> None:
+    async def _run() -> str:
+        config = load_config("rl_task_foundry.yaml")
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.run_tool_self_test(
+                tool_source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+""",
+                self_test_source="""
+async def run_self_test(tools):
+    row = await tools.get_city(11)
+    assert row["city"] == "busan"
+    return {"ok": True}
+""",
+            )
+            assert result.errors
+            return result.errors[0].code
+        finally:
+            await pool.close()
+
+    error_code = asyncio.run(_run())
+    assert error_code == "execution_error"

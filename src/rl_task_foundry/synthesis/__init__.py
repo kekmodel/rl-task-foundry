@@ -38,6 +38,8 @@ from rl_task_foundry.synthesis.contracts import (
     ToolEmptyResultBehavior,
     ToolParameterContract,
     ToolParameterType,
+    ToolSelfTestCheck,
+    ToolSelfTestContract,
     ToolTimeoutBehavior,
     VerifierContract,
 )
@@ -111,6 +113,8 @@ __all__ = [
     "ToolEmptyResultBehavior",
     "ToolParameterContract",
     "ToolParameterType",
+    "ToolSelfTestCheck",
+    "ToolSelfTestContract",
     "ToolTimeoutBehavior",
     "VerifierContract",
     "RuntimeIsolationPlan",

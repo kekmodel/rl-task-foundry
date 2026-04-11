@@ -112,6 +112,26 @@ class RegistrationWorkerHandle:
         response = await self._request(payload, expected_request_id=request_id)
         return RegistrationExecutionResult.model_validate(response)
 
+    async def run_tool_self_test(
+        self,
+        *,
+        tool_source: str,
+        self_test_source: str,
+    ) -> RegistrationExecutionResult:
+        request_id = f"worker-{self.worker_index}-req-{self._request_counter}"
+        self._request_counter += 1
+        payload = {
+            "type": "run_tool_self_test",
+            "request_id": request_id,
+            "tool_source": tool_source,
+            "self_test_source": self_test_source,
+            "policy": self.config.synthesis.registration_policy.model_dump(mode="json"),
+            "memory_limit_mb": self.config.synthesis.registration_workers.memory_limit_mb,
+            "call_count_limit": self.config.synthesis.registration_workers.call_count_limit,
+        }
+        response = await self._request(payload, expected_request_id=request_id)
+        return RegistrationExecutionResult.model_validate(response)
+
     async def close(self) -> None:
         if self.process.returncode is not None:
             return
@@ -221,6 +241,21 @@ class RegistrationSubprocessPool:
             entrypoint=entrypoint,
             args=args,
             kwargs=kwargs,
+        )
+
+    async def run_tool_self_test(
+        self,
+        *,
+        tool_source: str,
+        self_test_source: str,
+    ) -> RegistrationExecutionResult:
+        if not self.workers:
+            raise RegistrationSubprocessError("registration subprocess pool has no workers")
+        worker = self.workers[self._next_worker_index]
+        self._next_worker_index = (self._next_worker_index + 1) % len(self.workers)
+        return await worker.run_tool_self_test(
+            tool_source=tool_source,
+            self_test_source=self_test_source,
         )
 
     async def close(self) -> None:

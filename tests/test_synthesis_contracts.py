@@ -37,6 +37,8 @@ from rl_task_foundry.synthesis.contracts import (
     ToolEmptyResultBehavior,
     ToolParameterContract,
     ToolParameterType,
+    ToolSelfTestCheck,
+    ToolSelfTestContract,
     ToolTimeoutBehavior,
     VerifierContract,
 )
@@ -249,6 +251,7 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
     assert round_tripped.task.category is CategoryTaxonomy.ITINERARY
     assert round_tripped.shadow_verifier.official_judgment is False
     assert round_tripped.verifier.fetch_facts_function == "fetch_facts"
+    assert round_tripped.tool_self_test.entrypoint == "run_self_test"
     assert round_tripped.quality_metrics.shadow_disagreement_rate is None
 
 
@@ -312,6 +315,18 @@ def test_tool_contract_defaults_error_behavior() -> None:
 
     assert tool.empty_result_behavior is ToolEmptyResultBehavior.RETURN_EMPTY
     assert tool.timeout_behavior is ToolTimeoutBehavior.RAISE_TIMEOUT
+
+
+def test_tool_self_test_contract_defaults_required_checks() -> None:
+    contract = ToolSelfTestContract()
+
+    assert contract.entrypoint == "run_self_test"
+    assert contract.required_checks == [
+        ToolSelfTestCheck.HAPPY_PATH,
+        ToolSelfTestCheck.EMPTY_RESULT_BEHAVIOR,
+        ToolSelfTestCheck.TIMEOUT_BEHAVIOR,
+        ToolSelfTestCheck.DETERMINISTIC_ORDERING,
+    ]
 
 
 def test_cross_instance_set_requires_unique_instance_ids() -> None:

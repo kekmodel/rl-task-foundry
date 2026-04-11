@@ -666,7 +666,7 @@ v1에서는 generated code를 두 개의 runtime lane으로 나눈다.
 - subprocess worker는 persistent pool이다
 - 각 worker는 자기 프로세스 안에서 작은 read-only async DB pool을 가진다
 - worker당 connection 수는 bounded다
-- worker protocol은 최소한 `validate_module`과 `execute_module_entrypoint` 요청을 지원한다
+- worker protocol은 최소한 `validate_module`, `execute_module_entrypoint`, `run_tool_self_test` 요청을 지원한다
 - timeout은 subprocess 단위로 강제한다
 - memory limit도 프로세스 단위로 강제한다
 - main process의 asyncpg pool을 subprocess와 공유하지 않는다

@@ -97,6 +97,13 @@ class ToolTimeoutBehavior(StrEnum):
     RETURN_ERROR = "return_error"
 
 
+class ToolSelfTestCheck(StrEnum):
+    HAPPY_PATH = "happy_path"
+    EMPTY_RESULT_BEHAVIOR = "empty_result_behavior"
+    TIMEOUT_BEHAVIOR = "timeout_behavior"
+    DETERMINISTIC_ORDERING = "deterministic_ordering"
+
+
 class FactCardinality(StrEnum):
     ONE = "one"
     MANY = "many"
@@ -310,6 +317,21 @@ class SolutionContract(StrictModel):
     visible_to_solver: Literal[False] = False
 
 
+class ToolSelfTestContract(StrictModel):
+    entrypoint: Literal["run_self_test"] = "run_self_test"
+    role: Literal["registration_gate"] = "registration_gate"
+    async_entrypoint: Literal[True] = True
+    visible_to_solver: Literal[False] = False
+    required_checks: list[ToolSelfTestCheck] = Field(
+        default_factory=lambda: [
+            ToolSelfTestCheck.HAPPY_PATH,
+            ToolSelfTestCheck.EMPTY_RESULT_BEHAVIOR,
+            ToolSelfTestCheck.TIMEOUT_BEHAVIOR,
+            ToolSelfTestCheck.DETERMINISTIC_ORDERING,
+        ]
+    )
+
+
 class FactSpec(StrictModel):
     key: str
     entity_ref: str
@@ -501,6 +523,7 @@ class EnvironmentContract(StrictModel):
     tools: list[ToolContract] = Field(default_factory=list)
     task: TaskContract
     solution: SolutionContract
+    tool_self_test: ToolSelfTestContract = Field(default_factory=ToolSelfTestContract)
     verifier: VerifierContract
     shadow_verifier: ShadowVerifierContract
     instance_space: InstanceSpaceContract
