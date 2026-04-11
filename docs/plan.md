@@ -78,11 +78,13 @@ Plan 4가 끝나면 아래가 가능해야 한다.
 - release owner가 latest review pack을 baseline snapshot으로 기록
 - current green suite를 infra regression baseline으로 명시
 - production training 금지 상태를 문서와 runbook에 기록
+- phase 0 산출물을 `docs/phase0_baseline.md`, `docs/runbook.md`에 남긴다
 
 Acceptance:
 
 - baseline snapshot path가 명시돼 있다
 - baseline suite가 회귀 기준으로 남아 있다
+- freeze 상태가 runbook에 명시돼 있다
 
 ### Milestone 1: Core Contracts
 
