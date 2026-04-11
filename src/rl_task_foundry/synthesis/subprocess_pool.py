@@ -30,6 +30,14 @@ class RegistrationSubprocessResult(StrictModel):
     errors: list[RegistrationError]
 
 
+class RegistrationExecutionResult(StrictModel):
+    request_id: str
+    worker_pid: int
+    errors: list[RegistrationError]
+    call_count: int | None = None
+    return_value: object | None = None
+
+
 @dataclass(slots=True)
 class RegistrationWorkerHandle:
     config: AppConfig
@@ -75,7 +83,34 @@ class RegistrationWorkerHandle:
             "policy": self.config.synthesis.registration_policy.model_dump(mode="json"),
             "memory_limit_mb": self.config.synthesis.registration_workers.memory_limit_mb,
         }
-        return await self._request(payload, expected_request_id=request_id)
+        response = await self._request(payload, expected_request_id=request_id)
+        return RegistrationSubprocessResult.model_validate(response)
+
+    async def execute_module_entrypoint(
+        self,
+        *,
+        source: str,
+        artifact_kind: ArtifactKind,
+        entrypoint: str,
+        args: list[object] | None = None,
+        kwargs: dict[str, object] | None = None,
+    ) -> RegistrationExecutionResult:
+        request_id = f"worker-{self.worker_index}-req-{self._request_counter}"
+        self._request_counter += 1
+        payload = {
+            "type": "execute_module_entrypoint",
+            "request_id": request_id,
+            "artifact_kind": artifact_kind.value,
+            "source": source,
+            "entrypoint": entrypoint,
+            "args": args or [],
+            "kwargs": kwargs or {},
+            "policy": self.config.synthesis.registration_policy.model_dump(mode="json"),
+            "memory_limit_mb": self.config.synthesis.registration_workers.memory_limit_mb,
+            "call_count_limit": self.config.synthesis.registration_workers.call_count_limit,
+        }
+        response = await self._request(payload, expected_request_id=request_id)
+        return RegistrationExecutionResult.model_validate(response)
 
     async def close(self) -> None:
         if self.process.returncode is not None:
@@ -91,7 +126,7 @@ class RegistrationWorkerHandle:
         payload: dict[str, object],
         *,
         expected_request_id: str | None = None,
-    ) -> RegistrationSubprocessResult:
+    ) -> dict[str, object]:
         if self.process.stdin is None or self.process.stdout is None:
             raise RegistrationSubprocessError("registration worker subprocess pipes are unavailable")
         if self.process.returncode is not None:
@@ -132,7 +167,7 @@ class RegistrationWorkerHandle:
             )
 
         response.pop("shutdown", None)
-        return RegistrationSubprocessResult.model_validate(response)
+        return response
 
     async def _read_stderr(self) -> str:
         if self.process.stderr is None:
@@ -166,6 +201,27 @@ class RegistrationSubprocessPool:
         worker = self.workers[self._next_worker_index]
         self._next_worker_index = (self._next_worker_index + 1) % len(self.workers)
         return await worker.validate_module(source=source, artifact_kind=artifact_kind)
+
+    async def execute_module_entrypoint(
+        self,
+        *,
+        source: str,
+        artifact_kind: ArtifactKind,
+        entrypoint: str,
+        args: list[object] | None = None,
+        kwargs: dict[str, object] | None = None,
+    ) -> RegistrationExecutionResult:
+        if not self.workers:
+            raise RegistrationSubprocessError("registration subprocess pool has no workers")
+        worker = self.workers[self._next_worker_index]
+        self._next_worker_index = (self._next_worker_index + 1) % len(self.workers)
+        return await worker.execute_module_entrypoint(
+            source=source,
+            artifact_kind=artifact_kind,
+            entrypoint=entrypoint,
+            args=args,
+            kwargs=kwargs,
+        )
 
     async def close(self) -> None:
         await asyncio.gather(*(worker.close() for worker in self.workers))

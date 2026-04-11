@@ -55,6 +55,7 @@ from rl_task_foundry.synthesis.runtime_policy import (
     build_runtime_isolation_plan,
 )
 from rl_task_foundry.synthesis.subprocess_pool import (
+    RegistrationExecutionResult,
     RegistrationSubprocessError,
     RegistrationSubprocessPool,
     RegistrationSubprocessResult,
@@ -93,6 +94,7 @@ __all__ = [
     "OutputSchemaContract",
     "ExecutionLane",
     "RegistrationDbAccessStrategy",
+    "RegistrationExecutionResult",
     "RegistrationError",
     "RegistrationLanePlan",
     "RegistrationSubprocessError",

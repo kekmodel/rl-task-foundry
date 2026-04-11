@@ -27,6 +27,7 @@ def test_cli_validate_config_command():
     assert "mode=persistent_subprocess_pool" in normalized
     assert "db_access=worker_owned_pool" in normalized
     assert "solver_lane=main_process=True,per_tool_subprocess=False" in normalized
+    assert "registration_guards=timeout_s=30,memory_limit_mb=256,call_count_limit=256" in normalized
     assert "estimated_total_db_connections=44" in normalized
     assert "registration_policy_adr=docs/adr/0001-custom-ast-preflight.md" in normalized
 

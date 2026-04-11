@@ -130,6 +130,7 @@ Acceptance:
 - signature validation
 - registration error schema
 - subprocess execution contract
+- worker request contract (`validate_module`, `execute_module_entrypoint`)
 - subprocess worker DB access strategy 고정
 - solver runtime tool execution lane 고정
 - timeout / process-memory limit / call-count guard

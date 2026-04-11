@@ -174,3 +174,81 @@ async def get_country(conn, customer_id):
 
     first_pid, second_pid = asyncio.run(_run())
     assert first_pid != second_pid
+
+
+def test_registration_subprocess_pool_executes_async_tool_entrypoint() -> None:
+    async def _run() -> tuple[object | None, int | None]:
+        config = load_config("rl_task_foundry.yaml")
+        config.synthesis.registration_workers.worker_count = 1
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.execute_module_entrypoint(
+                source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+""",
+                artifact_kind=ArtifactKind.TOOL_MODULE,
+                entrypoint="get_city",
+                args=[None, 7],
+            )
+            assert result.errors == []
+            return result.return_value, result.call_count
+        finally:
+            await pool.close()
+
+    return_value, call_count = asyncio.run(_run())
+    assert return_value == {"customer_id": 7, "city": "sasebo"}
+    assert call_count is not None
+    assert call_count >= 1
+
+
+def test_registration_subprocess_pool_reports_execution_error() -> None:
+    async def _run() -> str:
+        config = load_config("rl_task_foundry.yaml")
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.execute_module_entrypoint(
+                source="""
+def solve(tools):
+    raise ValueError("boom")
+""",
+                artifact_kind=ArtifactKind.SOLUTION_MODULE,
+                entrypoint="solve",
+                args=[{}],
+            )
+            assert result.errors
+            return result.errors[0].code
+        finally:
+            await pool.close()
+
+    error_code = asyncio.run(_run())
+    assert error_code == "execution_error"
+
+
+def test_registration_subprocess_pool_enforces_call_count_limit() -> None:
+    async def _run() -> str:
+        config = load_config("rl_task_foundry.yaml")
+        config.synthesis.registration_workers.call_count_limit = 8
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.execute_module_entrypoint(
+                source="""
+def helper(n):
+    if n <= 0:
+        return 0
+    return helper(n - 1) + 1
+
+def solve(tools):
+    return helper(32)
+""",
+                artifact_kind=ArtifactKind.SOLUTION_MODULE,
+                entrypoint="solve",
+                args=[{}],
+            )
+            assert result.errors
+            return result.errors[0].code
+        finally:
+            await pool.close()
+
+    error_code = asyncio.run(_run())
+    assert error_code == "call_count_limit_exceeded"

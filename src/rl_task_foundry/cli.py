@@ -118,6 +118,12 @@ def validate_config(
         f"main_process={runtime_plan.production_solver_lane.main_process_execution},"
         f"per_tool_subprocess={runtime_plan.production_solver_lane.per_tool_subprocess_roundtrip}"
     )
+    console.print(
+        "registration_guards="
+        f"timeout_s={runtime_plan.registration_lane.task_timeout_s},"
+        f"memory_limit_mb={runtime_plan.registration_lane.memory_limit_mb},"
+        f"call_count_limit={runtime_plan.registration_lane.call_count_limit}"
+    )
     console.print(f"estimated_total_db_connections={runtime_plan.estimated_total_db_connections}")
     console.print(f"registration_policy_adr={runtime_plan.registration_lane.adr_path}")
     console.print(f"solvers={_solver_summary(config)}")
