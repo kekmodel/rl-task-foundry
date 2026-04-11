@@ -242,7 +242,6 @@ async def test_task_factory_generates_task_specs_from_synthetic_graph(monkeypatc
     assert {task.question_family for task in tasks} >= {
         "status_lookup",
         "causal_chain",
-        "timeline_resolution",
         "aggregate_verification",
     }
     assert all(task.label_tier == "A" for task in tasks)
@@ -736,6 +735,33 @@ def test_task_factory_promotes_safe_internal_field_and_contextualizes_generic_na
     assert factory._answer_field_visibility(internal_column) == "user_visible"
     assert factory._is_candidate_answer_column(internal_column) is True
     assert factory._answer_field_name(path, internal_column) == "city_name"
+
+
+def test_task_factory_does_not_emit_timeline_contracts_for_tier_a():
+    graph, catalog = _synthetic_graph()
+    path = catalog.get("orders.shipments")
+    factory = TierATaskFactory(
+        database=load_config("rl_task_foundry.yaml").database,
+        domain=DomainConfig(name="customer_support", language="en"),
+        task_config=TaskComposerConfig(
+            label_tier="A",
+            question_families=["timeline_resolution"],
+            selected_tool_level=1,
+            negative_outcome_ratio=0.0,
+            max_attempts_per_anchor=6,
+        ),
+        tool_compiler=ToolCompilerConfig(
+            max_hops=3,
+            allow_aggregates=True,
+            allow_timelines=True,
+            max_list_cardinality=20,
+        ),
+        verification=VerificationConfig(float_precision=6),
+    )
+
+    contracts = factory._contract_drafts_for_path(graph, path)
+
+    assert contracts == []
 
 
 @pytest.mark.asyncio

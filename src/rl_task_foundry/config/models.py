@@ -27,7 +27,7 @@ class DatabaseConfig(StrictModel):
 
 class DomainConfig(StrictModel):
     name: str
-    language: Literal["ko", "en"] = "ko"
+    language: str = Field(default="ko", min_length=2)
     user_role: str = "end user"
     agent_role: str = "organization AI assistant"
     scenario_description: str = (

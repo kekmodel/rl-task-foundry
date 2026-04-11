@@ -550,6 +550,7 @@ def _provenance_requirements(
         )
         if prefixes:
             return prefixes
+        return ["semantic_key:__missing_timeline_tool__"]
     return _semantic_key_requirements(core_tools, kind="lookup")
 
 

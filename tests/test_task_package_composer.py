@@ -243,6 +243,38 @@ async def test_task_composer_generates_task_aware_l2_presentation(monkeypatch):
     assert any(tool.presentation_role == "distractor" for tool in package.presented_tool_bundle.tools)
 
 
+@pytest.mark.asyncio
+async def test_task_composer_marks_timeline_task_missing_timeline_tool_when_unavailable():
+    graph, path = _graph_and_path()
+    canonical_bundle = compile_canonical_tool_bundle(graph, path, max_list_cardinality=5)
+    composer = TaskComposer(domain=DomainConfig(name="customer_support", language="ko"))
+
+    package = await composer.compose(
+        ComposeRequest(
+            graph=graph,
+            task=_task(tool_level=1, question="가장 최근 배송 시점이 언제였는지 알려주세요.").model_copy(
+                update={
+                    "question_family": "timeline_resolution",
+                    "answer_schema": AnswerSchema(
+                        fields=[
+                            AnswerField(
+                                name="latest_shipped_at",
+                                type="datetime",
+                                canonicalizer="datetime",
+                                source_columns=["shipments.shipped_at"],
+                            )
+                        ]
+                    ),
+                }
+            ),
+            path=path,
+            canonical_bundle=canonical_bundle,
+        )
+    )
+
+    assert package.task.provenance_requirements == ["semantic_key:__missing_timeline_tool__"]
+
+
 def test_question_policy_rejects_raw_english_schema_tokens_in_korean():
     violations = _question_policy_violations(
         "제 inventory에 등록된 film 제목이 무엇인지 알려주세요.",

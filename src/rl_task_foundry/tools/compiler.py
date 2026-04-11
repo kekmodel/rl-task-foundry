@@ -516,13 +516,12 @@ def _tool_description(
     max_list_cardinality: int | None = None,
 ) -> str:
     descriptions = {
-        "lookup": "Return rows from the terminal table reachable from the anchor path.",
+        "lookup": "Return the related details for the requested item.",
         "list_related": (
-            "Return a deterministic bounded list of rows from the terminal table reachable "
-            "from the anchor path."
+            "Return a deterministic bounded list of related details for the requested item."
         ),
-        "count": "Return the number of terminal rows reachable from the anchor path.",
-        "exists": "Return whether at least one terminal row exists for the anchor path.",
+        "count": "Return how many related results are available for the requested item.",
+        "exists": "Return whether any related result exists for the requested item.",
     }
     suffix = ""
     if kind == "list_related" and max_list_cardinality is not None:
@@ -537,7 +536,7 @@ def _aggregate_tool_description(
 ) -> str:
     return (
         f"L{tool_level} aggregate tool. "
-        f"Return {aggregate_function.upper()} over terminal column {aggregate_column}."
+        f"Return {aggregate_function.upper()} over a related numeric field."
     )
 
 
@@ -548,7 +547,7 @@ def _timeline_tool_description(
 ) -> str:
     return (
         f"L{tool_level} timeline tool. "
-        f"Return up to {max_list_cardinality} rows ordered by {order_column} descending."
+        f"Return up to {max_list_cardinality} related results in deterministic most-recent-first order."
     )
 
 

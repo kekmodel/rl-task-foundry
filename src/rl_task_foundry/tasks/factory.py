@@ -68,16 +68,6 @@ _DATETIME_TYPES = {
     "timestamp with time zone",
     "timestamptz",
 }
-_DISALLOWED_ANSWER_PATTERNS = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        r"(^|_)(ssn|social_security|passport|tax_id|cvv|pin|password|secret|token|api_key|private_key)($|_)",
-        r"(^|_)(credit_card|card_number|bank_account|iban|routing_number)($|_)",
-        r"(^|_)(email|e_mail|phone|mobile|telephone|fax)($|_)",
-        r"(^|_)(street|address|zipcode|postal_code|postcode)($|_)",
-        r"(^|_)(birth|birthdate|birthday|dob|first_name|last_name|full_name)($|_)",
-    )
-)
 _PROMOTABLE_INTERNAL_FIELD_NAMES = {
     "city",
     "state",
@@ -382,7 +372,11 @@ class TierATaskFactory:
                             outcome_type="no_result",
                         )
                     )
-            elif family == "timeline_resolution" and temporal_field is not None:
+            elif (
+                family == "timeline_resolution"
+                and temporal_field is not None
+                and self._timeline_contract_enabled()
+            ):
                 drafts.append(
                     self._scalar_contract_draft(
                         path,
@@ -830,9 +824,6 @@ class TierATaskFactory:
         if column.is_primary_key or column.is_foreign_key:
             return False
         normalized = column.column_name.strip().lower()
-        for pattern in _DISALLOWED_ANSWER_PATTERNS:
-            if pattern.search(normalized):
-                return False
         for raw_pattern in self.task_config.exclude_answer_column_patterns:
             try:
                 pattern = re.compile(raw_pattern, re.IGNORECASE)
@@ -909,6 +900,9 @@ class TierATaskFactory:
         if raw_value is None:
             return 0
         return max(0, int(raw_value))
+
+    def _timeline_contract_enabled(self) -> bool:
+        return self.task_config.label_tier != "A" and self.tool_compiler.allow_timelines
 
     @staticmethod
     def _scalar_question_focus_label(contract: TaskContractDraft) -> str:
