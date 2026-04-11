@@ -29,11 +29,13 @@ from rl_task_foundry.synthesis.environment_registry import (
     DifficultyBand,
     EnvironmentRegistryCoverageEntry,
     EnvironmentRegistryCommitStatus,
+    EnvironmentRegistryDuplicateReason,
     EnvironmentRegistrySnapshot,
     EnvironmentRegistryWriter,
     SemanticDedupCandidate,
     build_semantic_dedup_text,
     bucketize_difficulty_vector,
+    estimate_semantic_similarity,
 )
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
 from rl_task_foundry.synthesis.registration_runner import (
@@ -58,6 +60,9 @@ def _sample_draft(
     question: str = "고객 배정 계획을 만들어 주세요.",
     created_at: datetime | None = None,
     difficulty_vector: dict[DifficultyAxis, float] | None = None,
+    tool_signature: str = "sha256:tool",
+    task_signature: str = "sha256:task",
+    verifier_signature: str = "sha256:verifier",
 ) -> SynthesisEnvironmentDraft:
     created_at = created_at or datetime(2026, 4, 12, tzinfo=timezone.utc)
     output_schema = OutputSchemaContract(
@@ -95,9 +100,9 @@ def _sample_draft(
         difficulty_vector=task.difficulty_vector,
         created_at=created_at,
         generator_version="test-version",
-        tool_signature="sha256:tool",
-        task_signature="sha256:task",
-        verifier_signature="sha256:verifier",
+        tool_signature=tool_signature,
+        task_signature=task_signature,
+        verifier_signature=verifier_signature,
         status=EnvironmentStatus.DRAFT,
         quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
         tools=[
@@ -236,10 +241,42 @@ def test_environment_registry_writer_deduplicates_exact_signature(tmp_path: Path
     assert first.status == EnvironmentRegistryCommitStatus.COMMITTED
     assert second.status == EnvironmentRegistryCommitStatus.DUPLICATE
     assert second.duplicate_of_env_id == draft.environment.env_id
+    assert second.duplicate_reason == EnvironmentRegistryDuplicateReason.EXACT
     assert writer.environment_count() == 1
     assert writer.coverage_snapshot() == {
         "db=sakila|category=assignment|difficulty_band=medium": 1
     }
+
+
+def test_environment_registry_writer_deduplicates_semantic_minhash(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+        minhash_threshold=0.9,
+    )
+    first = _sample_draft(
+        "env_assignment_registrytest_a",
+        tool_signature="sha256:tool_a",
+        task_signature="sha256:task_a",
+        verifier_signature="sha256:verifier_a",
+    )
+    second = _sample_draft(
+        "env_assignment_registrytest_b",
+        tool_signature="sha256:tool_b",
+        task_signature="sha256:task_b",
+        verifier_signature="sha256:verifier_b",
+    )
+
+    committed = writer.commit_draft(first)
+    duplicate = writer.commit_draft(second)
+
+    assert committed.status == EnvironmentRegistryCommitStatus.COMMITTED
+    assert duplicate.status == EnvironmentRegistryCommitStatus.DUPLICATE
+    assert duplicate.duplicate_reason == EnvironmentRegistryDuplicateReason.MINHASH
+    assert duplicate.duplicate_of_env_id == "env_assignment_registrytest_a"
+    assert duplicate.semantic_similarity is not None
+    assert duplicate.semantic_similarity >= 0.9
+    assert writer.environment_count() == 1
 
 
 def test_environment_registry_snapshot_and_semantic_candidates(tmp_path: Path) -> None:
@@ -344,3 +381,24 @@ def test_build_semantic_dedup_text_includes_question_and_schema() -> None:
     assert "question:고객 배정 계획을 만들어 주세요." in text
     assert "constraints:uniqueness:unique_customer:같은 고객을 중복 배정하지 않는다." in text
     assert "output_schema:assignment.customer:string" in text
+
+
+def test_estimate_semantic_similarity_is_high_for_same_semantics() -> None:
+    first = build_semantic_dedup_text(
+        _sample_draft(
+            "env_assignment_similarity_a",
+            tool_signature="sha256:tool_a",
+            task_signature="sha256:task_a",
+            verifier_signature="sha256:verifier_a",
+        ).environment
+    )
+    second = build_semantic_dedup_text(
+        _sample_draft(
+            "env_assignment_similarity_b",
+            tool_signature="sha256:tool_b",
+            task_signature="sha256:task_b",
+            verifier_signature="sha256:verifier_b",
+        ).environment
+    )
+
+    assert estimate_semantic_similarity(first, second) >= 0.9

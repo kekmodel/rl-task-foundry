@@ -387,7 +387,7 @@ Acceptance:
 - sqlite index
 - WAL + single-writer append queue 정책
 - exact dedup
-- semantic dedup candidate surface
+- MinHash semantic dedup
 - registry read/query surface
 - category taxonomy mapping
 - difficulty-band coverage counters
@@ -397,6 +397,7 @@ Acceptance:
 Acceptance:
 
 - near-duplicate environment를 exact + semantic 두 단계로 잡을 수 있다
+- v1 semantic dedup은 MinHash threshold로 동작한다
 - category/difficulty coverage를 계산하고 skew를 볼 수 있다
 - v1은 accepted draft를 filesystem bundle + sqlite exact-signature index로 durable commit할 수 있다
 - v1은 registry snapshot과 semantic dedup candidate를 조회할 수 있다

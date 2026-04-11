@@ -145,6 +145,12 @@ def validate_config(
     )
     console.print(f"estimated_total_db_connections={runtime_plan.estimated_total_db_connections}")
     console.print(f"registration_policy_adr={runtime_plan.registration_lane.adr_path}")
+    console.print(
+        "dedup="
+        f"exact_enabled={config.dedup.exact_enabled},"
+        f"near_dup_enabled={config.dedup.near_dup_enabled},"
+        f"minhash_threshold={config.dedup.minhash_threshold}"
+    )
     console.print(f"solvers={_solver_summary(config)}")
 
 

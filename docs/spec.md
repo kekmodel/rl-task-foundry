@@ -987,10 +987,9 @@ dedup은 두 단계다.
 1. exact dedup
    - v1은 `db_id + tool_signature + task_signature + verifier_signature`의 exact signature를 sqlite unique key로 사용한다
 2. semantic dedup
-   - v1은 registry가 `semantic_dedup_text` candidate document를 durable하게 저장하고 조회 surface를 제공한다
-   - 이후 embedding lane이 이 candidate document를 사용해 near-duplicate를 판정한다
-   - task embedding
-   - constraint summary embedding
+   - v1은 같은 `db_id x category` 안에서 `semantic_dedup_text`의 MinHash similarity로 near-duplicate를 판정한다
+   - `minhash_threshold`는 config source-of-truth다
+   - registry는 semantic candidate document를 durable하게 저장하고 query surface를 제공한다
 
 minor naming variation으로 near-duplicate가 통과하면 안 된다.
 

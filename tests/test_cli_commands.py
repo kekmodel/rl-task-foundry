@@ -56,6 +56,7 @@ def test_cli_validate_config_command():
     assert "registration_guards=timeout_s=30,memory_limit_mb=256,call_count_limit=256" in normalized
     assert "estimated_total_db_connections=44" in normalized
     assert "registration_policy_adr=docs/adr/0001-custom-ast-preflight.md" in normalized
+    assert "dedup=exact_enabled=True,near_dup_enabled=True,minhash_threshold=0.9" in normalized
 
 
 def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):

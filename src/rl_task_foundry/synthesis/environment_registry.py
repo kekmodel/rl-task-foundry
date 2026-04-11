@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from datasketch import MinHash
 import yaml
 
 from rl_task_foundry.config.models import AppConfig
@@ -56,10 +58,17 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_env_registry_exact_signature ON environments (exact_signature)",
 )
 
+MINHASH_NUM_PERM = 128
+
 
 class EnvironmentRegistryCommitStatus(StrEnum):
     COMMITTED = "committed"
     DUPLICATE = "duplicate"
+
+
+class EnvironmentRegistryDuplicateReason(StrEnum):
+    EXACT = "exact"
+    MINHASH = "minhash"
 
 
 class DifficultyBand(StrEnum):
@@ -77,6 +86,8 @@ class EnvironmentRegistryCommitResult:
     difficulty_band: DifficultyBand
     filesystem_path: Path
     duplicate_of_env_id: str | None = None
+    duplicate_reason: EnvironmentRegistryDuplicateReason | None = None
+    semantic_similarity: float | None = None
 
 
 @dataclass(slots=True)
@@ -126,6 +137,10 @@ class EnvironmentRegistrySnapshot:
 class EnvironmentRegistryWriter:
     root_dir: Path
     index_db_path: Path
+    exact_dedup_enabled: bool = True
+    near_dup_enabled: bool = True
+    minhash_threshold: float = 0.9
+    minhash_num_perm: int = MINHASH_NUM_PERM
 
     def __post_init__(self) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -137,6 +152,9 @@ class EnvironmentRegistryWriter:
         return cls(
             root_dir=base_dir / "environments",
             index_db_path=base_dir / "environment_registry.db",
+            exact_dedup_enabled=config.dedup.exact_enabled,
+            near_dup_enabled=config.dedup.near_dup_enabled,
+            minhash_threshold=config.dedup.minhash_threshold,
         )
 
     def commit_draft(
@@ -146,16 +164,35 @@ class EnvironmentRegistryWriter:
         env = draft.environment
         exact_signature = self._exact_signature(draft)
         difficulty_band = bucketize_difficulty_vector(env.difficulty_vector)
-        existing = self._lookup_duplicate(exact_signature)
-        if existing is not None:
-            return EnvironmentRegistryCommitResult(
-                status=EnvironmentRegistryCommitStatus.DUPLICATE,
-                env_id=existing["env_id"],
-                exact_signature=exact_signature,
-                difficulty_band=DifficultyBand(existing["difficulty_band"]),
-                filesystem_path=Path(existing["filesystem_path"]),
-                duplicate_of_env_id=existing["env_id"],
+        if self.exact_dedup_enabled:
+            existing = self._lookup_duplicate(exact_signature)
+            if existing is not None:
+                return EnvironmentRegistryCommitResult(
+                    status=EnvironmentRegistryCommitStatus.DUPLICATE,
+                    env_id=existing["env_id"],
+                    exact_signature=exact_signature,
+                    difficulty_band=DifficultyBand(existing["difficulty_band"]),
+                    filesystem_path=Path(existing["filesystem_path"]),
+                    duplicate_of_env_id=existing["env_id"],
+                    duplicate_reason=EnvironmentRegistryDuplicateReason.EXACT,
+                )
+        if self.near_dup_enabled:
+            semantic_duplicate = self._lookup_semantic_duplicate(
+                db_id=env.db_id,
+                category=env.category,
+                semantic_text=build_semantic_dedup_text(env),
             )
+            if semantic_duplicate is not None:
+                return EnvironmentRegistryCommitResult(
+                    status=EnvironmentRegistryCommitStatus.DUPLICATE,
+                    env_id=semantic_duplicate["env_id"],
+                    exact_signature=exact_signature,
+                    difficulty_band=DifficultyBand(semantic_duplicate["difficulty_band"]),
+                    filesystem_path=Path(semantic_duplicate["filesystem_path"]),
+                    duplicate_of_env_id=semantic_duplicate["env_id"],
+                    duplicate_reason=EnvironmentRegistryDuplicateReason.MINHASH,
+                    semantic_similarity=float(semantic_duplicate["semantic_similarity"]),
+                )
 
         temp_dir = self.root_dir / f".tmp-{env.env_id}"
         final_dir = self.root_dir / env.env_id
@@ -187,6 +224,7 @@ class EnvironmentRegistryWriter:
                         difficulty_band=DifficultyBand(row["difficulty_band"]),
                         filesystem_path=Path(row["filesystem_path"]),
                         duplicate_of_env_id=row["env_id"],
+                        duplicate_reason=EnvironmentRegistryDuplicateReason.EXACT,
                     )
 
                 temp_dir.rename(final_dir)
@@ -441,6 +479,47 @@ class EnvironmentRegistryWriter:
                 (exact_signature,),
             ).fetchone()
 
+    def _lookup_semantic_duplicate(
+        self,
+        *,
+        db_id: str,
+        category: CategoryTaxonomy,
+        semantic_text: str,
+    ) -> dict[str, object] | None:
+        target = _build_minhash(semantic_text, num_perm=self.minhash_num_perm)
+        best_match: dict[str, object] | None = None
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT env_id, difficulty_band, filesystem_path, payload_json
+                FROM environments
+                WHERE db_id = ? AND category = ?
+                """,
+                (db_id, category.value),
+            ).fetchall()
+        for row in rows:
+            payload = self._parse_payload(row["payload_json"])
+            existing_text = _optional_string(payload.get("semantic_dedup_text"))
+            if not existing_text:
+                existing_text = _fallback_semantic_text(
+                    category=category,
+                    question=_optional_string(payload.get("question")),
+                    constraint_summaries=_constraint_summaries_from_payload(payload),
+                )
+            similarity = target.jaccard(
+                _build_minhash(existing_text, num_perm=self.minhash_num_perm)
+            )
+            if similarity < self.minhash_threshold:
+                continue
+            if best_match is None or similarity > float(best_match["semantic_similarity"]):
+                best_match = {
+                    "env_id": str(row["env_id"]),
+                    "difficulty_band": str(row["difficulty_band"]),
+                    "filesystem_path": str(row["filesystem_path"]),
+                    "semantic_similarity": similarity,
+                }
+        return best_match
+
     def _has_env_row(self, env_id: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
@@ -664,6 +743,17 @@ def build_semantic_dedup_text(environment: EnvironmentContract) -> str:
     return "\n".join(lines)
 
 
+def estimate_semantic_similarity(
+    left_text: str,
+    right_text: str,
+    *,
+    num_perm: int = MINHASH_NUM_PERM,
+) -> float:
+    return _build_minhash(left_text, num_perm=num_perm).jaccard(
+        _build_minhash(right_text, num_perm=num_perm)
+    )
+
+
 def _flatten_output_schema(field: OutputFieldContract, *, prefix: str = "") -> list[str]:
     path = f"{prefix}.{field.name}" if prefix else field.name
     if field.type == OutputFieldType.OBJECT:
@@ -712,3 +802,22 @@ def _fallback_semantic_text(
         "constraints:" + (" | ".join(constraint_summaries) or "<none>"),
     ]
     return "\n".join(parts)
+
+
+def _build_minhash(text: str, *, num_perm: int) -> MinHash:
+    minhash = MinHash(num_perm=num_perm)
+    for token in _semantic_shingles(text):
+        minhash.update(token.encode("utf-8"))
+    return minhash
+
+
+def _semantic_shingles(text: str) -> tuple[str, ...]:
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    if not normalized:
+        return ("<empty>",)
+    tokens = re.findall(r"\w+", normalized)
+    if not tokens:
+        return (normalized,)
+    if len(tokens) < 3:
+        return tuple(tokens)
+    return tuple(" ".join(tokens[index : index + 3]) for index in range(len(tokens) - 2))
