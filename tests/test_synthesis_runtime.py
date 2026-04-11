@@ -51,12 +51,16 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisPhase,
     SynthesisRegistrationError,
     SynthesisSelfConsistencyError,
+    SynthesisSelfConsistencyDiagnostics,
     SynthesisSelfConsistencyOutcome,
     SynthesisStageRequest,
     SynthesisStageResult,
     SynthesisToolTraceEntry,
 )
-from rl_task_foundry.synthesis.subprocess_pool import RegistrationVerifierProbeResult
+from rl_task_foundry.synthesis.subprocess_pool import (
+    RegistrationSelfConsistencyResult,
+    RegistrationVerifierProbeResult,
+)
 
 
 def _sample_graph() -> SchemaGraph:
@@ -311,6 +315,47 @@ def _diagnostic_registration_report(
     )
 
 
+def _passing_self_consistency_result() -> RegistrationSelfConsistencyResult:
+    return RegistrationSelfConsistencyResult(
+        request_id="self-check-1",
+        worker_pid=1234,
+        errors=[],
+        answer={"assignments": []},
+        solution_tool_calls=1,
+        verifier_tool_calls=1,
+        fetch_facts_return_keys=[],
+        expected_fact_keys=[],
+        facts_match_result=True,
+        check_constraints_result=True,
+        verify_result=True,
+    )
+
+
+def _failing_self_consistency_result(
+    *,
+    error_codes: list[str] | None = None,
+    facts_match_result: bool | None = True,
+    check_constraints_result: bool | None = False,
+    verify_result: bool | None = False,
+) -> RegistrationSelfConsistencyResult:
+    return RegistrationSelfConsistencyResult(
+        request_id="self-check-1",
+        worker_pid=1234,
+        errors=[
+            RegistrationError(code=code, detail=f"self-consistency error: {code}")
+            for code in (error_codes or [])
+        ],
+        answer={"assignments": []},
+        solution_tool_calls=1,
+        verifier_tool_calls=1,
+        fetch_facts_return_keys=["city"],
+        expected_fact_keys=["city"],
+        facts_match_result=facts_match_result,
+        check_constraints_result=check_constraints_result,
+        verify_result=verify_result,
+    )
+
+
 class _FakeBackend:
     def __init__(
         self,
@@ -392,7 +437,11 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
         assert proposed_environment == _sample_proposed_environment()
         return _diagnostic_registration_report()
 
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
 
     draft = await runtime.synthesize_environment_draft(
         db_id="sakila",
@@ -407,12 +456,13 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.environment.generator_version == CURRENT_SYNTHESIS_GENERATOR_VERSION
     assert draft.environment.env_id.startswith("env_assignment_")
     assert len(draft.environment.env_id.split("_")[-1]) == 16
-    assert draft.environment.quality_metrics.self_consistency_pass is False
+    assert draft.environment.quality_metrics.self_consistency_pass is True
     assert draft.environment.tool_signature.startswith("sha256:")
     assert draft.environment.task_signature.startswith("sha256:")
     assert draft.environment.verifier_signature.startswith("sha256:")
     assert draft.registration_report.status == RegistrationBundleStatus.PASSED
     assert draft.registration_diagnostics.status == RegistrationBundleStatus.PASSED
+    assert draft.self_consistency_diagnostics.passed is True
     assert draft.registration_diagnostics.error_codes == []
     assert draft.registration_diagnostics.verifier.fetch_facts_tool_calls == 1
     assert draft.registration_diagnostics.verifier.probe_fetch_facts_return_keys == ["city"]
@@ -444,7 +494,11 @@ async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback(
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
 
     draft = await runtime.synthesize_environment_draft(
         db_id="sakila",
@@ -547,7 +601,11 @@ async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
             probe_error_codes=["facts_schema_keys_mismatch"],
         )
 
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
 
     with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
         await runtime.synthesize_environment_draft(
@@ -592,7 +650,11 @@ async def test_synthesis_agent_runtime_retries_artifact_generation_with_registra
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return next(reports)
 
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
 
     draft = await runtime.synthesize_environment_draft(
         db_id="sakila",
@@ -665,6 +727,109 @@ async def test_synthesis_agent_runtime_raises_self_consistency_error_after_budge
 
 
 @pytest.mark.asyncio
+async def test_synthesis_agent_runtime_retries_on_self_consistency_failure(monkeypatch):
+    config = load_config("rl_task_foundry.yaml")
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+    checks = iter(
+        [
+            _failing_self_consistency_result(
+                facts_match_result=True,
+                check_constraints_result=False,
+                verify_result=False,
+            ),
+            _passing_self_consistency_result(),
+        ]
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return next(checks)
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    artifact_requests = [
+        request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
+    ]
+    assert [request.attempt_index for request in artifact_requests] == [1, 2]
+    assert artifact_requests[0].latest_self_consistency_diagnostics is None
+    assert artifact_requests[1].latest_self_consistency_diagnostics is not None
+    assert artifact_requests[1].latest_self_consistency_diagnostics.verify_result is False
+    assert [attempt.outcome for attempt in draft.self_consistency_attempts] == [
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+        SynthesisSelfConsistencyOutcome.PASSED,
+    ]
+    assert draft.self_consistency_attempts[0].self_consistency_diagnostics is not None
+    assert (
+        draft.self_consistency_attempts[0].self_consistency_diagnostics.check_constraints_result
+        is False
+    )
+    assert draft.self_consistency_diagnostics.passed is True
+    assert draft.environment.quality_metrics.self_consistency_pass is True
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_raises_after_self_consistency_budget_exhausted(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 2
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _failing_self_consistency_result(
+            facts_match_result=True,
+            check_constraints_result=False,
+            verify_result=False,
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    assert [attempt.outcome for attempt in exc_info.value.attempts] == [
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+    ]
+    assert exc_info.value.last_self_consistency_diagnostics is not None
+    assert exc_info.value.last_self_consistency_diagnostics.verify_result is False
+    assert backend.calls.count(SynthesisPhase.ARTIFACT_GENERATION) == 2
+
+
+@pytest.mark.asyncio
 async def test_synthesis_agent_runtime_wraps_registration_gate_exceptions(monkeypatch):
     config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
     config.synthesis.runtime.max_self_consistency_iterations = 1
@@ -717,11 +882,15 @@ async def test_synthesis_agent_runtime_introspects_graph_once_when_not_provided(
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
     monkeypatch.setattr(
         "rl_task_foundry.synthesis.runtime.PostgresSchemaIntrospector.introspect",
         _fake_introspect,
     )
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
 
     draft_one = await runtime.synthesize_environment_draft(
         db_id="sakila",
@@ -753,7 +922,15 @@ async def test_synthesis_agent_runtime_is_single_db_per_instance(monkeypatch):
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_run_self_consistency_check",
+        _fake_self_consistency,
+    )
 
     await runtime.synthesize_environment_draft(
         db_id="sakila",
@@ -806,10 +983,14 @@ async def test_synthesis_agent_runtime_propagates_materialize_validation_failure
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
     def _fake_model_validate(payload):
         raise ValueError("forced validation failure")
 
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
     monkeypatch.setattr(
         "rl_task_foundry.synthesis.runtime.EnvironmentContract.model_validate",
         _fake_model_validate,

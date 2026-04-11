@@ -256,6 +256,8 @@ Acceptance:
 - `max_self_consistency_iterations`
 - stage 1/2는 재사용하고 artifact generation phase만 재시도하는 v1 loop
 - 직전 registration diagnostics를 다음 artifact attempt input에 주입
+- registration 통과 후 `solve(tools)` + primary verifier 실제 실행
+- 직전 self-consistency diagnostics를 다음 artifact attempt input에 주입
 - budget 소진 시 typed `SynthesisSelfConsistencyError`로 attempt history를 반환
 - infeasible discard path
 - discard consumes budget 정책
@@ -267,6 +269,8 @@ Acceptance:
 
 Acceptance:
 
+- registration을 통과한 attempt는 solution과 primary verifier를 실제 실행한다
+- verifier가 `False`를 반환하면 artifact generation이 다음 attempt로 재시도된다
 - verifier relaxation으로만 통과하는 gaming이 reject된다
 - difficulty vector가 monotonic하게 증가한다
 - 반복 discard가 scheduler-level backoff로 이어진다

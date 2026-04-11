@@ -78,6 +78,7 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisProviderUnavailableError,
     SynthesisRegistrationError,
     SynthesisSelfConsistencyAttempt,
+    SynthesisSelfConsistencyDiagnostics,
     SynthesisSelfConsistencyError,
     SynthesisSelfConsistencyOutcome,
     SynthesisStageRequest,
@@ -95,6 +96,7 @@ from rl_task_foundry.synthesis.runtime_policy import (
 )
 from rl_task_foundry.synthesis.subprocess_pool import (
     RegistrationExecutionResult,
+    RegistrationSelfConsistencyResult,
     RegistrationSubprocessError,
     RegistrationSubprocessPool,
     RegistrationSubprocessResult,
@@ -147,6 +149,7 @@ __all__ = [
     "ArtifactRegistrationResult",
     "build_registration_diagnostics",
     "RegistrationExecutionResult",
+    "RegistrationSelfConsistencyResult",
     "RegistrationError",
     "RegistrationLanePlan",
     "RegistrationSubprocessError",
@@ -171,6 +174,7 @@ __all__ = [
     "SynthesisProviderUnavailableError",
     "SynthesisRegistrationError",
     "SynthesisSelfConsistencyAttempt",
+    "SynthesisSelfConsistencyDiagnostics",
     "SynthesisSelfConsistencyError",
     "SynthesisSelfConsistencyOutcome",
     "SynthesisStageRequest",

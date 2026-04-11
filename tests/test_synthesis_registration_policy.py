@@ -681,6 +681,111 @@ async def run_self_test(tools):
     assert error_code == "execution_error"
 
 
+def test_registration_subprocess_pool_runs_solution_verifier_self_consistency_check() -> None:
+    async def _run() -> tuple[bool | None, bool | None, bool | None, int | None, int | None]:
+        config = load_config("rl_task_foundry.yaml")
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.run_self_consistency_check(
+                tool_source="""
+async def lookup_city(conn, customer_id):
+    return {"city": "sasebo"}
+""",
+                solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+                verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"city": tools.lookup_city(answer.get("city"))["city"]}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return bool(facts.get("city"))
+""",
+                expected_fact_keys=["city"],
+            )
+            assert result.errors == []
+            return (
+                result.facts_match_result,
+                result.check_constraints_result,
+                result.verify_result,
+                result.solution_tool_calls,
+                result.verifier_tool_calls,
+            )
+        finally:
+            await pool.close()
+
+    (
+        facts_match_result,
+        check_constraints_result,
+        verify_result,
+        solution_tool_calls,
+        verifier_tool_calls,
+    ) = asyncio.run(_run())
+    assert facts_match_result is True
+    assert check_constraints_result is True
+    assert verify_result is True
+    assert solution_tool_calls is not None
+    assert verifier_tool_calls is not None
+
+
+def test_registration_subprocess_pool_reports_failed_self_consistency_check() -> None:
+    async def _run() -> tuple[bool | None, bool | None, bool | None, list[str]]:
+        config = load_config("rl_task_foundry.yaml")
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.run_self_consistency_check(
+                tool_source="""
+async def lookup_city(conn, customer_id):
+    return {"city": "sasebo"}
+""",
+                solution_source="""
+def solve(tools):
+    return {"city": "busan"}
+""",
+                verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"city": tools.lookup_city(answer.get("city"))["city"]}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return bool(facts.get("city"))
+""",
+                expected_fact_keys=["city"],
+            )
+            return (
+                result.facts_match_result,
+                result.check_constraints_result,
+                result.verify_result,
+                [error.code for error in result.errors],
+            )
+        finally:
+            await pool.close()
+
+    facts_match_result, check_constraints_result, verify_result, error_codes = asyncio.run(_run())
+    assert facts_match_result is False
+    assert check_constraints_result is True
+    assert verify_result is False
+    assert error_codes == []
+
+
 def test_registration_runner_passes_valid_bundle() -> None:
     async def _run() -> tuple[str, bool, bool, int, int, int, list[str]]:
         config = load_config("rl_task_foundry.yaml")

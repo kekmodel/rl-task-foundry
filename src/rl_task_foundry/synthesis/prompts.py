@@ -59,5 +59,13 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
         "latest_registration_diagnostics_role": (
             "structured registration feedback from the most recent failed artifact attempt"
         ),
+        "latest_self_consistency_diagnostics": (
+            request.latest_self_consistency_diagnostics.model_dump(mode="json")
+            if request.latest_self_consistency_diagnostics is not None
+            else None
+        ),
+        "latest_self_consistency_diagnostics_role": (
+            "structured solution/verifier feedback from the most recent failed artifact attempt"
+        ),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)

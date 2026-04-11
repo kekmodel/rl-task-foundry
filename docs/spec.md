@@ -808,14 +808,23 @@ artifact generation phase output contract:
 3. 실패 시 수정 제안
 4. iteration budget이 남아 있으면 다시 synthesize
 
-v1 runtime skeleton에서는 full solution/verifier self-consistency 전에,
-artifact generation phase에 대한 registration-driven retry를 먼저 구현한다.
+v1 runtime skeleton에서는 schema/category phase를 재사용하면서,
+artifact generation phase에 대해 registration + primary verifier self-consistency retry를 구현한다.
 
 - schema exploration과 category inference는 한 번만 수행한다
 - artifact generation만 `attempt_index=1..N`으로 재실행한다
 - 직전 registration 실패의 `registration_diagnostics`를 다음 artifact attempt input에 넣는다
-- registration이 통과한 attempt만 materialize된다
+- registration이 통과하면 같은 attempt에서 `solve(tools)`를 실행하고 primary verifier를 실제로 돌린다
+- 직전 self-consistency 실패의 structured diagnostics도 다음 artifact attempt input에 넣는다
+- registration과 self-consistency를 모두 통과한 attempt만 materialize된다
 - budget을 다 쓰면 runtime은 `SynthesisSelfConsistencyError`로 실패 attempt와 마지막 diagnostics를 함께 올린다
+
+v1 self-consistency execution은 registration lane subprocess worker에서 아래를 확인한다.
+
+- `solve(tools)`를 실제 실행해 JSON-serializable answer를 얻는다
+- primary verifier의 `fetch_facts()`, `facts_match_answer_claims()`, `check_constraints()`, `verify()`를 solution answer로 실행한다
+- `verify()`가 `True`여야 attempt가 self-consistency pass로 간주된다
+- facts schema key mismatch, staged outcome mismatch, bool contract 위반은 structured diagnostics로 수집된다
 
 운영 규칙:
 

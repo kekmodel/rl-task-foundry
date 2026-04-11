@@ -47,6 +47,7 @@ from rl_task_foundry.synthesis.registration_runner import (
     run_registration_bundle,
 )
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
+from rl_task_foundry.synthesis.subprocess_pool import RegistrationSelfConsistencyResult
 
 CURRENT_SYNTHESIS_GENERATOR_VERSION = "milestone-3-runtime-v1"
 RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
@@ -149,6 +150,7 @@ class SynthesisStageRequest(StrictModel):
     previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput] = Field(default_factory=dict)
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
     latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
+    latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
 
 
 class SynthesisStageResult(StrictModel):
@@ -170,6 +172,7 @@ class SynthesisEnvironmentDraft(StrictModel):
     artifacts: GeneratedArtifactBundle
     registration_report: RegistrationBundleReport
     registration_diagnostics: RegistrationBundleDiagnostics
+    self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics
     self_consistency_attempts: list[SynthesisSelfConsistencyAttempt] = Field(default_factory=list)
     stage_results: list[SynthesisStageResult] = Field(default_factory=list)
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
@@ -222,6 +225,22 @@ class SynthesisSelfConsistencyOutcome(StrEnum):
     PASSED = "passed"
     REGISTRATION_FAILED = "registration_failed"
     CATEGORY_MISMATCH = "category_mismatch"
+    SELF_CONSISTENCY_FAILED = "self_consistency_failed"
+
+
+class SynthesisSelfConsistencyDiagnostics(StrictModel):
+    passed: bool
+    error_codes: list[str] = Field(default_factory=list)
+    answer: object | None = None
+    solution_tool_calls: int | None = None
+    verifier_tool_calls: int | None = None
+    fetch_facts_return_keys: list[str] = Field(default_factory=list)
+    expected_fact_keys: list[str] = Field(default_factory=list)
+    missing_fact_keys: list[str] = Field(default_factory=list)
+    extra_fact_keys: list[str] = Field(default_factory=list)
+    facts_match_result: bool | None = None
+    check_constraints_result: bool | None = None
+    verify_result: bool | None = None
 
 
 class SynthesisSelfConsistencyAttempt(StrictModel):
@@ -232,6 +251,7 @@ class SynthesisSelfConsistencyAttempt(StrictModel):
     memory_summary: str
     error_message: str | None = None
     registration_diagnostics: RegistrationBundleDiagnostics | None = None
+    self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
 
 
 class SynthesisSelfConsistencyError(SynthesisRuntimeError):
@@ -243,16 +263,19 @@ class SynthesisSelfConsistencyError(SynthesisRuntimeError):
         *,
         attempts: list[SynthesisSelfConsistencyAttempt],
         last_registration_diagnostics: RegistrationBundleDiagnostics | None = None,
+        last_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None,
     ) -> None:
         super().__init__(message)
         self.attempts = attempts
         self.last_registration_diagnostics = last_registration_diagnostics
+        self.last_self_consistency_diagnostics = last_self_consistency_diagnostics
 
 
 class SynthesisDbBindingError(SynthesisRuntimeError):
     """Raised when a runtime instance is reused for a different logical database id."""
 
 
+SynthesisStageRequest.model_rebuild()
 SynthesisEnvironmentDraft.model_rebuild()
 
 
@@ -420,6 +443,7 @@ class SynthesisAgentRuntime:
             artifact_payload,
             registration_report,
             registration_diagnostics,
+            self_consistency_diagnostics,
             self_consistency_attempts,
         ) = await self._run_artifact_generation_with_self_consistency(
             db_id=db_id,
@@ -438,6 +462,7 @@ class SynthesisAgentRuntime:
             db_id=db_id,
             requested_category=requested_category,
             created_at=materialized_at,
+            self_consistency_pass=self_consistency_diagnostics.passed,
         )
 
         return SynthesisEnvironmentDraft(
@@ -450,6 +475,7 @@ class SynthesisAgentRuntime:
             artifacts=artifact_payload.artifacts,
             registration_report=registration_report,
             registration_diagnostics=registration_diagnostics,
+            self_consistency_diagnostics=self_consistency_diagnostics,
             self_consistency_attempts=self_consistency_attempts,
             stage_results=stage_results,
             memory=memory,
@@ -512,10 +538,12 @@ class SynthesisAgentRuntime:
         ArtifactGenerationOutput,
         RegistrationBundleReport,
         RegistrationBundleDiagnostics,
+        SynthesisSelfConsistencyDiagnostics,
         list[SynthesisSelfConsistencyAttempt],
     ]:
         attempts: list[SynthesisSelfConsistencyAttempt] = []
         latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
+        latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
         max_iterations = self.config.synthesis.runtime.max_self_consistency_iterations
 
         for attempt_index in range(1, max_iterations + 1):
@@ -532,6 +560,7 @@ class SynthesisAgentRuntime:
                 previous_outputs=previous_outputs,
                 memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
                 latest_registration_diagnostics=latest_registration_diagnostics,
+                latest_self_consistency_diagnostics=latest_self_consistency_diagnostics,
             )
             result = await self._run_phase(request)
             assert isinstance(result.payload, ArtifactGenerationOutput)
@@ -552,6 +581,7 @@ class SynthesisAgentRuntime:
                 attempts.append(attempt)
                 memory.append(self._attempt_feedback_entry(attempt))
                 latest_registration_diagnostics = None
+                latest_self_consistency_diagnostics = None
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget on category mismatch",
@@ -577,12 +607,41 @@ class SynthesisAgentRuntime:
                 attempts.append(attempt)
                 memory.append(self._attempt_feedback_entry(attempt))
                 latest_registration_diagnostics = exc.diagnostics
+                latest_self_consistency_diagnostics = None
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget after registration failures",
                         attempts=attempts,
                         last_registration_diagnostics=exc.diagnostics,
                     ) from exc
+                continue
+
+            self_consistency_diagnostics = await self._execute_self_consistency_check(
+                bundle=artifact_payload.artifacts,
+                proposed_environment=artifact_payload.proposed_environment,
+            )
+            if not self_consistency_diagnostics.passed:
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+                    provider=result.provider,
+                    model=result.model,
+                    memory_summary=result.memory_entry.summary,
+                    error_message="solution output did not satisfy the primary verifier",
+                    registration_diagnostics=registration_diagnostics,
+                    self_consistency_diagnostics=self_consistency_diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                latest_registration_diagnostics = registration_diagnostics
+                latest_self_consistency_diagnostics = self_consistency_diagnostics
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "artifact generation exhausted self-consistency budget after verifier failures",
+                        attempts=attempts,
+                        last_registration_diagnostics=registration_diagnostics,
+                        last_self_consistency_diagnostics=self_consistency_diagnostics,
+                    )
                 continue
 
             passed_attempt = SynthesisSelfConsistencyAttempt(
@@ -592,23 +651,38 @@ class SynthesisAgentRuntime:
                 model=result.model,
                 memory_summary=result.memory_entry.summary,
                 registration_diagnostics=registration_diagnostics,
+                self_consistency_diagnostics=self_consistency_diagnostics,
             )
             attempts.append(passed_attempt)
-            return artifact_payload, registration_report, registration_diagnostics, attempts
+            return (
+                artifact_payload,
+                registration_report,
+                registration_diagnostics,
+                self_consistency_diagnostics,
+                attempts,
+            )
 
         raise SynthesisSelfConsistencyError(
             "artifact generation exhausted self-consistency budget",
             attempts=attempts,
             last_registration_diagnostics=latest_registration_diagnostics,
+            last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
         )
 
     @staticmethod
     def _attempt_feedback_entry(
         attempt: SynthesisSelfConsistencyAttempt,
     ) -> SynthesisMemoryEntry:
-        diagnostics = attempt.registration_diagnostics
-        weak_signals = diagnostics.weak_signal_codes if diagnostics is not None else []
-        error_codes = diagnostics.error_codes if diagnostics is not None else []
+        registration_diagnostics = attempt.registration_diagnostics
+        self_consistency_diagnostics = attempt.self_consistency_diagnostics
+        weak_signals = (
+            registration_diagnostics.weak_signal_codes
+            if registration_diagnostics is not None
+            else []
+        )
+        error_codes = (
+            registration_diagnostics.error_codes if registration_diagnostics is not None else []
+        )
         detail_parts = [
             f"self_consistency_attempt={attempt.attempt_index}",
             f"outcome={attempt.outcome.value}",
@@ -617,6 +691,23 @@ class SynthesisAgentRuntime:
             detail_parts.append(f"errors={','.join(error_codes)}")
         if weak_signals:
             detail_parts.append(f"weak_signals={','.join(weak_signals)}")
+        if self_consistency_diagnostics is not None:
+            if self_consistency_diagnostics.error_codes:
+                detail_parts.append(
+                    "self_consistency_errors="
+                    + ",".join(self_consistency_diagnostics.error_codes)
+                )
+            if self_consistency_diagnostics.facts_match_result is not None:
+                detail_parts.append(
+                    f"facts_match={self_consistency_diagnostics.facts_match_result}"
+                )
+            if self_consistency_diagnostics.check_constraints_result is not None:
+                detail_parts.append(
+                    "check_constraints="
+                    f"{self_consistency_diagnostics.check_constraints_result}"
+                )
+            if self_consistency_diagnostics.verify_result is not None:
+                detail_parts.append(f"verify={self_consistency_diagnostics.verify_result}")
         return SynthesisMemoryEntry(
             phase=SynthesisPhase.ARTIFACT_GENERATION,
             provider="runtime",
@@ -661,6 +752,58 @@ class SynthesisAgentRuntime:
             )
         return report, diagnostics
 
+    async def _execute_self_consistency_check(
+        self,
+        *,
+        bundle: GeneratedArtifactBundle,
+        proposed_environment: ProposedEnvironmentDraft,
+    ) -> SynthesisSelfConsistencyDiagnostics:
+        result = await self._run_self_consistency_check(
+            bundle=bundle,
+            proposed_environment=proposed_environment,
+        )
+        return self._build_self_consistency_diagnostics(result)
+
+    async def _run_self_consistency_check(
+        self,
+        *,
+        bundle: GeneratedArtifactBundle,
+        proposed_environment: ProposedEnvironmentDraft,
+    ) -> RegistrationSelfConsistencyResult:
+        if self._registration_pool is None:
+            async with self._registration_lock:
+                if self._registration_pool is None:
+                    self._registration_pool = await RegistrationSubprocessPool.start(
+                        self.config
+                    )
+        return await self._registration_pool.run_self_consistency_check(
+            tool_source=bundle.tool_source,
+            solution_source=bundle.solution_source,
+            verifier_source=bundle.verifier_source,
+            expected_fact_keys=[
+                fact.key for fact in proposed_environment.verifier.facts_schema.facts
+            ],
+        )
+
+    @staticmethod
+    def _build_self_consistency_diagnostics(
+        result: RegistrationSelfConsistencyResult,
+    ) -> SynthesisSelfConsistencyDiagnostics:
+        return SynthesisSelfConsistencyDiagnostics(
+            passed=not result.errors and bool(result.verify_result),
+            error_codes=[error.code for error in result.errors],
+            answer=result.answer,
+            solution_tool_calls=result.solution_tool_calls,
+            verifier_tool_calls=result.verifier_tool_calls,
+            fetch_facts_return_keys=list(result.fetch_facts_return_keys),
+            expected_fact_keys=list(result.expected_fact_keys),
+            missing_fact_keys=list(result.missing_fact_keys),
+            extra_fact_keys=list(result.extra_fact_keys),
+            facts_match_result=result.facts_match_result,
+            check_constraints_result=result.check_constraints_result,
+            verify_result=result.verify_result,
+        )
+
     async def _run_registration_gate(
         self,
         *,
@@ -688,6 +831,7 @@ class SynthesisAgentRuntime:
         db_id: str,
         requested_category: CategoryTaxonomy,
         created_at: datetime,
+        self_consistency_pass: bool,
     ) -> EnvironmentContract:
         task_payload = proposed_environment.task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
@@ -718,7 +862,9 @@ class SynthesisAgentRuntime:
                 "task_signature": task_signature,
                 "verifier_signature": verifier_signature,
                 "status": EnvironmentStatus.DRAFT,
-                "quality_metrics": EnvironmentQualityMetrics().model_dump(mode="python"),
+                "quality_metrics": EnvironmentQualityMetrics(
+                    self_consistency_pass=self_consistency_pass
+                ).model_dump(mode="python"),
                 "task": proposed_environment.task.model_copy(
                     update={"category": requested_category}
                 ).model_dump(mode="python"),

@@ -54,6 +54,22 @@ class RegistrationVerifierProbeResult(StrictModel):
     verify_result: bool | None = None
 
 
+class RegistrationSelfConsistencyResult(StrictModel):
+    request_id: str
+    worker_pid: int
+    errors: list[RegistrationError]
+    answer: object | None = None
+    solution_tool_calls: int | None = None
+    verifier_tool_calls: int | None = None
+    fetch_facts_return_keys: list[str] = []
+    expected_fact_keys: list[str] = []
+    missing_fact_keys: list[str] = []
+    extra_fact_keys: list[str] = []
+    facts_match_result: bool | None = None
+    check_constraints_result: bool | None = None
+    verify_result: bool | None = None
+
+
 @dataclass(slots=True)
 class RegistrationWorkerHandle:
     config: AppConfig
@@ -173,6 +189,28 @@ class RegistrationWorkerHandle:
             },
         )
         return RegistrationVerifierProbeResult.model_validate(response)
+
+    async def run_self_consistency_check(
+        self,
+        *,
+        tool_source: str,
+        solution_source: str,
+        verifier_source: str,
+        expected_fact_keys: list[str],
+    ) -> RegistrationSelfConsistencyResult:
+        response = await self._perform_request(
+            request_type="run_self_consistency_check",
+            payload={
+                "tool_source": tool_source,
+                "solution_source": solution_source,
+                "verifier_source": verifier_source,
+                "expected_fact_keys": expected_fact_keys,
+                "policy": self.config.synthesis.registration_policy.model_dump(mode="json"),
+                "memory_limit_mb": self.config.synthesis.registration_workers.memory_limit_mb,
+                "call_count_limit": self.config.synthesis.registration_workers.call_count_limit,
+            },
+        )
+        return RegistrationSelfConsistencyResult.model_validate(response)
 
     async def close(self) -> None:
         async with self._lock:
@@ -347,6 +385,22 @@ class RegistrationSubprocessPool:
             verifier_source=verifier_source,
             artifact_kind=artifact_kind,
             answer_sample=answer_sample,
+            expected_fact_keys=expected_fact_keys,
+        )
+
+    async def run_self_consistency_check(
+        self,
+        *,
+        tool_source: str,
+        solution_source: str,
+        verifier_source: str,
+        expected_fact_keys: list[str],
+    ) -> RegistrationSelfConsistencyResult:
+        return await self._dispatch(
+            "run_self_consistency_check",
+            tool_source=tool_source,
+            solution_source=solution_source,
+            verifier_source=verifier_source,
             expected_fact_keys=expected_fact_keys,
         )
 
