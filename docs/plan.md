@@ -157,14 +157,19 @@ Acceptance:
 - category inference phase
 - tool/task/solution/verifier generation phase
 - explicit memory / tool trace contract
+- phase별 structured output contract (`SchemaExplorationOutput`, `CategoryInferenceOutput`, `ArtifactGenerationOutput`)
+- `previous_outputs`는 authoritative structured state, `memory`는 compressed execution summary로 분리
 - provider resilience reuse
 - synthesis runtime config (`max_turns`, `tracing`, `sdk_sessions_enabled`, `explicit_memory_window`)
 - default skeleton은 `models.composer`를 synthesis backend model로 재사용하고, phase별 fallback backend 주입을 허용한다
+- artifact generation 직후 registration bundle runner를 통과시켜야 draft를 반환한다
+- environment trust field (`env_id`, signatures, status, quality_metrics, generator_version`)는 runtime이 재생성한다
 
 Acceptance:
 
 - 단일 DB에서 단일 category에 대해 environment draft 하나를 생성할 수 있다
 - provider circuit breaker / cooldown / quota rebalance가 synthesis runtime에도 적용된다
+- draft는 structured phase output을 통해 생성되고 registration gate를 통과한 artifact만 포함한다
 
 ### Milestone 4: Hybrid A + Hybrid B Enforcement
 

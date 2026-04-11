@@ -822,6 +822,9 @@ synthesis agent도 solver와 동일하게 provider resilience를 사용한다.
 Milestone 3 skeleton의 기본 구현은 `models.composer`를 synthesis backend model로 재사용하며,
 phase별 backend list를 주입해 circuit breaker 이후 healthy provider로 fallback할 수 있게 한다.
 또 각 phase는 explicit memory entry와 tool trace entry를 남긴다.
+`previous_outputs`는 phase별 authoritative structured output이고, `memory`는 retry/fallback을 포함한 compressed execution summary다.
+artifact generation 응답은 registration bundle runner를 통과한 뒤에만 draft로 승격되며,
+`env_id`, signatures, `status`, `quality_metrics`, `generator_version` 같은 trust field는 runtime이 재생성한다.
 
 ## Environment Registry
 

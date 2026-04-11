@@ -10,7 +10,7 @@ from rl_task_foundry.synthesis.runtime import SynthesisPhase, SynthesisStageRequ
 def build_synthesis_phase_instructions(phase: SynthesisPhase) -> str:
     common = (
         "You are one phase of a synthesis meta-agent that creates verifiable database "
-        "task environments. Always return a single JSON object and no markdown."
+        "task environments. Return only a JSON object that matches the required schema."
     )
     if phase == SynthesisPhase.SCHEMA_EXPLORATION:
         return (
@@ -42,7 +42,12 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
             request.requested_category.value if request.requested_category is not None else None
         ),
         "schema_summary": request.schema_summary,
-        "previous_outputs": request.previous_outputs,
+        "previous_outputs": {
+            phase.value: output.model_dump(mode="json")
+            for phase, output in request.previous_outputs.items()
+        },
+        "previous_outputs_role": "authoritative structured outputs from earlier phases",
         "memory": [entry.model_dump(mode="json") for entry in request.memory],
+        "memory_role": "compressed execution summaries from earlier phase runs",
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)

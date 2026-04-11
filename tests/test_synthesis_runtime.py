@@ -15,6 +15,8 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
     EnvironmentContract,
+    EnvironmentQualityMetrics,
+    EnvironmentStatus,
     MaterializedFactsSchema,
     OutputFieldContract,
     OutputFieldType,
@@ -26,12 +28,24 @@ from rl_task_foundry.synthesis.contracts import (
     ToolSelfTestContract,
     VerifierContract,
 )
-from rl_task_foundry.synthesis.registration_runner import GeneratedArtifactBundle
+from rl_task_foundry.synthesis.registration_policy import ArtifactKind
+from rl_task_foundry.synthesis.registration_runner import (
+    ArtifactRegistrationResult,
+    GeneratedArtifactBundle,
+    RegistrationArtifactName,
+    RegistrationBundleReport,
+    RegistrationBundleStatus,
+)
 from rl_task_foundry.synthesis.runtime import (
+    ArtifactGenerationOutput,
+    CURRENT_SYNTHESIS_GENERATOR_VERSION,
+    CategoryInferenceOutput,
+    SchemaExplorationOutput,
     SynthesisAgentRuntime,
     SynthesisCategoryMismatchError,
     SynthesisMemoryEntry,
     SynthesisPhase,
+    SynthesisRegistrationError,
     SynthesisStageRequest,
     SynthesisStageResult,
     SynthesisToolTraceEntry,
@@ -111,7 +125,9 @@ def _sample_graph() -> SchemaGraph:
     )
 
 
-def _sample_environment(category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT) -> EnvironmentContract:
+def _sample_environment(
+    category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
+) -> EnvironmentContract:
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(
             name="assignments",
@@ -129,16 +145,18 @@ def _sample_environment(category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT
         primary_output_format="json_array",
     )
     return EnvironmentContract(
-        env_id="env_assignment_001",
-        db_id="sakila",
-        domain="customer_support",
+        env_id="agent_supplied_env",
+        db_id="spoof_db",
+        domain="spoof_domain",
         category=category,
         difficulty_vector={},
-        created_at=datetime(2026, 4, 11, 12, 0, tzinfo=timezone.utc),
-        generator_version="milestone-3",
-        tool_signature="tool_sig_001",
-        task_signature="task_sig_001",
-        verifier_signature="verifier_sig_001",
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        generator_version="agent-generated",
+        tool_signature="tool_sig_agent",
+        task_signature="task_sig_agent",
+        verifier_signature="verifier_sig_agent",
+        status=EnvironmentStatus.ACCEPTED,
+        quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
         tools=[
             ToolContract(
                 name="get_customer_assignments",
@@ -200,13 +218,69 @@ def _sample_artifacts() -> GeneratedArtifactBundle:
     )
 
 
+def _payloads(
+    *,
+    category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
+) -> dict[SynthesisPhase, object]:
+    return {
+        SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
+            domain_hypothesis="customer_support",
+            candidate_categories=[category],
+            memory_summary="schema explored",
+        ),
+        SynthesisPhase.CATEGORY_INFERENCE: CategoryInferenceOutput(
+            selected_category=category,
+            rationale="best match",
+            memory_summary="category selected",
+        ),
+        SynthesisPhase.ARTIFACT_GENERATION: ArtifactGenerationOutput(
+            environment=_sample_environment(category),
+            artifacts=_sample_artifacts(),
+            memory_summary="artifacts generated",
+        ),
+    }
+
+
+def _passing_registration_report() -> RegistrationBundleReport:
+    def _artifact_result(name: RegistrationArtifactName, kind: ArtifactKind) -> ArtifactRegistrationResult:
+        executed = name == RegistrationArtifactName.TOOL_SELF_TEST
+        return ArtifactRegistrationResult(
+            artifact_name=name,
+            artifact_kind=kind,
+            execution_required=executed,
+            executed=executed,
+            execution_call_count=1 if executed else None,
+            execution_return_value={"ok": True} if executed else None,
+        )
+
+    return RegistrationBundleReport(
+        status=RegistrationBundleStatus.PASSED,
+        tool=_artifact_result(RegistrationArtifactName.TOOL, ArtifactKind.TOOL_MODULE),
+        tool_self_test=_artifact_result(
+            RegistrationArtifactName.TOOL_SELF_TEST,
+            ArtifactKind.TOOL_SELF_TEST_MODULE,
+        ),
+        solution=_artifact_result(RegistrationArtifactName.SOLUTION, ArtifactKind.SOLUTION_MODULE),
+        verifier=_artifact_result(RegistrationArtifactName.VERIFIER, ArtifactKind.VERIFIER_MODULE),
+        shadow_verifier=_artifact_result(
+            RegistrationArtifactName.SHADOW_VERIFIER,
+            ArtifactKind.SHADOW_VERIFIER_MODULE,
+        ),
+    )
+
+
+def _failing_registration_report() -> RegistrationBundleReport:
+    report = _passing_registration_report()
+    return report.model_copy(update={"status": RegistrationBundleStatus.FAILED})
+
+
 class _FakeBackend:
     def __init__(
         self,
         *,
         provider_name: str,
         model_name: str,
-        payloads: dict[SynthesisPhase, dict[str, object]],
+        payloads: dict[SynthesisPhase, object],
         fail_phases: set[SynthesisPhase] | None = None,
     ) -> None:
         self._provider_name = provider_name
@@ -237,7 +311,7 @@ class _FakeBackend:
                 phase=request.phase,
                 provider=self.provider_name,
                 model=self.model_name,
-                summary=str(payload.get("memory_summary", f"{request.phase.value} done")),
+                summary=getattr(payload, "memory_summary", f"{request.phase.value} done"),
                 turn_count=1,
                 token_usage={"requests": 1},
             ),
@@ -252,28 +326,10 @@ class _FakeBackend:
         )
 
 
-def _payloads(*, category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT) -> dict[SynthesisPhase, dict[str, object]]:
-    return {
-        SynthesisPhase.SCHEMA_EXPLORATION: {
-            "domain_hypothesis": "customer_support",
-            "candidate_categories": [category.value],
-            "memory_summary": "schema explored",
-        },
-        SynthesisPhase.CATEGORY_INFERENCE: {
-            "selected_category": category.value,
-            "rationale": "best match",
-            "memory_summary": "category selected",
-        },
-        SynthesisPhase.ARTIFACT_GENERATION: {
-            "environment": _sample_environment(category).model_dump(mode="json"),
-            "artifacts": _sample_artifacts().model_dump(mode="json"),
-            "memory_summary": "artifacts generated",
-        },
-    }
-
-
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_builds_environment_draft():
+async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_trust_fields(
+    monkeypatch,
+):
     config = load_config("rl_task_foundry.yaml")
     backend = _FakeBackend(
         provider_name="codex_oauth",
@@ -285,21 +341,35 @@ async def test_synthesis_agent_runtime_builds_environment_draft():
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
+    async def _fake_registration_gate(self, *, bundle):
+        assert bundle == _sample_artifacts()
+        return _passing_registration_report()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
     draft = await runtime.synthesize_environment_draft(
         db_id="sakila",
         requested_category=CategoryTaxonomy.ASSIGNMENT,
         graph=_sample_graph(),
     )
 
-    assert draft.environment.env_id == "env_assignment_001"
     assert draft.selected_category == CategoryTaxonomy.ASSIGNMENT
-    assert draft.schema_summary["table_count"] == 2
+    assert draft.environment.status == EnvironmentStatus.DRAFT
+    assert draft.environment.db_id == "sakila"
+    assert draft.environment.domain == config.domain.name
+    assert draft.environment.generator_version == CURRENT_SYNTHESIS_GENERATOR_VERSION
+    assert draft.environment.env_id.startswith("env_assignment_")
+    assert draft.environment.quality_metrics.self_consistency_pass is False
+    assert draft.environment.tool_signature.startswith("sha256:")
+    assert draft.environment.task_signature.startswith("sha256:")
+    assert draft.environment.verifier_signature.startswith("sha256:")
+    assert draft.registration_report.status == RegistrationBundleStatus.PASSED
     assert [entry.phase for entry in draft.memory] == list(SynthesisPhase)
-    assert len(draft.tool_traces) == 3
+    assert draft.provider_status["codex_oauth"].observed_at.tzinfo is not None
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback():
+async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback(monkeypatch):
     config = load_config("rl_task_foundry.yaml")
     failing = _FakeBackend(
         provider_name="codex_oauth",
@@ -317,13 +387,18 @@ async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback()
         phase_backends={phase: [failing, fallback] for phase in SynthesisPhase},
     )
 
+    async def _fake_registration_gate(self, *, bundle):
+        return _passing_registration_report()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
     draft = await runtime.synthesize_environment_draft(
         db_id="sakila",
         requested_category=CategoryTaxonomy.ASSIGNMENT,
         graph=_sample_graph(),
     )
 
-    assert draft.environment.env_id == "env_assignment_001"
+    assert draft.environment.env_id.startswith("env_assignment_")
     assert failing.calls == [
         SynthesisPhase.SCHEMA_EXPLORATION,
         SynthesisPhase.CATEGORY_INFERENCE,
@@ -334,7 +409,7 @@ async def test_synthesis_agent_runtime_reuses_provider_resilience_for_fallback()
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_rejects_category_mismatch():
+async def test_synthesis_agent_runtime_rejects_category_mismatch(monkeypatch):
     config = load_config("rl_task_foundry.yaml")
     backend = _FakeBackend(
         provider_name="codex_oauth",
@@ -346,6 +421,11 @@ async def test_synthesis_agent_runtime_rejects_category_mismatch():
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
+    async def _fake_registration_gate(self, *, bundle):
+        return _passing_registration_report()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
     with pytest.raises(SynthesisCategoryMismatchError):
         await runtime.synthesize_environment_draft(
             db_id="sakila",
@@ -355,7 +435,7 @@ async def test_synthesis_agent_runtime_rejects_category_mismatch():
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_introspects_graph_when_not_provided(monkeypatch):
+async def test_synthesis_agent_runtime_rejects_failed_registration(monkeypatch):
     config = load_config("rl_task_foundry.yaml")
     backend = _FakeBackend(
         provider_name="codex_oauth",
@@ -367,24 +447,68 @@ async def test_synthesis_agent_runtime_introspects_graph_when_not_provided(monke
         phase_backends={phase: [backend] for phase in SynthesisPhase},
     )
 
+    async def _fake_registration_gate(self, *, bundle):
+        return _failing_registration_report()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+
+    with pytest.raises(SynthesisRegistrationError):
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_introspects_graph_once_when_not_provided(monkeypatch):
+    config = load_config("rl_task_foundry.yaml")
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+    introspect_calls = 0
+
     async def _fake_introspect(self):
+        nonlocal introspect_calls
+        introspect_calls += 1
         return _sample_graph()
+
+    async def _fake_registration_gate(self, *, bundle):
+        return _passing_registration_report()
 
     monkeypatch.setattr(
         "rl_task_foundry.synthesis.runtime.PostgresSchemaIntrospector.introspect",
         _fake_introspect,
     )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
 
-    draft = await runtime.synthesize_environment_draft(
+    draft_one = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+    )
+    draft_two = await runtime.synthesize_environment_draft(
         db_id="sakila",
         requested_category=CategoryTaxonomy.ASSIGNMENT,
     )
 
-    assert draft.schema_summary["edge_count"] == 1
+    assert draft_one.schema_summary["edge_count"] == 1
+    assert draft_two.schema_summary["edge_count"] == 1
+    assert introspect_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_synthesis_backend_returns_stage_result(tmp_path, monkeypatch):
+async def test_openai_agents_synthesis_backend_uses_structured_output_and_tracing(
+    tmp_path,
+    monkeypatch,
+):
+    tracing_disabled: list[bool] = []
+
     class FakeAsyncOpenAI:
         calls: list[dict[str, object]] = []
 
@@ -431,8 +555,9 @@ async def test_openai_agents_synthesis_backend_returns_stage_result(tmp_path, mo
             )
             return SimpleNamespace(
                 final_output={
-                    "memory_summary": "schema exploration complete",
+                    "domain_hypothesis": "customer_support",
                     "candidate_categories": ["assignment"],
+                    "memory_summary": "schema exploration complete",
                 },
                 _current_turn=2,
                 context_wrapper=SimpleNamespace(
@@ -456,6 +581,7 @@ async def test_openai_agents_synthesis_backend_returns_stage_result(tmp_path, mo
             OpenAIChatCompletionsModel=FakeChatModel,
             Runner=FakeRunner,
             SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: tracing_disabled.append(disabled),
         ),
     )
 
@@ -487,13 +613,113 @@ async def test_openai_agents_synthesis_backend_returns_stage_result(tmp_path, mo
         )
     )
 
-    assert result.phase == SynthesisPhase.SCHEMA_EXPLORATION
-    assert result.payload["candidate_categories"] == ["assignment"]
+    assert isinstance(result.payload, SchemaExplorationOutput)
+    assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
     assert result.memory_entry.summary == "schema exploration complete"
     assert result.memory_entry.token_usage["total_tokens"] == 26
     assert result.tool_traces[0].tool_name == "schema_probe"
+    assert tracing_disabled == [True]
     assert FakeAsyncOpenAI.calls[0]["api_key"] == "dummy"
     assert FakeRunner.calls[0]["max_turns"] == config.synthesis.runtime.max_turns
     assert FakeSQLiteSession.last_instance.session_id == "sakila:schema_exploration:codex_oauth"
-    assert "schema summary" in FakeAgent.last_instance.kwargs["instructions"].lower()
+    assert FakeAgent.last_instance.kwargs["output_type"] is SchemaExplorationOutput
     assert (tmp_path / "synthesis_traces" / "transcripts").exists()
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_accepts_markdown_fenced_json(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            return SimpleNamespace(
+                final_output="""```json
+{"selected_category":"assignment","rationale":"best match","memory_summary":"category selected"}
+```""",
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        requests=1,
+                        input_tokens=10,
+                        output_tokens=6,
+                        total_tokens=16,
+                    )
+                ),
+                new_items=[],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    result = await backend.run_stage(
+        SynthesisStageRequest(
+            phase=SynthesisPhase.CATEGORY_INFERENCE,
+            db_id="sakila",
+            domain_name="customer_support",
+            user_role="end user",
+            agent_role="organization AI assistant",
+            scenario_description="help requests",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            schema_summary={"table_count": 2},
+            previous_outputs={
+                SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
+                    domain_hypothesis="customer_support",
+                    candidate_categories=[CategoryTaxonomy.ASSIGNMENT],
+                    memory_summary="schema explored",
+                )
+            },
+        )
+    )
+
+    assert isinstance(result.payload, CategoryInferenceOutput)
+    assert result.payload.selected_category == CategoryTaxonomy.ASSIGNMENT

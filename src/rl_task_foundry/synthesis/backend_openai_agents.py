@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
+
+from pydantic import BaseModel
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.synthesis.prompts import (
@@ -17,7 +18,11 @@ from rl_task_foundry.synthesis.prompts import (
     build_synthesis_phase_instructions,
 )
 from rl_task_foundry.synthesis.runtime import (
+    ArtifactGenerationOutput,
+    CategoryInferenceOutput,
+    SchemaExplorationOutput,
     SynthesisMemoryEntry,
+    SynthesisPhase,
     SynthesisStageRequest,
     SynthesisStageResult,
     SynthesisToolTraceEntry,
@@ -25,7 +30,14 @@ from rl_task_foundry.synthesis.runtime import (
 
 
 def _load_sdk_components() -> SimpleNamespace:
-    from agents import Agent, ModelSettings, OpenAIChatCompletionsModel, Runner, SQLiteSession
+    from agents import (
+        Agent,
+        ModelSettings,
+        OpenAIChatCompletionsModel,
+        Runner,
+        SQLiteSession,
+        set_tracing_disabled,
+    )
     from openai import AsyncOpenAI
 
     return SimpleNamespace(
@@ -35,6 +47,7 @@ def _load_sdk_components() -> SimpleNamespace:
         OpenAIChatCompletionsModel=OpenAIChatCompletionsModel,
         Runner=Runner,
         SQLiteSession=SQLiteSession,
+        set_tracing_disabled=set_tracing_disabled,
     )
 
 
@@ -79,9 +92,8 @@ def _extract_tool_call_name(item: Any) -> str | None:
             value = getattr(raw_item, attr, None)
             if isinstance(value, str) and value:
                 return value
-    match = re.search(r"tool-call\(([^)]+)\)", repr(item))
-    if match:
-        return match.group(1)
+    if isinstance(item, str) and item.startswith("tool-call(") and item.endswith(")"):
+        return item[len("tool-call(") : -1]
     return None
 
 
@@ -109,14 +121,45 @@ def _extract_tool_traces(
     return traces
 
 
-def _normalize_payload(final_output: Any) -> dict[str, object]:
+def _extract_json_object_text(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
+            stripped = "\n".join(lines[1:-1]).strip()
+            if stripped.startswith("json"):
+                stripped = stripped[4:].strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start : end + 1]
+    return stripped
+
+
+def _phase_output_type(phase: SynthesisPhase) -> type[BaseModel]:
+    if phase == SynthesisPhase.SCHEMA_EXPLORATION:
+        return SchemaExplorationOutput
+    if phase == SynthesisPhase.CATEGORY_INFERENCE:
+        return CategoryInferenceOutput
+    return ArtifactGenerationOutput
+
+
+def _normalize_phase_payload(phase: SynthesisPhase, final_output: Any) -> BaseModel:
+    output_type = _phase_output_type(phase)
+    if isinstance(final_output, output_type):
+        return final_output
+    if isinstance(final_output, BaseModel):
+        return output_type.model_validate(final_output.model_dump(mode="python"))
     if isinstance(final_output, dict):
-        return dict(final_output)
+        return output_type.model_validate(final_output)
     if isinstance(final_output, str):
-        parsed = json.loads(final_output)
+        payload_text = _extract_json_object_text(final_output)
+        parsed = json.loads(payload_text)
         if not isinstance(parsed, dict):
             raise RuntimeError("synthesis backend expected a JSON object payload")
-        return dict(parsed)
+        return output_type.model_validate(parsed)
     raise RuntimeError("synthesis backend returned an unsupported final_output type")
 
 
@@ -191,26 +234,31 @@ class OpenAIAgentsSynthesisBackend:
 
     async def run_stage(self, request: SynthesisStageRequest) -> SynthesisStageResult:
         sdk = _load_sdk_components()
+        if hasattr(sdk, "set_tracing_disabled"):
+            sdk.set_tracing_disabled(
+                disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"
+            )
         agent = sdk.Agent(
             name=f"synthesis-{request.phase.value}",
             instructions=build_synthesis_phase_instructions(request.phase),
             model=self._build_model(sdk),
             tools=[],
-            output_type=None,
+            output_type=_phase_output_type(request.phase),
             model_settings=sdk.ModelSettings(parallel_tool_calls=False),
         )
         session = self._build_session(sdk, request)
 
+        request_input = build_synthesis_phase_input(request)
         started_at = perf_counter()
         run_result = await sdk.Runner.run(
             agent,
-            build_synthesis_phase_input(request),
+            request_input,
             max_turns=self.runtime_config.max_turns,
             session=session,
         )
         latency_ms = int((perf_counter() - started_at) * 1000)
 
-        payload = _normalize_payload(run_result.final_output)
+        payload_model = _normalize_phase_payload(request.phase, run_result.final_output)
         tool_traces = _extract_tool_traces(
             run_result,
             request=request,
@@ -222,8 +270,8 @@ class OpenAIAgentsSynthesisBackend:
             request=request,
             payload={
                 "phase": request.phase.value,
-                "input": build_synthesis_phase_input(request),
-                "final_output": payload,
+                "input": request_input,
+                "final_output": payload_model.model_dump(mode="json"),
                 "latency_ms": latency_ms,
                 "turn_count": _extract_turn_count(run_result),
                 "token_usage": _extract_token_usage(run_result),
@@ -238,15 +286,12 @@ class OpenAIAgentsSynthesisBackend:
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", []) or []],
             },
         )
+        summary = getattr(payload_model, "memory_summary", f"{request.phase.value} completed")
         memory_entry = SynthesisMemoryEntry(
             phase=request.phase,
             provider=self.provider_name,
             model=self.model_name,
-            summary=(
-                payload.get("memory_summary")
-                if isinstance(payload.get("memory_summary"), str)
-                else f"{request.phase.value} completed"
-            ),
+            summary=summary if isinstance(summary, str) else f"{request.phase.value} completed",
             turn_count=_extract_turn_count(run_result),
             token_usage=_extract_token_usage(run_result),
             transcript_ref=transcript_ref,
@@ -256,7 +301,7 @@ class OpenAIAgentsSynthesisBackend:
             phase=request.phase,
             provider=self.provider_name,
             model=self.model_name,
-            payload=payload,
+            payload=payload_model,
             memory_entry=memory_entry,
             tool_traces=tool_traces,
         )
