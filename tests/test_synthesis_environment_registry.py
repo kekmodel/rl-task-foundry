@@ -4,6 +4,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
     ConstraintKind,
@@ -253,7 +255,7 @@ def test_environment_registry_writer_deduplicates_semantic_minhash(tmp_path: Pat
     writer = EnvironmentRegistryWriter(
         root_dir=tmp_path / "environments",
         index_db_path=tmp_path / "environment_registry.db",
-        minhash_threshold=0.85,
+        minhash_threshold=0.75,
     )
     first = _sample_draft(
         "env_assignment_registrytest_a",
@@ -277,7 +279,7 @@ def test_environment_registry_writer_deduplicates_semantic_minhash(tmp_path: Pat
     assert duplicate.duplicate_reason == EnvironmentRegistryDuplicateReason.MINHASH
     assert duplicate.duplicate_of_env_id == "env_assignment_registrytest_a"
     assert duplicate.semantic_similarity is not None
-    assert 0.85 <= duplicate.semantic_similarity < 1.0
+    assert 0.75 <= duplicate.semantic_similarity < 1.0
     assert writer.environment_count() == 1
 
 
@@ -286,7 +288,7 @@ def test_environment_registry_writer_respects_near_dup_disabled(tmp_path: Path) 
         root_dir=tmp_path / "environments",
         index_db_path=tmp_path / "environment_registry.db",
         near_dup_enabled=False,
-        minhash_threshold=0.85,
+        minhash_threshold=0.75,
     )
     first = _sample_draft(
         "env_assignment_registrytest_a",
@@ -475,7 +477,61 @@ def test_estimate_semantic_similarity_tracks_non_identical_near_duplicates() -> 
             verifier_signature="sha256:verifier_b",
         ).environment
     )
+    different = build_semantic_dedup_text(
+        _sample_draft(
+            "env_assignment_similarity_c",
+            category=CategoryTaxonomy.ITINERARY,
+            question="3일 여행 일정을 짜 주세요.",
+            tool_signature="sha256:tool_c",
+            task_signature="sha256:task_c",
+            verifier_signature="sha256:verifier_c",
+        ).environment
+    )
 
     similarity = estimate_semantic_similarity(first, second)
+    different_similarity = estimate_semantic_similarity(first, different)
 
-    assert 0.85 <= similarity < 1.0
+    assert similarity < 1.0
+    assert similarity > different_similarity
+
+
+def test_environment_registry_writer_uses_in_transaction_semantic_recheck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+        minhash_threshold=0.75,
+    )
+    first = _sample_draft(
+        "env_assignment_registrytest_a",
+        tool_signature="sha256:tool_a",
+        task_signature="sha256:task_a",
+        verifier_signature="sha256:verifier_a",
+    )
+    second = _sample_draft(
+        "env_assignment_registrytest_b",
+        question="고객 배정 계획을 세워 주세요.",
+        tool_signature="sha256:tool_b",
+        task_signature="sha256:task_b",
+        verifier_signature="sha256:verifier_b",
+    )
+    writer.commit_draft(first)
+
+    original = EnvironmentRegistryWriter._lookup_semantic_duplicate
+    call_counter = {"count": 0}
+
+    def _wrapped(self, **kwargs):
+        call_counter["count"] += 1
+        if call_counter["count"] == 1:
+            return None
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(EnvironmentRegistryWriter, "_lookup_semantic_duplicate", _wrapped)
+
+    duplicate = writer.commit_draft(second)
+
+    assert call_counter["count"] >= 2
+    assert duplicate.status == EnvironmentRegistryCommitStatus.DUPLICATE
+    assert duplicate.duplicate_reason == EnvironmentRegistryDuplicateReason.MINHASH

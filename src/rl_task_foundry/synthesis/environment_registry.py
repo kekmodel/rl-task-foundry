@@ -6,14 +6,15 @@ import json
 import re
 import shutil
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from datasketch import MinHash
+import numpy as np
+from datasketch import MinHash, MinHashLSH
 import yaml
 
 from rl_task_foundry.config.models import AppConfig
@@ -138,6 +139,12 @@ class EnvironmentRegistrySnapshot:
 
 
 @dataclass(slots=True)
+class _SemanticScopeIndex:
+    lsh: MinHashLSH
+    metadata_by_env_id: dict[str, dict[str, object]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class EnvironmentRegistryWriter:
     """Durable accepted-environment registry.
 
@@ -151,6 +158,11 @@ class EnvironmentRegistryWriter:
     near_dup_enabled: bool = True
     minhash_threshold: float = 0.9
     minhash_num_perm: int = MINHASH_NUM_PERM
+    _semantic_scope_indexes: dict[tuple[str, str], _SemanticScopeIndex] = field(
+        init=False,
+        default_factory=dict,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -338,6 +350,15 @@ class EnvironmentRegistryWriter:
                 shutil.rmtree(final_dir, ignore_errors=True)
             raise
 
+        if self.near_dup_enabled:
+            self._register_semantic_scope_entry(
+                db_id=env.db_id,
+                category=env.category,
+                env_id=env.env_id,
+                difficulty_band=difficulty_band,
+                filesystem_path=final_dir,
+                semantic_signature=semantic_signature,
+            )
         return EnvironmentRegistryCommitResult(
             status=EnvironmentRegistryCommitStatus.COMMITTED,
             env_id=env.env_id,
@@ -541,45 +562,37 @@ class EnvironmentRegistryWriter:
         semantic_signature: str,
         conn: sqlite3.Connection | None = None,
     ) -> dict[str, object] | None:
+        target = _decode_minhash_to_minhash(
+            semantic_signature,
+            num_perm=self.minhash_num_perm,
+        )
+        if target is None:
+            return None
+        scope = self._semantic_scope_index(
+            db_id=db_id,
+            category=category,
+            conn=conn,
+        )
+        candidate_ids = scope.lsh.query(target)
         best_match: dict[str, object] | None = None
-        manages_connection = conn is None
-        connection = conn or self._connect()
-        try:
-            rows = connection.execute(
-                """
-                SELECT
-                    env_id,
-                    difficulty_band,
-                    filesystem_path,
-                    semantic_dedup_text,
-                    semantic_dedup_text_version,
-                    semantic_minhash_signature,
-                    payload_json
-                FROM environments
-                WHERE db_id = ? AND category = ?
-                """,
-                (db_id, category.value),
-            ).fetchall()
-            for row in rows:
-                similarity = self._semantic_similarity_for_row(
-                    row=row,
-                    category=category,
-                    semantic_text=semantic_text,
-                    semantic_signature=semantic_signature,
-                )
-                if similarity < self.minhash_threshold:
-                    continue
-                if best_match is None or similarity > float(best_match["semantic_similarity"]):
-                    best_match = {
-                        "env_id": str(row["env_id"]),
-                        "difficulty_band": str(row["difficulty_band"]),
-                        "filesystem_path": str(row["filesystem_path"]),
-                        "semantic_similarity": similarity,
-                    }
-            return best_match
-        finally:
-            if manages_connection:
-                connection.close()
+        for env_id in candidate_ids:
+            metadata = scope.metadata_by_env_id.get(str(env_id))
+            if metadata is None:
+                continue
+            similarity = _estimate_signature_similarity(
+                semantic_signature,
+                str(metadata["semantic_signature"]),
+            )
+            if similarity < self.minhash_threshold:
+                continue
+            if best_match is None or similarity > float(best_match["semantic_similarity"]):
+                best_match = {
+                    "env_id": str(env_id),
+                    "difficulty_band": str(metadata["difficulty_band"]),
+                    "filesystem_path": str(metadata["filesystem_path"]),
+                    "semantic_similarity": similarity,
+                }
+        return best_match
 
     def _has_env_row(self, env_id: str) -> bool:
         with self._connect() as conn:
@@ -701,14 +714,92 @@ class EnvironmentRegistryWriter:
             "semantic_dedup_text_version": SEMANTIC_DEDUP_TEXT_VERSION,
         }
 
-    def _semantic_similarity_for_row(
+    def _semantic_scope_index(
+        self,
+        *,
+        db_id: str,
+        category: CategoryTaxonomy,
+        conn: sqlite3.Connection | None = None,
+    ) -> _SemanticScopeIndex:
+        scope_key = (db_id, category.value)
+        existing = self._semantic_scope_indexes.get(scope_key)
+        if existing is not None:
+            return existing
+        lsh = MinHashLSH(
+            threshold=self.minhash_threshold,
+            num_perm=self.minhash_num_perm,
+        )
+        metadata_by_env_id: dict[str, dict[str, object]] = {}
+        manages_connection = conn is None
+        connection = conn or self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT
+                    env_id,
+                    difficulty_band,
+                    filesystem_path,
+                    semantic_dedup_text,
+                    semantic_dedup_text_version,
+                    semantic_minhash_signature,
+                    payload_json
+                FROM environments
+                WHERE db_id = ? AND category = ?
+                """,
+                (db_id, category.value),
+            ).fetchall()
+        finally:
+            if manages_connection:
+                connection.close()
+        for row in rows:
+            env_id = str(row["env_id"])
+            signature = self._semantic_signature_for_row(row=row, category=category)
+            minhash = _decode_minhash_to_minhash(signature, num_perm=self.minhash_num_perm)
+            if minhash is None:
+                continue
+            lsh.insert(env_id, minhash, check_duplication=False)
+            metadata_by_env_id[env_id] = {
+                "difficulty_band": str(row["difficulty_band"]),
+                "filesystem_path": str(row["filesystem_path"]),
+                "semantic_signature": signature,
+            }
+        scope = _SemanticScopeIndex(lsh=lsh, metadata_by_env_id=metadata_by_env_id)
+        self._semantic_scope_indexes[scope_key] = scope
+        return scope
+
+    def _register_semantic_scope_entry(
+        self,
+        *,
+        db_id: str,
+        category: CategoryTaxonomy,
+        env_id: str,
+        difficulty_band: DifficultyBand,
+        filesystem_path: Path,
+        semantic_signature: str,
+    ) -> None:
+        scope_key = (db_id, category.value)
+        scope = self._semantic_scope_indexes.get(scope_key)
+        if scope is None:
+            return
+        minhash = _decode_minhash_to_minhash(
+            semantic_signature,
+            num_perm=self.minhash_num_perm,
+        )
+        if minhash is None:
+            return
+        scope.lsh.insert(env_id, minhash, check_duplication=False)
+        scope.metadata_by_env_id[env_id] = {
+            "difficulty_band": difficulty_band.value,
+            "filesystem_path": str(filesystem_path),
+            "semantic_signature": semantic_signature,
+        }
+
+    def _semantic_signature_for_row(
         self,
         *,
         row: sqlite3.Row,
         category: CategoryTaxonomy,
-        semantic_text: str,
-        semantic_signature: str,
-    ) -> float:
+    ) -> str:
         signature = _optional_string(row["semantic_minhash_signature"])
         version = row["semantic_dedup_text_version"]
         if (
@@ -716,7 +807,7 @@ class EnvironmentRegistryWriter:
             and int(version) == SEMANTIC_DEDUP_TEXT_VERSION
             and _signature_length(signature) == self.minhash_num_perm
         ):
-            return _estimate_signature_similarity(semantic_signature, signature)
+            return signature
         payload = self._parse_payload(row["payload_json"])
         existing_text = _optional_string(row["semantic_dedup_text"]) or _optional_string(
             payload.get("semantic_dedup_text")
@@ -727,10 +818,8 @@ class EnvironmentRegistryWriter:
                 question=_optional_string(payload.get("question")),
                 constraint_summaries=_constraint_summaries_from_payload(payload),
             )
-        return estimate_semantic_similarity(
-            semantic_text,
-            existing_text,
-            num_perm=self.minhash_num_perm,
+        return _encode_minhash_signature(
+            _build_minhash(existing_text, num_perm=self.minhash_num_perm)
         )
 
     def _count_environments(
@@ -874,9 +963,8 @@ def estimate_semantic_similarity(
     *,
     num_perm: int = MINHASH_NUM_PERM,
 ) -> float:
-    return _estimate_signature_similarity(
-        _encode_minhash_signature(_build_minhash(left_text, num_perm=num_perm)),
-        _encode_minhash_signature(_build_minhash(right_text, num_perm=num_perm)),
+    return _build_minhash(left_text, num_perm=num_perm).jaccard(
+        _build_minhash(right_text, num_perm=num_perm)
     )
 
 
@@ -961,12 +1049,25 @@ def _estimate_signature_similarity(left_signature: str, right_signature: str) ->
     right = _decode_minhash_signature(right_signature)
     if not left or len(left) != len(right):
         return 0.0
-    matches = sum(1 for left_value, right_value in zip(left, right, strict=False) if left_value == right_value)
+    matches = sum(
+        1
+        for left_value, right_value in zip(left, right, strict=True)
+        if left_value == right_value
+    )
     return matches / len(left)
 
 
 def _signature_length(signature: str) -> int:
     return len(_decode_minhash_signature(signature))
+
+
+def _decode_minhash_to_minhash(signature: str, *, num_perm: int) -> MinHash | None:
+    values = _decode_minhash_signature(signature)
+    if len(values) != num_perm:
+        return None
+    minhash = MinHash(num_perm=num_perm)
+    minhash.hashvalues = np.array(values, dtype=np.uint64)
+    return minhash
 
 
 def _semantic_shingles(text: str) -> tuple[str, ...]:
