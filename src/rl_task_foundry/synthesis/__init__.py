@@ -96,6 +96,12 @@ from rl_task_foundry.synthesis.runtime_policy import (
     RuntimeIsolationPlan,
     build_runtime_isolation_plan,
 )
+from rl_task_foundry.synthesis.scheduler import (
+    SynthesisDbSnapshot,
+    SynthesisDomainScheduler,
+    SynthesisSchedulerDecision,
+    SynthesisSelectionStatus,
+)
 from rl_task_foundry.synthesis.subprocess_pool import (
     RegistrationExecutionResult,
     RegistrationSelfConsistencyResult,
@@ -168,6 +174,8 @@ __all__ = [
     "SynthesisCategoryStatus",
     "SynthesisCategoryBackoffError",
     "SynthesisDbBindingError",
+    "SynthesisDbSnapshot",
+    "SynthesisDomainScheduler",
     "SynthesisCategoryMismatchError",
     "SynthesisEnvironmentDraft",
     "SynthesisMemoryEntry",
@@ -181,6 +189,8 @@ __all__ = [
     "SynthesisSelfConsistencyDiagnostics",
     "SynthesisSelfConsistencyError",
     "SynthesisSelfConsistencyOutcome",
+    "SynthesisSchedulerDecision",
+    "SynthesisSelectionStatus",
     "SynthesisStageRequest",
     "SynthesisStageResult",
     "SynthesisToolTraceEntry",

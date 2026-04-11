@@ -363,6 +363,7 @@ Acceptance:
 - per-DB progress tracking
 - retry / backoff / starvation protection
 - checkpoint / resume
+- v1 `SynthesisDomainScheduler` helper로 `category_status()` snapshot 소비
 
 Acceptance:
 

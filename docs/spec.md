@@ -921,6 +921,7 @@ quality_filter:
 - round-robin / priority queue
 - DB 단위 독립 처리
 - per-DB progress 추적
+- v1 helper는 `SynthesisDomainScheduler`로 구현되며 `SynthesisDbSnapshot + category_status()`를 입력으로 받아 next `(db_id, category)` 또는 earliest backoff wait를 결정한다
 
 ### Synthesis Provider Resilience
 
