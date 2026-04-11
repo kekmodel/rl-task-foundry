@@ -377,6 +377,8 @@ def check_constraints(answer, facts) -> bool:
 - tool call 사용 필수
 - constraint 판단 금지
 - 반환값은 `facts` dict
+- 반환값은 slot/entity 단위의 raw facts여야 한다
+- aggregate 값은 이 stage에서 미리 계산하지 않는다
 
 #### Stage 2: Claim Consistency
 
@@ -391,6 +393,7 @@ def check_constraints(answer, facts) -> bool:
 
 - 추가 tool call 금지
 - pure function only
+- 합계, 평균, 개수, min/max 같은 aggregate 계산은 이 stage에서 수행한다
 
 즉 facts dict가 Stage 1과 Stage 2/3 사이의 유일한 경계 계약이다.
 
@@ -405,9 +408,16 @@ FactSpec:
   attribute: str
   value_type: str
   nullable: bool
+  cardinality: one | many
 ```
 
 `fetch_facts()`는 반드시 이 schema에 맞는 dict를 반환해야 한다.
+
+운영 결정:
+
+- `fetch_facts()`는 per-entity raw attribute bag만 materialize한다
+- facts는 slot 또는 entity collection을 표현할 수 있지만 pre-aggregated metric은 포함하지 않는다
+- `"3일 호텔 가격 총합"`, `"식당 평점 평균"` 같은 aggregate는 항상 `check_constraints()`가 raw facts에서 계산한다
 
 이 계약 덕분에:
 
@@ -447,6 +457,17 @@ shadow verifier prompt:
 
 즉 둘은 같은 내용을 같은 방식으로 paraphrase하지 않는다.
 
+#### Contract Symmetry
+
+shadow verifier도 weaker contract를 허용하지 않는다.
+
+- 동일한 `verify(answer, tools) -> bool` signature를 따른다
+- 동일한 `fetch_facts / facts_match_answer_claims / check_constraints` 3-stage 경계를 따른다
+- 동일한 code registration policy와 subprocess isolation을 적용받는다
+- 동일하게 tool-grounded fact materialization이 필수다
+
+즉 “다른 각도”는 contract를 느슨하게 하는 것이 아니라, 어떤 facts를 materialize하고 어떤 invariant를 더 강하게 보느냐의 차이로 구현한다.
+
 ### Hybrid D — Cross-Instance Generation Is Runtime-Owned
 
 cross-instance variation의 주체는 runtime이다.
@@ -454,14 +475,49 @@ cross-instance variation의 주체는 runtime이다.
 agent는 `instance_space.yaml`만 정의한다.
 
 ```yaml
-anchor_query: ...
-parameter_spaces:
-  budget_bucket: [low, mid, high]
-  day_count: [2, 3]
-sampling_strategy: deterministic_hash
+anchor_query:
+  sql: SELECT ...
+  outputs: [anchor_id, city_id]
+parameters:
+  budget_bucket:
+    kind: enum
+    values: [low, mid, high]
+  day_count:
+    kind: int_range
+    min: 2
+    max: 3
+sampling:
+  strategy: deterministic_hash
+  seed: 17
+instance_count: 3
 ```
 
 runtime는 이 parameter space에서 deterministic sampler로 N instances를 만든다.
+
+### InstanceSpace Contract
+
+`instance_space.yaml`은 아래를 명시해야 한다.
+
+- `anchor_query.sql`
+  - read-only SQL
+  - deterministic ordering이 가능해야 한다
+- `anchor_query.outputs`
+  - downstream instance builder가 사용할 named columns
+- `parameters`
+  - `enum`
+  - `int_range`
+  - `float_range`
+  - `date_range`
+  - `derived_bucket`
+- `sampling.strategy`
+  - `deterministic_hash`
+  - `grid`
+  - `stratified_hash`
+- `sampling.seed`
+  - deterministic source of truth
+- `instance_count`
+  - 생략 시 quality filter의 `min_cross_instances`를 따른다
+  - 지정 시 runtime minimum보다 작을 수 없다
 
 요구:
 
@@ -472,7 +528,7 @@ runtime는 이 parameter space에서 deterministic sampler로 N instances를 만
 
 ## Code Registration Policy
 
-generated Python code는 in-process로 실행하지 않는다.  
+unregistered generated Python code는 in-process로 실행하지 않는다.  
 `AST preflight + subprocess isolation`이 mandatory다.
 
 운영 결정:
@@ -480,6 +536,7 @@ generated Python code는 in-process로 실행하지 않는다.
 - v1은 `RestrictedPython`을 전면 채택하지 않는다
 - 대신 narrow DSL 전제를 둔 custom AST preflight + subprocess isolation을 사용한다
 - production promotion 전에 denylist 우회 사례가 발견되면 RestrictedPython 또는 동등한 safe-subset compiler 도입을 재평가한다
+- 이 선택의 사유는 spec 본문과 별도 ADR에 함께 기록한다
 
 ### Static Policy
 
@@ -548,15 +605,37 @@ RegistrationError:
 
 ### Runtime Isolation Strategy
 
-v1에서는 generated code를 subprocess로 분리 실행한다.
+v1에서는 generated code를 두 개의 runtime lane으로 나눈다.
 
-- `solution.py`, `verifier.py`, `shadow_verifier.py`, generated `tools.py`는 subprocess worker에서 실행
+#### Lane A: Registration and Verification Lane
+
+아래 코드는 persistent subprocess worker pool에서만 실행한다.
+
+- `solution.py`
+- `verifier.py`
+- `shadow_verifier.py`
+- tool self-test during registration
+- generated `tools.py` during self-consistency / verifier / shadow verification
+
+운영 방식:
+
+- subprocess worker는 persistent pool이다
+- 각 worker는 자기 프로세스 안에서 작은 read-only async DB pool을 가진다
+- worker당 connection 수는 bounded다
 - timeout은 subprocess 단위로 강제한다
 - memory limit도 프로세스 단위로 강제한다
-- container는 v1 필수는 아니지만, subprocess는 mandatory다
+- main process의 asyncpg pool을 subprocess와 공유하지 않는다
 
-즉 과거의 “sandbox 불필요” 가정은 수정된다.  
-container는 optional이지만 subprocess isolation은 필수다.
+#### Lane B: Production Solver Runtime Lane
+
+solver runtime은 per-tool-call subprocess roundtrip을 하지 않는다.
+
+- registration policy를 통과한 registered tool만 main process에서 import하여 실행한다
+- solver는 기존 `DatabasePools` 기반 main-process tool execution path를 재사용한다
+- subprocess isolation은 “신뢰되지 않은 generated code의 등록/검증”에 mandatory이며, production solver loop의 per-call isolation을 의미하지 않는다
+
+즉 과거의 “sandbox 불필요” 가정은 수정되지만, 동시에 “모든 tool call을 subprocess로 우회”하는 구조도 채택하지 않는다.  
+container는 v1 필수는 아니지만 subprocess isolation은 registration lane에서 필수다.
 
 ## Synthesis Agent Loop
 
@@ -589,6 +668,9 @@ agent는 아래를 함께 만든다.
 - `max_self_consistency_iterations`를 가진다
 - tool이 수정되면 solution/verifier를 모두 invalidate하고 재생성한다
 - task를 “불가능”으로 분류하고 discard하는 경로가 있어야 한다
+- discard는 iteration budget을 소비한 것으로 본다
+- discard는 `db_id x category` failure counter를 증가시킨다
+- 연속 discard가 임계치를 넘으면 해당 `db_id x category`를 backoff queue로 보낸다
 
 #### Gaming Guard
 
@@ -597,6 +679,12 @@ verifier 수정은 임의 완화가 아니다.
 - difficulty vector는 self-consistency 수정 과정에서 감소하면 안 된다
 - constraint count / conditional depth / threshold strictness를 줄이는 verifier 수정은 disallowed
 - verifier를 약화시키는 수정이 필요하면 environment를 discard하고 category synthesis로 되돌린다
+
+category synthesis로 되돌린다는 뜻은:
+
+- 같은 category 안에서 새 environment draft를 다시 제안할 수 있다
+- failure counter가 누적되면 scheduler가 해당 category를 일시 backoff할 수 있다
+- backoff가 해제되기 전까지는 다른 category 또는 다른 DB를 우선 진행한다
 
 즉 self-consistency는 “solution을 맞추는 수리”는 허용하지만, “검사를 느슨하게 하는 수리”는 허용하지 않는다.
 
@@ -758,6 +846,28 @@ quality gate와 독립적인 qualitative spot-check artifact다.
 
 즉 verifier correctness의 source of truth는 아니고, 운영 guardrail이다.
 
+### Review Rubric
+
+review pack의 “예시 수준 이상” 평가는 아래 rubric으로 기록한다.
+
+- `compositional_structure`
+  - multi-slot 또는 multi-entity coupling이 필요하다
+- `constraint_density`
+  - non-trivial hard constraint가 5개 이상이다
+- `branching_or_threshold`
+  - conditional branching 또는 numeric threshold가 존재한다
+- `grounded_verification`
+  - verifier summary상 DB-grounded fact stage가 분명하다
+- `natural_user_request`
+  - 실제 사용자가 할 법한 자연어 요청이다
+- `non_lookup_shape`
+  - 단순 single-value lookup으로 축약되지 않는다
+
+운영 기준:
+
+- 앞의 네 항목은 mandatory다
+- 전체 6개 중 최소 5개를 만족하면 “예시 수준 이상”으로 기록한다
+
 ## Proof Environment Decision
 
 첫 proof environment는 Sakila 위에서 억지로 만들지 않는다.
@@ -766,6 +876,7 @@ quality gate와 독립적인 qualitative spot-check artifact다.
 
 - first proof는 synthetic fixture DB를 사용한다
 - Sakila는 schema introspection / baseline regression 용도로만 남긴다
+- synthetic proof 이후에는 Sakila와 두 번째 real DB에서 single-environment validation을 반드시 거친다
 
 이유:
 
