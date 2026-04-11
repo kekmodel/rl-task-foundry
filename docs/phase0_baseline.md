@@ -14,8 +14,8 @@
 
 clean-break rewrite 이전 baseline review pack snapshot은 아래 artifact로 고정한다.
 
-- markdown: [`review_pack.md`](/Users/jd/Documents/workspace/rl-data-harness/review_packs/20260411-114636-aggregate-focus-v2/review_pack.md)
-- jsonl: [`review_pack.jsonl`](/Users/jd/Documents/workspace/rl-data-harness/review_packs/20260411-114636-aggregate-focus-v2/review_pack.jsonl)
+- committed markdown snapshot: [`review_pack.md`](/Users/jd/Documents/workspace/rl-data-harness/docs/baselines/phase0/review_pack.md)
+- committed jsonl snapshot: [`review_pack.jsonl`](/Users/jd/Documents/workspace/rl-data-harness/docs/baselines/phase0/review_pack.jsonl)
 
 선정 기준:
 
@@ -24,6 +24,11 @@ clean-break rewrite 이전 baseline review pack snapshot은 아래 artifact로 �
 - 이후 synthesis-agent rewrite와 직접 비교 가능한 artifact
 
 portable reference:
+
+- `docs/baselines/phase0/review_pack.md`
+- `docs/baselines/phase0/review_pack.jsonl`
+
+working-copy source:
 
 - `review_packs/20260411-114636-aggregate-focus-v2/review_pack.md`
 - `review_packs/20260411-114636-aggregate-focus-v2/review_pack.jsonl`
