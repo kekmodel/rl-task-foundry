@@ -7,6 +7,11 @@ from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
     validate_generated_module,
 )
+from rl_task_foundry.synthesis.registration_runner import (
+    GeneratedArtifactBundle,
+    RegistrationBundleStatus,
+    run_registration_bundle,
+)
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
 
@@ -333,4 +338,163 @@ async def run_self_test(tools):
             await pool.close()
 
     error_code = asyncio.run(_run())
+    assert error_code == "execution_error"
+
+
+def test_registration_runner_passes_valid_bundle() -> None:
+    async def _run() -> tuple[str, bool, bool]:
+        config = load_config("rl_task_foundry.yaml")
+        bundle = GeneratedArtifactBundle(
+            tool_source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+""",
+            tool_self_test_source="""
+async def run_self_test(tools):
+    row = await tools.get_city(9)
+    assert row["city"] == "sasebo"
+    return {"ok": True}
+""",
+            solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+            verifier_source="""
+def verify(answer, tools):
+    return True
+
+def fetch_facts(answer, tools):
+    return {"city": answer.get("city")}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+            shadow_verifier_source="""
+def verify(answer, tools):
+    return True
+
+def fetch_facts(answer, tools):
+    return {"city": answer.get("city")}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+        )
+        report = await run_registration_bundle(config=config, bundle=bundle)
+        return report.status, report.tool_self_test.executed, report.tool_self_test.passed
+
+    status, executed, self_test_passed = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.PASSED
+    assert executed is True
+    assert self_test_passed is True
+
+
+def test_registration_runner_fails_when_static_validation_fails() -> None:
+    async def _run() -> tuple[str, bool, str]:
+        config = load_config("rl_task_foundry.yaml")
+        bundle = GeneratedArtifactBundle(
+            tool_source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+""",
+            tool_self_test_source="""
+async def run_self_test(tools):
+    return {"ok": True}
+""",
+            solution_source="""
+def solve(answer, tools):
+    return {"city": "sasebo"}
+""",
+            verifier_source="""
+def verify(answer, tools):
+    return True
+
+def fetch_facts(answer, tools):
+    return {"city": answer.get("city")}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+            shadow_verifier_source="""
+def verify(answer, tools):
+    return True
+
+def fetch_facts(answer, tools):
+    return {"city": answer.get("city")}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+        )
+        report = await run_registration_bundle(config=config, bundle=bundle)
+        return report.status, report.tool_self_test.executed, report.solution.static_errors[0].code
+
+    status, executed, error_code = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.FAILED
+    assert executed is True
+    assert error_code == "solve_signature_invalid"
+
+
+def test_registration_runner_surfaces_tool_self_test_execution_failure() -> None:
+    async def _run() -> tuple[str, str]:
+        config = load_config("rl_task_foundry.yaml")
+        bundle = GeneratedArtifactBundle(
+            tool_source="""
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+""",
+            tool_self_test_source="""
+async def run_self_test(tools):
+    row = await tools.get_city(9)
+    assert row["city"] == "busan"
+    return {"ok": True}
+""",
+            solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+            verifier_source="""
+def verify(answer, tools):
+    return True
+
+def fetch_facts(answer, tools):
+    return {"city": answer.get("city")}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+            shadow_verifier_source="""
+def verify(answer, tools):
+    return True
+
+def fetch_facts(answer, tools):
+    return {"city": answer.get("city")}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return True
+""",
+        )
+        report = await run_registration_bundle(config=config, bundle=bundle)
+        return report.status, report.tool_self_test.execution_errors[0].code
+
+    status, error_code = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.FAILED
     assert error_code == "execution_error"

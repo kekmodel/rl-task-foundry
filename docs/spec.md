@@ -670,6 +670,7 @@ v1에서는 generated code를 두 개의 runtime lane으로 나눈다.
 - timeout은 subprocess 단위로 강제한다
 - memory limit도 프로세스 단위로 강제한다
 - main process의 asyncpg pool을 subprocess와 공유하지 않는다
+- registration runner는 `tool + tool_self_test + solution + verifier + shadow_verifier` 번들을 한 번에 평가하는 orchestration helper를 가진다
 
 #### Lane B: Production Solver Runtime Lane
 

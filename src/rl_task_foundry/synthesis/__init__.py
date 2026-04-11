@@ -48,6 +48,14 @@ from rl_task_foundry.synthesis.registration_policy import (
     RegistrationError,
     validate_generated_module,
 )
+from rl_task_foundry.synthesis.registration_runner import (
+    ArtifactRegistrationResult,
+    GeneratedArtifactBundle,
+    RegistrationArtifactName,
+    RegistrationBundleReport,
+    RegistrationBundleStatus,
+    run_registration_bundle,
+)
 from rl_task_foundry.synthesis.runtime_policy import (
     ExecutionLane,
     RegistrationDbAccessStrategy,
@@ -95,7 +103,12 @@ __all__ = [
     "OutputFieldType",
     "OutputSchemaContract",
     "ExecutionLane",
+    "GeneratedArtifactBundle",
     "RegistrationDbAccessStrategy",
+    "RegistrationArtifactName",
+    "RegistrationBundleReport",
+    "RegistrationBundleStatus",
+    "ArtifactRegistrationResult",
     "RegistrationExecutionResult",
     "RegistrationError",
     "RegistrationLanePlan",
@@ -119,5 +132,6 @@ __all__ = [
     "VerifierContract",
     "RuntimeIsolationPlan",
     "build_runtime_isolation_plan",
+    "run_registration_bundle",
     "validate_generated_module",
 ]
