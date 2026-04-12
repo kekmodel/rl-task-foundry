@@ -155,60 +155,14 @@ def _extract_submission_output(
     return None, None, "completed", None, {}
 
 
-def _json_schema_type(json_type: str) -> str:
-    normalized = json_type.strip().lower()
-    if normalized in {"string", "integer", "number", "boolean", "object", "array"}:
-        return normalized
-    if normalized == "int":
-        return "integer"
-    if normalized == "float":
-        return "number"
-    if normalized == "bool":
-        return "boolean"
-    return "string"
-
-
-def _legacy_params_schema(parameters: list[object]) -> dict[str, Any]:
-    properties: dict[str, Any] = {}
-    required: list[str] = []
-    for parameter in parameters:
-        name = getattr(parameter, "name", None)
-        json_type = getattr(parameter, "json_type", None)
-        if not isinstance(name, str) or not isinstance(json_type, str):
-            continue
-        properties[name] = {
-            "type": _json_schema_type(json_type),
-            "description": str(getattr(parameter, "description", "") or name),
-        }
-        if bool(getattr(parameter, "required", True)):
-            required.append(name)
-    schema: dict[str, Any] = {
-        "type": "object",
-        "properties": properties,
-        "additionalProperties": False,
-    }
-    if required:
-        schema["required"] = required
-    return schema
-
-
-def _normalize_tool_definition(definition: object) -> dict[str, Any]:
-    if isinstance(definition, dict):
-        return {
-            "name": definition["name"],
-            "description": definition["description"],
-            "params_schema": dict(definition.get("params_schema", {})),
-            "semantic_key": definition.get("semantic_key"),
-        }
-    name = getattr(definition, "name", None)
-    description = getattr(definition, "description", None)
-    if not isinstance(name, str) or not isinstance(description, str):
-        raise TypeError("tool definitions must be dict-like payloads or legacy ToolSpec-like objects")
+def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(definition, dict):
+        raise TypeError("tool definitions must be dict-like payloads")
     return {
-        "name": name,
-        "description": description,
-        "params_schema": _legacy_params_schema(list(getattr(definition, "parameters", []))),
-        "semantic_key": getattr(definition, "semantic_key", None),
+        "name": definition["name"],
+        "description": definition["description"],
+        "params_schema": dict(definition.get("params_schema", {})),
+        "semantic_key": definition.get("semantic_key"),
     }
 
 
@@ -290,7 +244,6 @@ class OpenAIAgentsSolverBackend:
     solver_config: SolverModelConfig
     provider_config: ProviderConfig
     runtime_config: SolverRuntimeConfig
-    tool_specs: list[object] = field(default_factory=list)
     tool_definitions: list[dict[str, Any]] = field(default_factory=list)
     tool_executors: dict[str, ToolExecutor] = field(default_factory=dict)
     session_db_path: Path | None = None
@@ -323,10 +276,7 @@ class OpenAIAgentsSolverBackend:
         )
 
     def _normalized_tool_definitions(self) -> list[dict[str, Any]]:
-        raw_definitions: list[object] = (
-            list(self.tool_definitions) if self.tool_definitions else list(self.tool_specs)
-        )
-        return [_normalize_tool_definition(definition) for definition in raw_definitions]
+        return [_normalize_tool_definition(definition) for definition in self.tool_definitions]
 
     def _build_tools(self) -> list[object]:
         sdk_tools: list[object] = []
@@ -401,7 +351,7 @@ class OpenAIAgentsSolverBackend:
             raise TypeError("solver runtime requires SolverEpisodeInput")
         return input_item.task_id, input_item.rendered_user_prompt
 
-    async def run(self, episode: object, *, replica_index: int) -> SolverResult:
+    async def run(self, episode: SolverEpisodeInput, *, replica_index: int) -> SolverResult:
         sdk = _load_sdk_components()
         # For non-OpenAI providers we default tracing off to avoid accidental export attempts.
         sdk.set_tracing_disabled(
