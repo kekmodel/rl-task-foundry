@@ -12,20 +12,13 @@ from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, create_model
-
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
 from rl_task_foundry.solver.prompts import build_solver_prompt
-from rl_task_foundry.tasks.models import SolverResult, TaskSpec
-from rl_task_foundry.tools.models import ToolSpec
-from rl_task_foundry.tools.openai_agents_adapter import (
-    ToolExecutor,
-    make_sdk_tool,
-    make_submit_result_tool,
-)
-from rl_task_foundry.truth.schemas import AnswerField, AnswerSchema
+from rl_task_foundry.solver.runtime import SolverEpisodeInput
+from rl_task_foundry.tasks.models import SolverResult
 
 ArtifactWriter = Callable[[str, dict[str, Any]], str]
+ToolExecutor = Callable[[dict[str, Any]], Any]
 
 
 def _load_sdk_components() -> SimpleNamespace:
@@ -52,59 +45,13 @@ def _load_sdk_components() -> SimpleNamespace:
     )
 
 
-def _python_type_for_field(field: AnswerField) -> Any:
-    base_type_map: dict[str, Any] = {
-        "string": str,
-        "int": int,
-        "float": float,
-        "bool": bool,
-        "date": str,
-        "datetime": str,
-        "enum": str,
-        "list[string]": list[str],
-        "list[int]": list[int],
-    }
-    python_type = base_type_map[field.type]
-    if field.nullable:
-        return python_type | None
-    return python_type
-
-
-def build_output_model(answer_schema: AnswerSchema) -> type[BaseModel]:
-    """Build a strict Pydantic model that matches the task answer schema."""
-
-    model_fields: dict[str, tuple[Any, Any]] = {}
-    for answer_field in answer_schema.fields:
-        default = None if answer_field.nullable else ...
-        model_fields[answer_field.name] = (
-            _python_type_for_field(answer_field),
-            Field(default=default, description=answer_field.description or answer_field.name),
-        )
-
-    return create_model(
-        f"TaskAnswer_{abs(hash(answer_schema.model_dump_json()))}",
-        __config__=ConfigDict(extra="forbid"),
-        **model_fields,
-    )
-
-
-def _normalize_final_output(final_output: Any, task: TaskSpec) -> dict[str, object] | None:
-    if isinstance(final_output, BaseModel):
-        return final_output.model_dump(mode="python")
-    if isinstance(final_output, dict):
-        return dict(final_output)
-    if isinstance(final_output, str) and len(task.answer_schema.fields) == 1:
-        return {task.answer_schema.fields[0].name: final_output}
-    return None
-
-
-def _raw_output_text(final_output: Any, structured_output: dict[str, object] | None) -> str:
+def _raw_output_text(final_output: Any, submitted_answer_text: str | None) -> str:
+    if submitted_answer_text is not None:
+        return submitted_answer_text
     if isinstance(final_output, str):
         return final_output
     if isinstance(final_output, dict):
         return json.dumps(final_output, ensure_ascii=False, sort_keys=True)
-    if structured_output is not None:
-        return json.dumps(structured_output, ensure_ascii=False, sort_keys=True)
     return str(final_output)
 
 
@@ -170,15 +117,15 @@ def _extract_tool_calls(
     return tool_calls
 
 
-def _trace_stub(kind: str, task: TaskSpec, solver_id: str, replica_index: int) -> str:
-    return f"memory://{kind}/{task.task_id}/{solver_id}/replica-{replica_index}"
+def _trace_stub(kind: str, task_id: str, solver_id: str, replica_index: int) -> str:
+    return f"memory://{kind}/{task_id}/{solver_id}/replica-{replica_index}"
 
 
 def _is_successful_submission(output: Any) -> bool:
     return (
         isinstance(output, dict)
         and output.get("submitted") is True
-        and isinstance(output.get("answer"), dict)
+        and isinstance(output.get("answer_text"), str)
     )
 
 
@@ -188,19 +135,153 @@ def _is_failed_submission(output: Any) -> bool:
 
 def _extract_submission_output(
     final_output: Any,
-    task: TaskSpec,
-) -> tuple[dict[str, object] | None, str, str | None, dict[str, object]]:
+    ) -> tuple[str | None, dict[str, object] | None, str, str | None, dict[str, object]]:
     if _is_successful_submission(final_output):
-        answer = final_output["answer"]
-        return dict(answer), "completed", "submitted", {}
+        answer_text = final_output["answer_text"]
+        structured_output: dict[str, object] | None = None
+        try:
+            parsed = json.loads(answer_text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            structured_output = dict(parsed)
+        return answer_text, structured_output, "completed", "submitted", {}
     if _is_failed_submission(final_output):
         metadata = {
             key: value
             for key, value in final_output.items()
             if key in {"error", "details"}
         }
-        return None, "invalid_submit", "invalid_submit_schema", metadata
-    return _normalize_final_output(final_output, task), "completed", None, {}
+        return None, None, "invalid_submit", "invalid_submit_schema", metadata
+    return None, None, "completed", None, {}
+
+
+def _json_schema_type(json_type: str) -> str:
+    normalized = json_type.strip().lower()
+    if normalized in {"string", "integer", "number", "boolean", "object", "array"}:
+        return normalized
+    if normalized == "int":
+        return "integer"
+    if normalized == "float":
+        return "number"
+    if normalized == "bool":
+        return "boolean"
+    return "string"
+
+
+def _legacy_params_schema(parameters: list[object]) -> dict[str, Any]:
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for parameter in parameters:
+        name = getattr(parameter, "name", None)
+        json_type = getattr(parameter, "json_type", None)
+        if not isinstance(name, str) or not isinstance(json_type, str):
+            continue
+        properties[name] = {
+            "type": _json_schema_type(json_type),
+            "description": str(getattr(parameter, "description", "") or name),
+        }
+        if bool(getattr(parameter, "required", True)):
+            required.append(name)
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _normalize_tool_definition(definition: object) -> dict[str, Any]:
+    if isinstance(definition, dict):
+        return {
+            "name": definition["name"],
+            "description": definition["description"],
+            "params_schema": dict(definition.get("params_schema", {})),
+            "semantic_key": definition.get("semantic_key"),
+        }
+    name = getattr(definition, "name", None)
+    description = getattr(definition, "description", None)
+    if not isinstance(name, str) or not isinstance(description, str):
+        raise TypeError("tool definitions must be dict-like payloads or legacy ToolSpec-like objects")
+    return {
+        "name": name,
+        "description": description,
+        "params_schema": _legacy_params_schema(list(getattr(definition, "parameters", []))),
+        "semantic_key": getattr(definition, "semantic_key", None),
+    }
+
+
+def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object:
+    from agents import FunctionTool
+    from agents.strict_schema import ensure_strict_json_schema
+
+    params_json_schema = ensure_strict_json_schema(dict(definition["params_schema"]))
+
+    async def _invoke_tool(_tool_context: Any, input_json: str) -> Any:
+        payload = json.loads(input_json) if input_json else {}
+        if not isinstance(payload, dict):
+            raise ValueError("Tool input must be a JSON object")
+        result = executor(payload)
+        if hasattr(result, "__await__"):
+            return await result
+        return result
+
+    return FunctionTool(
+        name=str(definition["name"]),
+        description=str(definition["description"]),
+        params_json_schema=params_json_schema,
+        on_invoke_tool=_invoke_tool,
+        strict_json_schema=True,
+    )
+
+
+def _make_submit_result_tool() -> object:
+    from agents import FunctionTool
+    from agents.strict_schema import ensure_strict_json_schema
+
+    params_json_schema = ensure_strict_json_schema(
+        {
+            "type": "object",
+            "properties": {
+                "answer_text": {
+                    "type": "string",
+                    "description": "Final answer as a JSON string matching the rendered prompt format.",
+                }
+            },
+            "required": ["answer_text"],
+            "additionalProperties": False,
+        }
+    )
+
+    async def _invoke_tool(_tool_context: Any, input_json: str) -> Any:
+        try:
+            payload = json.loads(input_json) if input_json else {}
+        except json.JSONDecodeError as exc:
+            return {
+                "submitted": False,
+                "error": "submit_result payload failed schema validation",
+                "details": [{"loc": ["answer_text"], "msg": f"invalid JSON: {exc}"}],
+            }
+        if not isinstance(payload, dict) or not isinstance(payload.get("answer_text"), str):
+            return {
+                "submitted": False,
+                "error": "submit_result payload failed schema validation",
+                "details": [{"loc": ["answer_text"], "msg": "Field required"}],
+            }
+        return {"submitted": True, "answer_text": payload["answer_text"]}
+
+    return FunctionTool(
+        name="submit_result",
+        description=(
+            "Submit the final answer as a JSON string once you have enough evidence. "
+            "Call this exactly once when you are ready to finish."
+        ),
+        params_json_schema=params_json_schema,
+        on_invoke_tool=_invoke_tool,
+        strict_json_schema=True,
+    )
 
 
 @dataclass(slots=True)
@@ -210,7 +291,8 @@ class OpenAIAgentsSolverBackend:
     solver_config: SolverModelConfig
     provider_config: ProviderConfig
     runtime_config: SolverRuntimeConfig
-    tool_specs: list[ToolSpec] = field(default_factory=list)
+    tool_specs: list[object] = field(default_factory=list)
+    tool_definitions: list[dict[str, Any]] = field(default_factory=list)
     tool_executors: dict[str, ToolExecutor] = field(default_factory=dict)
     session_db_path: Path | None = None
     traces_dir: Path | None = None
@@ -241,27 +323,21 @@ class OpenAIAgentsSolverBackend:
             openai_client=client,
         )
 
+    def _normalized_tool_definitions(self) -> list[dict[str, Any]]:
+        raw_definitions: list[object] = (
+            list(self.tool_definitions) if self.tool_definitions else list(self.tool_specs)
+        )
+        return [_normalize_tool_definition(definition) for definition in raw_definitions]
+
     def _build_tools(self) -> list[object]:
         sdk_tools: list[object] = []
-        for spec in self.tool_specs:
-            executor = self.tool_executors.get(spec.name)
+        for definition in self._normalized_tool_definitions():
+            tool_name = str(definition["name"])
+            executor = self.tool_executors.get(tool_name)
             if executor is None:
-                raise RuntimeError(f"Missing tool executor for tool: {spec.name}")
-            sdk_tools.append(make_sdk_tool(spec, executor))
+                raise RuntimeError(f"Missing tool executor for tool: {tool_name}")
+            sdk_tools.append(_make_sdk_tool(definition, executor))
         return sdk_tools
-
-    @staticmethod
-    def _submit_result_payload(answer: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "submitted": True,
-            "answer": dict(answer),
-        }
-
-    def _build_submit_result_tool(self, answer_model: type[BaseModel]) -> object:
-        return make_submit_result_tool(
-            answer_model=answer_model,
-            on_submit=self._submit_result_payload,
-        )
 
     @staticmethod
     def _build_tool_use_behavior(sdk: SimpleNamespace) -> Callable[[Any, list[Any]], Any]:
@@ -284,13 +360,13 @@ class OpenAIAgentsSolverBackend:
 
         return _finalize_on_submit
 
-    def _build_session(self, sdk: SimpleNamespace, task: TaskSpec, replica_index: int) -> Any | None:
+    def _build_session(self, sdk: SimpleNamespace, task_id: str, replica_index: int) -> Any | None:
         if not self.runtime_config.sdk_sessions_enabled:
             return None
         if self.solver_config.memory_mode == "none":
             return None
 
-        session_id = f"{task.task_id}:{self.solver_config.solver_id}:{replica_index}"
+        session_id = f"{task_id}:{self.solver_config.solver_id}:{replica_index}"
         db_path: str | Path = ":memory:"
         if self.session_db_path is not None:
             self.session_db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,19 +376,19 @@ class OpenAIAgentsSolverBackend:
     def _write_artifact(
         self,
         kind: str,
-        task: TaskSpec,
+        task_id: str,
         replica_index: int,
         payload: dict[str, Any],
     ) -> str:
         if self.artifact_writer is not None:
             return self.artifact_writer(kind, payload)
         if self.traces_dir is None:
-            return _trace_stub(kind, task, self.solver_config.solver_id, replica_index)
+            return _trace_stub(kind, task_id, self.solver_config.solver_id, replica_index)
 
         target_dir = self.traces_dir / kind
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / (
-            f"{task.task_id}__{self.solver_config.solver_id}__replica_{replica_index}.json"
+            f"{task_id}__{self.solver_config.solver_id}__replica_{replica_index}.json"
         )
         target_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -320,72 +396,92 @@ class OpenAIAgentsSolverBackend:
         )
         return str(target_path)
 
-    async def run(self, task: TaskSpec, *, replica_index: int) -> SolverResult:
+    @staticmethod
+    def _coerce_run_input(input_item: object) -> tuple[str, str]:
+        if isinstance(input_item, SolverEpisodeInput):
+            return input_item.task_id, input_item.rendered_user_prompt
+        task_id = getattr(input_item, "task_id", None)
+        rendered_user_prompt = getattr(input_item, "question", None)
+        if isinstance(task_id, str) and isinstance(rendered_user_prompt, str):
+            return task_id, rendered_user_prompt
+        raise TypeError("solver runtime requires SolverEpisodeInput or TaskSpec-like input")
+
+    async def run(self, episode: object, *, replica_index: int) -> SolverResult:
         sdk = _load_sdk_components()
         # For non-OpenAI providers we default tracing off to avoid accidental export attempts.
         sdk.set_tracing_disabled(
             disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"
         )
 
-        output_model = build_output_model(task.answer_schema)
+        task_id, rendered_user_prompt = self._coerce_run_input(episode)
         tools = self._build_tools()
-        tools.append(self._build_submit_result_tool(output_model))
+        tools.append(_make_submit_result_tool())
         agent = sdk.Agent(
             name=self.solver_config.solver_id,
-            instructions=build_solver_prompt(task),
+            instructions=build_solver_prompt(),
             model=self._build_model(sdk),
             tools=tools,
             output_type=None,
             tool_use_behavior=self._build_tool_use_behavior(sdk),
             model_settings=sdk.ModelSettings(parallel_tool_calls=False),
         )
-        session = self._build_session(sdk, task, replica_index)
+        session = self._build_session(sdk, task_id, replica_index)
 
         started_at = perf_counter()
         run_result = await sdk.Runner.run(
             agent,
-            task.question,
+            rendered_user_prompt,
             max_turns=self.runtime_config.max_turns,
             session=session,
         )
         latency_ms = int((perf_counter() - started_at) * 1000)
 
-        structured_output, status, termination_reason, termination_metadata = _extract_submission_output(
-            run_result.final_output, task
+        (
+            submitted_answer_text,
+            structured_output,
+            status,
+            termination_reason,
+            termination_metadata,
+        ) = _extract_submission_output(
+            run_result.final_output
         )
-        if structured_output is None and status == "completed":
-            raise RuntimeError("Solver run did not submit a structured answer via submit_result()")
-        raw_output_text = _raw_output_text(run_result.final_output, structured_output)
+        if submitted_answer_text is None and status == "completed":
+            raise RuntimeError("Solver run did not submit an answer via submit_result()")
+        raw_output_text = _raw_output_text(run_result.final_output, submitted_answer_text)
         transcript_ref = self._write_artifact(
             "transcripts",
-            task,
+            task_id,
             replica_index,
             {
-                "task_id": task.task_id,
+                "task_id": task_id,
                 "solver_id": self.solver_config.solver_id,
                 "replica_index": replica_index,
                 "input_items": run_result.to_input_list(mode="preserve_all"),
-                "final_output": structured_output if structured_output is not None else raw_output_text,
+                "final_output": raw_output_text,
             },
         )
         tool_trace_ref = self._write_artifact(
             "tool_traces",
-            task,
+            task_id,
             replica_index,
             {
-                "task_id": task.task_id,
+                "task_id": task_id,
                 "solver_id": self.solver_config.solver_id,
                 "replica_index": replica_index,
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", [])],
                 "tool_calls": _extract_tool_calls(
                     run_result,
-                    semantic_keys_by_name={spec.name: spec.semantic_key for spec in self.tool_specs},
+                    semantic_keys_by_name={
+                        str(definition["name"]): str(definition["semantic_key"])
+                        for definition in self._normalized_tool_definitions()
+                        if definition.get("semantic_key")
+                    },
                 ),
             },
         )
 
         return SolverResult(
-            task_id=task.task_id,
+            task_id=task_id,
             solver_id=self.solver_config.solver_id,
             provider=self.solver_config.provider,
             model=self.solver_config.model,

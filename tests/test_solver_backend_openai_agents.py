@@ -1,46 +1,131 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
 from rl_task_foundry.solver import backend_openai_agents as backend_module
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
-from rl_task_foundry.tasks.models import TaskSpec
-from rl_task_foundry.tools.models import ToolParameter, ToolSpec
-from rl_task_foundry.truth.schemas import AnswerField, AnswerSchema
+from rl_task_foundry.solver.prompts import build_solver_prompt
+from rl_task_foundry.solver.runtime import SolverEpisodeInput
+from rl_task_foundry.synthesis.contracts import (
+    CategoryTaxonomy,
+    CrossInstanceSet,
+    EnvironmentContract,
+    EnvironmentQualityMetrics,
+    EnvironmentStatus,
+    InstanceSpaceContract,
+    MaterializedFactsSchema,
+    OutputFieldContract,
+    OutputFieldType,
+    OutputSchemaContract,
+    RolloutConstraintsContract,
+    ShadowVerifierContract,
+    SolutionContract,
+    TaskContract,
+    VerifierContract,
+    AnchorQueryContract,
+)
 
 
-def _sample_task() -> TaskSpec:
-    return TaskSpec(
-        task_id="task_1",
-        anchor_table="orders",
-        anchor_pk_column="order_id",
-        anchor_pk_value="1",
+def _sample_episode() -> SolverEpisodeInput:
+    environment = EnvironmentContract(
+        env_id="env_assignment_solver",
+        db_id="sakila",
         domain="customer_support",
-        language="ko",
-        label_tier="A",
-        question="현재 배송 상태는 무엇인가요?",
-        answer_schema=AnswerSchema(
-            fields=[
-                AnswerField(
-                    name="delivery_status",
-                    type="string",
-                    canonicalizer="lower_trim",
-                )
-            ]
+        category=CategoryTaxonomy.ASSIGNMENT,
+        atomic_tool_set_ref="db://sakila",
+        difficulty_vector={},
+        created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
+        generator_version="test-version",
+        tool_signature="sha256:tool",
+        task_signature="sha256:task",
+        verifier_signature="sha256:verifier",
+        status=EnvironmentStatus.ACCEPTED,
+        quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
+        rollout_constraints=RolloutConstraintsContract(
+            max_turns=8,
+            max_episode_duration_ms=40000,
+            max_tool_rows=100,
         ),
-        selected_path_id="orders.shipments",
-        required_hops=2,
-        tool_bundle_id="orders.shipments",
-        sensitivity_policy="default",
+        task=TaskContract(
+            question="INTERNAL QUESTION SHOULD NOT BE USED",
+            category=CategoryTaxonomy.ASSIGNMENT,
+            output_schema=OutputSchemaContract(
+                root=OutputFieldContract(
+                    name="answer",
+                    type=OutputFieldType.OBJECT,
+                    fields=[
+                        OutputFieldContract(
+                            name="delivery_status",
+                            type=OutputFieldType.STRING,
+                        )
+                    ],
+                ),
+                primary_output_format="json_object",
+            ),
+        ),
+        solution=SolutionContract(),
+        verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
+        shadow_verifier=ShadowVerifierContract(facts_schema=MaterializedFactsSchema()),
+        instance_space=InstanceSpaceContract(
+            anchor_query=AnchorQueryContract(
+                sql="SELECT order_id FROM orders ORDER BY order_id",
+                outputs=["order_id"],
+            )
+        ),
+        cross_instance_set=CrossInstanceSet(minimum_required=1),
     )
+    return SolverEpisodeInput(
+        environment=environment,
+        instance_id="instance_0007",
+        rendered_user_prompt=(
+            "현재 배송 상태는 무엇인가요?\n\n"
+            "Submit Result Format:\n"
+            '{"type":"object","properties":{"delivery_status":{"type":"string"}}}\n\n'
+            "Call submit_result with a JSON string."
+        ),
+    )
+
+
+def _sample_tool_definitions() -> list[dict[str, object]]:
+    return [
+        {
+            "name": "delivery_lookup",
+            "description": "Look up delivery status for an order id.",
+            "params_schema": {
+                "type": "object",
+                "properties": {
+                    "anchor_order_id": {
+                        "type": "integer",
+                        "description": "Order id",
+                    }
+                },
+                "required": ["anchor_order_id"],
+                "additionalProperties": False,
+            },
+            "returns_schema": {
+                "type": "object",
+                "properties": {
+                    "delivery_status": {
+                        "type": "string",
+                    }
+                },
+                "required": ["delivery_status"],
+                "additionalProperties": False,
+            },
+            "semantic_key": "orders.shipments:lookup",
+        }
+    ]
 
 
 @pytest.mark.asyncio
 async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monkeypatch):
     tracing_disabled: list[bool] = []
+    episode = _sample_episode()
 
     class FakeAsyncOpenAI:
         calls: list[dict[str, object]] = []
@@ -89,7 +174,7 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             return SimpleNamespace(
                 final_output={
                     "submitted": True,
-                    "answer": {"delivery_status": "IN_TRANSIT"},
+                    "answer_text": '{"delivery_status":"IN_TRANSIT"}',
                 },
                 _current_turn=3,
                 context_wrapper=SimpleNamespace(
@@ -141,29 +226,17 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             sdk_sessions_enabled=True,
             canonical_state_store="run_db",
         ),
-        tool_specs=[
-            ToolSpec(
-                name="delivery_lookup",
-                description="lookup tool",
-                sql_template="SELECT 1",
-                parameters=[ToolParameter(name="anchor_order_id", json_type="integer", description="id")],
-                output_fields=["delivery_status"],
-                path_id="orders.shipments",
-                kind="lookup",
-                tool_level=1,
-                semantic_key="orders.shipments:lookup",
-                name_source="rule_based",
-            )
-        ],
+        tool_definitions=_sample_tool_definitions(),
         tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
         session_db_path=tmp_path / "sessions.sqlite",
         traces_dir=tmp_path / "traces",
     )
 
-    result = await backend.run(_sample_task(), replica_index=2)
+    result = await backend.run(episode, replica_index=2)
 
-    assert result.task_id == "task_1"
+    assert result.task_id == "env_assignment_solver__instance_0007"
     assert result.solver_id == "solver_a"
+    assert result.raw_output_text == '{"delivery_status":"IN_TRANSIT"}'
     assert result.structured_output == {"delivery_status": "IN_TRANSIT"}
     assert result.token_usage == {
         "requests": 1,
@@ -179,18 +252,28 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
 
     assert FakeAsyncOpenAI.calls[0]["base_url"] == "http://127.0.0.1:10531/v1"
     assert FakeAsyncOpenAI.calls[0]["api_key"] == "dummy"
-    assert FakeRunner.calls[0]["input"] == "현재 배송 상태는 무엇인가요?"
+    assert FakeRunner.calls[0]["input"] == episode.rendered_user_prompt
     assert FakeRunner.calls[0]["max_turns"] == 8
-    assert FakeSQLiteSession.last_instance.session_id == "task_1:solver_a:2"
+    assert FakeSQLiteSession.last_instance.session_id == "env_assignment_solver__instance_0007:solver_a:2"
 
-    transcript_path = tmp_path / "traces" / "transcripts" / "task_1__solver_a__replica_2.json"
-    tool_trace_path = tmp_path / "traces" / "tool_traces" / "task_1__solver_a__replica_2.json"
+    transcript_path = (
+        tmp_path
+        / "traces"
+        / "transcripts"
+        / "env_assignment_solver__instance_0007__solver_a__replica_2.json"
+    )
+    tool_trace_path = (
+        tmp_path
+        / "traces"
+        / "tool_traces"
+        / "env_assignment_solver__instance_0007__solver_a__replica_2.json"
+    )
     assert result.transcript_ref == str(transcript_path)
     assert result.tool_trace_ref == str(tool_trace_path)
 
     transcript_payload = json.loads(transcript_path.read_text(encoding="utf-8"))
-    assert transcript_payload["final_output"] == {"delivery_status": "IN_TRANSIT"}
-    assert transcript_payload["input_items"][0]["content"] == "현재 배송 상태는 무엇인가요?"
+    assert transcript_payload["final_output"] == '{"delivery_status":"IN_TRANSIT"}'
+    assert transcript_payload["input_items"][0]["content"] == episode.rendered_user_prompt
 
     tool_trace_payload = json.loads(tool_trace_path.read_text(encoding="utf-8"))
     assert tool_trace_payload["run_items"] == [
@@ -206,10 +289,9 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
         {"name": "submit_result", "repr": "'tool-call(submit_result)'"},
     ]
 
-    assert FakeAgent.last_instance.kwargs["instructions"].startswith(
-        "You are a solver agent for a verifiable database task."
-    )
-    assert "submit_result tool" in FakeAgent.last_instance.kwargs["instructions"]
+    assert FakeAgent.last_instance.kwargs["instructions"] == build_solver_prompt()
+    assert "delivery_status" not in FakeAgent.last_instance.kwargs["instructions"]
+    assert "INTERNAL QUESTION SHOULD NOT BE USED" not in FakeAgent.last_instance.kwargs["instructions"]
     assert FakeAgent.last_instance.kwargs["output_type"] is None
     assert callable(FakeAgent.last_instance.kwargs["tool_use_behavior"])
     assert any(
@@ -258,7 +340,7 @@ def test_tool_use_behavior_stops_on_failed_submit():
                 output={
                     "submitted": False,
                     "error": "submit_result payload failed schema validation",
-                    "details": [{"loc": ["delivery_status"], "msg": "Field required"}],
+                    "details": [{"loc": ["answer_text"], "msg": "Field required"}],
                 },
             )
         ],
@@ -269,20 +351,35 @@ def test_tool_use_behavior_stops_on_failed_submit():
 
 
 def test_extract_submission_output_classifies_invalid_submit():
-    task = _sample_task()
-
-    structured_output, status, termination_reason, termination_metadata = (
+    submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
         backend_module._extract_submission_output(
             {
                 "submitted": False,
                 "error": "submit_result payload failed schema validation",
-                "details": [{"loc": ["delivery_status"], "msg": "Field required"}],
-            },
-            task,
+                "details": [{"loc": ["answer_text"], "msg": "Field required"}],
+            }
         )
     )
 
+    assert submitted_answer_text is None
     assert structured_output is None
     assert status == "invalid_submit"
     assert termination_reason == "invalid_submit_schema"
     assert termination_metadata["error"] == "submit_result payload failed schema validation"
+
+
+def test_extract_submission_output_keeps_non_object_json_as_raw_text_only():
+    submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
+        backend_module._extract_submission_output(
+            {
+                "submitted": True,
+                "answer_text": '["Seoul","Busan"]',
+            }
+        )
+    )
+
+    assert submitted_answer_text == '["Seoul","Busan"]'
+    assert structured_output is None
+    assert status == "completed"
+    assert termination_reason == "submitted"
+    assert termination_metadata == {}
