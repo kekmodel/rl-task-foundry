@@ -53,6 +53,10 @@ def test_schema_exploration_prompt_keeps_tool_json_out_of_user_message() -> None
     assert "available_atomic_tools" not in prompt
     assert "atomic_tool_set_ref" not in prompt
     assert "difficulty_crank_index" not in prompt
+    assert "movie rental support workflows" not in prompt
+    assert "count_customer() returned 599" not in prompt
+    assert "__REAL_COUNT_TOOL__ returned __ROW_COUNT__" in prompt
+    assert "# Placeholder Rules" in prompt
 
 
 def test_task_synthesis_prompt_includes_language_policy_and_one_shot() -> None:
@@ -86,12 +90,19 @@ def test_task_synthesis_prompt_includes_language_policy_and_one_shot() -> None:
     assert "# User-Facing Language" in prompt
     assert "Korean" in prompt
     assert "All schema field names, code identifiers, and tool names must remain in English." in prompt
+    assert "# Valid Constraint Kinds" in prompt
+    assert "- uniqueness" in prompt
+    assert "- cardinality" in prompt
     assert "# One-Shot Example" in prompt
     assert '"question"' in prompt
     assert '"memory_summary"' in prompt
     assert '"label"' not in prompt
+    assert "proof_anchors" not in prompt
+    assert "__REAL_TABLE__" in prompt
+    assert "Please identify the single account state" in prompt
     assert "solution.py" not in prompt
     assert "verifier.py" not in prompt
+    assert "double underscores" in prompt
 
 
 def test_task_synthesis_prompt_includes_quality_feedback_without_debug_dump() -> None:
@@ -119,6 +130,30 @@ def test_task_synthesis_prompt_includes_quality_feedback_without_debug_dump() ->
     assert "# Difficulty Guidance" in prompt
     assert "Increase search_cost" in prompt
     assert "latest_quality_gate_feedback" not in prompt
+
+
+def test_unknown_quality_feedback_status_renders_generic_retry_fix() -> None:
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.TASK_SYNTHESIS,
+        db_id="sakila",
+        domain_name="customer_support",
+        task_language="en",
+        scenario_description="help requests",
+        requested_topic="assignment",
+        latest_quality_gate_feedback=SynthesisQualityGateFeedback(
+            status="schema_mismatch_unknown",
+            pass_rate=0.0,
+            ci_lower=0.0,
+            ci_upper=0.2,
+            matched_solver_runs=0,
+            total_solver_runs=4,
+        ),
+    )
+
+    prompt = build_synthesis_phase_input(request)
+
+    assert "# Retry Fixes" in prompt
+    assert "schema_mismatch_unknown" in prompt
 
 
 def test_prompt_instructions_cover_only_four_phases() -> None:

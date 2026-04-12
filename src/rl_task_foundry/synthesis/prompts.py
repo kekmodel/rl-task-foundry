@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from rl_task_foundry.synthesis.contracts import ConstraintKind
 from rl_task_foundry.synthesis.runtime import SynthesisPhase, SynthesisStageRequest
 
 LANGUAGE_NAMES = {
@@ -30,24 +31,33 @@ ERROR_TEMPLATES = {
     ),
 }
 
+PLACEHOLDER_RULES = [
+    "Placeholder tokens are illustrative only.",
+    "Never emit any token wrapped in double underscores such as __REAL_TABLE__ or __REAL_OUTPUT_FIELD__.",
+    "Replace every placeholder with real grounded table names, column names, field names, and values from the current database.",
+]
+
 FEW_SHOT_EXAMPLE = {
-    "question": "봄 시즌 기준으로 연결된 두 도시를 중복 없이 방문하는 2일 일정을 짜 주세요. 각 날짜마다 가장 저렴한 숙소를 고르고, 하루 총비용이 같으면 도시 이름이 사전순으로 앞서는 쪽을 선택해 주세요.",
+    "question": (
+        "Please identify the single account state that should be shown to the user. "
+        "If multiple records satisfy the same conditions, apply a stable deterministic tie-break rule."
+    ),
     "constraint_summary": [
         {
-            "key": "connected_cities_only",
-            "kind": "other",
-            "summary": "Each next city must be reachable from the previous city.",
+            "key": "single_result",
+            "kind": "cardinality",
+            "summary": "Return exactly one result.",
         },
         {
-            "key": "no_repeat_city",
+            "key": "stable_tie_break",
             "kind": "uniqueness",
-            "summary": "Do not repeat a city.",
+            "summary": "Break ties with a stable deterministic rule.",
         },
     ],
     "instance_space": {
         "anchor_query": {
-            "sql": "SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
-            "outputs": ["anchor_id"],
+            "sql": "SELECT __REAL_PRIMARY_KEY__ FROM __REAL_TABLE__ ORDER BY __REAL_PRIMARY_KEY__",
+            "outputs": ["__REAL_PRIMARY_KEY__"],
         },
         "parameters": {},
         "sampling": {"strategy": "deterministic_hash", "seed": 0},
@@ -120,7 +130,9 @@ def _render_error_feedback(request: SynthesisStageRequest) -> list[str]:
         return []
     status = request.latest_quality_gate_feedback.status
     template = ERROR_TEMPLATES.get(status)
-    return [template] if template is not None else []
+    if template is not None:
+        return [template]
+    return [f"The previous attempt failed with status '{status}'. Fix the issue and return a valid payload."]
 
 
 def _render_difficulty_feedback(request: SynthesisStageRequest) -> str | None:
@@ -129,27 +141,31 @@ def _render_difficulty_feedback(request: SynthesisStageRequest) -> str | None:
     return None
 
 
+def _constraint_kind_lines() -> list[str]:
+    return [f"- {kind.value}" for kind in ConstraintKind]
+
+
 def _phase_output_contract(phase: SynthesisPhase, request: SynthesisStageRequest) -> dict[str, Any]:
     if phase == SynthesisPhase.SCHEMA_EXPLORATION:
         return {
-            "domain_hypothesis": "movie rental support workflows",
-            "candidate_topics": ["assignment", "other"],
+            "domain_hypothesis": "user-facing service workflows grounded in the observed database",
+            "candidate_topics": [request.requested_topic or "__REAL_TOPIC_A__", "__REAL_TOPIC_B__"],
             "sample_observations": [
-                "count_customer() returned 599",
-                "top_3_payment_by_amount_desc(limit=3) showed repeated high-value customers",
+                "__REAL_COUNT_TOOL__ returned __ROW_COUNT__",
+                "__REAL_GROUPED_TOOL__(limit=3) returned grounded aggregate examples",
             ],
             "memory_summary": "grounded schema exploration completed",
         }
     if phase == SynthesisPhase.CATEGORY_INFERENCE:
         return {
-            "selected_topic": request.requested_topic or "assignment",
+            "selected_topic": request.requested_topic or "__REAL_TOPIC__",
             "rationale": "This topic is feasible with the observed tables, rows, and tool paths.",
             "memory_summary": "topic inference completed",
         }
     if phase == SynthesisPhase.LABEL_CONSTRUCTION:
         return {
-            "canonical_answer_json": '{"store_id": 1}',
-            "anchor_entity": {"customer_id": 148},
+            "canonical_answer_json": '{"__REAL_OUTPUT_FIELD__": "__REAL_VALUE__"}',
+            "anchor_entity": {"__REAL_PRIMARY_KEY_COLUMN__": "__REAL_PRIMARY_KEY_VALUE__"},
             "difficulty_vector": {
                 "search_cost": 2.0,
                 "solution_space": 1.0,
@@ -160,7 +176,10 @@ def _phase_output_contract(phase: SynthesisPhase, request: SynthesisStageRequest
             "memory_summary": "label construction completed",
         }
     return {
-        "question": "사용자 입장에서 자연스럽게 묻는 요청문을 작성하세요.",
+        "question": (
+            "Write a natural user-facing request that surfaces the fixed label without revealing "
+            "internal tool paths."
+        ),
         "constraint_summary": [
             {
                 "key": "stable_tie_break",
@@ -170,8 +189,11 @@ def _phase_output_contract(phase: SynthesisPhase, request: SynthesisStageRequest
         ],
         "instance_space": {
             "anchor_query": {
-                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                "outputs": ["customer_id"],
+                "sql": (
+                    "SELECT __REAL_PRIMARY_KEY__ FROM __REAL_TABLE__ "
+                    "ORDER BY __REAL_PRIMARY_KEY__"
+                ),
+                "outputs": ["__REAL_PRIMARY_KEY__"],
             },
             "parameters": {},
             "sampling": {"strategy": "deterministic_hash", "seed": 0},
@@ -185,7 +207,11 @@ def build_synthesis_phase_instructions(phase: SynthesisPhase) -> str:
     common = (
         "You are one phase of a synthesis agent that builds grounded RLVR database tasks. "
         "Return exactly one JSON object matching the required output contract. "
-        "Do not emit markdown fences or extra commentary."
+        "Do not emit markdown fences or extra commentary. "
+        "Never copy placeholder tokens from the prompt. "
+        "Any token wrapped in double underscores, such as __REAL_TABLE__ or "
+        "__REAL_OUTPUT_FIELD__, is an invalid sentinel and must not appear in your output. "
+        "Replace those sentinels with real grounded names and values from the current database."
     )
     if phase == SynthesisPhase.SCHEMA_EXPLORATION:
         return (
@@ -229,11 +255,14 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
     if recent_memory:
         sections.append("# Recent Memory\n" + "\n".join(recent_memory))
 
+    sections.append("# Placeholder Rules\n" + "\n".join(f"- {line}" for line in PLACEHOLDER_RULES))
+
     if request.phase == SynthesisPhase.TASK_SYNTHESIS:
         sections.append(
             "# User-Facing Language\n"
             + TASK_LANGUAGE_INSTRUCTION.format(language=_language_name(request))
         )
+        sections.append("# Valid Constraint Kinds\n" + "\n".join(_constraint_kind_lines()))
 
     error_feedback = _render_error_feedback(request)
     if error_feedback:
@@ -246,7 +275,7 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
     if request.phase == SynthesisPhase.TASK_SYNTHESIS:
         sections.append(
             "# One-Shot Example\n"
-            "Use this only as a structural example. Do not copy values verbatim.\n"
+            "Use this only as a structural example. Do not copy values or placeholder tokens verbatim.\n"
             + _json_block(FEW_SHOT_EXAMPLE)
         )
 

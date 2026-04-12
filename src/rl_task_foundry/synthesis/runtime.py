@@ -659,6 +659,26 @@ def _top_level_answer_field_names(task: TaskContract) -> set[str]:
     return {field.name for field in root.fields}
 
 
+_FORBIDDEN_PLACEHOLDER_TOKENS = (
+    "__REAL_",
+    "anchor_id",
+    "anchor_table",
+    "example_field",
+    "replace_with_real_",
+)
+
+
+def _payload_placeholder_tokens(payload: SynthesisPhaseOutput) -> list[str]:
+    serialized = payload.model_dump_json()
+    return sorted(
+        {
+            token
+            for token in _FORBIDDEN_PLACEHOLDER_TOKENS
+            if token in serialized
+        }
+    )
+
+
 def _project_retry_difficulty_vector(
     *,
     previous: DifficultyVectorContract | None,
@@ -1491,6 +1511,7 @@ class SynthesisAgentRuntime:
                     retry_seed.latest_quality_gate_feedback if retry_seed is not None else None
                 ),
             }
+            crank_request_active = retry_requires_harder
 
             label_request = SynthesisStageRequest(
                 phase=SynthesisPhase.LABEL_CONSTRUCTION,
@@ -1503,6 +1524,56 @@ class SynthesisAgentRuntime:
             memory.append(label_result.memory_entry)
             tool_traces.extend(label_result.tool_traces)
             attempt_previous_outputs[SynthesisPhase.LABEL_CONSTRUCTION] = label_result.payload
+            label_placeholder_tokens = _payload_placeholder_tokens(label_result.payload)
+            if label_placeholder_tokens:
+                artifact_diagnostics = SynthesisArtifactDiagnostics(
+                    error_codes=["placeholder_tokens_not_allowed"],
+                    payload_repair_codes=list(label_result.payload_repair_codes),
+                )
+                latest_artifact_diagnostics = artifact_diagnostics
+                self._emit_phase_monitor(
+                    phase="label_construction",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "placeholder_tokens_forbidden": True,
+                    },
+                    actual_data=self._actual_data_for_stage_result(label_result),
+                    checks={"placeholder_token_count": len(label_placeholder_tokens)},
+                    diagnostics={
+                        "provider": label_result.provider,
+                        "model": label_result.model,
+                        "placeholder_tokens": label_placeholder_tokens,
+                        "payload_repair_codes": list(label_result.payload_repair_codes),
+                    },
+                )
+                attempt = SynthesisGenerationAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisGenerationOutcome.ARTIFACT_INVALID,
+                    provider=label_result.provider,
+                    model=label_result.model,
+                    memory_summary=label_result.memory_entry.summary,
+                    error_message=(
+                        "label construction emitted forbidden placeholder tokens: "
+                        + ",".join(label_placeholder_tokens)
+                    ),
+                    artifact_diagnostics=artifact_diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = crank_request_active
+                if attempt_index >= max_iterations:
+                    raise SynthesisArtifactGenerationError(
+                        "label-first synthesis exhausted its bounded retry budget after placeholder validation failures",
+                        attempts=attempts,
+                        last_artifact_diagnostics=artifact_diagnostics,
+                    )
+                continue
 
             task_request = SynthesisStageRequest(
                 phase=SynthesisPhase.TASK_SYNTHESIS,
@@ -1515,6 +1586,59 @@ class SynthesisAgentRuntime:
             memory.append(task_result.memory_entry)
             tool_traces.extend(task_result.tool_traces)
             attempt_previous_outputs[SynthesisPhase.TASK_SYNTHESIS] = task_result.payload
+            task_placeholder_tokens = _payload_placeholder_tokens(task_result.payload)
+            if task_placeholder_tokens:
+                artifact_diagnostics = SynthesisArtifactDiagnostics(
+                    error_codes=["placeholder_tokens_not_allowed"],
+                    payload_repair_codes=[
+                        *label_result.payload_repair_codes,
+                        *task_result.payload_repair_codes,
+                    ],
+                )
+                latest_artifact_diagnostics = artifact_diagnostics
+                self._emit_phase_monitor(
+                    phase="task_synthesis",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "placeholder_tokens_forbidden": True,
+                    },
+                    actual_data=self._actual_data_for_stage_result(task_result),
+                    checks={"placeholder_token_count": len(task_placeholder_tokens)},
+                    diagnostics={
+                        "provider": task_result.provider,
+                        "model": task_result.model,
+                        "placeholder_tokens": task_placeholder_tokens,
+                        "payload_repair_codes": list(artifact_diagnostics.payload_repair_codes),
+                    },
+                )
+                attempt = SynthesisGenerationAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisGenerationOutcome.ARTIFACT_INVALID,
+                    provider=task_result.provider,
+                    model=task_result.model,
+                    memory_summary=task_result.memory_entry.summary,
+                    error_message=(
+                        "task synthesis emitted forbidden placeholder tokens: "
+                        + ",".join(task_placeholder_tokens)
+                    ),
+                    artifact_diagnostics=artifact_diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = crank_request_active
+                if attempt_index >= max_iterations:
+                    raise SynthesisArtifactGenerationError(
+                        "label-first synthesis exhausted its bounded retry budget after placeholder validation failures",
+                        attempts=attempts,
+                        last_artifact_diagnostics=artifact_diagnostics,
+                    )
+                continue
 
             authoritative_task = self._build_authoritative_task(
                 requested_topic=requested_topic,
@@ -1522,7 +1646,6 @@ class SynthesisAgentRuntime:
                 task_output=task_result.payload,
             )
             latest_authoritative_task = authoritative_task
-            crank_request_active = retry_requires_harder
             current_difficulty_vector = authoritative_task.difficulty_vector
             weakened_axes = _weakened_difficulty_axes(
                 previous=strongest_difficulty_vector,

@@ -23,6 +23,7 @@ from rl_task_foundry.synthesis.runtime import (
     LabelConstructionOutput,
     SchemaExplorationOutput,
     SynthesisAgentRuntime,
+    SynthesisArtifactGenerationError,
     SynthesisMemoryEntry,
     SynthesisPhase,
     SynthesisPhaseExecutionError,
@@ -437,6 +438,44 @@ async def test_canonical_materialization_failure_does_not_force_harder_retry(
     assert len(task_requests) >= 2
     assert all(request.difficulty_crank_index == 0 for request in task_requests)
     assert all(request.difficulty_crank_history == [] for request in task_requests)
+
+
+@pytest.mark.asyncio
+async def test_synthesize_environment_draft_rejects_placeholder_tokens_in_label_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config_with_synthesis_output(tmp_path).model_copy(deep=True)
+    config.synthesis.runtime.max_generation_attempts = 1
+    runtime = SynthesisAgentRuntime(config)
+    _install_runtime_stubs(
+        monkeypatch,
+        runtime,
+        results={
+            SynthesisPhase.SCHEMA_EXPLORATION: _schema_result(),
+            SynthesisPhase.CATEGORY_INFERENCE: _category_result(),
+            SynthesisPhase.LABEL_CONSTRUCTION: _stage_result(
+                phase=SynthesisPhase.LABEL_CONSTRUCTION,
+                payload=LabelConstructionOutput(
+                    canonical_answer_json='{"__REAL_OUTPUT_FIELD__": "__REAL_VALUE__"}',
+                    anchor_entity={"__REAL_PRIMARY_KEY_COLUMN__": "__REAL_PRIMARY_KEY_VALUE__"},
+                    difficulty_vector=build_difficulty_vector(search_cost=1.0),
+                    instance_parameters={},
+                    label_summary="placeholder label",
+                    memory_summary="label construction completed",
+                ),
+            ),
+            SynthesisPhase.TASK_SYNTHESIS: _task_result(),
+        },
+    )
+
+    with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_topic="assignment",
+        )
+
+    assert "placeholder validation failures" in str(exc_info.value)
 
 
 def test_runtime_rejects_ungrounded_schema_exploration(tmp_path: Path) -> None:
