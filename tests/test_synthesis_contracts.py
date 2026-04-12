@@ -49,6 +49,8 @@ def _build_output_schema() -> OutputSchemaContract:
         root=OutputFieldContract(
             name="days",
             type=OutputFieldType.LIST,
+            ordered=False,
+            sort_key=("date", "city", "hotel"),
             items=OutputFieldContract(
                 name="day",
                 type=OutputFieldType.OBJECT,
@@ -199,6 +201,7 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
         return_schema=OutputFieldContract(
             name="hotels",
             type=OutputFieldType.LIST,
+            ordered=True,
             items=OutputFieldContract(
                 name="hotel",
                 type=OutputFieldType.OBJECT,

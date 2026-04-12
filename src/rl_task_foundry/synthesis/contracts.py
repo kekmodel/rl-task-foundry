@@ -228,6 +228,8 @@ class OutputFieldContract(StrictModel):
     description: str = ""
     nullable: bool = False
     ordered: bool = False
+    sort_key: tuple[str, ...] | None = None
+    unique_elements: bool = False
     enum_values: list[str] = Field(default_factory=list)
     fields: list[OutputFieldContract] = Field(default_factory=list)
     items: OutputFieldContract | None = None
@@ -250,6 +252,44 @@ class OutputFieldContract(StrictModel):
                 raise ValueError("list output fields must declare items")
         elif self.items is not None:
             raise ValueError("only list output fields may declare items")
+        if self.sort_key is not None:
+            if self.type != OutputFieldType.LIST:
+                raise ValueError("sort_key is only allowed for list output fields")
+            if self.ordered:
+                raise ValueError("ordered list output fields cannot declare sort_key")
+            if self.items is None or self.items.type != OutputFieldType.OBJECT:
+                raise ValueError("sort_key requires list items to be objects")
+            item_fields = {field.name: field for field in self.items.fields}
+            primitive_types = {
+                OutputFieldType.STRING,
+                OutputFieldType.INT,
+                OutputFieldType.FLOAT,
+                OutputFieldType.BOOL,
+                OutputFieldType.DATE,
+                OutputFieldType.DATETIME,
+                OutputFieldType.ENUM,
+            }
+            for key_part in self.sort_key:
+                if key_part not in item_fields:
+                    raise ValueError(f"sort_key references unknown field: {key_part}")
+                key_field = item_fields[key_part]
+                if key_field.type not in primitive_types:
+                    raise ValueError("sort_key components must reference primitive item fields")
+                if key_field.nullable:
+                    raise ValueError("sort_key components must reference non-nullable item fields")
+        if self.unique_elements:
+            if self.type != OutputFieldType.LIST:
+                raise ValueError("unique_elements is only allowed for list output fields")
+            if self.ordered:
+                raise ValueError("ordered list output fields cannot declare unique_elements")
+        if (
+            self.type == OutputFieldType.LIST
+            and not self.ordered
+            and self.items is not None
+            and self.items.type == OutputFieldType.OBJECT
+            and self.sort_key is None
+        ):
+            raise ValueError("unordered list of objects must declare sort_key")
         return self
 
 

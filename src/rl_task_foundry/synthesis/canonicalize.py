@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from typing import Any
+from typing import Any, Literal
 
 from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
@@ -25,6 +25,16 @@ class CanonicalizationError(ValueError):
 
     def __str__(self) -> str:
         return f"{self.path}: {self.message}"
+
+
+RewardStatus = Literal["matched", "json_decode_failed", "schema_mismatch", "em_mismatch"]
+
+
+@dataclass(frozen=True, slots=True)
+class RewardResult:
+    reward: float
+    status: RewardStatus
+    detail: str | None = None
 
 
 def canonicalize_output(
@@ -190,14 +200,93 @@ def _canonicalize_list(
         for index, item in enumerate(value)
     ]
     if field.ordered:
-        return items
-    return sorted(items, key=_unordered_sort_key)
+        result = items
+    elif field.sort_key is not None:
+        result = sorted(
+            items,
+            key=lambda element: _object_sort_key(element, field.sort_key, field.items),
+        )
+    else:
+        result = sorted(items, key=_unordered_sort_key)
+
+    if field.unique_elements:
+        result = _dedupe_preserving_order(result)
+
+    return result
+
+
+def _object_sort_key(
+    element: Any,
+    sort_key_path: tuple[str, ...],
+    item_field: OutputFieldContract,
+) -> tuple[int, tuple[Any, ...] | str, str]:
+    if item_field.type is not OutputFieldType.OBJECT or not isinstance(element, dict):
+        return (0, canonical_json(element), canonical_json(element))
+
+    primary_key_parts: list[Any] = []
+    for field_name in sort_key_path:
+        primary_key_parts.append(element.get(field_name))
+
+    return (1, tuple(primary_key_parts), canonical_json(element))
+
+
+def _dedupe_preserving_order(items: list[Any]) -> list[Any]:
+    seen: set[str] = set()
+    deduped: list[Any] = []
+    for item in items:
+        key = canonical_json(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def _unordered_sort_key(value: Any) -> tuple[int, str]:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return (0, canonical_json(value))
     return (1, canonical_json(value))
+
+
+def compute_reward(
+    *,
+    submitted_answer_text: str,
+    canonical_answer: Any,
+    output_schema: OutputSchemaContract,
+) -> RewardResult:
+    """Pure-function reward computation for RL runtime and environment serving."""
+
+    try:
+        parsed = json.loads(submitted_answer_text)
+    except json.JSONDecodeError as exc:
+        return RewardResult(
+            reward=0.0,
+            status="json_decode_failed",
+            detail=str(exc),
+        )
+
+    try:
+        canonical_submitted = canonicalize_output(output_schema, parsed)
+    except CanonicalizationError as exc:
+        return RewardResult(
+            reward=0.0,
+            status="schema_mismatch",
+            detail=str(exc),
+        )
+
+    try:
+        canonical_expected = canonicalize_output(output_schema, canonical_answer)
+    except CanonicalizationError as exc:
+        return RewardResult(
+            reward=0.0,
+            status="schema_mismatch",
+            detail=f"canonical answer failed validation: {exc}",
+        )
+
+    if canonical_submitted == canonical_expected:
+        return RewardResult(reward=1.0, status="matched")
+
+    return RewardResult(reward=0.0, status="em_mismatch")
 
 
 def _field_path(base: str, child_name: str) -> str:

@@ -171,6 +171,7 @@ def _sample_proposed_environment(
                 return_schema=OutputFieldContract(
                     name="rows",
                     type=OutputFieldType.LIST,
+                    ordered=True,
                     items=OutputFieldContract(
                         name="row",
                         type=OutputFieldType.OBJECT,

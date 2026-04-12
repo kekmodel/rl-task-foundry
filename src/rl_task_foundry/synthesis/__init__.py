@@ -9,9 +9,12 @@ from rl_task_foundry.synthesis.atomic_tools import (
 )
 from rl_task_foundry.synthesis.canonicalize import (
     CanonicalizationError,
+    RewardResult,
+    RewardStatus,
     canonical_json,
     canonicalize_field,
     canonicalize_output,
+    compute_reward,
 )
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import (
@@ -224,6 +227,7 @@ __all__ = [
     "canonical_json",
     "canonicalize_field",
     "canonicalize_output",
+    "compute_reward",
     "RegistrationExecutionResult",
     "RegistrationSelfConsistencyResult",
     "RegistrationError",
@@ -234,6 +238,8 @@ __all__ = [
     "RegistrationWorkerHandle",
     "RegistrationWorkerMode",
     "SchemaExplorationOutput",
+    "RewardResult",
+    "RewardStatus",
     "ShadowIndependenceRequirement",
     "ShadowPromptStrategy",
     "ShadowVerifierContract",
