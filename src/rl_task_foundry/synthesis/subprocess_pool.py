@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
     RegistrationError,
@@ -115,6 +116,24 @@ class RegistrationWorkerHandle:
     def is_alive(self) -> bool:
         return self.process.returncode is None
 
+    def _tool_reference_payload(
+        self,
+        *,
+        tool_source: str | None = None,
+        atomic_tool_set_ref: str | None = None,
+    ) -> dict[str, object]:
+        if tool_source is None and atomic_tool_set_ref is None:
+            raise ValueError("either tool_source or atomic_tool_set_ref is required")
+        payload: dict[str, object] = {}
+        if tool_source is not None:
+            payload["tool_source"] = tool_source
+        if atomic_tool_set_ref is not None:
+            payload["atomic_tool_set_ref"] = atomic_tool_set_ref
+            payload["atomic_tools_root_dir"] = str(
+                AtomicToolMaterializer.for_config(self.config).root_dir
+            )
+        return payload
+
     async def validate_module(
         self,
         *,
@@ -159,13 +178,17 @@ class RegistrationWorkerHandle:
     async def run_tool_self_test(
         self,
         *,
-        tool_source: str,
+        tool_source: str | None = None,
+        atomic_tool_set_ref: str | None = None,
         self_test_source: str,
     ) -> RegistrationExecutionResult:
         response = await self._perform_request(
             request_type="run_tool_self_test",
             payload={
-                "tool_source": tool_source,
+                **self._tool_reference_payload(
+                    tool_source=tool_source,
+                    atomic_tool_set_ref=atomic_tool_set_ref,
+                ),
                 "self_test_source": self_test_source,
                 "policy": self.config.synthesis.registration_policy.model_dump(mode="json"),
                 "memory_limit_mb": self.config.synthesis.registration_workers.memory_limit_mb,
@@ -177,7 +200,8 @@ class RegistrationWorkerHandle:
     async def probe_verifier_module(
         self,
         *,
-        tool_source: str,
+        tool_source: str | None = None,
+        atomic_tool_set_ref: str | None = None,
         verifier_source: str,
         artifact_kind: ArtifactKind,
         answer_sample: object,
@@ -186,7 +210,10 @@ class RegistrationWorkerHandle:
         response = await self._perform_request(
             request_type="probe_verifier_module",
             payload={
-                "tool_source": tool_source,
+                **self._tool_reference_payload(
+                    tool_source=tool_source,
+                    atomic_tool_set_ref=atomic_tool_set_ref,
+                ),
                 "verifier_source": verifier_source,
                 "artifact_kind": artifact_kind.value,
                 "answer_sample": answer_sample,
@@ -201,7 +228,8 @@ class RegistrationWorkerHandle:
     async def run_self_consistency_check(
         self,
         *,
-        tool_source: str,
+        tool_source: str | None = None,
+        atomic_tool_set_ref: str | None = None,
         solution_source: str,
         verifier_source: str,
         expected_fact_keys: list[str],
@@ -209,7 +237,10 @@ class RegistrationWorkerHandle:
         response = await self._perform_request(
             request_type="run_self_consistency_check",
             payload={
-                "tool_source": tool_source,
+                **self._tool_reference_payload(
+                    tool_source=tool_source,
+                    atomic_tool_set_ref=atomic_tool_set_ref,
+                ),
                 "solution_source": solution_source,
                 "verifier_source": verifier_source,
                 "expected_fact_keys": expected_fact_keys,
@@ -369,19 +400,22 @@ class RegistrationSubprocessPool:
     async def run_tool_self_test(
         self,
         *,
-        tool_source: str,
+        tool_source: str | None = None,
+        atomic_tool_set_ref: str | None = None,
         self_test_source: str,
     ) -> RegistrationExecutionResult:
         return await self._dispatch(
             "run_tool_self_test",
             tool_source=tool_source,
+            atomic_tool_set_ref=atomic_tool_set_ref,
             self_test_source=self_test_source,
         )
 
     async def probe_verifier_module(
         self,
         *,
-        tool_source: str,
+        tool_source: str | None = None,
+        atomic_tool_set_ref: str | None = None,
         verifier_source: str,
         artifact_kind: ArtifactKind,
         answer_sample: object,
@@ -390,6 +424,7 @@ class RegistrationSubprocessPool:
         return await self._dispatch(
             "probe_verifier_module",
             tool_source=tool_source,
+            atomic_tool_set_ref=atomic_tool_set_ref,
             verifier_source=verifier_source,
             artifact_kind=artifact_kind,
             answer_sample=answer_sample,
@@ -399,7 +434,8 @@ class RegistrationSubprocessPool:
     async def run_self_consistency_check(
         self,
         *,
-        tool_source: str,
+        tool_source: str | None = None,
+        atomic_tool_set_ref: str | None = None,
         solution_source: str,
         verifier_source: str,
         expected_fact_keys: list[str],
@@ -407,6 +443,7 @@ class RegistrationSubprocessPool:
         return await self._dispatch(
             "run_self_consistency_check",
             tool_source=tool_source,
+            atomic_tool_set_ref=atomic_tool_set_ref,
             solution_source=solution_source,
             verifier_source=verifier_source,
             expected_fact_keys=expected_fact_keys,

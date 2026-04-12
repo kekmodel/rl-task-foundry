@@ -1078,9 +1078,8 @@ class SynthesisAgentRuntime:
                     self._registration_pool = await RegistrationSubprocessPool.start(
                         self.config
                     )
-        atomic_tool_bundle = self._atomic_tool_bundle_for_bound_db()
         return await self._registration_pool.run_self_consistency_check(
-            tool_source=atomic_tool_bundle.source,
+            atomic_tool_set_ref=f"db://{self._bound_db_id}",
             solution_source=bundle.solution_source,
             verifier_source=bundle.verifier_source,
             expected_fact_keys=[
@@ -1137,11 +1136,10 @@ class SynthesisAgentRuntime:
                     self._registration_pool = await RegistrationSubprocessPool.start(
                         self.config
                     )
-        atomic_tool_bundle = self._atomic_tool_bundle_for_bound_db()
         return await run_registration_bundle(
             config=self.config,
             bundle=bundle,
-            tool_source=atomic_tool_bundle.source,
+            atomic_tool_set_ref=f"db://{self._bound_db_id}",
             pool=self._registration_pool,
             verifier_probe_specs=self._build_verifier_probe_specs(proposed_environment),
         )

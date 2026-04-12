@@ -9,6 +9,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from types import CodeType
 from typing import Any
 from types import SimpleNamespace
@@ -465,6 +466,29 @@ def _bind_tool_function(
     return _bound
 
 
+def _resolve_tool_source(payload: dict[str, Any]) -> str:
+    tool_source = payload.get("tool_source")
+    if isinstance(tool_source, str) and tool_source:
+        return tool_source
+
+    atomic_tool_set_ref = payload.get("atomic_tool_set_ref")
+    atomic_tools_root_dir = payload.get("atomic_tools_root_dir")
+    if not isinstance(atomic_tool_set_ref, str) or not atomic_tool_set_ref:
+        raise ValueError("tool_source or atomic_tool_set_ref is required")
+    if not atomic_tool_set_ref.startswith("db://"):
+        raise ValueError("atomic_tool_set_ref must start with db://")
+    if not isinstance(atomic_tools_root_dir, str) or not atomic_tools_root_dir:
+        raise ValueError("atomic_tools_root_dir is required with atomic_tool_set_ref")
+
+    db_id = atomic_tool_set_ref.removeprefix("db://").strip()
+    if not db_id:
+        raise ValueError("atomic_tool_set_ref must include a non-empty db_id")
+    source_path = Path(atomic_tools_root_dir) / db_id / "atomic_tools.py"
+    if not source_path.exists():
+        raise ValueError(f"atomic tool bundle is missing: {source_path}")
+    return source_path.read_text(encoding="utf-8")
+
+
 def _bind_sync_tool_function(
     function: Callable[..., Any],
     *,
@@ -613,7 +637,7 @@ def _handle_tool_self_test(payload: dict[str, Any]) -> dict[str, Any]:
     request_id = payload.get("request_id")
     try:
         policy = RegistrationPolicyConfig.model_validate(payload["policy"])
-        tool_source = payload["tool_source"]
+        tool_source = _resolve_tool_source(payload)
         self_test_source = payload["self_test_source"]
         call_count_limit = int(payload["call_count_limit"])
         memory_limit_mb = payload.get("memory_limit_mb")
@@ -695,7 +719,7 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
     request_id = payload.get("request_id")
     try:
         policy = RegistrationPolicyConfig.model_validate(payload["policy"])
-        tool_source = payload["tool_source"]
+        tool_source = _resolve_tool_source(payload)
         verifier_source = payload["verifier_source"]
         kind = ArtifactKind(payload["artifact_kind"])
         answer_sample = payload["answer_sample"]
@@ -955,7 +979,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
     request_id = payload.get("request_id")
     try:
         policy = RegistrationPolicyConfig.model_validate(payload["policy"])
-        tool_source = payload["tool_source"]
+        tool_source = _resolve_tool_source(payload)
         solution_source = payload["solution_source"]
         verifier_source = payload["verifier_source"]
         expected_fact_keys = list(payload.get("expected_fact_keys", []))

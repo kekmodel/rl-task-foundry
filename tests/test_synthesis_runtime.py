@@ -1399,6 +1399,66 @@ async def test_synthesis_agent_runtime_propagates_materialize_validation_failure
 
 
 @pytest.mark.asyncio
+async def test_synthesis_agent_runtime_passes_atomic_tool_reference_to_self_consistency_pool():
+    config = load_config("rl_task_foundry.yaml")
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={},
+    )
+    await runtime._bind_db_id("sakila")
+    runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle("sakila")
+    captured: dict[str, object] = {}
+
+    class _FakePool:
+        async def run_self_consistency_check(self, **kwargs):
+            captured.update(kwargs)
+            return _passing_self_consistency_result()
+
+    runtime._registration_pool = _FakePool()
+
+    await runtime._run_self_consistency_check(
+        bundle=_sample_artifacts(),
+        proposed_environment=_sample_proposed_environment(),
+    )
+
+    assert captured["atomic_tool_set_ref"] == "db://sakila"
+    assert captured["solution_source"] == _sample_artifacts().solution_source
+    assert captured["verifier_source"] == _sample_artifacts().verifier_source
+    assert "tool_source" not in captured
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_passes_atomic_tool_reference_to_registration_runner(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml")
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={},
+    )
+    await runtime._bind_db_id("sakila")
+    runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle("sakila")
+    runtime._registration_pool = SimpleNamespace()
+    captured: dict[str, object] = {}
+
+    async def _fake_run_registration_bundle(**kwargs):
+        captured.update(kwargs)
+        return _passing_registration_report()
+
+    monkeypatch.setattr("rl_task_foundry.synthesis.runtime.run_registration_bundle", _fake_run_registration_bundle)
+
+    await runtime._run_registration_gate(
+        bundle=_sample_artifacts(),
+        proposed_environment=_sample_proposed_environment(),
+    )
+
+    assert captured["atomic_tool_set_ref"] == "db://sakila"
+    assert captured["bundle"] == _sample_artifacts()
+    assert captured["pool"] is runtime._registration_pool
+    assert "tool_source" not in captured
+
+
+@pytest.mark.asyncio
 async def test_openai_agents_synthesis_backend_uses_structured_output_and_tracing(
     tmp_path,
     monkeypatch,

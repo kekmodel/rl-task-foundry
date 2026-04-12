@@ -306,6 +306,7 @@ async def run_registration_bundle(
     config: AppConfig,
     bundle: GeneratedArtifactBundle,
     tool_source: str | None = None,
+    atomic_tool_set_ref: str | None = None,
     tool_self_test_source: str | None = None,
     pool: RegistrationSubprocessPool | None = None,
     verifier_probe_specs: dict[RegistrationArtifactName, VerifierProbeSpec] | None = None,
@@ -333,7 +334,10 @@ async def run_registration_bundle(
     tool_self_test = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.TOOL_SELF_TEST,
         artifact_kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
-        execution_required=tool_source is not None and tool_self_test_source is not None,
+        execution_required=(
+            tool_self_test_source is not None
+            and (tool_source is not None or atomic_tool_set_ref is not None)
+        ),
         static_errors=(
             validate_generated_module(
                 tool_self_test_source,
@@ -389,6 +393,7 @@ async def run_registration_bundle(
         pool = pool or await RegistrationSubprocessPool.start(config)
         execution_result = await pool.run_tool_self_test(
             tool_source=tool_source,
+            atomic_tool_set_ref=atomic_tool_set_ref,
             self_test_source=tool_self_test_source,
         )
         tool_self_test.executed = True
@@ -397,8 +402,10 @@ async def run_registration_bundle(
         tool_self_test.execution_return_value = execution_result.return_value
 
     if verifier_probe_specs is not None and tool.static_passed:
-        if tool_source is None:
-            raise ValueError("tool_source is required when verifier probe specs are provided")
+        if tool_source is None and atomic_tool_set_ref is None:
+            raise ValueError(
+                "tool_source or atomic_tool_set_ref is required when verifier probe specs are provided"
+            )
         pool = pool or await RegistrationSubprocessPool.start(config)
         for artifact_result, artifact_name, verifier_source, artifact_kind in (
             (
@@ -419,6 +426,7 @@ async def run_registration_bundle(
                 continue
             probe_result = await pool.probe_verifier_module(
                 tool_source=tool_source,
+                atomic_tool_set_ref=atomic_tool_set_ref,
                 verifier_source=verifier_source,
                 artifact_kind=artifact_kind,
                 answer_sample=probe_spec.answer_sample,

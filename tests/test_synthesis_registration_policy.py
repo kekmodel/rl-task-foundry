@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from rl_task_foundry.config import load_config
+from rl_task_foundry.config.models import OutputConfig
+from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
+from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.contracts import (
     FactSpec,
     FactValueType,
@@ -21,6 +25,32 @@ from rl_task_foundry.synthesis.registration_runner import (
 )
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
+
+
+def _config_with_registration_output(tmp_path: Path):
+    config = load_config("rl_task_foundry.yaml")
+    output = OutputConfig(
+        run_db_path=tmp_path / "run.db",
+        accepted_jsonl_path=tmp_path / "accepted.jsonl",
+        rejected_jsonl_path=tmp_path / "rejected.jsonl",
+        events_jsonl_path=tmp_path / "events.jsonl",
+        traces_dir=tmp_path / "traces",
+    )
+    return config.model_copy(update={"output": output}, deep=True)
+
+
+def _materialize_atomic_tool_bundle(config, *, db_id: str = "sakila") -> str:
+    AtomicToolMaterializer.for_config(config).materialize_bundle(
+        AtomicToolBundle(
+            db_id=db_id,
+            tools=[],
+            source="""
+async def lookup_city(conn, customer_id):
+    return {"city": "sasebo"}
+""",
+        )
+    )
+    return f"db://{db_id}"
 
 
 def _valid_verifier_source() -> str:
@@ -829,6 +859,70 @@ def check_constraints(answer, facts):
     assert error_codes == []
 
 
+def test_registration_subprocess_pool_runs_self_consistency_check_from_atomic_tool_reference(
+    tmp_path: Path,
+) -> None:
+    async def _run(
+        ) -> tuple[
+            bool | None,
+            bool | None,
+            bool | None,
+            int | None,
+            int | None,
+        ]:
+        config = _config_with_registration_output(tmp_path)
+        atomic_tool_set_ref = _materialize_atomic_tool_bundle(config)
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.run_self_consistency_check(
+                atomic_tool_set_ref=atomic_tool_set_ref,
+                solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+                verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    return {"city": tools.lookup_city(answer.get("city"))["city"]}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return bool(facts.get("city"))
+""",
+                expected_fact_keys=["city"],
+            )
+            assert result.errors == []
+            return (
+                result.facts_match_result,
+                result.check_constraints_result,
+                result.verify_result,
+                result.solution_tool_calls,
+                result.verifier_tool_calls,
+            )
+        finally:
+            await pool.close()
+
+    (
+        facts_match_result,
+        check_constraints_result,
+        verify_result,
+        solution_tool_calls,
+        verifier_tool_calls,
+    ) = asyncio.run(_run())
+    assert facts_match_result is True
+    assert check_constraints_result is True
+    assert verify_result is True
+    assert solution_tool_calls is not None
+    assert verifier_tool_calls is not None
+
+
 def test_registration_runner_passes_valid_bundle() -> None:
     async def _run() -> tuple[str, bool, bool, int, int, int, int, int, int, int, list[str]]:
         config = load_config("rl_task_foundry.yaml")
@@ -897,6 +991,39 @@ def solve(tools):
     assert probe_facts_match_facts_reads >= 1
     assert probe_check_constraints_facts_reads >= 1
     assert fetch_facts_return_keys == ["city"]
+
+
+def test_registration_runner_passes_valid_bundle_with_atomic_tool_reference(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> tuple[str, bool, list[str]]:
+        config = _config_with_registration_output(tmp_path)
+        atomic_tool_set_ref = _materialize_atomic_tool_bundle(config)
+        bundle = GeneratedArtifactBundle(
+            solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+            verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_verifier_source(),
+        )
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            atomic_tool_set_ref=atomic_tool_set_ref,
+            verifier_probe_specs={
+                RegistrationArtifactName.VERIFIER: VerifierProbeSpec(
+                    answer_sample={"city": "sample_city"},
+                    facts_schema=_city_facts_schema(),
+                ),
+            },
+        )
+        return report.status, report.verifier.probe_executed, report.verifier.probe_errors
+
+    status, probe_executed, probe_errors = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.PASSED
+    assert probe_executed is True
+    assert probe_errors == []
 
 
 def test_registration_runner_fails_when_verifier_probe_detects_fact_schema_mismatch() -> None:
