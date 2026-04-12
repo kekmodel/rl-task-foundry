@@ -198,6 +198,7 @@ def _sample_draft(
         registration_diagnostics=build_registration_diagnostics(report),
         self_consistency_diagnostics=SynthesisSelfConsistencyDiagnostics(
             passed=True,
+            verify_result=True,
             shadow_verify_result=True,
         ),
         instances=[

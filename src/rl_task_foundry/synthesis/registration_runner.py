@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -301,6 +302,39 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return deduped
 
 
+def _sources_are_structurally_identical(left: str, right: str) -> bool:
+    try:
+        left_tree = ast.parse(left)
+        right_tree = ast.parse(right)
+    except SyntaxError:
+        return left.strip() == right.strip()
+    return ast.dump(left_tree, include_attributes=False) == ast.dump(
+        right_tree,
+        include_attributes=False,
+    )
+
+
+def _shadow_independence_errors(bundle: GeneratedArtifactBundle) -> list[RegistrationError]:
+    if not _sources_are_structurally_identical(
+        bundle.verifier_source,
+        bundle.shadow_verifier_source,
+    ):
+        return []
+    return [
+        RegistrationError(
+            code="shadow_verifier_not_independent",
+            detail=(
+                "shadow_verifier_source must not be structurally identical to "
+                "verifier_source."
+            ),
+            suggestion=(
+                "Use a meaningfully different shadow verification path instead of "
+                "reusing the primary verifier."
+            ),
+        )
+    ]
+
+
 async def run_registration_bundle(
     *,
     config: AppConfig,
@@ -377,11 +411,14 @@ async def run_registration_bundle(
         artifact_kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
         probe_required=verifier_probe_specs is not None
         and RegistrationArtifactName.SHADOW_VERIFIER in verifier_probe_specs,
-        static_errors=validate_generated_module(
-            bundle.shadow_verifier_source,
-            kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
-            policy=policy,
-        ),
+        static_errors=[
+            *validate_generated_module(
+                bundle.shadow_verifier_source,
+                kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
+                policy=policy,
+            ),
+            *_shadow_independence_errors(bundle),
+        ],
         verifier_hybrid_analysis=analyze_verifier_module(
             bundle.shadow_verifier_source,
             kind=ArtifactKind.SHADOW_VERIFIER_MODULE,

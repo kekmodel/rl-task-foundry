@@ -73,6 +73,29 @@ def check_constraints(answer, facts):
 """
 
 
+def _valid_shadow_verifier_source() -> str:
+    return """
+def verify(answer, tools):
+    shadow_facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, shadow_facts):
+        return False
+    return check_constraints(answer, shadow_facts)
+
+def fetch_facts(answer, tools):
+    candidate_city = answer.get("city")
+    city_row = tools.lookup_city(candidate_city)
+    return {"city": city_row["city"]}
+
+def facts_match_answer_claims(answer, facts):
+    submitted_city = answer.get("city")
+    verified_city = facts.get("city")
+    return submitted_city == verified_city
+
+def check_constraints(answer, facts):
+    return facts.get("city") is not None
+"""
+
+
 def _city_facts_schema() -> MaterializedFactsSchema:
     return MaterializedFactsSchema(
         facts=[
@@ -932,7 +955,7 @@ def solve(tools):
     return {"city": "sasebo"}
 """,
             verifier_source=_valid_verifier_source(),
-            shadow_verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_shadow_verifier_source(),
         )
         report = await run_registration_bundle(
             config=config,
@@ -1005,7 +1028,7 @@ def solve(tools):
     return {"city": "sasebo"}
 """,
             verifier_source=_valid_verifier_source(),
-            shadow_verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_shadow_verifier_source(),
         )
         report = await run_registration_bundle(
             config=config,
@@ -1050,7 +1073,7 @@ def facts_match_answer_claims(answer, facts):
 def check_constraints(answer, facts):
     return bool(facts.get("country"))
 """,
-            shadow_verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_shadow_verifier_source(),
         )
         report = await run_registration_bundle(
             config=config,
@@ -1083,7 +1106,7 @@ def solve(answer, tools):
     return {"city": "sasebo"}
 """,
             verifier_source=_valid_verifier_source(),
-            shadow_verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_shadow_verifier_source(),
         )
         report = await run_registration_bundle(
             config=config,
@@ -1111,7 +1134,7 @@ def solve(tools):
     return {"city": "sasebo"}
 """,
             verifier_source=_valid_verifier_source(),
-            shadow_verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_shadow_verifier_source(),
         )
         report = await run_registration_bundle(
             config=config,
@@ -1124,3 +1147,27 @@ def solve(tools):
     status, error_code = asyncio.run(_run())
     assert status == RegistrationBundleStatus.FAILED
     assert error_code == "execution_error"
+
+
+def test_registration_runner_rejects_structurally_identical_shadow_verifier() -> None:
+    async def _run() -> tuple[str, str]:
+        config = load_config("rl_task_foundry.yaml")
+        bundle = GeneratedArtifactBundle(
+            solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+            verifier_source=_valid_verifier_source(),
+            shadow_verifier_source=_valid_verifier_source(),
+        )
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            tool_source=_tool_source(),
+            tool_self_test_source=_tool_self_test_source(),
+        )
+        return report.status, report.shadow_verifier.static_errors[0].code
+
+    status, error_code = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.FAILED
+    assert error_code == "shadow_verifier_not_independent"
