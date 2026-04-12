@@ -24,7 +24,7 @@ Plan 4가 끝나면 아래가 가능해야 한다.
 3. synthesis agent가 db-level atomic tool bundle을 참조하는 environment bundle을 생성한다
 4. code registration policy가 generated code를 검사한다
 5. self-consistency, shadow verifier, cross-instance, solver pass-rate quality gate를 통과한 environment만 registry에 커밋한다
-6. review pack으로 환경 품질을 사람이 spot-check할 수 있다
+6. exported bundle로 환경 품질을 사람이 spot-check할 수 있다
 
 ## Explicit Non-Deliverable
 
@@ -35,37 +35,39 @@ Plan 4가 끝나면 아래가 가능해야 한다.
 - multi-DB joint task generation
 - fuzzy / subjective verifier
 
-## Preserved Modules
+## Authoritative Modules After Transition
 
-다음은 유지 또는 최소 수정 재사용을 목표로 한다.
+2026-04-12 기준 authoritative module surface는 아래다.
 
 - `config/`
 - `infra/`
-- `solver/backend_openai_agents.py`
-- `calibration/`
-- `pipeline/orchestrator.py` skeleton
 - `schema/introspect.py`, `schema/graph.py`, `schema/path_catalog.py`
-- `verification/shadow.py` 개념
-- `infra/json_chat_client.py`
+- `synthesis/`
+  - atomic tool generator
+  - canonicalize + `compute_reward`
+  - synthesis runtime
+  - registration lane
+  - registry / scheduler / bundle exporter
+- `solver/backend_openai_agents.py`
+- `solver/runtime.py`, `solver/models.py`
+- `calibration/`
+- `pipeline/environment_orchestrator.py`
 - `cli.py`
-- `pipeline/review_pack.py` 구조
 
-## Rewrite Modules
+삭제된 path-centric legacy stack은 git history에만 남고 authoritative runtime surface에는 포함되지 않는다.
 
-전면 재작성 대상으로 본다.
+## Deleted Legacy Modules
 
-- `tasks/factory.py`
-- `tasks/composer.py`
-- `tasks/question_generation.py`
-- `tasks/package_validation.py`
-- `tasks/provenance.py`
-- `truth/generator.py`
-- `truth/canonicalize.py` contract 부분
-- `tools/compiler.py`
-- `tools/sql_templates.py`
-- `tools/model_naming.py`
-- `tools/naming_eval.py`
-- `verification/compare.py`
+아래 legacy surface는 `C11`에서 삭제 완료됐다.
+
+- `tools/`
+- `tasks/`
+- `truth/`
+- `verification/`
+- `pipeline/orchestrator.py`
+- `pipeline/review_pack.py`
+- `pipeline/export.py`
+- `pipeline/manifest.py`
 
 ## Execution Order
 
@@ -75,7 +77,7 @@ Plan 4가 끝나면 아래가 가능해야 한다.
 
 작업:
 
-- release owner가 latest review pack을 baseline snapshot으로 기록
+- release owner가 latest qualitative artifact snapshot을 baseline으로 기록
 - current green suite를 infra regression baseline으로 명시
 - production training 금지 상태를 문서와 runbook에 기록
 - phase 0 산출물을 `docs/phase0_baseline.md`, `docs/runbook.md`에 남긴다
@@ -156,11 +158,18 @@ Acceptance:
 
 - 이 milestone이 초기에 가정했던 per-env narrow tool generation 경로는 아래 M-Atomic-Transition에서 대체된다
 
-### Milestone M-Atomic-Transition: Atomic Tools per Database
+### Milestone M-Atomic-Transition: Atomic Tools per Database (Completed 2026-04-12)
 
 목표:
 
 - narrow per-env tool architecture를 atomic-tool-per-database architecture로 전면 전환한다
+
+상태:
+
+- acceptance criteria 충족
+- Phase 1~4 구현 완료
+- C13은 구현 후 spec/plan을 코드 기준으로 동기화하는 문서 마감 단계다
+- 측정 참고값: 현재 `sakila` + `public` visibility profile에서는 atomic tool 108개(`T1=28`, `T2=36`, `T4=44`)가 materialize된다
 
 Acceptance criteria:
 
@@ -176,24 +185,24 @@ Commit sequence (C1-C13):
 
 Phase 1 — Foundation
 
-- C1: `feat: add atomic tool generator from schema graph`
-- C2: `feat: add schema-driven canonicalize library`
-- C3: `feat: add output field canonicalization metadata`
+- C1: `feat: add atomic tool generator from schema graph` ✅
+- C2: `feat: add schema-driven canonicalize library` ✅
+- C3: `feat: add output field canonicalization metadata` ✅
 
 Phase 2 — Synthesis transition
 
-- C4: `refactor: remove tool_source from generated artifact bundle`
-- C5: `feat: materialize db-level atomic tool bundle during synthesis`
-- C6: `refactor: update synthesis prompt to consume atomic tool set`
-- C7: `refactor: switch self-consistency subprocess to atomic tool reference`
-- C8: `feat: materialize per-instance canonical answers with triple oracle`
+- C4: `refactor: remove tool_source from generated artifact bundle` ✅
+- C5: `feat: materialize db-level atomic tool bundle during synthesis` ✅
+- C6: `refactor: update synthesis prompt to consume atomic tool set` ✅
+- C7: `refactor: switch self-consistency subprocess to atomic tool reference` ✅
+- C8: `feat: materialize per-instance canonical answers with triple oracle` ✅
 
 Phase 3 — Solver backend transition
 
-- C9: `refactor: switch solver backend to environment contract`
-- C10: `refactor: pipeline orchestrator to environment-contract-first`
+- C9: `refactor: switch solver backend to environment contract` ✅
+- C10: `refactor: pipeline orchestrator to environment-contract-first` ✅
 
-Phase 4 — Legacy deletion
+Phase 4 — Legacy deletion and bundle export (Completed)
 
 - C11: `chore: delete legacy path-centric tool pipeline`
   - 삭제 대상 test 범위도 함께 고정한다
@@ -205,13 +214,14 @@ Phase 4 — Legacy deletion
     - `tests/test_truth_canonicalize.py`
     - `tests/test_ground_truth_generator.py`의 legacy path-centric 부분
   - C11을 C12보다 먼저 두는 이유는 exporter 구현 시 legacy 분기를 고려하지 않도록 authoritative path를 먼저 단일화하기 위해서다
-- C12: `feat: environment bundle exporter`
+- C12: `feat: environment bundle exporter` ✅
+  - `export-bundle` CLI가 registry snapshot을 environment API server layout으로 내보낸다
 
 Phase 5 — Documentation finalization
 
-- C13: `docs: final spec/plan sync after implementation`
+- C13: `docs: final spec/plan sync after implementation` ✅
   - atomic tool count 실측
-  - triple oracle disagreement rate 실측
+  - staged verifier contract와 original `compute_canonical_answer(...)` target의 차이 명시
   - synthesis prompt 최종 wording
   - exporter가 만든 실제 bundle shape
   를 spec/plan에 backfill한다
@@ -227,17 +237,24 @@ Risks:
 - tool definition context window가 10K~20K token까지 증가할 수 있음
 - legacy code / test 삭제 중 일시적 coverage 하락 가능
 
-### Milestone 4: Verification and Reward Enforcement (Pending on M-Atomic-Transition completion)
+### Milestone 4: Verification and Reward Enforcement
 
 목표:
 
-- verification을 canonical answer + exact match + triple oracle 구조로 단일화한다
+- exact-match reward path를 authoritative source로 고정하고, synthesis-time verifier contract의 다음 수렴점을 정리한다
+
+현재 상태:
+
+- schema-driven canonicalization과 pure `compute_reward(...)`는 이미 구현됐다
+- environment-contract-first solver / orchestrator path도 구현됐다
+- 현재 authoritative triple oracle은 `solve + staged verifier + staged shadow verifier` 구조다
+- 즉 원래 계획의 `compute_canonical_answer(tools) -> dict` 단일-entrypoint verifier는 아직 future simplification target이다
 
 작업:
 
 - schema-driven canonicalization
-- `compute_canonical_answer(tools) -> dict` verifier contract
-- `solution.py`, `verifier.py`, `shadow_verifier.py` triple oracle
+- staged verifier contract 유지 여부 또는 `compute_canonical_answer(tools) -> dict` 단일-entrypoint 수렴 여부 결정
+- `solution.py`, `verifier.py`, `shadow_verifier.py` triple oracle 운영 계약 고정
 - pure `compute_reward(submitted_text, canonical_answer, output_schema)` contract
 - `json_decode_failed`, `schema_mismatch`, `em_mismatch` failure taxonomy
 - actor-facing parity invariant test
@@ -251,6 +268,7 @@ Acceptance:
 
 - verification이 EM + canonicalize로 단일화된다
 - triple oracle이 self-consistency의 공식 형태가 된다
+- current staged verifier contract와 future simplification target 사이의 경계가 문서와 code path에서 명시된다
 - cross-instance verification은 instance-level multiplexing으로 유지된다
 - pass-rate band는 atomic tool 전환 이후 다시 calibration 대상임이 문서와 code path에 반영된다
 
@@ -286,7 +304,7 @@ Acceptance:
 
 - unique canonical answer가 materialize된다
 - triple oracle이 일치한다
-- review pack에서 사람이 봐도 compositional task다
+- exported bundle review에서 사람이 봐도 compositional task다
 
 ### Milestone 6: Self-Consistency Policy and Difficulty Escalation
 
@@ -468,22 +486,21 @@ Acceptance:
 - planner가 `db x category` pair별 total deficit을 정렬해서 다음 scheduler priority 입력으로 넘길 수 있다
 - tracked difficulty band와 per-band target이 config source-of-truth로 고정된다
 
-### Cross-Cutting Workstream: Review Pack and Observability
+### Cross-Cutting Workstream: Manual Bundle Review and Observability
 
 이건 마지막 milestone이 아니라 전 과정에 걸친 cross-cutting requirement다.
 
 작업:
 
-- review pack에 rendered prompt summary 추가
-- atomic tool set summary 추가
-- verifier / shadow summary 추가
-- instance summary 추가
+- exported bundle에 rendered prompt / instance / canonical answer가 모두 포함되도록 유지
+- atomic tool set summary와 actor-facing definitions를 review surface로 유지
+- verifier / shadow audit source를 함께 보관
 - environment-level metrics 노출
 - quality taxonomy 기록 포맷 고정
 
 Acceptance:
 
-- 각 milestone마다 small review batch를 생성해 정성 평가할 수 있다
+- 각 milestone마다 small exported bundle batch를 생성해 정성 평가할 수 있다
 - qualitative rubric 기준으로 pass/fail을 기록할 수 있다
 
 ## Execution Strategy
@@ -501,6 +518,10 @@ Rollback trigger:
 1. C5~C7 진행 중 생성된 `solution.py`의 50% 이상이 parse 실패 또는 triple oracle disagreement를 유발한다
 2. 작은 proof DB에서 triple oracle agreement rate가 `80%` 미만으로 지속된다
 3. atomic tool definition context가 synthesis model context window의 `30%` 이상을 차지해 prompt truncation 또는 구조적 overflow가 반복된다
+
+관측 메모:
+
+- C1~C12 구현 동안 위 rollback trigger는 발동하지 않았다
 
 ## Quality Filter Defaults
 
@@ -562,12 +583,12 @@ atomic tool architecture에서는 actor-facing parity와 bundle self-containment
 
 ## Review Strategy
 
-이 rewrite에서는 review pack 정성 평가가 필수다.
+이 rewrite에서는 exported bundle 정성 평가가 필수다.
 
 반드시 반복한다.
 
 1. small environment batch 생성
-2. question / tool set / verifier summary / constraint summary를 직접 읽는다
+2. exported bundle의 `environment.yaml`, `instances.jsonl`, `canonical_answers.jsonl`, atomic tool definitions, audit source를 직접 읽는다
 3. 품질 문제를 taxonomy로 기록한다
 4. prompt / policy / category inference를 수정한다
 
@@ -582,7 +603,7 @@ atomic tool architecture에서는 actor-facing parity와 bundle self-containment
 - canonical answer + exact-match reward path가 deterministic하게 동작한다
 - shadow / cross-instance / pass-rate 품질 필터가 모두 동작한다
 - arbitrary DB를 registry에 추가해도 pipeline이 돌아간다
-- 최근 review pack 10개 중 최소 7개가 아래 rubric을 만족한다
+- 최근 exported bundle 10개 중 최소 7개가 아래 rubric을 만족한다
   - `compositional_structure`
   - `constraint_density`
   - `branching_or_threshold`
@@ -598,4 +619,4 @@ atomic tool architecture에서는 actor-facing parity와 bundle self-containment
 - verifier가 다시 self-consistent but ungrounded Python checker로 흐를 때
 - actor-facing parity invariant가 흐려질 때
 - proof environment 없이 generalized environment expansion부터 만들려 할 때
-- review pack 품질이 낮은데도 green tests만으로 진행하려 할 때
+- exported bundle 품질이 낮은데도 green tests만으로 진행하려 할 때
