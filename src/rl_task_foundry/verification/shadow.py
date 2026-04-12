@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import hashlib
 from typing import Literal
 
-from rl_task_foundry.tasks.models import SolverResult, TaskSpec, VerifyResult
+from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.tasks.models import TaskSpec, VerifyResult
 from rl_task_foundry.truth.canonicalize import canonicalize_answer
 from rl_task_foundry.truth.schemas import AnswerField, GroundTruth
 from rl_task_foundry.verification.compare import compare_structured_output

@@ -1,4 +1,5 @@
-from rl_task_foundry.tasks.models import AcceptedExample, SolverResult, TaskSpec, VerifyResult
+from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.tasks.models import AcceptedExample, TaskSpec, VerifyResult
 from rl_task_foundry.truth.schemas import AnswerField, AnswerSchema, GroundTruth
 
 

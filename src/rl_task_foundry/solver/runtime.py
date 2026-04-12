@@ -6,8 +6,8 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.synthesis.contracts import EnvironmentContract
-from rl_task_foundry.tasks.models import SolverResult
 
 
 class StrictModel(BaseModel):

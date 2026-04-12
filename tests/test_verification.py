@@ -1,6 +1,7 @@
 import json
 
-from rl_task_foundry.tasks.models import SolverResult, TaskSpec
+from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.tasks.models import TaskSpec
 from rl_task_foundry.truth.schemas import AnswerField, AnswerSchema, GroundTruth
 from rl_task_foundry.verification.policies import VerificationPolicy
 from rl_task_foundry.verification.scorer import VerificationEngine

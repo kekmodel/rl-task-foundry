@@ -34,13 +34,13 @@ from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.schema.path_catalog import PathCatalog, PathSpec, build_path_catalog
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
+from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import AgentRuntime
 from rl_task_foundry.tasks.composer import ComposeRequest, TaskComposer
 from rl_task_foundry.tasks.factory import TierATaskFactory
 from rl_task_foundry.tasks.models import (
     AcceptedExample,
     PresentedToolBundle,
-    SolverResult,
     TaskPackage,
     TaskSpec,
     VerifyResult,

@@ -10,12 +10,12 @@ from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGr
 from rl_task_foundry.schema.path_catalog import build_path_catalog
 from rl_task_foundry.infra.storage import connect_run_db, summarize_run
 from rl_task_foundry.pipeline.orchestrator import Orchestrator, ReviewArtifact, TaskExecutionOutcome
+from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.tasks.models import (
     PresentedToolBundle,
     PresentedToolSpec,
     TaskPackage,
     TaskSpec,
-    SolverResult,
     VerifyResult,
 )
 from rl_task_foundry.tools.compiler import compile_canonical_tool_bundle

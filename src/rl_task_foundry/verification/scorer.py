@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from rl_task_foundry.tasks.models import SolverResult, TaskSpec, VerifyResult
+from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.tasks.models import TaskSpec, VerifyResult
 from rl_task_foundry.tasks.provenance import validate_provenance
 from rl_task_foundry.truth.schemas import GroundTruth
 from rl_task_foundry.verification.compare import compare_structured_output

@@ -1,4 +1,4 @@
-"""Core task and solver result models."""
+"""Core task models and accepted-example metadata."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.truth.schemas import AnswerSchema, GroundTruth
 
 
@@ -72,25 +73,6 @@ class TaskPackage(StrictModel):
         if levels:
             return levels
         return [self.presented_tool_bundle.tool_level]
-
-
-class SolverResult(StrictModel):
-    task_id: str
-    solver_id: str
-    provider: str
-    model: str
-    replica_index: int
-    transcript_ref: str
-    tool_trace_ref: str
-    raw_output_text: str
-    structured_output: dict[str, object] | None = None
-    explicit_memory_events: list[dict[str, object]] = Field(default_factory=list)
-    token_usage: dict[str, int] = Field(default_factory=dict)
-    latency_ms: int = 0
-    turn_count: int = 0
-    status: str
-    termination_reason: str | None = None
-    termination_metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class VerifyResult(StrictModel):

@@ -9,7 +9,6 @@ import pytest
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
 from rl_task_foundry.solver import backend_openai_agents as backend_module
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
-from rl_task_foundry.solver.prompts import build_solver_prompt
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
@@ -289,9 +288,7 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
         {"name": "submit_result", "repr": "'tool-call(submit_result)'"},
     ]
 
-    assert FakeAgent.last_instance.kwargs["instructions"] == build_solver_prompt()
-    assert "delivery_status" not in FakeAgent.last_instance.kwargs["instructions"]
-    assert "INTERNAL QUESTION SHOULD NOT BE USED" not in FakeAgent.last_instance.kwargs["instructions"]
+    assert FakeAgent.last_instance.kwargs["instructions"] is None
     assert FakeAgent.last_instance.kwargs["output_type"] is None
     assert callable(FakeAgent.last_instance.kwargs["tool_use_behavior"])
     assert any(

@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from rl_task_foundry.tasks.models import SolverResult, TaskSpec
+from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.tasks.models import TaskSpec
 
 
 @dataclass(slots=True)

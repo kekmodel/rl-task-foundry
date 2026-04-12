@@ -13,9 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
-from rl_task_foundry.solver.prompts import build_solver_prompt
+from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
-from rl_task_foundry.tasks.models import SolverResult
 
 ArtifactWriter = Callable[[str, dict[str, Any]], str]
 ToolExecutor = Callable[[dict[str, Any]], Any]
@@ -418,7 +417,7 @@ class OpenAIAgentsSolverBackend:
         tools.append(_make_submit_result_tool())
         agent = sdk.Agent(
             name=self.solver_config.solver_id,
-            instructions=build_solver_prompt(),
+            instructions=None,
             model=self._build_model(sdk),
             tools=tools,
             output_type=None,
