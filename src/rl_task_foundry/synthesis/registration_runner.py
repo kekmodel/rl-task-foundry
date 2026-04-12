@@ -40,8 +40,6 @@ class RegistrationBundleStatus(StrEnum):
 
 
 class GeneratedArtifactBundle(StrictModel):
-    tool_source: str
-    tool_self_test_source: str
     solution_source: str
     verifier_source: str
     shadow_verifier_source: str
@@ -307,6 +305,8 @@ async def run_registration_bundle(
     *,
     config: AppConfig,
     bundle: GeneratedArtifactBundle,
+    tool_source: str | None = None,
+    tool_self_test_source: str | None = None,
     pool: RegistrationSubprocessPool | None = None,
     verifier_probe_specs: dict[RegistrationArtifactName, VerifierProbeSpec] | None = None,
 ) -> RegistrationBundleReport:
@@ -320,20 +320,28 @@ async def run_registration_bundle(
     tool = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.TOOL,
         artifact_kind=ArtifactKind.TOOL_MODULE,
-        static_errors=validate_generated_module(
-            bundle.tool_source,
-            kind=ArtifactKind.TOOL_MODULE,
-            policy=policy,
+        static_errors=(
+            validate_generated_module(
+                tool_source,
+                kind=ArtifactKind.TOOL_MODULE,
+                policy=policy,
+            )
+            if tool_source is not None
+            else []
         ),
     )
     tool_self_test = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.TOOL_SELF_TEST,
         artifact_kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
-        execution_required=True,
-        static_errors=validate_generated_module(
-            bundle.tool_self_test_source,
-            kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
-            policy=policy,
+        execution_required=tool_source is not None and tool_self_test_source is not None,
+        static_errors=(
+            validate_generated_module(
+                tool_self_test_source,
+                kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
+                policy=policy,
+            )
+            if tool_self_test_source is not None
+            else []
         ),
     )
     solution = ArtifactRegistrationResult(
@@ -377,11 +385,11 @@ async def run_registration_bundle(
     )
 
     owns_pool = pool is None
-    if tool.static_passed and tool_self_test.static_passed:
+    if tool.static_passed and tool_self_test.static_passed and tool_self_test.execution_required:
         pool = pool or await RegistrationSubprocessPool.start(config)
         execution_result = await pool.run_tool_self_test(
-            tool_source=bundle.tool_source,
-            self_test_source=bundle.tool_self_test_source,
+            tool_source=tool_source,
+            self_test_source=tool_self_test_source,
         )
         tool_self_test.executed = True
         tool_self_test.execution_errors = execution_result.errors
@@ -389,6 +397,8 @@ async def run_registration_bundle(
         tool_self_test.execution_return_value = execution_result.return_value
 
     if verifier_probe_specs is not None and tool.static_passed:
+        if tool_source is None:
+            raise ValueError("tool_source is required when verifier probe specs are provided")
         pool = pool or await RegistrationSubprocessPool.start(config)
         for artifact_result, artifact_name, verifier_source, artifact_kind in (
             (
@@ -408,7 +418,7 @@ async def run_registration_bundle(
             if probe_spec is None or not artifact_result.static_passed:
                 continue
             probe_result = await pool.probe_verifier_module(
-                tool_source=bundle.tool_source,
+                tool_source=tool_source,
                 verifier_source=verifier_source,
                 artifact_kind=artifact_kind,
                 answer_sample=probe_spec.answer_sample,

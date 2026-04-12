@@ -56,6 +56,22 @@ def _city_facts_schema() -> MaterializedFactsSchema:
     )
 
 
+def _tool_source() -> str:
+    return """
+async def get_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+"""
+
+
+def _tool_self_test_source(*, expected_city: str = "sasebo") -> str:
+    return f"""
+async def run_self_test(tools):
+    row = await tools.get_city(9)
+    assert row["city"] == "{expected_city}"
+    return {{"ok": True}}
+"""
+
+
 def test_registration_policy_accepts_valid_tool_module() -> None:
     policy = load_config("rl_task_foundry.yaml").synthesis.registration_policy
     errors = validate_generated_module(
@@ -817,16 +833,6 @@ def test_registration_runner_passes_valid_bundle() -> None:
     async def _run() -> tuple[str, bool, bool, int, int, int, int, int, int, int, list[str]]:
         config = load_config("rl_task_foundry.yaml")
         bundle = GeneratedArtifactBundle(
-            tool_source="""
-async def get_city(conn, customer_id):
-    return {"customer_id": customer_id, "city": "sasebo"}
-""",
-            tool_self_test_source="""
-async def run_self_test(tools):
-    row = await tools.get_city(9)
-    assert row["city"] == "sasebo"
-    return {"ok": True}
-""",
             solution_source="""
 def solve(tools):
     return {"city": "sasebo"}
@@ -837,6 +843,8 @@ def solve(tools):
         report = await run_registration_bundle(
             config=config,
             bundle=bundle,
+            tool_source=_tool_source(),
+            tool_self_test_source=_tool_self_test_source(),
             verifier_probe_specs={
                 RegistrationArtifactName.VERIFIER: VerifierProbeSpec(
                     answer_sample={"city": "sample_city"},
@@ -895,14 +903,6 @@ def test_registration_runner_fails_when_verifier_probe_detects_fact_schema_misma
     async def _run() -> tuple[str, str]:
         config = load_config("rl_task_foundry.yaml")
         bundle = GeneratedArtifactBundle(
-            tool_source="""
-async def get_city(conn, customer_id):
-    return {"customer_id": customer_id, "city": "sasebo"}
-""",
-            tool_self_test_source="""
-async def run_self_test(tools):
-    return {"ok": True}
-""",
             solution_source="""
 def solve(tools):
     return {"city": "sasebo"}
@@ -928,6 +928,11 @@ def check_constraints(answer, facts):
         report = await run_registration_bundle(
             config=config,
             bundle=bundle,
+            tool_source=_tool_source(),
+            tool_self_test_source="""
+async def run_self_test(tools):
+    return {"ok": True}
+""",
             verifier_probe_specs={
                 RegistrationArtifactName.VERIFIER: VerifierProbeSpec(
                     answer_sample={"city": "sample_city"},
@@ -946,14 +951,6 @@ def test_registration_runner_fails_when_static_validation_fails() -> None:
     async def _run() -> tuple[str, bool, str]:
         config = load_config("rl_task_foundry.yaml")
         bundle = GeneratedArtifactBundle(
-            tool_source="""
-async def get_city(conn, customer_id):
-    return {"customer_id": customer_id, "city": "sasebo"}
-""",
-            tool_self_test_source="""
-async def run_self_test(tools):
-    return {"ok": True}
-""",
             solution_source="""
 def solve(answer, tools):
     return {"city": "sasebo"}
@@ -961,7 +958,15 @@ def solve(answer, tools):
             verifier_source=_valid_verifier_source(),
             shadow_verifier_source=_valid_verifier_source(),
         )
-        report = await run_registration_bundle(config=config, bundle=bundle)
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            tool_source=_tool_source(),
+            tool_self_test_source="""
+async def run_self_test(tools):
+    return {"ok": True}
+""",
+        )
         return report.status, report.tool_self_test.executed, report.solution.static_errors[0].code
 
     status, executed, error_code = asyncio.run(_run())
@@ -974,16 +979,6 @@ def test_registration_runner_surfaces_tool_self_test_execution_failure() -> None
     async def _run() -> tuple[str, str]:
         config = load_config("rl_task_foundry.yaml")
         bundle = GeneratedArtifactBundle(
-            tool_source="""
-async def get_city(conn, customer_id):
-    return {"customer_id": customer_id, "city": "sasebo"}
-""",
-            tool_self_test_source="""
-async def run_self_test(tools):
-    row = await tools.get_city(9)
-    assert row["city"] == "busan"
-    return {"ok": True}
-""",
             solution_source="""
 def solve(tools):
     return {"city": "sasebo"}
@@ -991,7 +986,12 @@ def solve(tools):
             verifier_source=_valid_verifier_source(),
             shadow_verifier_source=_valid_verifier_source(),
         )
-        report = await run_registration_bundle(config=config, bundle=bundle)
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            tool_source=_tool_source(),
+            tool_self_test_source=_tool_self_test_source(expected_city="busan"),
+        )
         return report.status, report.tool_self_test.execution_errors[0].code
 
     status, error_code = asyncio.run(_run())

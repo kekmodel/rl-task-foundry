@@ -9,6 +9,7 @@ import pytest
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import ModelRef, ProviderConfig
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
+from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis import backend_openai_agents as backend_module
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import (
@@ -208,8 +209,6 @@ def _sample_proposed_environment(
 
 def _sample_artifacts() -> GeneratedArtifactBundle:
     return GeneratedArtifactBundle(
-        tool_source="async def get_customer_assignments(conn, customer_id):\n    return []\n",
-        tool_self_test_source="async def run_self_test(tools):\n    return {'ok': True}\n",
         solution_source="def solve(tools):\n    return {'assignments': []}\n",
         verifier_source=(
             "async def fetch_facts(answer, tools):\n    return {}\n\n"
@@ -223,6 +222,14 @@ def _sample_artifacts() -> GeneratedArtifactBundle:
             "def check_constraints(answer, facts):\n    return True\n\n"
             "def verify(answer, tools):\n    return True\n"
         ),
+    )
+
+
+def _sample_atomic_tool_bundle(db_id: str = "sakila") -> AtomicToolBundle:
+    return AtomicToolBundle(
+        db_id=db_id,
+        tools=[],
+        source="async def lookup_city(conn, customer_id):\n    return {'city': 'sasebo'}\n",
     )
 
 
@@ -502,6 +509,8 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.environment.generator_version == CURRENT_SYNTHESIS_GENERATOR_VERSION
     assert draft.environment.env_id.startswith("env_assignment_")
     assert len(draft.environment.env_id.split("_")[-1]) == 16
+    assert draft.atomic_tool_bundle.db_id == "sakila"
+    assert draft.atomic_tool_bundle.tools
     assert draft.environment.quality_metrics.self_consistency_pass is True
     assert draft.environment.tool_signature.startswith("sha256:")
     assert draft.environment.task_signature.startswith("sha256:")

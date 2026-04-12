@@ -37,6 +37,7 @@ from rl_task_foundry.synthesis.contracts import (
     ToolSelfTestContract,
     VerifierContract,
 )
+from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
 from rl_task_foundry.synthesis.registration_runner import (
     GeneratedArtifactBundle,
     RegistrationArtifactName,
@@ -190,6 +191,7 @@ class SynthesisEnvironmentDraft(StrictModel):
     schema_summary: dict[str, object] = Field(default_factory=dict)
     selected_category: CategoryTaxonomy
     environment: EnvironmentContract
+    atomic_tool_bundle: AtomicToolBundle
     artifacts: GeneratedArtifactBundle
     registration_report: RegistrationBundleReport
     registration_diagnostics: RegistrationBundleDiagnostics
@@ -429,6 +431,9 @@ class SynthesisAgentRuntime:
     _registration_pool: RegistrationSubprocessPool | None = field(
         default=None, init=False, repr=False
     )
+    _atomic_tool_bundles: dict[str, AtomicToolBundle] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _bound_db_id: str | None = field(default=None, init=False, repr=False)
     _category_failures: dict[tuple[str, CategoryTaxonomy], _CategoryFailureState] = field(
         default_factory=dict, init=False, repr=False
@@ -438,6 +443,7 @@ class SynthesisAgentRuntime:
     _registration_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
+    _atomic_tool_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _category_state_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
@@ -483,6 +489,10 @@ class SynthesisAgentRuntime:
         await self._bind_db_id(db_id)
         await self._ensure_category_available(db_id, requested_category)
         resolved_graph = graph if graph is not None else await self._introspect_graph()
+        atomic_tool_bundle = await self._ensure_atomic_tool_bundle(
+            db_id=db_id,
+            graph=resolved_graph,
+        )
         schema_summary = summarize_schema_graph(resolved_graph)
         try:
             stage_results: list[SynthesisStageResult] = []
@@ -540,6 +550,7 @@ class SynthesisAgentRuntime:
             materialized_at = datetime.now(timezone.utc)
             environment = self._materialize_environment(
                 proposed_environment=artifact_payload.proposed_environment,
+                atomic_tool_bundle=atomic_tool_bundle,
                 artifacts=artifact_payload.artifacts,
                 db_id=db_id,
                 requested_category=requested_category,
@@ -555,6 +566,7 @@ class SynthesisAgentRuntime:
                 schema_summary=schema_summary,
                 selected_category=selected_category,
                 environment=environment,
+                atomic_tool_bundle=atomic_tool_bundle,
                 artifacts=artifact_payload.artifacts,
                 registration_report=registration_report,
                 registration_diagnostics=registration_diagnostics,
@@ -592,6 +604,7 @@ class SynthesisAgentRuntime:
         if self._registration_pool is not None:
             await self._registration_pool.close()
             self._registration_pool = None
+        self._atomic_tool_bundles.clear()
 
     def provider_status(self) -> dict[str, SynthesisProviderStatus]:
         return {
@@ -973,6 +986,34 @@ class SynthesisAgentRuntime:
             self._graph_cache = await introspector.introspect()
         return self._graph_cache
 
+    async def _ensure_atomic_tool_bundle(
+        self,
+        *,
+        db_id: str,
+        graph: SchemaGraph,
+    ) -> AtomicToolBundle:
+        existing = self._atomic_tool_bundles.get(db_id)
+        if existing is not None:
+            return existing
+        async with self._atomic_tool_lock:
+            existing = self._atomic_tool_bundles.get(db_id)
+            if existing is not None:
+                return existing
+            bundle = AtomicToolGenerator(self.config.atomic_tools).generate_bundle(
+                graph,
+                db_id=db_id,
+            )
+            self._atomic_tool_bundles[db_id] = bundle
+            return bundle
+
+    def _atomic_tool_bundle_for_bound_db(self) -> AtomicToolBundle:
+        if self._bound_db_id is None:
+            raise RuntimeError("atomic tool bundle requested before db binding")
+        bundle = self._atomic_tool_bundles.get(self._bound_db_id)
+        if bundle is None:
+            raise RuntimeError("atomic tool bundle requested before generation")
+        return bundle
+
     async def _execute_registration_gate(
         self,
         bundle: GeneratedArtifactBundle,
@@ -1019,8 +1060,9 @@ class SynthesisAgentRuntime:
                     self._registration_pool = await RegistrationSubprocessPool.start(
                         self.config
                     )
+        atomic_tool_bundle = self._atomic_tool_bundle_for_bound_db()
         return await self._registration_pool.run_self_consistency_check(
-            tool_source=bundle.tool_source,
+            tool_source=atomic_tool_bundle.source,
             solution_source=bundle.solution_source,
             verifier_source=bundle.verifier_source,
             expected_fact_keys=[
@@ -1077,9 +1119,11 @@ class SynthesisAgentRuntime:
                     self._registration_pool = await RegistrationSubprocessPool.start(
                         self.config
                     )
+        atomic_tool_bundle = self._atomic_tool_bundle_for_bound_db()
         return await run_registration_bundle(
             config=self.config,
             bundle=bundle,
+            tool_source=atomic_tool_bundle.source,
             pool=self._registration_pool,
             verifier_probe_specs=self._build_verifier_probe_specs(proposed_environment),
         )
@@ -1088,6 +1132,7 @@ class SynthesisAgentRuntime:
         self,
         *,
         proposed_environment: ProposedEnvironmentDraft,
+        atomic_tool_bundle: AtomicToolBundle,
         artifacts: GeneratedArtifactBundle,
         db_id: str,
         requested_category: CategoryTaxonomy,
@@ -1096,9 +1141,7 @@ class SynthesisAgentRuntime:
     ) -> EnvironmentContract:
         task_payload = proposed_environment.task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
-        tool_signature = self._signature_for_text(
-            artifacts.tool_source + "\n---self-test---\n" + artifacts.tool_self_test_source
-        )
+        tool_signature = self._signature_for_text(atomic_tool_bundle.source)
         verifier_signature = self._signature_for_text(
             artifacts.verifier_source + "\n---shadow---\n" + artifacts.shadow_verifier_source
         )

@@ -630,9 +630,8 @@ class EnvironmentRegistryWriter:
             draft.environment.cross_instance_set.model_dump_json(indent=2),
             encoding="utf-8",
         )
-        (directory / "tools.py").write_text(draft.artifacts.tool_source, encoding="utf-8")
-        (directory / "tool_self_test.py").write_text(
-            draft.artifacts.tool_self_test_source,
+        (directory / "tools.py").write_text(
+            draft.atomic_tool_bundle.source,
             encoding="utf-8",
         )
         (directory / "solution.py").write_text(

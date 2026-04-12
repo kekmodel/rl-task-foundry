@@ -28,6 +28,7 @@ from rl_task_foundry.synthesis.contracts import (
     VerifierContract,
     AnchorQueryContract,
 )
+from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.environment_registry import (
     DifficultyBand,
     EnvironmentRegistryCoverageEntry,
@@ -173,9 +174,12 @@ def _sample_draft(
         schema_summary={"included_table_count": 2},
         selected_category=category,
         environment=environment,
+        atomic_tool_bundle=AtomicToolBundle(
+            db_id=db_id,
+            tools=[],
+            source="async def get_assignments(conn, customer_id):\n    return []\n",
+        ),
         artifacts=GeneratedArtifactBundle(
-            tool_source="async def get_assignments(conn, customer_id):\n    return []\n",
-            tool_self_test_source="async def run_self_test(tools):\n    return {'ok': True}\n",
             solution_source="def solve(tools):\n    return {'assignment': {}}\n",
             verifier_source=(
                 "async def fetch_facts(answer, tools):\n    return {}\n\n"
@@ -221,7 +225,8 @@ def test_environment_registry_writer_commits_bundle_and_updates_index(tmp_path: 
     assert (env_dir / "instance_space.json").exists()
     assert (env_dir / "cross_instance_set.json").exists()
     assert (env_dir / "tools.py").exists()
-    assert (env_dir / "tool_self_test.py").exists()
+    assert (env_dir / "tools.py").read_text(encoding="utf-8") == draft.atomic_tool_bundle.source
+    assert not (env_dir / "tool_self_test.py").exists()
     assert (env_dir / "solution.py").exists()
     assert (env_dir / "verifier.py").exists()
     assert (env_dir / "shadow_verifier.py").exists()
