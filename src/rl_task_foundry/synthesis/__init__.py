@@ -7,6 +7,12 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolGenerator,
     AtomicToolResultMode,
 )
+from rl_task_foundry.synthesis.canonicalize import (
+    CanonicalizationError,
+    canonical_json,
+    canonicalize_field,
+    canonicalize_output,
+)
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
@@ -161,6 +167,7 @@ __all__ = [
     "AtomicToolGenerator",
     "AtomicToolResultMode",
     "AnchorQueryContract",
+    "CanonicalizationError",
     "CategoryTaxonomy",
     "CategoryInferenceOutput",
     "ConstraintKind",
@@ -214,6 +221,9 @@ __all__ = [
     "RegistrationBundleStatus",
     "ArtifactRegistrationResult",
     "build_registration_diagnostics",
+    "canonical_json",
+    "canonicalize_field",
+    "canonicalize_output",
     "RegistrationExecutionResult",
     "RegistrationSelfConsistencyResult",
     "RegistrationError",

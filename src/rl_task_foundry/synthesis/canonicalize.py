@@ -1,0 +1,206 @@
+"""Schema-driven canonicalization for synthesis output contracts.
+
+This module is intentionally self-contained within the synthesis stack and does
+not import from the legacy truth/tasks/tools directories scheduled for removal.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import date, datetime, time
+from typing import Any
+
+from rl_task_foundry.synthesis.contracts import (
+    OutputFieldContract,
+    OutputFieldType,
+    OutputSchemaContract,
+)
+
+
+@dataclass(slots=True)
+class CanonicalizationError(ValueError):
+    path: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"{self.path}: {self.message}"
+
+
+def canonicalize_output(
+    schema: OutputSchemaContract,
+    payload: Any,
+) -> Any:
+    """Canonicalize a parsed answer payload against the synthesis output schema."""
+
+    return canonicalize_field(schema.root, payload, path="$")
+
+
+def canonicalize_field(
+    field: OutputFieldContract,
+    value: Any,
+    *,
+    path: str = "$",
+) -> Any:
+    """Canonicalize one value according to a synthesis output field contract."""
+
+    if value is None:
+        if field.nullable:
+            return None
+        raise CanonicalizationError(path, "null is not allowed for this field")
+
+    if field.type is OutputFieldType.STRING:
+        return _canonicalize_string(value, path=path)
+    if field.type is OutputFieldType.ENUM:
+        return _canonicalize_enum(field, value, path=path)
+    if field.type is OutputFieldType.INT:
+        return _canonicalize_int(value, path=path)
+    if field.type is OutputFieldType.FLOAT:
+        return _canonicalize_float(value, path=path)
+    if field.type is OutputFieldType.BOOL:
+        return _canonicalize_bool(value, path=path)
+    if field.type is OutputFieldType.DATE:
+        return _canonicalize_date(value, path=path)
+    if field.type is OutputFieldType.DATETIME:
+        return _canonicalize_datetime(value, path=path)
+    if field.type is OutputFieldType.OBJECT:
+        return _canonicalize_object(field, value, path=path)
+    if field.type is OutputFieldType.LIST:
+        return _canonicalize_list(field, value, path=path)
+    raise CanonicalizationError(path, f"unsupported field type: {field.type}")
+
+
+def canonical_json(value: Any) -> str:
+    """Return a stable JSON representation for exact-match comparisons."""
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _canonicalize_string(value: Any, *, path: str) -> str:
+    if not isinstance(value, str):
+        raise CanonicalizationError(path, "expected string")
+    return value
+
+
+def _canonicalize_enum(field: OutputFieldContract, value: Any, *, path: str) -> str:
+    if not isinstance(value, str):
+        raise CanonicalizationError(path, "expected enum string")
+    if field.enum_values and value not in field.enum_values:
+        raise CanonicalizationError(path, f"unexpected enum value: {value!r}")
+    return value
+
+
+def _canonicalize_int(value: Any, *, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise CanonicalizationError(path, "expected int")
+    return value
+
+
+def _canonicalize_float(value: Any, *, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CanonicalizationError(path, "expected float")
+    return float(value)
+
+
+def _canonicalize_bool(value: Any, *, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise CanonicalizationError(path, "expected bool")
+    return value
+
+
+def _canonicalize_date(value: Any, *, path: str) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if not isinstance(value, str):
+        raise CanonicalizationError(path, "expected ISO date string")
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        return date.fromisoformat(normalized).isoformat()
+    except ValueError:
+        try:
+            return datetime.fromisoformat(normalized).date().isoformat()
+        except ValueError as exc:
+            raise CanonicalizationError(path, f"invalid ISO date value: {value!r}") from exc
+
+
+def _canonicalize_datetime(value: Any, *, path: str) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, date):
+        return datetime.combine(value, time.min).isoformat(timespec="seconds")
+    if not isinstance(value, str):
+        raise CanonicalizationError(path, "expected ISO datetime string")
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).isoformat(timespec="seconds")
+    except ValueError as exc:
+        raise CanonicalizationError(path, f"invalid ISO datetime value: {value!r}") from exc
+
+
+def _canonicalize_object(
+    field: OutputFieldContract,
+    value: Any,
+    *,
+    path: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise CanonicalizationError(path, "expected object")
+
+    allowed_names = {child.name for child in field.fields}
+    unexpected = sorted(set(value) - allowed_names)
+    if unexpected:
+        raise CanonicalizationError(path, f"unexpected object keys: {unexpected}")
+
+    canonical: dict[str, Any] = {}
+    for child in field.fields:
+        child_path = _field_path(path, child.name)
+        if child.name not in value:
+            if child.nullable:
+                canonical[child.name] = None
+                continue
+            raise CanonicalizationError(child_path, "missing required field")
+        canonical[child.name] = canonicalize_field(
+            child,
+            value[child.name],
+            path=child_path,
+        )
+    return canonical
+
+
+def _canonicalize_list(
+    field: OutputFieldContract,
+    value: Any,
+    *,
+    path: str,
+) -> list[Any]:
+    if not isinstance(value, list):
+        raise CanonicalizationError(path, "expected list")
+    if field.items is None:
+        raise CanonicalizationError(path, "list field is missing item schema")
+
+    items = [
+        canonicalize_field(field.items, item, path=f"{path}[{index}]")
+        for index, item in enumerate(value)
+    ]
+    if field.ordered:
+        return items
+    return sorted(items, key=_unordered_sort_key)
+
+
+def _unordered_sort_key(value: Any) -> tuple[int, str]:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return (0, canonical_json(value))
+    return (1, canonical_json(value))
+
+
+def _field_path(base: str, child_name: str) -> str:
+    if base == "$":
+        return f"$.{child_name}"
+    return f"{base}.{child_name}"
