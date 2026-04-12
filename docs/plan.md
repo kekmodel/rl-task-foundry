@@ -23,7 +23,7 @@ Plan 4가 끝나면 아래가 가능해야 한다.
 2. scheduler가 DB를 선택해 synthesis loop를 돈다
 3. synthesis agent가 db-level atomic tool bundle을 참조하는 environment bundle을 생성한다
 4. code registration policy가 generated code를 검사한다
-5. self-consistency, shadow verifier, cross-instance, solver pass-rate quality gate를 통과한 environment만 registry에 커밋한다
+5. cross-instance와 solver pass-rate quality gate를 통과한 environment만 registry에 커밋한다
 6. exported bundle로 환경 품질을 사람이 spot-check할 수 있다
 
 ## Explicit Non-Deliverable
@@ -45,8 +45,7 @@ Plan 4가 끝나면 아래가 가능해야 한다.
 - `synthesis/`
   - atomic tool generator
   - canonicalize + `compute_reward`
-  - synthesis runtime
-  - registration lane
+  - label-first synthesis runtime
   - registry / scheduler / bundle exporter
 - `solver/backend_openai_agents.py`
 - `solver/runtime.py`, `solver/models.py`
@@ -180,7 +179,7 @@ Acceptance criteria:
 
 - atomic tool set은 schema graph로부터 deterministic하게 생성된다
 - 같은 `db_id`의 모든 environment가 동일 atomic tool set을 공유한다
-- synthesis agent는 `tool.py`를 생성하지 않고, `solution.py`, `verifier.py`, `shadow_verifier.py`는 atomic tool만 호출한다
+- synthesis agent는 `tool.py`를 생성하지 않고, `solution.py`는 atomic tool만 호출한다
 - solver backend가 `EnvironmentContract` 기반으로 동작하고 legacy `TaskSpec` 경로가 제거된다
 - path-centric legacy (`tool_compiler`, `TaskSpec`, `TierATaskFactory` 등)가 완전히 삭제된다
 - parity invariants 7개가 test로 강제된다
@@ -304,16 +303,16 @@ Acceptance:
 - proof task의 constraint 구조 먼저 고정
 - 그 task를 지원하는 최소 synthetic schema 설계
 - synthetic fixture DB 구축
-- rendered prompt / solution / verifier / shadow synthesis
-- triple oracle self-consistency
+- rendered prompt / solution synthesis
+- label-first canonical answer materialization
 
 Acceptance:
 
 - unique canonical answer가 materialize된다
-- triple oracle이 일치한다
+- grounded label과 canonical answer가 일치한다
 - exported bundle review에서 사람이 봐도 compositional task다
 
-### Milestone 6: Self-Consistency Policy and Difficulty Escalation
+### Milestone 6: Generation Retry Policy and Difficulty Escalation
 
 목표:
 
@@ -321,56 +320,43 @@ Acceptance:
 
 작업:
 
-- `max_self_consistency_iterations`
+- `max_generation_attempts`
 - schema/category phase 재사용 + artifact generation phase retry
-- registration diagnostics를 다음 attempt input에 주입
-- registration 통과 후 triple oracle 실제 실행
-- disagreement diagnostics를 다음 attempt input에 주입
+- artifact diagnostics를 다음 attempt input에 주입
+- quality gate feedback을 다음 harder retry input에 주입
 - infeasible discard path
 - discard consumes budget 정책
 - `db_id x category` failure counter와 backoff queue
 - `max_consecutive_category_discards` / `category_backoff_duration_s` config로 local runtime backoff enforce
 - scheduler가 읽을 수 있도록 runtime category status snapshot 노출
-- tool set change -> solution/verifier/shadow invalidation policy
-- verifier weakening 금지 규칙
+- tool set change -> solution invalidation policy
+- label weakening 금지 규칙
 - one-axis-per-step difficulty crank
 - crank termination policy
 
 Acceptance:
 
-- registration을 통과한 attempt는 triple oracle을 실제 실행한다
-- triple oracle disagreement는 artifact regeneration retry로 이어진다
-- canonical answer를 느슨하게 바꾸는 verifier weakening이 reject된다
+- artifact diagnostics는 regeneration retry로 이어진다
+- canonical answer를 느슨하게 바꾸는 label weakening이 reject된다
 - difficulty vector가 monotonic하게 증가한다
 - 연속 discard threshold를 넘긴 `db_id x category`는 backoff error로 즉시 차단된다
 - 반복 discard가 scheduler-level backoff로 이어진다
 
-### Milestone 7: Shadow Independence and Cross-Instance Consistency
+### Milestone 7: Cross-Instance Consistency
 
 목표:
 
-- independent shadow oracle과 cross-instance consistency를 production mandatory로 붙인다
+- cross-instance consistency를 production mandatory로 붙인다
 
 작업:
 
-- shadow prompt strategy 분리
-- session separation
-- temperature separation
 - instance_space contract
 - deterministic instance sampler
 - instance별 서로 다른 valid canonical answer 확인
-- shadow verifier가 독립 canonical answer 계산 경로를 유지하도록 enforcement
 
 Acceptance:
 
-- shadow disagreement rate가 측정된다
 - instance별 다른 valid canonical answer가 correctly materialize된다
-- shadow verifier가 primary verifier의 단순 paraphrase로 무너지지 않는다
-
-주의:
-
-- model family diversity는 proof stage optional이다
-- second family backend가 준비되면 production accepted env에서 mandatory로 승격한다
 
 ### Milestone 8: Quality Gate 5-Stage Pipeline
 
@@ -380,11 +366,11 @@ Acceptance:
 
 단계:
 
-1. code registration policy
-2. self-consistency triple oracle
-3. cross-instance consistency
-4. solver pass-rate band
-5. registry dedup / coverage policy
+1. label construction and canonical materialization
+2. cross-instance consistency
+3. solver pass-rate band
+4. registry dedup
+5. coverage policy
 
 작업:
 
@@ -548,8 +534,7 @@ quality_filter:
   safe_early_termination: true
   shadow_disagreement_threshold: 0.05
   min_cross_instances: 3
-  require_all_instances_pass_verifier_consistency: true
-  max_self_consistency_iterations: 5
+  max_generation_attempts: 5
   max_difficulty_cranks: 6
 ```
 

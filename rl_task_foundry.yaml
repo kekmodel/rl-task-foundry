@@ -73,53 +73,13 @@ synthesis:
     tracing: true
     sdk_sessions_enabled: true
     explicit_memory_window: 8
-    max_self_consistency_iterations: 5
+    max_generation_attempts: 5
     max_difficulty_cranks: 6
     max_consecutive_category_discards: 3
     category_backoff_duration_s: 3600
   coverage_planner:
     target_count_per_band: 3
     include_unset_band: false
-  registration_workers:
-    worker_count: 2
-    connections_per_worker: 2
-    task_timeout_s: 30
-    memory_limit_mb: 256
-    call_count_limit: 256
-  registration_policy:
-    allowed_import_roots:
-      - "collections"
-      - "datetime"
-      - "decimal"
-      - "json"
-      - "math"
-      - "re"
-      - "typing"
-    forbidden_module_roots:
-      - "asyncpg"
-      - "os"
-      - "pathlib"
-      - "psycopg"
-      - "psycopg2"
-      - "socket"
-      - "sqlalchemy"
-      - "subprocess"
-      - "sys"
-    forbidden_symbols:
-      - "__import__"
-      - "compile"
-      - "eval"
-      - "exec"
-      - "getattr"
-      - "globals"
-      - "locals"
-      - "open"
-      - "setattr"
-      - "type"
-      - "vars"
-    forbid_dunder_access: true
-    require_subprocess_lane: true
-    enforce_async_tool_functions: true
 
 solver_runtime:
   max_turns: 16
@@ -153,12 +113,6 @@ calibration:
     no_result: 1
     clarify: 2
     deny: 2
-
-verification:
-  require_provenance: true
-  fail_on_internal_field_leak: true
-  float_precision: 6
-  shadow_sample_rate: 0.1
 
 dedup:
   exact_enabled: true

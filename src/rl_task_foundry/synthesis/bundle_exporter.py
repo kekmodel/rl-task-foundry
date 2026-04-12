@@ -131,11 +131,6 @@ class EnvironmentBundleExporter:
             target_dir / "canonical_answers.jsonl",
         )
         self._copy_required_file(source_dir / "solution.py", audit_dir / "solution.py")
-        self._copy_required_file(source_dir / "verifier.py", audit_dir / "verifier.py")
-        self._copy_required_file(
-            source_dir / "shadow_verifier.py",
-            audit_dir / "shadow_verifier.py",
-        )
 
     @staticmethod
     def _copy_required_file(source: Path, target: Path) -> None:

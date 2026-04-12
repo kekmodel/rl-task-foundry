@@ -98,35 +98,6 @@ class ToolSelfTestCheck(StrEnum):
     DETERMINISTIC_ORDERING = "deterministic_ordering"
 
 
-class FactCardinality(StrEnum):
-    ONE = "one"
-    MANY = "many"
-
-
-class FactValueType(StrEnum):
-    STR = "str"
-    INT = "int"
-    FLOAT = "float"
-    BOOL = "bool"
-    DATE = "date"
-    DATETIME = "datetime"
-    LIST_STR = "list[str]"
-    LIST_INT = "list[int]"
-    LIST_FLOAT = "list[float]"
-
-
-class ShadowPromptStrategy(StrEnum):
-    TOP_DOWN = "top_down"
-    BOTTOM_UP = "bottom_up"
-
-
-class ShadowIndependenceRequirement(StrEnum):
-    SEPARATE_SESSION = "separate_session"
-    SEPARATE_PROMPT_TEMPLATE = "separate_prompt_template"
-    SEPARATE_TEMPERATURE = "separate_temperature"
-    SEPARATE_MODEL_FAMILY_PREFERRED = "separate_model_family_preferred"
-
-
 class InstanceSamplingStrategy(StrEnum):
     DETERMINISTIC_HASH = "deterministic_hash"
     GRID = "grid"
@@ -375,41 +346,6 @@ class ToolSelfTestContract(StrictModel):
     )
 
 
-class FactSpec(StrictModel):
-    key: str
-    entity_ref: str
-    attribute: str
-    value_type: FactValueType
-    nullable: bool = False
-    cardinality: FactCardinality = FactCardinality.ONE
-
-
-class MaterializedFactsSchema(StrictModel):
-    facts: list[FactSpec] = Field(default_factory=list)
-
-
-class VerifierContract(StrictModel):
-    entrypoint: Literal["verify"] = "verify"
-    fetch_facts_function: Literal["fetch_facts"] = "fetch_facts"
-    facts_match_function: Literal["facts_match_answer_claims"] = "facts_match_answer_claims"
-    check_constraints_function: Literal["check_constraints"] = "check_constraints"
-    facts_schema: MaterializedFactsSchema
-    official_judgment: Literal[True] = True
-
-
-class ShadowVerifierContract(VerifierContract):
-    official_judgment: Literal[False] = False
-    prompt_strategy: ShadowPromptStrategy = ShadowPromptStrategy.BOTTOM_UP
-    independence_requirements: list[ShadowIndependenceRequirement] = Field(
-        default_factory=lambda: [
-            ShadowIndependenceRequirement.SEPARATE_SESSION,
-            ShadowIndependenceRequirement.SEPARATE_PROMPT_TEMPLATE,
-            ShadowIndependenceRequirement.SEPARATE_TEMPERATURE,
-            ShadowIndependenceRequirement.SEPARATE_MODEL_FAMILY_PREFERRED,
-        ]
-    )
-
-
 class RolloutConstraintsContract(StrictModel):
     max_turns: int = Field(ge=1)
     max_episode_duration_ms: int = Field(ge=1)
@@ -535,8 +471,6 @@ class CrossInstanceSet(StrictModel):
 
 
 class EnvironmentQualityMetrics(StrictModel):
-    self_consistency_pass: bool = False
-    shadow_disagreement_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_low: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_high: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -565,7 +499,6 @@ class EnvironmentContract(StrictModel):
     generator_version: str
     tool_signature: str
     task_signature: str
-    verifier_signature: str
     status: EnvironmentStatus = EnvironmentStatus.DRAFT
     quality_metrics: EnvironmentQualityMetrics = Field(
         default_factory=EnvironmentQualityMetrics
@@ -573,8 +506,6 @@ class EnvironmentContract(StrictModel):
     rollout_constraints: RolloutConstraintsContract
     task: TaskContract
     solution: SolutionContract
-    verifier: VerifierContract
-    shadow_verifier: ShadowVerifierContract
     instance_space: InstanceSpaceContract
     cross_instance_set: CrossInstanceSet = Field(default_factory=CrossInstanceSet)
 

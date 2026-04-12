@@ -459,7 +459,6 @@ async def test_synthesis_registry_runner_records_quality_metrics_on_accepted_dra
     assert summary.registry_committed_envs == 1
     committed = fake_registry.committed_drafts[0]
     assert committed.environment.status == EnvironmentStatus.ACCEPTED
-    assert committed.environment.quality_metrics.shadow_disagreement_rate == 0.0
     assert committed.environment.quality_metrics.solver_pass_rate == 0.5
     assert committed.environment.quality_metrics.solver_ci_low is not None
     assert committed.environment.quality_metrics.solver_ci_high is not None

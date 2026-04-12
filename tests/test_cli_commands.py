@@ -46,24 +46,13 @@ def test_cli_validate_config_command():
         "atomic_tools=max_tool_count=256,bounded_result_limit=100,"
         "max_batch_values=128,float_precision=2"
     ) in normalized
-    assert "float_precision=6" in normalized
-    assert "shadow_sample_rate=0.1" in normalized
     assert (
         "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=True,"
-        "memory_window=8,max_self_consistency_iterations=5,"
+        "memory_window=8,max_generation_attempts=5,"
         "max_difficulty_cranks=6,"
         "max_consecutive_category_discards=3,category_backoff_duration_s=3600"
     ) in normalized
-    assert "registration_lane=" in normalized
-    assert "workers=2" in normalized
-    assert "connections_per_worker=2" in normalized
-    assert "max_db_connections=4" in normalized
-    assert "mode=persistent_subprocess_pool" in normalized
-    assert "db_access=worker_owned_pool" in normalized
-    assert "solver_lane=main_process=True,per_tool_subprocess=False" in normalized
-    assert "registration_guards=timeout_s=30,memory_limit_mb=256,call_count_limit=256" in normalized
-    assert "estimated_total_db_connections=44" in normalized
-    assert "registration_policy_adr=docs/adr/0001-custom-ast-preflight.md" in normalized
+    assert "estimated_total_db_connections=40" in normalized
     assert "dedup=exact_enabled=True,near_dup_enabled=True,minhash_threshold=0.9" in normalized
     assert (
         "synthesis_coverage=target_count_per_band=3,include_unset_band=False,"

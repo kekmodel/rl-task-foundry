@@ -43,7 +43,6 @@ SCHEMA_STATEMENTS = (
         generator_version TEXT NOT NULL,
         tool_signature TEXT NOT NULL,
         task_signature TEXT NOT NULL,
-        verifier_signature TEXT NOT NULL,
         exact_signature TEXT NOT NULL UNIQUE,
         semantic_dedup_text TEXT NOT NULL DEFAULT '',
         semantic_dedup_text_version INTEGER NOT NULL DEFAULT 1,
@@ -312,7 +311,6 @@ class EnvironmentRegistryWriter:
                         generator_version,
                         tool_signature,
                         task_signature,
-                        verifier_signature,
                         exact_signature,
                         semantic_dedup_text,
                         semantic_dedup_text_version,
@@ -320,7 +318,7 @@ class EnvironmentRegistryWriter:
                         filesystem_path,
                         payload_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         env.env_id,
@@ -333,7 +331,6 @@ class EnvironmentRegistryWriter:
                         env.generator_version,
                         env.tool_signature,
                         env.task_signature,
-                        env.verifier_signature,
                         exact_signature,
                         semantic_text,
                         SEMANTIC_DEDUP_TEXT_VERSION,
@@ -661,14 +658,6 @@ class EnvironmentRegistryWriter:
             draft.artifacts.solution_source,
             encoding="utf-8",
         )
-        (directory / "verifier.py").write_text(
-            draft.artifacts.verifier_source,
-            encoding="utf-8",
-        )
-        (directory / "shadow_verifier.py").write_text(
-            draft.artifacts.shadow_verifier_source,
-            encoding="utf-8",
-        )
         (directory / "registry_metadata.json").write_text(
             json.dumps(
                 {
@@ -676,10 +665,10 @@ class EnvironmentRegistryWriter:
                     "difficulty_band": difficulty_band.value,
                     "semantic_dedup_text": semantic_text,
                     "semantic_dedup_text_version": SEMANTIC_DEDUP_TEXT_VERSION,
-                    "registration_status": draft.registration_report.status.value,
-                    "registration_error_codes": draft.registration_diagnostics.error_codes,
-                    "self_consistency_passed": draft.self_consistency_diagnostics.passed,
-                    "self_consistency_error_codes": draft.self_consistency_diagnostics.error_codes,
+                    "generation_attempts": [
+                        attempt.model_dump(mode="json")
+                        for attempt in draft.generation_attempts
+                    ],
                     "instance_count": len(draft.instances),
                     "canonical_answer_count": len(draft.canonical_answers),
                     "provider_status": {
@@ -713,7 +702,6 @@ class EnvironmentRegistryWriter:
                 env.category.value,
                 env.tool_signature,
                 env.task_signature,
-                env.verifier_signature,
             ]
         )
         return f"sha256:{sha256(material.encode('utf-8')).hexdigest()}"
@@ -900,6 +888,7 @@ class EnvironmentRegistryWriter:
 
     def _bootstrap(self) -> None:
         with self._connect() as conn:
+            self._migrate_legacy_environment_table(conn)
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
             self._ensure_environment_column(
@@ -920,6 +909,84 @@ class EnvironmentRegistryWriter:
             for statement in INDEX_STATEMENTS:
                 conn.execute(statement)
             conn.commit()
+
+    @staticmethod
+    def _migrate_legacy_environment_table(conn: sqlite3.Connection) -> None:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'environments'"
+        ).fetchall()
+        if not tables:
+            return
+        columns = conn.execute("PRAGMA table_info(environments)").fetchall()
+        column_names = {str(row["name"]) for row in columns}
+        if "verifier_signature" not in column_names:
+            return
+        conn.execute("DROP INDEX IF EXISTS idx_env_registry_db_category")
+        conn.execute("DROP INDEX IF EXISTS idx_env_registry_exact_signature")
+        conn.execute(
+            """
+            CREATE TABLE environments_v2 (
+                env_id TEXT PRIMARY KEY,
+                db_id TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                category TEXT NOT NULL,
+                difficulty_band TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                generator_version TEXT NOT NULL,
+                tool_signature TEXT NOT NULL,
+                task_signature TEXT NOT NULL,
+                exact_signature TEXT NOT NULL UNIQUE,
+                semantic_dedup_text TEXT NOT NULL DEFAULT '',
+                semantic_dedup_text_version INTEGER NOT NULL DEFAULT 1,
+                semantic_minhash_signature TEXT NOT NULL DEFAULT '[]',
+                filesystem_path TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO environments_v2 (
+                env_id,
+                db_id,
+                domain,
+                category,
+                difficulty_band,
+                created_at,
+                status,
+                generator_version,
+                tool_signature,
+                task_signature,
+                exact_signature,
+                semantic_dedup_text,
+                semantic_dedup_text_version,
+                semantic_minhash_signature,
+                filesystem_path,
+                payload_json
+            )
+            SELECT
+                env_id,
+                db_id,
+                domain,
+                category,
+                difficulty_band,
+                created_at,
+                status,
+                generator_version,
+                tool_signature,
+                task_signature,
+                exact_signature,
+                semantic_dedup_text,
+                semantic_dedup_text_version,
+                semantic_minhash_signature,
+                filesystem_path,
+                payload_json
+            FROM environments
+            """
+        )
+        conn.execute("DROP TABLE environments")
+        conn.execute("ALTER TABLE environments_v2 RENAME TO environments")
 
     @staticmethod
     def _ensure_environment_column(

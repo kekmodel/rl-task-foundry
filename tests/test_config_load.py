@@ -16,18 +16,15 @@ def test_load_config_uses_solver_replicas_source_of_truth():
     assert config.atomic_tools.bounded_result_limit == 100
     assert config.atomic_tools.max_batch_values == 128
     assert config.atomic_tools.float_precision == 2
-    assert config.verification.shadow_sample_rate == 0.1
     assert config.synthesis.runtime.max_turns == 8
     assert config.synthesis.runtime.explicit_memory_window == 8
-    assert config.synthesis.runtime.max_self_consistency_iterations == 5
+    assert config.synthesis.runtime.max_generation_attempts == 5
     assert config.synthesis.runtime.max_difficulty_cranks == 6
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
     assert config.synthesis.runtime.category_backoff_duration_s == 3600
     assert config.synthesis.coverage_planner.target_count_per_band == 3
     assert config.synthesis.coverage_planner.include_unset_band is False
-    assert config.synthesis.registration_workers.worker_count == 2
-    assert config.synthesis.registration_workers.max_db_connections == 4
-    assert config.estimated_total_db_connections == 44
+    assert config.estimated_total_db_connections == 40
 
 
 def test_load_config_applies_runtime_model_overrides():

@@ -32,6 +32,7 @@ from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
+    SynthesisArtifactGenerationError,
     SynthesisBackendFailure,
     SynthesisDifficultyRetrySeed,
     SynthesisEnvironmentDraft,
@@ -39,7 +40,6 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisProviderUnavailableError,
     SynthesisQualityGateFeedback,
     SynthesisRuntimeError,
-    SynthesisSelfConsistencyError,
     merge_strongest_difficulty_vector,
 )
 
@@ -231,7 +231,7 @@ class RealDbTrialRunner:
                     requested_category=category,
                     retry_seed=active_retry_seed,
                 )
-            except SynthesisSelfConsistencyError as exc:
+            except SynthesisArtifactGenerationError as exc:
                 consumed_retry_seed = (
                     active_retry_seed.consume_requested_crank()
                     if active_retry_seed is not None
@@ -642,7 +642,7 @@ class RealDbTrialRunner:
         summary_path: Path,
         db_id: str,
         category: CategoryTaxonomy,
-        exc: SynthesisSelfConsistencyError,
+        exc: SynthesisArtifactGenerationError,
         flow_id: str,
         phase_monitor_log_path: Path,
         debug_root: Path,
@@ -652,11 +652,11 @@ class RealDbTrialRunner:
         synthesis_session_db_path: Path,
         solver_session_db_path: Path,
     ) -> RealDbTrialSummary:
-        error_codes: list[str] = []
-        if exc.last_registration_diagnostics is not None:
-            error_codes.extend(exc.last_registration_diagnostics.error_codes)
-        if exc.last_self_consistency_diagnostics is not None:
-            error_codes.extend(exc.last_self_consistency_diagnostics.error_codes)
+        error_codes = (
+            list(exc.last_artifact_diagnostics.error_codes)
+            if exc.last_artifact_diagnostics is not None
+            else []
+        )
         return RealDbTrialSummary(
             db_id=db_id,
             requested_category=category,

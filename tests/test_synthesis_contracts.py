@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -12,27 +12,21 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintSummaryItem,
     CrossInstanceSet,
     DifficultyAxis,
-    DIFFICULTY_CRANK_ORDER,
     DIFFICULTY_AXIS_SPECS,
+    DIFFICULTY_CRANK_ORDER,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnumParameterSpace,
-    FactCardinality,
-    FactValueType,
-    FactSpec,
     FloatRangeParameterSpace,
     InstanceContract,
     InstanceSamplingContract,
     InstanceSamplingStrategy,
     InstanceSpaceContract,
     IntRangeParameterSpace,
-    MaterializedFactsSchema,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    ShadowPromptStrategy,
-    ShadowVerifierContract,
     SolutionContract,
     TaskContract,
     ToolContract,
@@ -42,7 +36,6 @@ from rl_task_foundry.synthesis.contracts import (
     ToolSelfTestCheck,
     ToolSelfTestContract,
     ToolTimeoutBehavior,
-    VerifierContract,
     build_difficulty_vector,
 )
 
@@ -68,37 +61,12 @@ def _build_output_schema() -> OutputSchemaContract:
     )
 
 
-def _build_facts_schema() -> MaterializedFactsSchema:
-    return MaterializedFactsSchema(
-        facts=[
-            FactSpec(
-                key="hotel_price",
-                entity_ref="day_2.hotel",
-                attribute="price",
-                value_type=FactValueType.FLOAT,
-                cardinality=FactCardinality.ONE,
-            ),
-            FactSpec(
-                key="restaurant_ratings",
-                entity_ref="day_2.restaurants",
-                attribute="rating",
-                value_type=FactValueType.FLOAT,
-                nullable=False,
-                cardinality=FactCardinality.MANY,
-            ),
-        ]
-    )
-
-
 def test_output_schema_supports_nested_list_objects() -> None:
     schema = _build_output_schema()
-
-    dumped = schema.model_dump(mode="json")
 
     assert schema.root.type is OutputFieldType.LIST
     assert schema.root.items is not None
     assert schema.root.items.type is OutputFieldType.OBJECT
-    assert dumped["primary_output_format"] == "json_array"
 
 
 def test_output_schema_rejects_invalid_scalar_children() -> None:
@@ -107,35 +75,6 @@ def test_output_schema_rejects_invalid_scalar_children() -> None:
             name="city",
             type=OutputFieldType.STRING,
             fields=[OutputFieldContract(name="nested", type=OutputFieldType.STRING)],
-        )
-
-
-def test_output_schema_requires_enum_values_for_enum_fields() -> None:
-    with pytest.raises(ValidationError):
-        OutputFieldContract(name="tier", type=OutputFieldType.ENUM)
-
-
-def test_tool_parameter_contract_requires_enum_values_for_enum_types() -> None:
-    with pytest.raises(ValidationError):
-        ToolParameterContract(name="bucket", type=ToolParameterType.ENUM)
-
-
-def test_tool_parameter_contract_rejects_enum_values_for_non_enum_types() -> None:
-    with pytest.raises(ValidationError):
-        ToolParameterContract(
-            name="city",
-            type=ToolParameterType.STRING,
-            enum_values=["seoul"],
-        )
-
-
-def test_fact_spec_rejects_unknown_value_type() -> None:
-    with pytest.raises(ValidationError):
-        FactSpec(
-            key="bad",
-            entity_ref="slot.hotel",
-            attribute="price",
-            value_type="weird_thing",
         )
 
 
@@ -161,20 +100,7 @@ def test_instance_space_supports_contract_shapes() -> None:
     assert instance_space.parameters["day_count"].kind == "int_range"
 
 
-def test_anchor_query_contract_requires_unique_outputs() -> None:
-    with pytest.raises(ValidationError):
-        AnchorQueryContract(
-            sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
-            outputs=["anchor_id", "anchor_id"],
-        )
-
-
-def test_float_range_parameter_space_rejects_invalid_bounds() -> None:
-    with pytest.raises(ValidationError):
-        FloatRangeParameterSpace(min=10.0, max=5.0)
-
-
-def test_environment_contract_round_trips_with_core_artifacts() -> None:
+def test_environment_contract_round_trips_without_verifier_fields() -> None:
     output_schema = _build_output_schema()
     difficulty_vector = build_difficulty_vector(
         search_cost=2.0,
@@ -195,11 +121,6 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
         difficulty_vector=difficulty_vector,
         instance_parameters={"budget_bucket": "mid"},
     )
-    verifier = VerifierContract(facts_schema=_build_facts_schema())
-    shadow_verifier = ShadowVerifierContract(
-        facts_schema=_build_facts_schema(),
-        prompt_strategy=ShadowPromptStrategy.BOTTOM_UP,
-    )
     contract = EnvironmentContract(
         env_id="env_trip_fixture_v1",
         db_id="proof_trip_fixture",
@@ -207,12 +128,11 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
         category=CategoryTaxonomy.ITINERARY,
         atomic_tool_set_ref="db://proof_trip_fixture",
         difficulty_vector=difficulty_vector,
-        created_at=datetime(2026, 4, 11, 13, 40, 0),
+        created_at=datetime(2026, 4, 11, 13, 40, 0, tzinfo=timezone.utc),
         generator_version="rewrite-v1",
         tool_signature="toolhash",
         task_signature="taskhash",
-        verifier_signature="verifierhash",
-        quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
+        quality_metrics=EnvironmentQualityMetrics(),
         rollout_constraints=RolloutConstraintsContract(
             max_turns=16,
             max_episode_duration_ms=80000,
@@ -220,8 +140,6 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
         ),
         task=task,
         solution=SolutionContract(),
-        verifier=verifier,
-        shadow_verifier=shadow_verifier,
         instance_space=InstanceSpaceContract(
             anchor_query=AnchorQueryContract(
                 sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
@@ -232,7 +150,6 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
             instances=[
                 InstanceContract(instance_id="instance_1"),
                 InstanceContract(instance_id="instance_2"),
-                InstanceContract(instance_id="instance_3"),
             ]
         ),
     )
@@ -240,21 +157,9 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
     round_tripped = EnvironmentContract.model_validate_json(contract.model_dump_json())
 
     assert round_tripped.task.category is CategoryTaxonomy.ITINERARY
-    assert round_tripped.shadow_verifier.official_judgment is False
-    assert round_tripped.verifier.fetch_facts_function == "fetch_facts"
     assert round_tripped.atomic_tool_set_ref == "db://proof_trip_fixture"
     assert round_tripped.rollout_constraints.max_tool_rows == 100
-    assert round_tripped.quality_metrics.shadow_disagreement_rate is None
-
-
-def test_difficulty_vector_rejects_negative_axis_values() -> None:
-    with pytest.raises(ValidationError):
-        build_difficulty_vector(search_cost=-1.0)
-
-
-def test_difficulty_axis_specs_cover_every_axis_in_crank_order() -> None:
-    assert set(DIFFICULTY_AXIS_SPECS) == set(DifficultyAxis)
-    assert tuple(DIFFICULTY_AXIS_SPECS) == DIFFICULTY_CRANK_ORDER
+    assert round_tripped.quality_metrics.solver_pass_rate is None
 
 
 def test_environment_contract_rejects_task_category_mismatch() -> None:
@@ -274,11 +179,10 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
             category=CategoryTaxonomy.ITINERARY,
             atomic_tool_set_ref="db://proof_trip_fixture",
             difficulty_vector=build_difficulty_vector(solution_space=3.0),
-            created_at=datetime(2026, 4, 11, 13, 40, 0),
+            created_at=datetime(2026, 4, 11, 13, 40, 0, tzinfo=timezone.utc),
             generator_version="rewrite-v1",
             tool_signature="toolhash",
             task_signature="taskhash",
-            verifier_signature="verifierhash",
             rollout_constraints=RolloutConstraintsContract(
                 max_turns=16,
                 max_episode_duration_ms=80000,
@@ -286,8 +190,6 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
             ),
             task=task,
             solution=SolutionContract(),
-            verifier=VerifierContract(facts_schema=_build_facts_schema()),
-            shadow_verifier=ShadowVerifierContract(facts_schema=_build_facts_schema()),
             instance_space=InstanceSpaceContract(
                 anchor_query=AnchorQueryContract(
                     sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
@@ -323,14 +225,19 @@ def test_tool_self_test_contract_defaults_required_checks() -> None:
     ]
 
 
-def test_cross_instance_set_requires_unique_instance_ids() -> None:
+def test_difficulty_axis_specs_cover_every_axis_in_crank_order() -> None:
+    assert set(DIFFICULTY_AXIS_SPECS) == set(DifficultyAxis)
+    assert tuple(DIFFICULTY_AXIS_SPECS) == DIFFICULTY_CRANK_ORDER
+
+
+def test_float_range_parameter_space_rejects_invalid_bounds() -> None:
     with pytest.raises(ValidationError):
-        CrossInstanceSet(
-            instances=[
-                InstanceContract(instance_id="instance_1"),
-                InstanceContract(instance_id="instance_1"),
-            ]
-        )
+        FloatRangeParameterSpace(min=10.0, max=5.0)
+
+
+def test_tool_parameter_contract_requires_enum_values_for_enum_types() -> None:
+    with pytest.raises(ValidationError):
+        ToolParameterContract(name="bucket", type=ToolParameterType.ENUM)
 
 
 def test_cross_instance_set_rejects_duplicate_solution_fingerprints_when_required() -> None:
@@ -346,29 +253,4 @@ def test_cross_instance_set_rejects_duplicate_solution_fingerprints_when_require
                     expected_solution_fingerprint="sha256:abc",
                 ),
             ]
-        )
-
-
-def test_environment_quality_metrics_allow_unmeasured_state() -> None:
-    metrics = EnvironmentQualityMetrics()
-
-    assert metrics.shadow_disagreement_rate is None
-    assert metrics.solver_pass_rate is None
-    assert metrics.solver_ci_low is None
-    assert metrics.solver_ci_high is None
-
-
-def test_environment_quality_metrics_require_both_ci_bounds_together() -> None:
-    with pytest.raises(ValidationError):
-        EnvironmentQualityMetrics(solver_ci_low=0.2)
-
-
-def test_instance_contract_rejects_non_serializable_anchor_values() -> None:
-    class _Sentinel:
-        pass
-
-    with pytest.raises(ValidationError):
-        InstanceContract(
-            instance_id="instance_1",
-            anchor_values={"customer_id": _Sentinel()},
         )

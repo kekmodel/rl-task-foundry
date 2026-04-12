@@ -39,15 +39,12 @@ from rl_task_foundry.synthesis.contracts import (
     EnvironmentStatus,
     InstanceContract,
     InstanceSpaceContract,
-    MaterializedFactsSchema,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    ShadowVerifierContract,
     SolutionContract,
     TaskContract,
-    VerifierContract,
     difficulty_vector_json,
 )
 from rl_task_foundry.synthesis.cross_instance import evaluate_cross_instance_draft
@@ -61,22 +58,12 @@ from rl_task_foundry.synthesis.phase_monitor import (
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
-from rl_task_foundry.synthesis.registration_policy import ArtifactKind
-from rl_task_foundry.synthesis.registration_runner import (
-    ArtifactRegistrationResult,
-    GeneratedArtifactBundle,
-    RegistrationArtifactName,
-    RegistrationBundleDiagnostics,
-    RegistrationBundleReport,
-    RegistrationBundleStatus,
-    build_registration_diagnostics,
-)
 from rl_task_foundry.synthesis.runtime import (
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
+    GeneratedArtifactBundle,
     MaterializedCanonicalAnswerRecord,
     MaterializedInstanceRecord,
     SynthesisEnvironmentDraft,
-    SynthesisSelfConsistencyDiagnostics,
 )
 
 PROOF_DB_ID = "proof_trip_fixture"
@@ -470,9 +457,8 @@ def build_proof_environment_draft(
         generator_version=CURRENT_SYNTHESIS_GENERATOR_VERSION,
         tool_signature=_sha256_hex(_proof_atomic_tool_bundle().source),
         task_signature=_sha256_hex(task.model_dump_json()),
-        verifier_signature=_sha256_hex(_proof_verifier_source()),
         status=EnvironmentStatus.DRAFT,
-        quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
+        quality_metrics=EnvironmentQualityMetrics(),
         rollout_constraints=RolloutConstraintsContract(
             max_turns=12,
             max_episode_duration_ms=90000,
@@ -480,8 +466,6 @@ def build_proof_environment_draft(
         ),
         task=task,
         solution=SolutionContract(),
-        verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
-        shadow_verifier=ShadowVerifierContract(facts_schema=MaterializedFactsSchema()),
         instance_space=InstanceSpaceContract(
             anchor_query=AnchorQueryContract(
                 sql=(
@@ -508,7 +492,6 @@ def build_proof_environment_draft(
             ],
         ),
     )
-    report = _passed_registration_report()
     rendered_prompt = build_rendered_user_prompt(task)
     return SynthesisEnvironmentDraft(
         created_at=created_at,
@@ -518,19 +501,7 @@ def build_proof_environment_draft(
         selected_category=CategoryTaxonomy.ITINERARY,
         environment=environment,
         atomic_tool_bundle=_proof_atomic_tool_bundle(),
-        artifacts=GeneratedArtifactBundle(
-            solution_source=_proof_solution_source(),
-            verifier_source=_proof_verifier_source(),
-            shadow_verifier_source=_proof_shadow_verifier_source(),
-        ),
-        registration_report=report,
-        registration_diagnostics=build_registration_diagnostics(report),
-        self_consistency_diagnostics=SynthesisSelfConsistencyDiagnostics(
-            passed=True,
-            answer=canonical_answer,
-            verify_result=True,
-            shadow_verify_result=True,
-        ),
+        artifacts=GeneratedArtifactBundle(solution_source=_proof_solution_source()),
         instances=[
             MaterializedInstanceRecord(
                 instance_id="instance_0001",
@@ -551,6 +522,7 @@ def build_proof_environment_draft(
                 solution_fingerprint=solution_fingerprint,
             )
         ],
+        generation_attempts=[],
         provider_status={},
     )
 
@@ -830,90 +802,5 @@ def solve(tools):
     return plans
 """.strip() + "\n"
 
-
-def _proof_verifier_source() -> str:
-    return """
-async def fetch_facts(answer, tools):
-    facts = []
-    for item in answer:
-        neighbors = tools.list_proof_city_link_by_city_id_eq(
-            {"city_id": item["city_id"], "limit": 20}
-        )
-        facts.append({"city_id": item["city_id"], "neighbors": neighbors})
-    return {"rows": facts}
-
-
-def facts_match_answer_claims(answer, facts):
-    return len(answer) == 3 and bool(facts["rows"])
-
-
-def check_constraints(answer, facts):
-    cities = [item["city"] for item in answer]
-    if len(set(cities)) != len(cities):
-        return False
-    if any(item["total_cost"] > 250 for item in answer):
-        return False
-    return True
-
-
-def verify(answer, tools):
-    return isinstance(answer, list) and len(answer) == 3
-""".strip() + "\n"
-
-
-def _proof_shadow_verifier_source() -> str:
-    return """
-async def fetch_facts(answer, tools):
-    rows = []
-    for item in answer:
-        rows.append(
-            {
-                "city_id": item["city_id"],
-                "lodging_options": tools.traverse_proof_city_to_proof_lodging_via_city_id(
-                    {"city_id": item["city_id"], "limit": 20}
-                ),
-            }
-        )
-    return {"rows": rows}
-
-
-def facts_match_answer_claims(answer, facts):
-    return len(answer) == 3 and len(facts["rows"]) == len(answer)
-
-
-def check_constraints(answer, facts):
-    return all(item["total_cost"] <= 250 for item in answer)
-
-
-def verify(answer, tools):
-    return isinstance(answer, list)
-""".strip() + "\n"
-
-
-def _passed_registration_report() -> RegistrationBundleReport:
-    report = RegistrationBundleReport(
-        status=RegistrationBundleStatus.PASSED,
-        tool=ArtifactRegistrationResult(
-            artifact_name=RegistrationArtifactName.TOOL,
-            artifact_kind=ArtifactKind.TOOL_MODULE,
-        ),
-        tool_self_test=ArtifactRegistrationResult(
-            artifact_name=RegistrationArtifactName.TOOL_SELF_TEST,
-            artifact_kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
-        ),
-        solution=ArtifactRegistrationResult(
-            artifact_name=RegistrationArtifactName.SOLUTION,
-            artifact_kind=ArtifactKind.SOLUTION_MODULE,
-        ),
-        verifier=ArtifactRegistrationResult(
-            artifact_name=RegistrationArtifactName.VERIFIER,
-            artifact_kind=ArtifactKind.VERIFIER_MODULE,
-        ),
-        shadow_verifier=ArtifactRegistrationResult(
-            artifact_name=RegistrationArtifactName.SHADOW_VERIFIER,
-            artifact_kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
-        ),
-    )
-    return report
 def _sha256_hex(payload: str) -> str:
     return "sha256:" + sha256(payload.encode("utf-8")).hexdigest()

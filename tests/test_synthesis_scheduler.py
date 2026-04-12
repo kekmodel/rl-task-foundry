@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryStatus,
-    SynthesisSelfConsistencyOutcome,
+    SynthesisGenerationOutcome,
 )
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisDbSnapshot,
@@ -31,8 +31,8 @@ def _backed_off_status(
         backed_off=True,
         backoff_until=now + timedelta(seconds=seconds),
         backoff_remaining_s=float(seconds),
-        last_outcome=SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
-        last_error_codes=["verify_false"],
+        last_outcome=SynthesisGenerationOutcome.ARTIFACT_INVALID,
+        last_error_codes=["solution_source_missing"],
         last_updated_at=now,
     )
 

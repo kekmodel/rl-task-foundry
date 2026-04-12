@@ -25,7 +25,6 @@ from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
 )
-from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -76,16 +75,14 @@ def validate_config(
         f"max_batch_values={config.atomic_tools.max_batch_values},"
         f"float_precision={config.atomic_tools.float_precision}"
     )
-    console.print(f"float_precision={config.verification.float_precision}")
-    console.print(f"shadow_sample_rate={config.verification.shadow_sample_rate}")
     console.print(
         "synthesis_runtime="
         f"max_turns={config.synthesis.runtime.max_turns},"
         f"tracing={config.synthesis.runtime.tracing},"
         f"sdk_sessions_enabled={config.synthesis.runtime.sdk_sessions_enabled},"
         f"memory_window={config.synthesis.runtime.explicit_memory_window},"
-        "max_self_consistency_iterations="
-        f"{config.synthesis.runtime.max_self_consistency_iterations},"
+        "max_generation_attempts="
+        f"{config.synthesis.runtime.max_generation_attempts},"
         "max_difficulty_cranks="
         f"{config.synthesis.runtime.max_difficulty_cranks},"
         "max_consecutive_category_discards="
@@ -93,29 +90,8 @@ def validate_config(
         "category_backoff_duration_s="
         f"{config.synthesis.runtime.category_backoff_duration_s}"
     )
-    runtime_plan = build_runtime_isolation_plan(config)
     coverage_planner = SynthesisCoveragePlanner.for_config(config)
-    console.print(
-        "registration_lane="
-        f"mode={runtime_plan.registration_lane.worker_mode},"
-        f"db_access={runtime_plan.registration_lane.db_access_strategy},"
-        f"workers={runtime_plan.registration_lane.worker_count},"
-        f"connections_per_worker={runtime_plan.registration_lane.connections_per_worker},"
-        f"max_db_connections={runtime_plan.registration_lane.max_db_connections}"
-    )
-    console.print(
-        "solver_lane="
-        f"main_process={runtime_plan.production_solver_lane.main_process_execution},"
-        f"per_tool_subprocess={runtime_plan.production_solver_lane.per_tool_subprocess_roundtrip}"
-    )
-    console.print(
-        "registration_guards="
-        f"timeout_s={runtime_plan.registration_lane.task_timeout_s},"
-        f"memory_limit_mb={runtime_plan.registration_lane.memory_limit_mb},"
-        f"call_count_limit={runtime_plan.registration_lane.call_count_limit}"
-    )
-    console.print(f"estimated_total_db_connections={runtime_plan.estimated_total_db_connections}")
-    console.print(f"registration_policy_adr={runtime_plan.registration_lane.adr_path}")
+    console.print(f"estimated_total_db_connections={config.estimated_total_db_connections}")
     console.print(
         "dedup="
         f"exact_enabled={config.dedup.exact_enabled},"

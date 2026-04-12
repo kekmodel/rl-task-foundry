@@ -16,24 +16,12 @@ LANGUAGE_NAMES = {
 
 TASK_LANGUAGE_INSTRUCTION = (
     "Generate the user-facing question, constraint descriptions, and tie-breaker wording in "
-    "{language}. All code (solution.py, verifier.py, shadow_verifier.py), field names, and "
-    "tool calls must remain in English."
+    "{language}. All code (solution.py), field names, and tool calls must remain in English."
 )
 
 ERROR_TEMPLATES = {
-    "fetch_facts_result_not_object": (
-        "In the previous attempt, fetch_facts() returned a non-dict value. Return one dict."
-    ),
     "top_level_statement_forbidden": (
         "Do not place statements other than imports and function definitions at module top level."
-    ),
-    "facts_schema_keys_mismatch": (
-        "fetch_facts() must return exactly the expected fact keys: {expected_keys}. "
-        "The previous attempt returned: {returned_keys}."
-    ),
-    "shadow_verifier_not_independent": (
-        "shadow_verifier must not be structurally identical to verifier. Use a different "
-        "verification path."
     ),
     "execution_error": (
         "A runtime execution error occurred: {detail}. Common causes include inventing "
@@ -44,26 +32,8 @@ ERROR_TEMPLATES = {
     "call_count_limit_exceeded": (
         "Tool calls exceeded the budget. Rewrite the code to use a more efficient validation path."
     ),
-    "check_constraints_constant_boolean_return_forbidden": (
-        "check_constraints() must compute its result from facts instead of returning a constant."
-    ),
-    "fetch_facts_aggregate_call_forbidden": (
-        "Do not aggregate inside fetch_facts(). Collect raw facts there and aggregate later."
-    ),
     "canonical_answer_schema_mismatch": (
         "The solution output does not match output_schema. Return JSON that matches the schema."
-    ),
-    "fetch_facts_tools_call_required": (
-        "fetch_facts(answer, tools) must call at least one tool to gather DB-grounded facts."
-    ),
-    "fetch_facts_answer_reference_required": (
-        "fetch_facts(answer, tools) must read answer fields and use them to parameterize tool calls."
-    ),
-    "facts_match_answer_claims_facts_reference_required": (
-        "facts_match_answer_claims(answer, facts) must compare answer claims against facts."
-    ),
-    "check_constraints_facts_reference_required": (
-        "check_constraints(answer, facts) must inspect facts directly."
     ),
     "tool_return_key_not_in_returns_schema": (
         "Only access keys that are declared in the tool returns_schema."
@@ -71,12 +41,15 @@ ERROR_TEMPLATES = {
     "tool_return_key_access_forbidden": (
         "Only access named fields on object-valued tool results whose returns_schema declares them."
     ),
+    "lambda_forbidden": (
+        "Do not use lambda expressions. Write explicit local variables and loops instead."
+    ),
 }
 
 FEW_SHOT_TRIP_EXAMPLE = {
     "category": "itinerary",
     "label": {
-        "canonical_answer_json": '[{"day":1,"city":"Seoul","hotel":"Station Stay"},{"day":2,"city":"Suwon","hotel":"Fortress Hotel"}]',
+        "canonical_answer_json": '[{"activity":"Han River Night Walk","city":"Seoul","city_id":101,"day":1,"hotel":"Seoul Station Stay","total_cost":180},{"activity":"Fortress Loop Tour","city":"Suwon","city_id":102,"day":2,"hotel":"Suwon Fortress Hotel","total_cost":160}]',
         "output_schema": {
             "version": "v2",
             "root": {
@@ -88,8 +61,11 @@ FEW_SHOT_TRIP_EXAMPLE = {
                     "type": "object",
                     "fields": [
                         {"name": "day", "type": "int"},
+                        {"name": "city_id", "type": "int"},
                         {"name": "city", "type": "str"},
                         {"name": "hotel", "type": "str"},
+                        {"name": "activity", "type": "str"},
+                        {"name": "total_cost", "type": "int"},
                     ],
                 },
             },
@@ -103,7 +79,7 @@ FEW_SHOT_TRIP_EXAMPLE = {
         "instance_parameters": {},
     },
     "task": {
-        "question": "Plan a 2-day spring itinerary. Visit connected cities without repetition and choose the cheapest valid lodging each day. Break ties by city name.",
+        "question": "Plan a 2-day spring itinerary. Visit connected cities without repetition, choose the cheapest valid lodging and the first listed activity in each city, and break ties by city name.",
         "constraint_summary": [
             {
                 "key": "connected_cities_only",
@@ -114,6 +90,11 @@ FEW_SHOT_TRIP_EXAMPLE = {
                 "key": "no_repeat_city",
                 "kind": "uniqueness",
                 "summary": "Do not repeat a city.",
+            },
+            {
+                "key": "daily_budget_cap",
+                "kind": "threshold",
+                "summary": "Each day's lodging plus activity cost must stay at or below 200.",
             },
         ],
         "instance_space": {
@@ -128,7 +109,7 @@ FEW_SHOT_TRIP_EXAMPLE = {
     },
     "proposed_environment": {
         "task": {
-            "question": "Plan a 2-day spring itinerary. Visit connected cities without repetition and choose the cheapest valid lodging each day. Break ties by city name.",
+            "question": "Plan a 2-day spring itinerary. Visit connected cities without repetition, choose the cheapest valid lodging and the first listed activity in each city, and break ties by city name.",
             "category": "itinerary",
             "output_schema": {
                 "version": "v2",
@@ -141,8 +122,11 @@ FEW_SHOT_TRIP_EXAMPLE = {
                         "type": "object",
                         "fields": [
                             {"name": "day", "type": "int"},
+                            {"name": "city_id", "type": "int"},
                             {"name": "city", "type": "str"},
                             {"name": "hotel", "type": "str"},
+                            {"name": "activity", "type": "str"},
+                            {"name": "total_cost", "type": "int"},
                         ],
                     },
                 },
@@ -159,6 +143,11 @@ FEW_SHOT_TRIP_EXAMPLE = {
                     "kind": "uniqueness",
                     "summary": "Do not repeat a city.",
                 },
+                {
+                    "key": "daily_budget_cap",
+                    "kind": "threshold",
+                    "summary": "Each day's lodging plus activity cost must stay at or below 200.",
+                },
             ],
             "difficulty_vector": {
                 "search_cost": 2.0,
@@ -168,58 +157,6 @@ FEW_SHOT_TRIP_EXAMPLE = {
             "instance_parameters": {},
         },
         "solution": {"entrypoint": "solve"},
-        "verifier": {
-            "entrypoint": "verify",
-            "fetch_facts_function": "fetch_facts",
-            "facts_match_function": "facts_match_answer_claims",
-            "check_constraints_function": "check_constraints",
-            "facts_schema": {
-                "facts": [
-                    {
-                        "key": "city_path",
-                        "entity_ref": "candidate_itinerary",
-                        "attribute": "city",
-                        "value_type": "str",
-                        "nullable": False,
-                        "cardinality": "many",
-                    },
-                    {
-                        "key": "hotel_path",
-                        "entity_ref": "candidate_itinerary",
-                        "attribute": "hotel",
-                        "value_type": "str",
-                        "nullable": False,
-                        "cardinality": "many",
-                    },
-                ]
-            },
-        },
-        "shadow_verifier": {
-            "entrypoint": "verify",
-            "fetch_facts_function": "fetch_facts",
-            "facts_match_function": "facts_match_answer_claims",
-            "check_constraints_function": "check_constraints",
-            "facts_schema": {
-                "facts": [
-                    {
-                        "key": "city_path",
-                        "entity_ref": "candidate_itinerary",
-                        "attribute": "city",
-                        "value_type": "str",
-                        "nullable": False,
-                        "cardinality": "many",
-                    },
-                    {
-                        "key": "hotel_path",
-                        "entity_ref": "candidate_itinerary",
-                        "attribute": "hotel",
-                        "value_type": "str",
-                        "nullable": False,
-                        "cardinality": "many",
-                    },
-                ]
-            },
-        },
         "instance_space": {
             "anchor_query": {
                 "sql": "SELECT city_id FROM city ORDER BY city_id",
@@ -231,9 +168,7 @@ FEW_SHOT_TRIP_EXAMPLE = {
         },
     },
     "artifacts": {
-        "solution_source": "def solve(tools):\n    # grounded chain over city -> lodging\n    return []\n",
-        "verifier_source": "def fetch_facts(answer, tools):\n    return {}\n\n\ndef facts_match_answer_claims(answer, facts):\n    return True\n\n\ndef check_constraints(answer, facts):\n    return True\n\n\ndef verify(answer, tools):\n    facts = fetch_facts(answer, tools)\n    return facts_match_answer_claims(answer, facts) and check_constraints(answer, facts)\n",
-        "shadow_verifier_source": "def fetch_facts(answer, tools):\n    return {}\n\n\ndef facts_match_answer_claims(answer, facts):\n    return True\n\n\ndef check_constraints(answer, facts):\n    return True\n\n\ndef verify(answer, tools):\n    facts = fetch_facts(answer, tools)\n    return facts_match_answer_claims(answer, facts) and check_constraints(answer, facts)\n",
+        "solution_source": "def solve(tools):\n    city_ids = [101, 102]\n    answer = []\n    for day, city_id in enumerate(city_ids, start=1):\n        city = tools.get_proof_city_by_id({\"city_id\": city_id})\n        lodgings = tools.traverse_proof_city_to_proof_lodging_via_city_id({\"city_id\": city_id, \"limit\": 1})\n        activities = tools.traverse_proof_city_to_proof_activity_via_city_id({\"city_id\": city_id, \"limit\": 1})\n        lodging = lodgings[0]\n        activity = activities[0]\n        answer.append({\n            \"day\": day,\n            \"city_id\": city_id,\n            \"city\": city[\"city_name\"],\n            \"hotel\": lodging[\"lodging_name\"],\n            \"activity\": activity[\"activity_name\"],\n            \"total_cost\": lodging[\"nightly_cost\"] + activity[\"ticket_cost\"],\n        })\n    return answer\n",
     },
 }
 
@@ -404,71 +339,8 @@ def _recent_memory_lines(request: SynthesisStageRequest) -> list[str]:
     ]
 
 
-def _registration_fact_key_mismatches(
-    request: SynthesisStageRequest,
-) -> list[dict[str, object]]:
-    diagnostics = request.latest_registration_diagnostics
-    if diagnostics is None:
-        return []
-
-    mismatches: list[dict[str, object]] = []
-    for artifact_name in ("verifier", "shadow_verifier"):
-        artifact = getattr(diagnostics, artifact_name, None)
-        if artifact is None:
-            continue
-        error_codes = {
-            *artifact.static_error_codes,
-            *artifact.execution_error_codes,
-            *artifact.probe_error_codes,
-        }
-        if "facts_schema_keys_mismatch" not in error_codes:
-            continue
-        mismatches.append(
-            {
-                "artifact": artifact_name,
-                "expected_keys": list(artifact.probe_expected_fact_keys),
-                "returned_keys": list(artifact.probe_fetch_facts_return_keys),
-                "missing_keys": list(artifact.probe_missing_fact_keys),
-                "extra_keys": list(artifact.probe_extra_fact_keys),
-            }
-        )
-    return mismatches
-
-
 def _render_error_feedback(request: SynthesisStageRequest) -> list[str]:
-    diagnostics = request.latest_registration_diagnostics
-    if diagnostics is None:
-        return []
-
-    mismatch_by_artifact = {
-        mismatch["artifact"]: mismatch for mismatch in _registration_fact_key_mismatches(request)
-    }
-
-    rendered: list[str] = []
-    for code in diagnostics.error_codes:
-        template = ERROR_TEMPLATES.get(code)
-        if template is None:
-            rendered.append(f"Resolve this error before the next attempt: {code}.")
-            continue
-        if code == "facts_schema_keys_mismatch" and mismatch_by_artifact:
-            for artifact_name, mismatch in mismatch_by_artifact.items():
-                rendered.append(
-                    f"{artifact_name}: "
-                    + template.format(
-                        expected_keys=", ".join(mismatch["expected_keys"]),
-                        returned_keys=", ".join(mismatch["returned_keys"]),
-                    )
-                )
-            continue
-        rendered.append(
-            template.format(
-                expected_keys="",
-                returned_keys="",
-                detail="see registration diagnostics",
-                module_name="forbidden module",
-            )
-        )
-    return rendered
+    return []
 
 
 def _render_difficulty_feedback(request: SynthesisStageRequest) -> str | None:
@@ -684,7 +556,6 @@ def _phase_output_contract(phase: SynthesisPhase, request: SynthesisStageRequest
             item.model_dump(mode="json") for item in task_output.constraint_summary
         ]
         instance_space = task_output.instance_space.model_dump(mode="json")
-    fact_schema = _artifact_fact_schema_example(request)
     return {
         "proposed_environment": {
             "task": {
@@ -700,26 +571,10 @@ def _phase_output_contract(phase: SynthesisPhase, request: SynthesisStageRequest
                 "instance_parameters": instance_parameters,
             },
             "solution": {"entrypoint": "solve"},
-            "verifier": {
-                "entrypoint": "verify",
-                "fetch_facts_function": "fetch_facts",
-                "facts_match_function": "facts_match_answer_claims",
-                "check_constraints_function": "check_constraints",
-                "facts_schema": fact_schema,
-            },
-            "shadow_verifier": {
-                "entrypoint": "verify",
-                "fetch_facts_function": "fetch_facts",
-                "facts_match_function": "facts_match_answer_claims",
-                "check_constraints_function": "check_constraints",
-                "facts_schema": fact_schema,
-            },
             "instance_space": instance_space,
         },
         "artifacts": {
             "solution_source": "python source string",
-            "verifier_source": "python source string",
-            "shadow_verifier_source": "python source string",
         },
     }
 
@@ -760,11 +615,11 @@ def build_synthesis_phase_instructions(phase: SynthesisPhase) -> str:
         "phases are authoritative. Keep generated code aligned with them, use only English for "
         "code and field names. Do not invent new tools. `proposed_environment.task` must fully "
         "restate the authoritative question, output_schema, constraint_summary, difficulty_vector, "
-        "and instance_parameters. `verifier.facts_schema` and `shadow_verifier.facts_schema` must "
-        "declare the exact keys returned by fetch_facts(). Generated code may call only named "
+        "and instance_parameters. Generate only `solution.py`. The solution may call only named "
         "atomic tools through the `tools` object, for example `tools.get_customer_by_id(...)` or "
         "`await tools.get_customer_by_id(...)`. Never use raw SQL, `tools.query(...)`, "
-        "`tools.execute(...)`, or invented helper APIs."
+        "`tools.execute(...)`, or invented helper APIs. Do not use lambda expressions; prefer "
+        "explicit loops and named variables."
     )
 
 
@@ -859,11 +714,10 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
     else:
         sections.append(
             "# Code Goal\n"
-            "Generate solution.py, verifier.py, and shadow_verifier.py that reproduce and verify "
-            "the already-fixed label. Do not rely on text reasoning for correctness. The code must "
-            "implement the authoritative task contract exactly and each verifier must return facts "
-            "matching its declared facts_schema. Use only named atomic tools through the `tools` "
-            "object. Never use raw SQL or invented helpers such as tools.query(...)."
+            "Generate solution.py that reproduces the already-fixed label. Do not rely on text "
+            "reasoning for correctness. The code must implement the authoritative task contract "
+            "exactly. Use only named atomic tools through the `tools` object. Never use raw SQL "
+            "or invented helpers such as tools.query(...)."
         )
 
     error_feedback = _render_error_feedback(request)

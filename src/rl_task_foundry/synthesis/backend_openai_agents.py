@@ -469,37 +469,11 @@ def _coerce_phase_payload_dict(
         proposed_environment = payload.get("proposed_environment")
         if isinstance(proposed_environment, dict):
             normalized_proposed_environment = dict(proposed_environment)
-            promoted_keys = ("task", "solution", "verifier", "shadow_verifier", "instance_space")
+            promoted_keys = ("task", "solution", "instance_space")
             for key in promoted_keys:
                 if key in payload and key not in normalized_proposed_environment:
                     normalized_proposed_environment[key] = payload[key]
                     repair_codes.append("artifact_proposed_environment_nested")
-            for verifier_key in ("verifier", "shadow_verifier"):
-                verifier_payload = normalized_proposed_environment.get(verifier_key)
-                if not isinstance(verifier_payload, dict):
-                    continue
-                facts_schema = verifier_payload.get("facts_schema")
-                if not isinstance(facts_schema, dict):
-                    continue
-                facts = facts_schema.get("facts")
-                if not isinstance(facts, list):
-                    continue
-                normalized_facts: list[object] = []
-                changed = False
-                for fact in facts:
-                    normalized_fact, fact_changed, repair_code = _normalize_fact_schema_entry(fact)
-                    normalized_facts.append(normalized_fact)
-                    if fact_changed:
-                        changed = True
-                    if repair_code is not None:
-                        repair_codes.append(repair_code)
-                if changed:
-                    updated_verifier = dict(verifier_payload)
-                    updated_facts_schema = dict(facts_schema)
-                    updated_facts_schema["facts"] = normalized_facts
-                    updated_verifier["facts_schema"] = updated_facts_schema
-                    normalized_proposed_environment[verifier_key] = updated_verifier
-                    repair_codes.append("facts_schema_normalized")
             task_payload = normalized_proposed_environment.get("task")
             if isinstance(task_payload, dict):
                 task_updates: dict[str, Any] = {}
@@ -576,11 +550,7 @@ def _coerce_phase_payload_dict(
             legacy_artifacts = normalized_payload.get("artifacts")
             if isinstance(legacy_artifacts, dict):
                 normalized_artifacts = dict(legacy_artifacts)
-                for legacy_name, contract_name in (
-                    ("solution.py", "solution_source"),
-                    ("verifier.py", "verifier_source"),
-                    ("shadow_verifier.py", "shadow_verifier_source"),
-                ):
+                for legacy_name, contract_name in (("solution.py", "solution_source"),):
                     if contract_name not in normalized_artifacts and legacy_name in normalized_artifacts:
                         normalized_artifacts[contract_name] = normalized_artifacts[legacy_name]
                         repair_codes.append("artifact_key_remapped")

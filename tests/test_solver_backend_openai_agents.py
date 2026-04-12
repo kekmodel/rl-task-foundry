@@ -12,22 +12,19 @@ from rl_task_foundry.solver import backend_openai_agents as backend_module
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
 from rl_task_foundry.synthesis.contracts import (
+    AnchorQueryContract,
     CategoryTaxonomy,
     CrossInstanceSet,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
     InstanceSpaceContract,
-    MaterializedFactsSchema,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    ShadowVerifierContract,
     SolutionContract,
     TaskContract,
-    VerifierContract,
-    AnchorQueryContract,
     build_difficulty_vector,
 )
 
@@ -44,9 +41,8 @@ def _sample_episode() -> SolverEpisodeInput:
         generator_version="test-version",
         tool_signature="sha256:tool",
         task_signature="sha256:task",
-        verifier_signature="sha256:verifier",
         status=EnvironmentStatus.ACCEPTED,
-        quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
+        quality_metrics=EnvironmentQualityMetrics(),
         rollout_constraints=RolloutConstraintsContract(
             max_turns=8,
             max_episode_duration_ms=40000,
@@ -70,8 +66,6 @@ def _sample_episode() -> SolverEpisodeInput:
             ),
         ),
         solution=SolutionContract(),
-        verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
-        shadow_verifier=ShadowVerifierContract(facts_schema=MaterializedFactsSchema()),
         instance_space=InstanceSpaceContract(
             anchor_query=AnchorQueryContract(
                 sql="SELECT order_id FROM orders ORDER BY order_id",

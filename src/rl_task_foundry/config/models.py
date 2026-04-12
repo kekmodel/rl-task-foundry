@@ -75,70 +75,12 @@ class AtomicToolConfig(StrictModel):
     float_precision: int = Field(default=2, ge=0)
 
 
-class RegistrationWorkerConfig(StrictModel):
-    worker_count: int = Field(default=2, ge=1)
-    connections_per_worker: int = Field(default=2, ge=1)
-    task_timeout_s: int = Field(default=30, ge=1)
-    memory_limit_mb: int = Field(default=256, ge=64)
-    call_count_limit: int = Field(default=256, ge=1)
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def max_db_connections(self) -> int:
-        return self.worker_count * self.connections_per_worker
-
-
-class RegistrationPolicyConfig(StrictModel):
-    allowed_import_roots: list[str] = Field(
-        default_factory=lambda: [
-            "collections",
-            "datetime",
-            "decimal",
-            "json",
-            "math",
-            "re",
-            "typing",
-        ]
-    )
-    forbidden_module_roots: list[str] = Field(
-        default_factory=lambda: [
-            "asyncpg",
-            "os",
-            "pathlib",
-            "psycopg",
-            "psycopg2",
-            "socket",
-            "sqlalchemy",
-            "subprocess",
-            "sys",
-        ]
-    )
-    forbidden_symbols: list[str] = Field(
-        default_factory=lambda: [
-            "__import__",
-            "compile",
-            "eval",
-            "exec",
-            "getattr",
-            "globals",
-            "locals",
-            "open",
-            "setattr",
-            "type",
-            "vars",
-        ]
-    )
-    forbid_dunder_access: bool = True
-    require_subprocess_lane: bool = True
-    enforce_async_tool_functions: bool = True
-
-
 class SynthesisRuntimeConfig(StrictModel):
     max_turns: int = Field(default=8, ge=1)
     tracing: bool = True
     sdk_sessions_enabled: bool = True
     explicit_memory_window: int = Field(default=8, ge=1)
-    max_self_consistency_iterations: int = Field(default=5, ge=1)
+    max_generation_attempts: int = Field(default=5, ge=1)
     max_difficulty_cranks: int = Field(default=6, ge=1)
     max_consecutive_category_discards: int = Field(default=3, ge=1)
     category_backoff_duration_s: int = Field(default=3600, ge=1)
@@ -153,12 +95,6 @@ class SynthesisConfig(StrictModel):
     runtime: SynthesisRuntimeConfig = Field(default_factory=SynthesisRuntimeConfig)
     coverage_planner: SynthesisCoveragePlannerConfig = Field(
         default_factory=SynthesisCoveragePlannerConfig
-    )
-    registration_workers: RegistrationWorkerConfig = Field(
-        default_factory=RegistrationWorkerConfig
-    )
-    registration_policy: RegistrationPolicyConfig = Field(
-        default_factory=RegistrationPolicyConfig
     )
 
 
@@ -201,13 +137,6 @@ class CalibrationConfig(StrictModel):
             "deny": 2,
         }
     )
-
-
-class VerificationConfig(StrictModel):
-    require_provenance: bool = True
-    fail_on_internal_field_leak: bool = True
-    float_precision: int = Field(default=6, ge=0, le=12)
-    shadow_sample_rate: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class ProviderResilienceConfig(StrictModel):
@@ -258,7 +187,6 @@ class AppConfig(StrictModel):
     synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
     solver_runtime: SolverRuntimeConfig
     calibration: CalibrationConfig
-    verification: VerificationConfig
     dedup: DedupConfig
     budget: BudgetConfig
     privacy: PrivacyConfig
@@ -267,11 +195,7 @@ class AppConfig(StrictModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def estimated_total_db_connections(self) -> int:
-        return (
-            self.database.solver_pool_size
-            + self.database.control_pool_size
-            + self.synthesis.registration_workers.max_db_connections
-        )
+        return self.database.solver_pool_size + self.database.control_pool_size
 
     @model_validator(mode="after")
     def _validate_connection_budget(self) -> AppConfig:
