@@ -245,12 +245,34 @@ class SynthesisRuntimeError(RuntimeError):
     """Base runtime error for synthesis orchestration."""
 
 
+@dataclass(frozen=True, slots=True)
+class SynthesisBackendFailure:
+    provider: str
+    model: str
+    error_type: str
+
+
 class SynthesisPhaseExecutionError(SynthesisRuntimeError):
     """Raised when a synthesis phase fails across all candidate backends."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        phase: SynthesisPhase | None = None,
+        backend_failures: list[SynthesisBackendFailure] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.phase = phase
+        self.backend_failures = tuple(backend_failures or [])
 
 
 class SynthesisProviderUnavailableError(SynthesisRuntimeError):
     """Raised when all provider candidates are currently unavailable."""
+
+    def __init__(self, message: str, *, phase: SynthesisPhase | None = None) -> None:
+        super().__init__(message)
+        self.phase = phase
 
 
 class SynthesisCategoryMismatchError(SynthesisRuntimeError):
@@ -784,6 +806,7 @@ class SynthesisAgentRuntime:
             )
 
         errors: list[str] = []
+        backend_failures: list[SynthesisBackendFailure] = []
         for backend in candidate_backends:
             breaker = self._breakers[backend.provider_name]
             if not breaker.is_available():
@@ -793,6 +816,13 @@ class SynthesisAgentRuntime:
             except Exception as exc:  # pragma: no cover
                 breaker.record_failure()
                 errors.append(f"{backend.provider_name}/{backend.model_name}: {type(exc).__name__}")
+                backend_failures.append(
+                    SynthesisBackendFailure(
+                        provider=backend.provider_name,
+                        model=backend.model_name,
+                        error_type=type(exc).__name__,
+                    )
+                )
                 continue
             breaker.record_success()
             return result
@@ -800,10 +830,13 @@ class SynthesisAgentRuntime:
         if errors:
             raise SynthesisPhaseExecutionError(
                 f"synthesis phase {request.phase.value} failed across candidate providers: "
-                + ", ".join(errors)
+                + ", ".join(errors),
+                phase=request.phase,
+                backend_failures=backend_failures,
             )
         raise SynthesisProviderUnavailableError(
-            f"all providers are in cooldown for synthesis phase {request.phase.value}"
+            f"all providers are in cooldown for synthesis phase {request.phase.value}",
+            phase=request.phase,
         )
 
     async def _run_artifact_generation_with_self_consistency(

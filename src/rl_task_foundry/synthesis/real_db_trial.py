@@ -24,6 +24,9 @@ from rl_task_foundry.synthesis.environment_registry import (
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
+    SynthesisBackendFailure,
+    SynthesisPhaseExecutionError,
+    SynthesisProviderUnavailableError,
     SynthesisRuntimeError,
     SynthesisSelfConsistencyError,
 )
@@ -48,6 +51,8 @@ class RealDbTrialSummary:
     quality_gate_status: str | None = None
     synthesis_error_type: str | None = None
     synthesis_error_message: str | None = None
+    synthesis_phase: str | None = None
+    backend_failures: tuple[str, ...] = ()
     attempt_outcomes: tuple[str, ...] = ()
     error_codes: tuple[str, ...] = ()
     cross_instance_error_codes: tuple[str, ...] = ()
@@ -101,6 +106,31 @@ class RealDbTrialRunner:
                     db_id=db_id,
                     category=category,
                     exc=exc,
+                )
+            )
+        except SynthesisPhaseExecutionError as exc:
+            return self._write_summary(
+                RealDbTrialSummary(
+                    db_id=db_id,
+                    requested_category=category,
+                    trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+                    summary_path=summary_path,
+                    synthesis_error_type=type(exc).__name__,
+                    synthesis_error_message=str(exc),
+                    synthesis_phase=exc.phase.value if exc.phase is not None else None,
+                    backend_failures=_encode_backend_failures(exc.backend_failures),
+                )
+            )
+        except SynthesisProviderUnavailableError as exc:
+            return self._write_summary(
+                RealDbTrialSummary(
+                    db_id=db_id,
+                    requested_category=category,
+                    trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+                    summary_path=summary_path,
+                    synthesis_error_type=type(exc).__name__,
+                    synthesis_error_message=str(exc),
+                    synthesis_phase=exc.phase.value if exc.phase is not None else None,
                 )
             )
         except SynthesisRuntimeError as exc:
@@ -248,3 +278,9 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
         deduped.append(value)
         seen.add(value)
     return deduped
+
+
+def _encode_backend_failures(
+    failures: tuple[SynthesisBackendFailure, ...] | list[SynthesisBackendFailure],
+) -> tuple[str, ...]:
+    return tuple(f"{failure.provider}/{failure.model}:{failure.error_type}" for failure in failures)

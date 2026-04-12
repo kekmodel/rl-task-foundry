@@ -223,6 +223,8 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 summary_path=output_dir / "trial_summary.json",
                 env_id="env_real_trial",
                 quality_gate_status="accept",
+                synthesis_phase=None,
+                backend_failures=(),
                 solver_pass_rate=0.5,
                 solver_ci_low=0.2,
                 solver_ci_high=0.8,

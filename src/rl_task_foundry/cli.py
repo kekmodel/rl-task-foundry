@@ -412,6 +412,10 @@ def run_real_db_trial(
             console.print(f"synthesis_error_type={summary.synthesis_error_type}")
         if summary.synthesis_error_message is not None:
             console.print(f"synthesis_error_message={summary.synthesis_error_message}")
+        if summary.synthesis_phase is not None:
+            console.print(f"synthesis_phase={summary.synthesis_phase}")
+        if summary.backend_failures:
+            console.print(f"backend_failures={list(summary.backend_failures)}")
         if summary.solver_pass_rate is not None:
             console.print(f"solver_pass_rate={summary.solver_pass_rate}")
         if summary.solver_ci_low is not None:

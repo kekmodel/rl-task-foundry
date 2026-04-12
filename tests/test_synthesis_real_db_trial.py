@@ -21,6 +21,9 @@ from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialStatus,
 )
 from rl_task_foundry.synthesis.runtime import (
+    SynthesisBackendFailure,
+    SynthesisPhase,
+    SynthesisPhaseExecutionError,
     SynthesisSelfConsistencyAttempt,
     SynthesisSelfConsistencyDiagnostics,
     SynthesisSelfConsistencyError,
@@ -187,6 +190,62 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert payload["trial_status"] == "accepted"
     assert payload["env_id"] == "env_real_trial"
     assert payload["quality_gate_status"] == "accept"
+
+
+@pytest.mark.asyncio
+async def test_real_db_trial_runner_captures_phase_execution_taxonomy(
+    tmp_path: Path,
+) -> None:
+    exc = SynthesisPhaseExecutionError(
+        "synthesis phase schema_exploration failed across candidate providers: "
+        "codex_oauth/gpt-5.4-mini: ModelBehaviorError",
+        phase=SynthesisPhase.SCHEMA_EXPLORATION,
+        backend_failures=[
+            SynthesisBackendFailure(
+                provider="codex_oauth",
+                model="gpt-5.4-mini",
+                error_type="ModelBehaviorError",
+            )
+        ],
+    )
+    runtime = _FakeSynthesisRuntime(exc=exc)
+    orchestrator = _FakeEnvironmentOrchestrator(
+        summary=_rollout_summary(env_id="unused", matched=1, total=2)
+    )
+    registry = _FakeRegistry(
+        result=EnvironmentRegistryCommitResult(
+            status=EnvironmentRegistryCommitStatus.COMMITTED,
+            env_id="unused",
+            exact_signature="sha256:unused",
+            difficulty_band=DifficultyBand.UNSET,
+            filesystem_path=tmp_path / "unused",
+        )
+    )
+    exporter = _FakeExporter()
+    runner = RealDbTrialRunner(
+        _config_with_tmp_traces(tmp_path),
+        synthesis_runtime=runtime,
+        environment_orchestrator=orchestrator,
+        registry=registry,
+        exporter=exporter,
+    )
+
+    try:
+        summary = await runner.run(
+            tmp_path / "real_trial_phase_failure",
+            db_id="sakila",
+            category=CategoryTaxonomy.ASSIGNMENT,
+        )
+    finally:
+        await runner.close()
+
+    assert summary.trial_status is RealDbTrialStatus.SYNTHESIS_FAILED
+    assert summary.synthesis_error_type == "SynthesisPhaseExecutionError"
+    assert summary.synthesis_phase == "schema_exploration"
+    assert summary.backend_failures == ("codex_oauth/gpt-5.4-mini:ModelBehaviorError",)
+    assert not registry.committed_drafts
+    assert not exporter.calls
+    assert not orchestrator.calls
 
 
 @pytest.mark.asyncio
