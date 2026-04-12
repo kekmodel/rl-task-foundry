@@ -7,6 +7,10 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolGenerator,
     AtomicToolResultMode,
 )
+from rl_task_foundry.synthesis.atomic_tool_materializer import (
+    AtomicToolMaterialization,
+    AtomicToolMaterializer,
+)
 from rl_task_foundry.synthesis.canonicalize import (
     CanonicalizationError,
     RewardResult,
@@ -168,6 +172,8 @@ __all__ = [
     "AtomicToolDefinition",
     "AtomicToolFamily",
     "AtomicToolGenerator",
+    "AtomicToolMaterialization",
+    "AtomicToolMaterializer",
     "AtomicToolResultMode",
     "AnchorQueryContract",
     "CanonicalizationError",

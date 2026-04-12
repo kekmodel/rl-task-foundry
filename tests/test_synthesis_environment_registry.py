@@ -231,6 +231,8 @@ def test_environment_registry_writer_commits_bundle_and_updates_index(tmp_path: 
     assert (env_dir / "verifier.py").exists()
     assert (env_dir / "shadow_verifier.py").exists()
     assert (env_dir / "registry_metadata.json").exists()
+    assert (tmp_path / "databases" / "sakila" / "atomic_tools.py").exists()
+    assert (tmp_path / "databases" / "sakila" / "atomic_tool_definitions.json").exists()
     assert writer.environment_count() == 1
     assert writer.coverage_snapshot() == {
         "db=sakila|category=assignment|difficulty_band=medium": 1

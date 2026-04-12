@@ -18,6 +18,7 @@ from datasketch import MinHash, MinHashLSH
 import yaml
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
     EnvironmentContract,
@@ -163,9 +164,17 @@ class EnvironmentRegistryWriter:
         default_factory=dict,
         repr=False,
     )
+    atomic_tool_materializer: AtomicToolMaterializer | None = field(
+        default=None,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        if self.atomic_tool_materializer is None:
+            self.atomic_tool_materializer = AtomicToolMaterializer(
+                root_dir=self.root_dir.parent / "databases"
+            )
         self._bootstrap()
 
     @classmethod
@@ -235,6 +244,8 @@ class EnvironmentRegistryWriter:
             difficulty_band,
             semantic_text,
         )
+        assert self.atomic_tool_materializer is not None
+        self.atomic_tool_materializer.materialize_bundle(draft.atomic_tool_bundle)
 
         try:
             with self._connect() as conn:

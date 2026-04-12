@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from rl_task_foundry.config import load_config
-from rl_task_foundry.config.models import ModelRef, ProviderConfig
+from rl_task_foundry.config.models import ModelRef, OutputConfig, ProviderConfig
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
+from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
 from rl_task_foundry.synthesis import backend_openai_agents as backend_module
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import (
@@ -142,6 +142,18 @@ def _sample_graph() -> SchemaGraph:
             )
         ],
     )
+
+
+def _config_with_synthesis_output(tmp_path):
+    config = load_config("rl_task_foundry.yaml")
+    output = OutputConfig(
+        run_db_path=tmp_path / "run.db",
+        accepted_jsonl_path=tmp_path / "accepted.jsonl",
+        rejected_jsonl_path=tmp_path / "rejected.jsonl",
+        events_jsonl_path=tmp_path / "events.jsonl",
+        traces_dir=tmp_path / "traces",
+    )
+    return config.model_copy(update={"output": output}, deep=True)
 
 
 def _sample_proposed_environment(
@@ -523,6 +535,61 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.registration_diagnostics.verifier.probe_fetch_facts_return_keys == ["city"]
     assert [entry.phase for entry in draft.memory] == list(SynthesisPhase)
     assert draft.provider_status["codex_oauth"].observed_at.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_materializes_atomic_tool_bundle_once(
+    tmp_path,
+    monkeypatch,
+):
+    config = _config_with_synthesis_output(tmp_path)
+    payloads = _payloads()
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=payloads,
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+    generate_calls: list[str] = []
+    original_generate_bundle = AtomicToolGenerator.generate_bundle
+
+    def _wrapped_generate_bundle(self, graph, *, db_id: str):
+        generate_calls.append(db_id)
+        return original_generate_bundle(self, graph, db_id=db_id)
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
+    monkeypatch.setattr(AtomicToolGenerator, "generate_bundle", _wrapped_generate_bundle)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    first = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+    second = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    bundle_dir = tmp_path / "databases" / "sakila"
+    assert generate_calls == ["sakila"]
+    assert bundle_dir.joinpath("atomic_tools.py").exists()
+    assert bundle_dir.joinpath("atomic_tool_definitions.json").exists()
+    assert first.atomic_tool_bundle.source == second.atomic_tool_bundle.source
+    assert (
+        bundle_dir.joinpath("atomic_tools.py").read_text(encoding="utf-8")
+        == first.atomic_tool_bundle.source
+    )
 
 
 @pytest.mark.asyncio

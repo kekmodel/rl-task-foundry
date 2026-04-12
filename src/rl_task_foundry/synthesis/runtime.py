@@ -38,6 +38,7 @@ from rl_task_foundry.synthesis.contracts import (
     VerifierContract,
 )
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
+from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.registration_runner import (
     GeneratedArtifactBundle,
     RegistrationArtifactName,
@@ -444,6 +445,9 @@ class SynthesisAgentRuntime:
         default_factory=asyncio.Lock, init=False, repr=False
     )
     _atomic_tool_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _atomic_tool_materializer: AtomicToolMaterializer | None = field(
+        default=None, init=False, repr=False
+    )
     _category_state_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
@@ -478,6 +482,7 @@ class SynthesisAgentRuntime:
             )
             for provider_name in self.config.providers
         }
+        self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
 
     async def synthesize_environment_draft(
         self,
@@ -1003,6 +1008,8 @@ class SynthesisAgentRuntime:
                 graph,
                 db_id=db_id,
             )
+            assert self._atomic_tool_materializer is not None
+            self._atomic_tool_materializer.materialize_bundle(bundle)
             self._atomic_tool_bundles[db_id] = bundle
             return bundle
 
