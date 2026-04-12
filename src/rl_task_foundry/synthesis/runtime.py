@@ -21,7 +21,6 @@ from rl_task_foundry.pipeline.provider_resilience import (
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.synthesis.contracts import (
-    CategoryTaxonomy,
     ConstraintSummaryItem,
     CrossInstanceSet,
     DIFFICULTY_CRANK_ORDER,
@@ -32,15 +31,16 @@ from rl_task_foundry.synthesis.contracts import (
     EnvironmentStatus,
     InstanceContract,
     InstanceSpaceContract,
+    TopicName,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    SolutionContract,
     StrictModel,
     TaskContract,
     difficulty_vector_json,
     flatten_difficulty_vector,
+    normalize_topic,
 )
 from rl_task_foundry.synthesis.canonicalize import (
     CanonicalizationError,
@@ -55,6 +55,7 @@ from rl_task_foundry.synthesis.phase_monitor import (
 )
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
+from rl_task_foundry.synthesis.schema_inference import extract_output_schema_from_canonical
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
     bind_atomic_tool_executor,
@@ -67,7 +68,7 @@ RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
         "env_id",
         "db_id",
         "domain",
-        "category",
+        "topic",
         "atomic_tool_set_ref",
         "difficulty_vector",
         "created_at",
@@ -86,7 +87,6 @@ class SynthesisPhase(StrEnum):
     CATEGORY_INFERENCE = "category_inference"
     LABEL_CONSTRUCTION = "label_construction"
     TASK_SYNTHESIS = "task_synthesis"
-    ARTIFACT_GENERATION = "artifact_generation"
 
 
 class SynthesisProviderStatus(StrictModel):
@@ -100,7 +100,7 @@ class SynthesisProviderStatus(StrictModel):
 
 class SynthesisCategoryStatus(StrictModel):
     db_id: str
-    category: CategoryTaxonomy
+    topic: str
     consecutive_discards: int
     backed_off: bool
     backoff_until: datetime | None = None
@@ -109,13 +109,28 @@ class SynthesisCategoryStatus(StrictModel):
     last_error_codes: list[str] = Field(default_factory=list)
     last_updated_at: datetime | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_category_key(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "topic" not in payload and "category" in payload:
+            payload["topic"] = payload.pop("category")
+        return payload
+
     @model_validator(mode="after")
     def _validate_timezones(self) -> SynthesisCategoryStatus:
+        self.topic = normalize_topic(self.topic)
         if self.backoff_until is not None and self.backoff_until.tzinfo is None:
             raise ValueError("backoff_until must be timezone-aware")
         if self.last_updated_at is not None and self.last_updated_at.tzinfo is None:
             raise ValueError("last_updated_at must be timezone-aware")
         return self
+
+    @property
+    def category(self) -> TopicName:
+        return TopicName(self.topic)
 
 
 class SynthesisMemoryEntry(StrictModel):
@@ -140,20 +155,38 @@ class SynthesisToolTraceEntry(StrictModel):
 
 class SchemaExplorationOutput(StrictModel):
     domain_hypothesis: str
-    candidate_categories: list[CategoryTaxonomy] = Field(min_length=1)
+    candidate_topics: list[str] = Field(min_length=1)
     sample_observations: list[str] = Field(default_factory=list, min_length=1)
     memory_summary: str = "schema exploration completed"
 
+    @model_validator(mode="after")
+    def _validate_topics(self) -> SchemaExplorationOutput:
+        self.candidate_topics = [normalize_topic(topic) for topic in self.candidate_topics]
+        return self
+
+    @property
+    def candidate_categories(self) -> list[TopicName]:
+        return [TopicName(topic) for topic in self.candidate_topics]
+
 
 class CategoryInferenceOutput(StrictModel):
-    selected_category: CategoryTaxonomy
+    selected_topic: str
     rationale: str
     memory_summary: str = "category inference completed"
+
+    @model_validator(mode="after")
+    def _validate_topic(self) -> CategoryInferenceOutput:
+        self.selected_topic = normalize_topic(self.selected_topic)
+        return self
+
+    @property
+    def selected_category(self) -> TopicName:
+        return TopicName(self.selected_topic)
 
 
 class LabelConstructionOutput(StrictModel):
     canonical_answer_json: str = Field(min_length=1)
-    output_schema: OutputSchemaContract
+    anchor_entity: dict[str, object] = Field(default_factory=dict)
     difficulty_vector: DifficultyVectorContract = Field(default_factory=DifficultyVectorContract)
     instance_parameters: dict[str, object] = Field(default_factory=dict)
     label_summary: str
@@ -169,19 +202,8 @@ class TaskSynthesisOutput(StrictModel):
 
 class ProposedEnvironmentDraft(StrictModel):
     task: TaskContract
-    solution: SolutionContract
     instance_space: InstanceSpaceContract
     cross_instance_set: CrossInstanceSet = Field(default_factory=CrossInstanceSet)
-
-
-class GeneratedArtifactBundle(StrictModel):
-    solution_source: str
-
-
-class ArtifactGenerationOutput(StrictModel):
-    proposed_environment: ProposedEnvironmentDraft
-    artifacts: GeneratedArtifactBundle
-    memory_summary: str = "artifact generation completed"
 
 
 SynthesisPhaseOutput = (
@@ -189,7 +211,6 @@ SynthesisPhaseOutput = (
     | CategoryInferenceOutput
     | LabelConstructionOutput
     | TaskSynthesisOutput
-    | ArtifactGenerationOutput
 )
 
 
@@ -201,7 +222,7 @@ class SynthesisStageRequest(StrictModel):
     domain_name: str
     task_language: str = "ko"
     scenario_description: str
-    requested_category: CategoryTaxonomy | None = None
+    requested_topic: str | None = None
     attempt_index: int = 1
     schema_summary: dict[str, object] = Field(default_factory=dict)
     previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput] = Field(default_factory=dict)
@@ -217,6 +238,12 @@ class SynthesisStageRequest(StrictModel):
     current_scale: int | None = Field(default=None, ge=0)
     crank_hint: str | None = None
     latest_quality_gate_feedback: SynthesisQualityGateFeedback | None = None
+
+    @property
+    def requested_category(self) -> TopicName | None:
+        if self.requested_topic is None:
+            return None
+        return TopicName(self.requested_topic)
 
 
 class SynthesisStageResult(StrictModel):
@@ -242,7 +269,11 @@ class SynthesisQualityGateFeedback(StrictModel):
     previous_semantic_dedup_text: str | None = None
     previous_difficulty_vector: DifficultyVectorContract | None = None
     previous_canonical_answers: list[str] = Field(default_factory=list)
-    previous_solution_fingerprints: list[str] = Field(default_factory=list)
+    previous_label_signatures: list[str] = Field(default_factory=list)
+
+    @property
+    def previous_solution_fingerprints(self) -> list[str]:
+        return self.previous_label_signatures
 
 
 class SynthesisDifficultyRetrySeed(StrictModel):
@@ -278,18 +309,21 @@ class MaterializedCanonicalAnswerRecord(StrictModel):
     instance_id: str
     canonical_answer: object
     canonical_answer_json: str
-    solution_fingerprint: str
+    label_signature: str
+
+    @property
+    def solution_fingerprint(self) -> str:
+        return self.label_signature
 
 
 class SynthesisEnvironmentDraft(StrictModel):
     created_at: datetime
     db_id: str
-    requested_category: CategoryTaxonomy
+    requested_topic: str
     schema_summary: dict[str, object] = Field(default_factory=dict)
-    selected_category: CategoryTaxonomy
+    selected_topic: str
     environment: EnvironmentContract
     atomic_tool_bundle: AtomicToolBundle
-    artifacts: GeneratedArtifactBundle
     instances: list[MaterializedInstanceRecord] = Field(default_factory=list)
     canonical_answers: list[MaterializedCanonicalAnswerRecord] = Field(default_factory=list)
     generation_attempts: list[SynthesisGenerationAttempt] = Field(default_factory=list)
@@ -398,7 +432,7 @@ class SynthesisCategoryBackoffError(SynthesisRuntimeError):
         message: str,
         *,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
         consecutive_discards: int,
         backoff_until: datetime,
         last_outcome: SynthesisGenerationOutcome | None = None,
@@ -406,11 +440,15 @@ class SynthesisCategoryBackoffError(SynthesisRuntimeError):
     ) -> None:
         super().__init__(message)
         self.db_id = db_id
-        self.category = category
+        self.topic = topic
         self.consecutive_discards = consecutive_discards
         self.backoff_until = backoff_until
         self.last_outcome = last_outcome
         self.last_error_codes = list(last_error_codes or [])
+
+    @property
+    def category(self) -> TopicName:
+        return TopicName(self.topic)
 
 
 @dataclass(slots=True)
@@ -557,27 +595,15 @@ def _output_slot_count(field: OutputFieldContract) -> int:
 def _search_cost_diversity(
     *,
     graph: SchemaGraph,
-    bundle: GeneratedArtifactBundle | None,
     available_atomic_tools: list[dict[str, object]],
+    task: TaskContract | None,
 ) -> int:
-    if bundle is None:
+    if task is None:
         return 0
-    tool_names = [
-        str(tool["name"])
-        for tool in available_atomic_tools
-        if isinstance(tool, dict) and isinstance(tool.get("name"), str)
-    ]
-    source = bundle.solution_source
-    referenced_tool_names = [name for name in tool_names if f"tools.{name}(" in source]
-    referenced_tables: set[str] = set()
-    for name in referenced_tool_names:
-        for table in graph.tables:
-            table_slug = table.table_name.lower()
-            if table_slug in name:
-                referenced_tables.add(table.qualified_name)
-    if referenced_tables:
-        return len(referenced_tables)
-    return len(referenced_tool_names)
+    return min(
+        max(1, int(task.difficulty_vector.search_cost)),
+        max(1, len(graph.tables)),
+    )
 
 
 def _search_cost_max_diversity(graph: SchemaGraph) -> int:
@@ -586,21 +612,12 @@ def _search_cost_max_diversity(graph: SchemaGraph) -> int:
 
 def _search_cost_scale(
     *,
-    bundle: GeneratedArtifactBundle | None,
+    task: TaskContract | None,
     available_atomic_tools: list[dict[str, object]],
 ) -> int:
-    if bundle is None:
+    if task is None:
         return 0
-    tool_names = [
-        str(tool["name"])
-        for tool in available_atomic_tools
-        if isinstance(tool, dict) and isinstance(tool.get("name"), str)
-    ]
-    source = bundle.solution_source
-    total_calls = 0
-    for name in tool_names:
-        total_calls += source.count(f"tools.{name}(")
-    return total_calls
+    return max(1, len(task.instance_parameters) or len(available_atomic_tools) // 16 or 1)
 
 
 def _solution_space_diversity(task: TaskContract | None) -> int:
@@ -689,7 +706,6 @@ def _difficulty_guidance(
     *,
     graph: SchemaGraph,
     task: TaskContract | None,
-    bundle: GeneratedArtifactBundle | None,
     available_atomic_tools: list[dict[str, object]],
     history: list[DifficultyAxis],
 ) -> tuple[DifficultyAxis, int, int, int, str]:
@@ -697,12 +713,12 @@ def _difficulty_guidance(
     if axis is DifficultyAxis.SEARCH_COST:
         current_diversity = _search_cost_diversity(
             graph=graph,
-            bundle=bundle,
             available_atomic_tools=available_atomic_tools,
+            task=task,
         )
         max_diversity = _search_cost_max_diversity(graph)
         current_scale = _search_cost_scale(
-            bundle=bundle,
+            task=task,
             available_atomic_tools=available_atomic_tools,
         )
         if current_diversity < max_diversity:
@@ -776,7 +792,7 @@ class SynthesisAgentRuntime:
     )
     _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
     _bound_db_id: str | None = field(default=None, init=False, repr=False)
-    _category_failures: dict[tuple[str, CategoryTaxonomy], _CategoryFailureState] = field(
+    _category_failures: dict[tuple[str, str], _CategoryFailureState] = field(
         default_factory=dict, init=False, repr=False
     )
     _bind_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
@@ -810,7 +826,6 @@ class SynthesisAgentRuntime:
                     SynthesisPhase.CATEGORY_INFERENCE,
                     SynthesisPhase.LABEL_CONSTRUCTION,
                     SynthesisPhase.TASK_SYNTHESIS,
-                    SynthesisPhase.ARTIFACT_GENERATION,
                 )
             }
         self._breakers = {
@@ -836,12 +851,13 @@ class SynthesisAgentRuntime:
         self,
         *,
         db_id: str,
-        requested_category: CategoryTaxonomy,
+        requested_topic: str,
         graph: SchemaGraph | None = None,
         retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> SynthesisEnvironmentDraft:
+        requested_topic = normalize_topic(requested_topic)
         await self._bind_db_id(db_id)
-        await self._ensure_category_available(db_id, requested_category)
+        await self._ensure_category_available(db_id, requested_topic)
         resolved_graph = graph if graph is not None else await self._introspect_graph()
         atomic_tool_bundle = await self._ensure_atomic_tool_bundle(
             db_id=db_id,
@@ -871,7 +887,7 @@ class SynthesisAgentRuntime:
                     available_atomic_tools=available_atomic_tools,
                     domain_name=self.config.domain.name,
                     scenario_description=self.config.domain.scenario_description,
-                    requested_category=requested_category,
+                    requested_topic=requested_topic,
                     attempt_index=1,
                     schema_summary=schema_summary,
                     previous_outputs=previous_outputs,
@@ -887,22 +903,22 @@ class SynthesisAgentRuntime:
 
             category_payload = previous_outputs[SynthesisPhase.CATEGORY_INFERENCE]
             assert isinstance(category_payload, CategoryInferenceOutput)
-            selected_category = category_payload.selected_category
-            if selected_category != requested_category:
+            selected_topic = category_payload.selected_topic
+            if selected_topic != requested_topic:
                 raise SynthesisCategoryMismatchError(
-                    "category inference result did not match the requested category"
+                    "category inference result did not match the requested topic"
                 )
 
             (
-                proposed_environment,
-                artifacts,
+                task,
+                instance_space,
                 instances,
                 canonical_answers,
                 materialized_cross_instance_set,
                 generation_attempts,
             ) = await self._run_label_first_generation_loop(
                 db_id=db_id,
-                requested_category=requested_category,
+                requested_topic=requested_topic,
                 graph=resolved_graph,
                 schema_summary=schema_summary,
                 previous_outputs=previous_outputs,
@@ -916,24 +932,24 @@ class SynthesisAgentRuntime:
 
             materialized_at = datetime.now(timezone.utc)
             environment = self._materialize_environment(
-                proposed_environment=proposed_environment,
                 atomic_tool_bundle=atomic_tool_bundle,
                 db_id=db_id,
-                requested_category=requested_category,
+                requested_topic=requested_topic,
                 created_at=materialized_at,
                 materialized_cross_instance_set=materialized_cross_instance_set,
+                task=task,
+                instance_space=instance_space,
             )
-            await self._reset_category_failure_state(db_id, requested_category)
+            await self._reset_category_failure_state(db_id, requested_topic)
 
             return SynthesisEnvironmentDraft(
                 created_at=materialized_at,
                 db_id=db_id,
-                requested_category=requested_category,
+                requested_topic=requested_topic,
                 schema_summary=schema_summary,
-                selected_category=selected_category,
+                selected_topic=selected_topic,
                 environment=environment,
                 atomic_tool_bundle=atomic_tool_bundle,
-                artifacts=artifacts,
                 instances=instances,
                 canonical_answers=canonical_answers,
                 generation_attempts=generation_attempts,
@@ -945,7 +961,7 @@ class SynthesisAgentRuntime:
         except SynthesisCategoryMismatchError:
             await self._record_category_discard(
                 db_id,
-                requested_category,
+                requested_topic,
                 outcome=SynthesisGenerationOutcome.CATEGORY_MISMATCH,
                 error_codes=["category_mismatch"],
             )
@@ -954,7 +970,7 @@ class SynthesisAgentRuntime:
             last_attempt = exc.attempts[-1] if exc.attempts else None
             await self._record_category_discard(
                 db_id,
-                requested_category,
+                requested_topic,
                 outcome=last_attempt.outcome if last_attempt is not None else None,
                 error_codes=(
                     list(exc.last_artifact_diagnostics.error_codes)
@@ -992,15 +1008,6 @@ class SynthesisAgentRuntime:
             diagnostics=diagnostics,
         )
 
-    @staticmethod
-    def _artifact_present_fields(bundle: GeneratedArtifactBundle) -> list[str]:
-        payload = bundle.model_dump(mode="python")
-        return sorted(
-            key
-            for key, value in payload.items()
-            if isinstance(value, str) and value.strip()
-        )
-
     def _expected_contract_for_request(
         self,
         request: SynthesisStageRequest,
@@ -1009,11 +1016,7 @@ class SynthesisAgentRuntime:
             "db_id": request.db_id,
             "phase": request.phase.value,
             "attempt_index": request.attempt_index,
-            "requested_category": (
-                request.requested_category.value
-                if request.requested_category is not None
-                else None
-            ),
+            "requested_topic": request.requested_topic,
             "atomic_tool_count": len(request.available_atomic_tools),
             "memory_window_size": len(request.memory),
         }
@@ -1022,11 +1025,11 @@ class SynthesisAgentRuntime:
                 {
                     "required_fields": [
                         "domain_hypothesis",
-                        "candidate_categories",
+                        "candidate_topics",
                         "sample_observations",
                         "memory_summary",
                     ],
-                    "candidate_categories_min_length": 1,
+                    "candidate_topics_min_length": 1,
                     "sample_observations_min_length": 1,
                     "must_use_live_atomic_tools": True,
                 }
@@ -1036,11 +1039,11 @@ class SynthesisAgentRuntime:
             base.update(
                 {
                     "required_fields": [
-                        "selected_category",
+                        "selected_topic",
                         "rationale",
                         "memory_summary",
                     ],
-                    "must_match_requested_category": request.requested_category is not None,
+                    "must_match_requested_topic": request.requested_topic is not None,
                 }
             )
             return base
@@ -1049,7 +1052,7 @@ class SynthesisAgentRuntime:
                 {
                     "required_fields": [
                         "canonical_answer_json",
-                        "output_schema",
+                        "anchor_entity",
                         "difficulty_vector",
                         "label_summary",
                         "memory_summary",
@@ -1071,39 +1074,6 @@ class SynthesisAgentRuntime:
                 }
             )
             return base
-        base.update(
-            {
-                "required_fields": [
-                    "proposed_environment",
-                    "artifacts",
-                    "memory_summary",
-                ],
-                "required_proposed_environment_sections": [
-                    "task",
-                    "solution",
-                    "instance_space",
-                ],
-                "required_artifact_fields": ["solution_source"],
-                "must_match_requested_category": True,
-                "difficulty_crank_index": request.difficulty_crank_index,
-                "difficulty_crank_history": [axis.value for axis in request.difficulty_crank_history],
-                "strongest_difficulty_vector": difficulty_vector_json(
-                    request.strongest_difficulty_vector
-                ),
-                "next_crank_axis": (
-                    request.next_crank_axis.value if request.next_crank_axis is not None else None
-                ),
-                "current_diversity": request.current_diversity,
-                "max_diversity": request.max_diversity,
-                "current_scale": request.current_scale,
-                "crank_hint": request.crank_hint,
-                "latest_quality_gate_feedback": (
-                    request.latest_quality_gate_feedback.model_dump(mode="json")
-                    if request.latest_quality_gate_feedback is not None
-                    else None
-                ),
-            }
-        )
         return base
 
     def _actual_data_for_stage_result(
@@ -1114,23 +1084,23 @@ class SynthesisAgentRuntime:
         if isinstance(payload, SchemaExplorationOutput):
             return {
                 "domain_hypothesis": payload.domain_hypothesis,
-                "candidate_categories": [category.value for category in payload.candidate_categories],
+                "candidate_topics": list(payload.candidate_topics),
                 "sample_observations": list(payload.sample_observations),
                 "memory_summary": payload.memory_summary,
             }
         if isinstance(payload, CategoryInferenceOutput):
             return {
-                "selected_category": payload.selected_category.value,
+                "selected_topic": payload.selected_topic,
                 "rationale": payload.rationale,
                 "memory_summary": payload.memory_summary,
             }
         if isinstance(payload, LabelConstructionOutput):
             return {
                 "canonical_answer_json": payload.canonical_answer_json,
+                "anchor_entity": dict(payload.anchor_entity),
                 "difficulty_vector": difficulty_vector_json(payload.difficulty_vector),
                 "instance_parameter_keys": sorted(payload.instance_parameters.keys()),
                 "label_summary": payload.label_summary,
-                "output_schema_root_type": payload.output_schema.root.type.value,
                 "memory_summary": payload.memory_summary,
             }
         if isinstance(payload, TaskSynthesisOutput):
@@ -1141,19 +1111,7 @@ class SynthesisAgentRuntime:
                 "instance_space_anchor_outputs": list(payload.instance_space.anchor_query.outputs),
                 "memory_summary": payload.memory_summary,
             }
-        proposed_environment = payload.proposed_environment
-        task = proposed_environment.task
-        return {
-            "task_category": task.category.value,
-            "question": task.question,
-            "difficulty_vector": difficulty_vector_json(task.difficulty_vector),
-            "user_prompt_preview": build_rendered_user_prompt(task),
-            "output_schema_root_type": task.output_schema.root.type.value,
-            "constraint_count": len(task.constraint_summary),
-            "instance_parameter_keys": sorted(task.instance_parameters.keys()),
-            "artifact_fields_present": self._artifact_present_fields(payload.artifacts),
-            "memory_summary": payload.memory_summary,
-        }
+        return {}
 
     def _checks_for_stage_result(
         self,
@@ -1164,22 +1122,21 @@ class SynthesisAgentRuntime:
         if isinstance(payload, SchemaExplorationOutput):
             return {
                 "domain_hypothesis_present": bool(payload.domain_hypothesis.strip()),
-                "candidate_categories_non_empty": len(payload.candidate_categories) > 0,
+                "candidate_topics_non_empty": len(payload.candidate_topics) > 0,
                 "sample_observations_non_empty": len(payload.sample_observations) > 0,
                 "tool_traces_present": len(result.tool_traces) > 0,
-                "requested_category_in_candidates": (
-                    request.requested_category.value
-                    in [category.value for category in payload.candidate_categories]
-                    if request.requested_category is not None
+                "requested_topic_in_candidates": (
+                    request.requested_topic in payload.candidate_topics
+                    if request.requested_topic is not None
                     else None
                 ),
             }
         if isinstance(payload, CategoryInferenceOutput):
             return {
-                "selected_category_present": bool(payload.selected_category.value),
-                "selected_category_matches_requested": (
-                    payload.selected_category == request.requested_category
-                    if request.requested_category is not None
+                "selected_topic_present": bool(payload.selected_topic),
+                "selected_topic_matches_requested": (
+                    payload.selected_topic == request.requested_topic
+                    if request.requested_topic is not None
                     else None
                 ),
                 "rationale_present": bool(payload.rationale.strip()),
@@ -1187,6 +1144,7 @@ class SynthesisAgentRuntime:
         if isinstance(payload, LabelConstructionOutput):
             return {
                 "canonical_answer_json_present": bool(payload.canonical_answer_json.strip()),
+                "anchor_entity_present": bool(payload.anchor_entity),
                 "label_summary_present": bool(payload.label_summary.strip()),
                 "difficulty_vector_present": payload.difficulty_vector.total_score() >= 0.0,
             }
@@ -1196,18 +1154,7 @@ class SynthesisAgentRuntime:
                 "anchor_outputs_present": bool(payload.instance_space.anchor_query.outputs),
                 "constraint_summary_present": len(payload.constraint_summary) > 0,
             }
-        proposed_environment = payload.proposed_environment
-        return {
-            "task_category_matches_requested": (
-                proposed_environment.task.category == request.requested_category
-                if request.requested_category is not None
-                else None
-            ),
-            "solution_source_present": bool(payload.artifacts.solution_source.strip()),
-            "difficulty_vector_present": bool(
-                proposed_environment.task.difficulty_vector.nonzero_axes()
-            ),
-        }
+        return {}
 
     def _log_stage_result(
         self,
@@ -1269,7 +1216,7 @@ class SynthesisAgentRuntime:
         self,
         *,
         db_id: str | None = None,
-    ) -> dict[CategoryTaxonomy, SynthesisCategoryStatus]:
+    ) -> dict[str, SynthesisCategoryStatus]:
         resolved_db_id = db_id or self._bound_db_id
         if resolved_db_id is None:
             return {}
@@ -1288,16 +1235,16 @@ class SynthesisAgentRuntime:
             ]
             for key in expired:
                 del self._category_failures[key]
-            statuses: dict[CategoryTaxonomy, SynthesisCategoryStatus] = {}
-            for (state_db_id, category), state in self._category_failures.items():
+            statuses: dict[str, SynthesisCategoryStatus] = {}
+            for (state_db_id, topic), state in self._category_failures.items():
                 if state_db_id != resolved_db_id:
                     continue
                 remaining = 0.0
                 if state.backoff_until is not None:
                     remaining = max(0.0, (state.backoff_until - now).total_seconds())
-                statuses[category] = SynthesisCategoryStatus(
+                statuses[topic] = SynthesisCategoryStatus(
                     db_id=state_db_id,
-                    category=category,
+                    topic=topic,
                     consecutive_discards=state.consecutive_discards,
                     backed_off=state.backoff_until is not None and state.backoff_until > now,
                     backoff_until=state.backoff_until,
@@ -1311,22 +1258,22 @@ class SynthesisAgentRuntime:
     async def _ensure_category_available(
         self,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
     ) -> None:
         now = datetime.now(timezone.utc)
         async with self._category_state_lock:
-            state = self._category_failures.get((db_id, category))
+            state = self._category_failures.get((db_id, topic))
             if state is None:
                 return
             if state.backoff_until is None:
                 return
             if state.backoff_until <= now:
-                del self._category_failures[(db_id, category)]
+                del self._category_failures[(db_id, topic)]
                 return
             raise SynthesisCategoryBackoffError(
                 "synthesis category is temporarily backed off after repeated discards",
                 db_id=db_id,
-                category=category,
+                topic=topic,
                 consecutive_discards=state.consecutive_discards,
                 backoff_until=state.backoff_until,
                 last_outcome=state.last_outcome,
@@ -1336,13 +1283,13 @@ class SynthesisAgentRuntime:
     async def _record_category_discard(
         self,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
         *,
         outcome: SynthesisGenerationOutcome | None,
         error_codes: list[str] | None = None,
     ) -> None:
         async with self._category_state_lock:
-            key = (db_id, category)
+            key = (db_id, topic)
             state = self._category_failures.get(key, _CategoryFailureState())
             state.consecutive_discards += 1
             state.last_outcome = outcome
@@ -1360,10 +1307,10 @@ class SynthesisAgentRuntime:
     async def _reset_category_failure_state(
         self,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
     ) -> None:
         async with self._category_state_lock:
-            self._category_failures.pop((db_id, category), None)
+            self._category_failures.pop((db_id, topic), None)
 
     async def _run_phase(self, request: SynthesisStageRequest) -> SynthesisStageResult:
         candidate_backends = self.phase_backends.get(request.phase, []) if self.phase_backends else []
@@ -1427,7 +1374,7 @@ class SynthesisAgentRuntime:
         self,
         *,
         db_id: str,
-        requested_category: CategoryTaxonomy,
+        requested_topic: str,
         graph: SchemaGraph,
         schema_summary: dict[str, object],
         previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput],
@@ -1438,8 +1385,8 @@ class SynthesisAgentRuntime:
         available_atomic_tools: list[dict[str, object]],
         retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> tuple[
-        ProposedEnvironmentDraft,
-        GeneratedArtifactBundle,
+        TaskContract,
+        InstanceSpaceContract,
         list[MaterializedInstanceRecord],
         list[MaterializedCanonicalAnswerRecord],
         CrossInstanceSet,
@@ -1447,7 +1394,6 @@ class SynthesisAgentRuntime:
     ]:
         attempts: list[SynthesisGenerationAttempt] = []
         latest_artifact_diagnostics: SynthesisArtifactDiagnostics | None = None
-        latest_artifact_payload: ArtifactGenerationOutput | None = None
         latest_authoritative_task: TaskContract | None = None
         base_previous_outputs = dict(previous_outputs)
         strongest_difficulty_vector: DifficultyVectorContract | None = (
@@ -1514,7 +1460,6 @@ class SynthesisAgentRuntime:
             ) = _difficulty_guidance(
                 graph=graph,
                 task=latest_authoritative_task,
-                bundle=latest_artifact_payload.artifacts if latest_artifact_payload is not None else None,
                 available_atomic_tools=available_atomic_tools,
                 history=difficulty_crank_history,
             )
@@ -1527,7 +1472,7 @@ class SynthesisAgentRuntime:
                 "domain_name": self.config.domain.name,
                 "task_language": self.config.domain.language,
                 "scenario_description": self.config.domain.scenario_description,
-                "requested_category": requested_category,
+                "requested_topic": requested_topic,
                 "attempt_index": attempt_index,
                 "schema_summary": schema_summary,
                 "memory": memory[-self.config.synthesis.runtime.explicit_memory_window :],
@@ -1571,7 +1516,7 @@ class SynthesisAgentRuntime:
             attempt_previous_outputs[SynthesisPhase.TASK_SYNTHESIS] = task_result.payload
 
             authoritative_task = self._build_authoritative_task(
-                requested_category=requested_category,
+                requested_topic=requested_topic,
                 label_output=label_result.payload,
                 task_output=task_result.payload,
             )
@@ -1743,86 +1688,14 @@ class SynthesisAgentRuntime:
                     )
                 continue
             strongest_difficulty_vector = current_difficulty_vector
-
-            artifact_request = SynthesisStageRequest(
-                phase=SynthesisPhase.ARTIFACT_GENERATION,
-                previous_outputs=attempt_previous_outputs,
-                **request_kwargs,
-            )
-            artifact_result = await self._run_phase(artifact_request)
-            assert isinstance(artifact_result.payload, ArtifactGenerationOutput)
-            stage_results.append(artifact_result)
-            memory.append(artifact_result.memory_entry)
-            tool_traces.extend(artifact_result.tool_traces)
-
-            artifact_payload, artifact_repair_codes = self._synchronize_artifact_payload_with_label(
-                artifact_result.payload,
-                authoritative_task=authoritative_task,
-                instance_space=task_result.payload.instance_space,
-            )
-            latest_artifact_payload = artifact_payload
-            if artifact_repair_codes:
-                artifact_result = artifact_result.model_copy(
-                    update={
-                        "payload": artifact_payload,
-                        "payload_repair_codes": [
-                            *artifact_result.payload_repair_codes,
-                            *artifact_repair_codes,
-                        ],
-                    }
-                )
             artifact_diagnostics = SynthesisArtifactDiagnostics(
                 error_codes=[],
-                payload_repair_codes=list(artifact_result.payload_repair_codes),
+                payload_repair_codes=[
+                    *label_result.payload_repair_codes,
+                    *task_result.payload_repair_codes,
+                ],
             )
             latest_artifact_diagnostics = artifact_diagnostics
-
-            if not artifact_payload.artifacts.solution_source.strip():
-                artifact_diagnostics = artifact_diagnostics.model_copy(
-                    update={"error_codes": ["solution_source_missing"]}
-                )
-                latest_artifact_diagnostics = artifact_diagnostics
-                self._emit_phase_monitor(
-                    phase="artifact_generation",
-                    status="failed",
-                    expected_contract={
-                        "attempt_index": attempt_index,
-                        "required_artifacts": ["solution"],
-                    },
-                    actual_data={
-                        "error_codes": list(artifact_diagnostics.error_codes),
-                        "payload_repair_codes": list(artifact_diagnostics.payload_repair_codes),
-                    },
-                    checks={"passed": False},
-                    diagnostics={
-                        "provider": artifact_result.provider,
-                        "model": artifact_result.model,
-                    },
-                )
-                attempt = SynthesisGenerationAttempt(
-                    attempt_index=attempt_index,
-                    outcome=SynthesisGenerationOutcome.ARTIFACT_INVALID,
-                    provider=artifact_result.provider,
-                    model=artifact_result.model,
-                    memory_summary=artifact_result.memory_entry.summary,
-                    error_message="artifact generation returned blank solution_source",
-                    artifact_diagnostics=artifact_diagnostics,
-                )
-                attempts.append(attempt)
-                memory.append(self._attempt_feedback_entry(attempt))
-                if crank_request_active:
-                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
-                        count=difficulty_crank_count,
-                        history=difficulty_crank_history,
-                    )
-                retry_requires_harder = True
-                if attempt_index >= max_iterations:
-                    raise SynthesisArtifactGenerationError(
-                        "label-first synthesis exhausted its bounded retry budget after invalid artifacts",
-                        attempts=attempts,
-                        last_artifact_diagnostics=artifact_diagnostics,
-                    )
-                continue
 
             try:
                 (
@@ -1830,8 +1703,10 @@ class SynthesisAgentRuntime:
                     canonical_answers,
                     materialized_cross_instance_set,
                 ) = self._materialize_instances_and_canonical_answers(
-                    proposed_environment=artifact_payload.proposed_environment,
+                    task=authoritative_task,
+                    instance_space=task_result.payload.instance_space,
                     canonical_answer_json=label_result.payload.canonical_answer_json,
+                    anchor_entity=label_result.payload.anchor_entity,
                 )
             except (CanonicalizationError, json.JSONDecodeError):
                 artifact_diagnostics = artifact_diagnostics.model_copy(
@@ -1848,8 +1723,8 @@ class SynthesisAgentRuntime:
                     actual_data={},
                     checks={"canonicalization_passed": False},
                     diagnostics={
-                        "provider": artifact_result.provider,
-                        "model": artifact_result.model,
+                        "provider": task_result.provider,
+                        "model": task_result.model,
                         "error_codes": list(artifact_diagnostics.error_codes),
                         "payload_repair_codes": list(artifact_diagnostics.payload_repair_codes),
                     },
@@ -1857,9 +1732,9 @@ class SynthesisAgentRuntime:
                 attempt = SynthesisGenerationAttempt(
                     attempt_index=attempt_index,
                     outcome=SynthesisGenerationOutcome.ARTIFACT_INVALID,
-                    provider=artifact_result.provider,
-                    model=artifact_result.model,
-                    memory_summary=artifact_result.memory_entry.summary,
+                    provider=task_result.provider,
+                    model=task_result.model,
+                    memory_summary=task_result.memory_entry.summary,
                     error_message="planned canonical answer could not be canonicalized against the output schema",
                     artifact_diagnostics=artifact_diagnostics,
                 )
@@ -1895,8 +1770,8 @@ class SynthesisAgentRuntime:
                     "canonical_answer_jsons": [
                         answer.canonical_answer_json for answer in canonical_answers
                     ],
-                    "solution_fingerprints": [
-                        answer.solution_fingerprint for answer in canonical_answers
+                    "label_signatures": [
+                        answer.label_signature for answer in canonical_answers
                     ],
                 },
                 checks={
@@ -1906,8 +1781,8 @@ class SynthesisAgentRuntime:
                     >= materialized_cross_instance_set.minimum_required,
                 },
                 diagnostics={
-                    "provider": artifact_result.provider,
-                    "model": artifact_result.model,
+                    "provider": task_result.provider,
+                    "model": task_result.model,
                     "payload_repair_codes": list(artifact_diagnostics.payload_repair_codes),
                 },
             )
@@ -1915,16 +1790,16 @@ class SynthesisAgentRuntime:
             passed_attempt = SynthesisGenerationAttempt(
                 attempt_index=attempt_index,
                 outcome=SynthesisGenerationOutcome.PASSED,
-                provider=artifact_result.provider,
-                model=artifact_result.model,
-                memory_summary=artifact_result.memory_entry.summary,
+                provider=task_result.provider,
+                model=task_result.model,
+                memory_summary=task_result.memory_entry.summary,
                 artifact_diagnostics=artifact_diagnostics,
             )
             attempts.append(passed_attempt)
             retry_requires_harder = False
             return (
-                artifact_payload.proposed_environment,
-                artifact_payload.artifacts,
+                authoritative_task,
+                task_result.payload.instance_space,
                 instances,
                 canonical_answers,
                 materialized_cross_instance_set,
@@ -1940,41 +1815,20 @@ class SynthesisAgentRuntime:
     @staticmethod
     def _build_authoritative_task(
         *,
-        requested_category: CategoryTaxonomy,
+        requested_topic: str,
         label_output: LabelConstructionOutput,
         task_output: TaskSynthesisOutput,
     ) -> TaskContract:
+        canonical_answer = json.loads(label_output.canonical_answer_json)
+        output_schema = extract_output_schema_from_canonical(canonical_answer)
         return TaskContract(
             question=task_output.question,
-            category=requested_category,
-            output_schema=label_output.output_schema,
+            topic=requested_topic,
+            output_schema=output_schema,
             constraint_summary=task_output.constraint_summary,
             difficulty_vector=label_output.difficulty_vector,
             instance_parameters=label_output.instance_parameters,
         )
-
-    @staticmethod
-    def _synchronize_artifact_payload_with_label(
-        payload: ArtifactGenerationOutput,
-        *,
-        authoritative_task: TaskContract,
-        instance_space: InstanceSpaceContract,
-    ) -> tuple[ArtifactGenerationOutput, list[str]]:
-        repair_codes: list[str] = []
-        proposed_environment = payload.proposed_environment
-        if proposed_environment.task != authoritative_task:
-            proposed_environment = proposed_environment.model_copy(
-                update={"task": authoritative_task}
-            )
-            repair_codes.append("artifact_task_overridden_from_task_synthesis")
-        if proposed_environment.instance_space != instance_space:
-            proposed_environment = proposed_environment.model_copy(
-                update={"instance_space": instance_space}
-            )
-            repair_codes.append("artifact_instance_space_overridden_from_task_synthesis")
-        if not repair_codes:
-            return payload, repair_codes
-        return payload.model_copy(update={"proposed_environment": proposed_environment}), repair_codes
 
     @staticmethod
     def _attempt_feedback_entry(
@@ -1997,7 +1851,7 @@ class SynthesisAgentRuntime:
                     + ",".join(attempt.artifact_diagnostics.payload_repair_codes)
                 )
         return SynthesisMemoryEntry(
-            phase=SynthesisPhase.ARTIFACT_GENERATION,
+            phase=SynthesisPhase.TASK_SYNTHESIS,
             provider="runtime",
             model="generation_loop",
             summary="; ".join(detail_parts),
@@ -2129,31 +1983,36 @@ class SynthesisAgentRuntime:
     def _materialize_environment(
         self,
         *,
-        proposed_environment: ProposedEnvironmentDraft,
         atomic_tool_bundle: AtomicToolBundle,
         db_id: str,
-        requested_category: CategoryTaxonomy,
+        requested_topic: str,
         created_at: datetime,
         materialized_cross_instance_set: CrossInstanceSet,
+        task: TaskContract,
+        instance_space: InstanceSpaceContract,
     ) -> EnvironmentContract:
-        task_payload = proposed_environment.task.model_dump(mode="python")
+        task_payload = task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
         tool_signature = self._signature_for_text(atomic_tool_bundle.source)
         env_id = self._build_env_id(
             db_id=db_id,
-            category=requested_category,
+            topic=requested_topic,
             task_signature=task_signature,
             tool_signature=tool_signature,
         )
-        payload = proposed_environment.model_dump(mode="python")
+        payload = {
+            "instance_space": instance_space.model_dump(mode="python"),
+            "cross_instance_set": materialized_cross_instance_set.model_dump(mode="python"),
+            "task": task.model_dump(mode="python"),
+        }
         payload.update(
             {
                 "env_id": env_id,
                 "db_id": db_id,
                 "domain": self.config.domain.name,
-                "category": requested_category,
+                "topic": requested_topic,
                 "atomic_tool_set_ref": f"db://{db_id}",
-                "difficulty_vector": proposed_environment.task.difficulty_vector,
+                "difficulty_vector": task.difficulty_vector,
                 "created_at": created_at,
                 "generator_version": CURRENT_SYNTHESIS_GENERATOR_VERSION,
                 "tool_signature": tool_signature,
@@ -2163,10 +2022,6 @@ class SynthesisAgentRuntime:
                 "rollout_constraints": self._build_rollout_constraints().model_dump(
                     mode="python"
                 ),
-                "cross_instance_set": materialized_cross_instance_set.model_dump(mode="python"),
-                "task": proposed_environment.task.model_copy(
-                    update={"category": requested_category}
-                ).model_dump(mode="python"),
             }
         )
         return EnvironmentContract.model_validate(payload)
@@ -2183,8 +2038,10 @@ class SynthesisAgentRuntime:
     def _materialize_instances_and_canonical_answers(
         self,
         *,
-        proposed_environment: ProposedEnvironmentDraft,
+        task: TaskContract,
+        instance_space: InstanceSpaceContract,
         canonical_answer_json: str,
+        anchor_entity: dict[str, object],
     ) -> tuple[
         list[MaterializedInstanceRecord],
         list[MaterializedCanonicalAnswerRecord],
@@ -2192,38 +2049,38 @@ class SynthesisAgentRuntime:
     ]:
         canonical_input = json.loads(canonical_answer_json)
         canonical_answer = canonicalize_output(
-            proposed_environment.task.output_schema,
+            task.output_schema,
             canonical_input,
         )
         canonical_answer_json = canonical_json(canonical_answer)
-        solution_fingerprint = self._signature_for_text(canonical_answer_json)
+        label_signature = self._signature_for_text(canonical_answer_json)
         instance_id = "instance_0001"
-        params = dict(proposed_environment.task.instance_parameters)
+        params = dict(task.instance_parameters)
         instance = MaterializedInstanceRecord(
             instance_id=instance_id,
-            rendered_user_prompt=build_rendered_user_prompt(proposed_environment.task),
+            rendered_user_prompt=build_rendered_user_prompt(
+                task,
+                anchor_entity=anchor_entity,
+                canonical_answer=canonical_answer,
+            ),
             params=params,
-            anchor_values={},
+            anchor_values=dict(anchor_entity),
         )
         canonical_record = MaterializedCanonicalAnswerRecord(
             instance_id=instance_id,
             canonical_answer=canonical_answer,
             canonical_answer_json=canonical_answer_json,
-            solution_fingerprint=solution_fingerprint,
+            label_signature=label_signature,
         )
         cross_instance_set = CrossInstanceSet(
-            # C8 materializes a single bootstrap instance. Keep the persisted
-            # cross-instance contract aligned with the records we actually emit.
             minimum_required=1,
-            require_distinct_solution_fingerprints=(
-                proposed_environment.cross_instance_set.require_distinct_solution_fingerprints
-            ),
+            require_distinct_label_signatures=True,
             instances=[
                 InstanceContract(
                     instance_id=instance_id,
-                    anchor_values={},
+                    anchor_values=dict(anchor_entity),
                     parameter_values=params,
-                    expected_solution_fingerprint=solution_fingerprint,
+                    expected_label_signature=label_signature,
                 )
             ],
         )
@@ -2269,11 +2126,11 @@ class SynthesisAgentRuntime:
     def _build_env_id(
         *,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
         task_signature: str,
         tool_signature: str,
     ) -> str:
         digest = sha256(
-            f"{db_id}|{category.value}|{task_signature}|{tool_signature}".encode("utf-8")
+            f"{db_id}|{topic}|{task_signature}|{tool_signature}".encode("utf-8")
         ).hexdigest()[:16]
-        return f"env_{category.value}_{digest}"
+        return f"env_{topic}_{digest}"

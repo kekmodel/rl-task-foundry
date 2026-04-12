@@ -13,7 +13,6 @@ from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBacke
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
-    CategoryTaxonomy,
     CrossInstanceSet,
     EnvironmentContract,
     EnvironmentQualityMetrics,
@@ -23,7 +22,6 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    SolutionContract,
     TaskContract,
     build_difficulty_vector,
 )
@@ -34,7 +32,7 @@ def _sample_episode() -> SolverEpisodeInput:
         env_id="env_assignment_solver",
         db_id="sakila",
         domain="customer_support",
-        category=CategoryTaxonomy.ASSIGNMENT,
+        topic="assignment",
         atomic_tool_set_ref="db://sakila",
         difficulty_vector=build_difficulty_vector(),
         created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
@@ -50,7 +48,7 @@ def _sample_episode() -> SolverEpisodeInput:
         ),
         task=TaskContract(
             question="INTERNAL QUESTION SHOULD NOT BE USED",
-            category=CategoryTaxonomy.ASSIGNMENT,
+            topic="assignment",
             output_schema=OutputSchemaContract(
                 root=OutputFieldContract(
                     name="answer",
@@ -65,7 +63,6 @@ def _sample_episode() -> SolverEpisodeInput:
                 primary_output_format="json_object",
             ),
         ),
-        solution=SolutionContract(),
         instance_space=InstanceSpaceContract(
             anchor_query=AnchorQueryContract(
                 sql="SELECT order_id FROM orders ORDER BY order_id",
@@ -80,8 +77,7 @@ def _sample_episode() -> SolverEpisodeInput:
         rendered_user_prompt=(
             "현재 배송 상태는 무엇인가요?\n\n"
             "# Submit Result Format\n"
-            "Submit your final answer via submit_result as a JSON string matching this schema.\n"
-            '{"type":"object","properties":{"delivery_status":{"type":"string"}}}\n\n'
+            '{"type":"object","properties":{"delivery_status":{"type":"string"}}}\n'
         ),
     )
 
@@ -464,10 +460,10 @@ def test_extract_submission_output_classifies_invalid_submit():
     assert termination_metadata["error"] == "submit_result payload failed schema validation"
 
 
-def test_extract_submission_output_accepts_stringified_submit_payload():
+def test_extract_submission_output_accepts_json_stringified_submit_payload():
     submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
         backend_module._extract_submission_output(
-            "{'submitted': True, 'answer_text': '{\"store_id\":1}'}"
+            '{"submitted": true, "answer_text": "{\\"store_id\\":1}"}'
         )
     )
 
@@ -478,7 +474,21 @@ def test_extract_submission_output_accepts_stringified_submit_payload():
     assert termination_metadata == {}
 
 
-def test_extract_submission_output_accepts_stringified_invalid_submit_payload():
+def test_extract_submission_output_rejects_python_repr_success_payload():
+    submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
+        backend_module._extract_submission_output(
+            "{'submitted': True, 'answer_text': '{\"store_id\":1}'}"
+        )
+    )
+
+    assert submitted_answer_text is None
+    assert structured_output is None
+    assert status == "completed"
+    assert termination_reason is None
+    assert termination_metadata == {}
+
+
+def test_extract_submission_output_rejects_python_repr_submit_payload():
     submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
         backend_module._extract_submission_output(
             "{'submitted': False, 'error': 'submit_result payload failed schema validation', 'details': [{'loc': ['answer_text'], 'msg': 'Field required'}]}"
@@ -487,12 +497,9 @@ def test_extract_submission_output_accepts_stringified_invalid_submit_payload():
 
     assert submitted_answer_text is None
     assert structured_output is None
-    assert status == "invalid_submit"
-    assert termination_reason == "invalid_submit_schema"
-    assert termination_metadata == {
-        "error": "submit_result payload failed schema validation",
-        "details": [{"loc": ["answer_text"], "msg": "Field required"}],
-    }
+    assert status == "completed"
+    assert termination_reason is None
+    assert termination_metadata == {}
 
 
 def test_extract_submission_output_keeps_non_object_json_as_raw_text_only():

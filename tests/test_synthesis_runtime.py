@@ -11,31 +11,21 @@ from rl_task_foundry.config.models import OutputConfig
 from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.contracts import (
-    AnchorQueryContract,
-    CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
     DifficultyVectorContract,
-    OutputFieldContract,
-    OutputFieldType,
-    OutputSchemaContract,
-    SolutionContract,
-    TaskContract,
+    InstanceSpaceContract,
     build_difficulty_vector,
 )
 from rl_task_foundry.synthesis.runtime import (
-    ArtifactGenerationOutput,
     CategoryInferenceOutput,
-    GeneratedArtifactBundle,
     LabelConstructionOutput,
-    ProposedEnvironmentDraft,
     SchemaExplorationOutput,
     SynthesisAgentRuntime,
-    SynthesisArtifactGenerationError,
-    SynthesisGenerationOutcome,
     SynthesisMemoryEntry,
     SynthesisPhase,
     SynthesisPhaseExecutionError,
+    SynthesisStageRequest,
     SynthesisStageResult,
     SynthesisToolTraceEntry,
     TaskSynthesisOutput,
@@ -96,36 +86,6 @@ def _sample_atomic_tool_bundle(db_id: str = "sakila") -> AtomicToolBundle:
     )
 
 
-def _output_schema() -> OutputSchemaContract:
-    return OutputSchemaContract(
-        root=OutputFieldContract(
-            name="answer",
-            type=OutputFieldType.OBJECT,
-            fields=[
-                OutputFieldContract(name="customer_name", type=OutputFieldType.STRING),
-            ],
-        ),
-        primary_output_format="json_object",
-    )
-
-
-def _authoritative_task() -> TaskContract:
-    return TaskContract(
-        question="고객 이름을 반환해 주세요.",
-        category=CategoryTaxonomy.ASSIGNMENT,
-        output_schema=_output_schema(),
-        constraint_summary=[
-            ConstraintSummaryItem(
-                key="single_customer",
-                kind=ConstraintKind.CARDINALITY,
-                summary="Return exactly one customer.",
-            )
-        ],
-        difficulty_vector=build_difficulty_vector(search_cost=1.0),
-        instance_parameters={"customer_id": 1},
-    )
-
-
 def _stage_result(
     *,
     phase: SynthesisPhase,
@@ -165,7 +125,7 @@ def _schema_result(*, grounded: bool = True) -> SynthesisStageResult:
         phase=SynthesisPhase.SCHEMA_EXPLORATION,
         payload=SchemaExplorationOutput(
             domain_hypothesis="customer_support",
-            candidate_categories=[CategoryTaxonomy.ASSIGNMENT],
+            candidate_topics=["assignment"],
             sample_observations=["Observed customer_id=1, customer_name='Alice'"],
             memory_summary="schema exploration completed",
         ),
@@ -177,7 +137,7 @@ def _category_result() -> SynthesisStageResult:
     return _stage_result(
         phase=SynthesisPhase.CATEGORY_INFERENCE,
         payload=CategoryInferenceOutput(
-            selected_category=CategoryTaxonomy.ASSIGNMENT,
+            selected_topic="assignment",
             rationale="Matches assignment semantics.",
             memory_summary="category inference completed",
         ),
@@ -193,7 +153,7 @@ def _label_result(
         phase=SynthesisPhase.LABEL_CONSTRUCTION,
         payload=LabelConstructionOutput(
             canonical_answer_json=canonical_answer_json,
-            output_schema=_output_schema(),
+            anchor_entity={"customer_id": 1},
             difficulty_vector=difficulty_vector or build_difficulty_vector(search_cost=1.0),
             instance_parameters={"customer_id": 1},
             label_summary="Alice is the only valid customer answer.",
@@ -214,38 +174,15 @@ def _task_result() -> SynthesisStageResult:
                     summary="Return exactly one customer.",
                 )
             ],
-            instance_space={
-                "anchor_query": {
-                    "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                    "outputs": ["customer_id"],
-                }
-            },
-            memory_summary="task synthesis completed",
-        ),
-    )
-
-
-def _artifact_result(
-    *,
-    solution_source: str = "def solve(tools):\n    return {'customer_name': 'Alice'}\n",
-    task: TaskContract | None = None,
-) -> SynthesisStageResult:
-    proposed_task = task or _authoritative_task().model_copy(update={"question": "WRONG"})
-    return _stage_result(
-        phase=SynthesisPhase.ARTIFACT_GENERATION,
-        payload=ArtifactGenerationOutput(
-            proposed_environment=ProposedEnvironmentDraft(
-                task=proposed_task,
-                solution=SolutionContract(),
-                instance_space={
+            instance_space=InstanceSpaceContract.model_validate(
+                {
                     "anchor_query": {
                         "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
                         "outputs": ["customer_id"],
                     }
-                },
+                }
             ),
-            artifacts=GeneratedArtifactBundle(solution_source=solution_source),
-            memory_summary="artifact generation completed",
+            memory_summary="task synthesis completed",
         ),
     )
 
@@ -259,28 +196,55 @@ def _install_runtime_stubs(
     async def _fake_run_phase(self, request):
         return results[request.phase]
 
-    async def _fake_prime(self, *, db_id: str, bundle: AtomicToolBundle) -> None:
-        del self, db_id, bundle
+    async def _fake_bind_db_id(self, db_id: str):
+        self._bound_db_id = db_id
 
-    async def _fake_reset(self, db_id: str, category: CategoryTaxonomy) -> None:
-        del self, db_id, category
+    async def _fake_ensure_category_available(self, db_id: str, topic: str):
+        return None
 
-    async def _fake_ensure_bundle(self, *, db_id: str, graph: SchemaGraph) -> AtomicToolBundle:
-        del self, graph
+    async def _fake_introspect_graph(self):
+        return _sample_graph()
+
+    async def _fake_ensure_atomic_tool_bundle(self, *, db_id: str, graph: SchemaGraph):
         return _sample_atomic_tool_bundle(db_id)
 
+    async def _fake_prime_phase_backends_with_atomic_tools(self, *, db_id: str, bundle):
+        return None
+
+    async def _fake_reset(self, db_id: str, topic: str):
+        return None
+
+    async def _fake_record_discard(self, db_id: str, topic: str, outcome=None, error_codes=None):
+        return None
+
     monkeypatch.setattr(SynthesisAgentRuntime, "_run_phase", _fake_run_phase)
-    monkeypatch.setattr(SynthesisAgentRuntime, "_prime_phase_backends_with_atomic_tools", _fake_prime)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_bind_db_id", _fake_bind_db_id)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_category_available",
+        _fake_ensure_category_available,
+    )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_introspect_graph", _fake_introspect_graph)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_atomic_tool_bundle",
+        _fake_ensure_atomic_tool_bundle,
+    )
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_prime_phase_backends_with_atomic_tools",
+        _fake_prime_phase_backends_with_atomic_tools,
+    )
     monkeypatch.setattr(SynthesisAgentRuntime, "_reset_category_failure_state", _fake_reset)
-    monkeypatch.setattr(SynthesisAgentRuntime, "_ensure_atomic_tool_bundle", _fake_ensure_bundle)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_record_category_discard", _fake_record_discard)
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_materializes_solution_only_label_first_draft(
+async def test_synthesize_environment_draft_materializes_label_first_prompt_and_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path), phase_backends={})
+    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
     _install_runtime_stubs(
         monkeypatch,
         runtime,
@@ -289,176 +253,57 @@ async def test_synthesis_agent_runtime_materializes_solution_only_label_first_dr
             SynthesisPhase.CATEGORY_INFERENCE: _category_result(),
             SynthesisPhase.LABEL_CONSTRUCTION: _label_result(),
             SynthesisPhase.TASK_SYNTHESIS: _task_result(),
-            SynthesisPhase.ARTIFACT_GENERATION: _artifact_result(),
         },
     )
 
     draft = await runtime.synthesize_environment_draft(
         db_id="sakila",
-        requested_category=CategoryTaxonomy.ASSIGNMENT,
-        graph=_sample_graph(),
+        requested_topic="assignment",
     )
 
-    assert draft.environment.task.question == "고객 이름을 반환해 주세요."
-    assert draft.artifacts.solution_source.startswith("def solve")
-    assert len(draft.instances) == 1
-    assert len(draft.canonical_answers) == 1
-    assert draft.canonical_answers[0].canonical_answer_json == '{"customer_name":"Alice"}'
+    assert draft.requested_topic == "assignment"
+    assert draft.selected_topic == "assignment"
+    assert not hasattr(draft, "artifacts")
+    assert draft.environment.task.output_schema.root.type.value == "object"
+    assert draft.environment.task.output_schema.root.fields[0].name == "customer_name"
+    assert draft.instances[0].rendered_user_prompt.startswith("<entity>\n")
+    assert '"customer_id": 1' in draft.instances[0].rendered_user_prompt
+    assert draft.canonical_answers[0].label_signature.startswith("sha256:")
     assert [result.phase for result in draft.stage_results] == [
         SynthesisPhase.SCHEMA_EXPLORATION,
         SynthesisPhase.CATEGORY_INFERENCE,
         SynthesisPhase.LABEL_CONSTRUCTION,
         SynthesisPhase.TASK_SYNTHESIS,
-        SynthesisPhase.ARTIFACT_GENERATION,
     ]
-    assert [attempt.outcome for attempt in draft.generation_attempts] == [
-        SynthesisGenerationOutcome.PASSED
-    ]
-    assert draft.generation_attempts[0].artifact_diagnostics is not None
-    assert (
-        "artifact_task_overridden_from_task_synthesis"
-        in draft.generation_attempts[0].artifact_diagnostics.payload_repair_codes
+
+
+def test_runtime_rejects_ungrounded_schema_exploration(tmp_path: Path) -> None:
+    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.SCHEMA_EXPLORATION,
+        db_id="sakila",
+        requested_topic="assignment",
+        domain_name="customer_support",
+        scenario_description="help requests",
     )
-    assert "verifier" not in draft.environment.model_dump(mode="json")
-    assert "shadow_verifier" not in draft.environment.model_dump(mode="json")
-
-
-@pytest.mark.asyncio
-async def test_synthesis_agent_runtime_requires_grounded_schema_exploration(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path), phase_backends={})
-    _install_runtime_stubs(
-        monkeypatch,
-        runtime,
-        results={
-            SynthesisPhase.SCHEMA_EXPLORATION: _schema_result(grounded=False),
-            SynthesisPhase.CATEGORY_INFERENCE: _category_result(),
-            SynthesisPhase.LABEL_CONSTRUCTION: _label_result(),
-            SynthesisPhase.TASK_SYNTHESIS: _task_result(),
-            SynthesisPhase.ARTIFACT_GENERATION: _artifact_result(),
-        },
-    )
-
     with pytest.raises(SynthesisPhaseExecutionError):
-        await runtime.synthesize_environment_draft(
-            db_id="sakila",
-            requested_category=CategoryTaxonomy.ASSIGNMENT,
-            graph=_sample_graph(),
+        runtime._ensure_grounded_schema_exploration(  # type: ignore[attr-defined]
+            request,
+            _schema_result(grounded=False),
         )
 
 
-@pytest.mark.asyncio
-async def test_synthesis_agent_runtime_raises_when_solution_source_is_blank(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = _config_with_synthesis_output(tmp_path)
-    config.synthesis.runtime.max_generation_attempts = 1
-    runtime = SynthesisAgentRuntime(config, phase_backends={})
-    _install_runtime_stubs(
-        monkeypatch,
-        runtime,
-        results={
-            SynthesisPhase.SCHEMA_EXPLORATION: _schema_result(),
-            SynthesisPhase.CATEGORY_INFERENCE: _category_result(),
-            SynthesisPhase.LABEL_CONSTRUCTION: _label_result(),
-            SynthesisPhase.TASK_SYNTHESIS: _task_result(),
-            SynthesisPhase.ARTIFACT_GENERATION: _artifact_result(solution_source="   "),
-        },
+def test_runtime_module_has_no_legacy_imports() -> None:
+    module_path = Path("src/rl_task_foundry/synthesis/runtime.py")
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+    banned_prefixes = (
+        "rl_task_foundry.tools",
+        "rl_task_foundry.tasks",
+        "rl_task_foundry.truth",
+        "rl_task_foundry.verification",
     )
 
-    with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
-        await runtime.synthesize_environment_draft(
-            db_id="sakila",
-            requested_category=CategoryTaxonomy.ASSIGNMENT,
-            graph=_sample_graph(),
-        )
-
-    assert exc_info.value.attempts[-1].outcome is SynthesisGenerationOutcome.ARTIFACT_INVALID
-    assert exc_info.value.last_artifact_diagnostics is not None
-    assert exc_info.value.last_artifact_diagnostics.error_codes == ["solution_source_missing"]
-
-
-@pytest.mark.asyncio
-async def test_synthesis_agent_runtime_raises_when_label_cannot_be_canonicalized(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = _config_with_synthesis_output(tmp_path)
-    config.synthesis.runtime.max_generation_attempts = 1
-    runtime = SynthesisAgentRuntime(config, phase_backends={})
-    _install_runtime_stubs(
-        monkeypatch,
-        runtime,
-        results={
-            SynthesisPhase.SCHEMA_EXPLORATION: _schema_result(),
-            SynthesisPhase.CATEGORY_INFERENCE: _category_result(),
-            SynthesisPhase.LABEL_CONSTRUCTION: _label_result(canonical_answer_json='"wrong-shape"'),
-            SynthesisPhase.TASK_SYNTHESIS: _task_result(),
-            SynthesisPhase.ARTIFACT_GENERATION: _artifact_result(task=_authoritative_task()),
-        },
-    )
-
-    with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
-        await runtime.synthesize_environment_draft(
-            db_id="sakila",
-            requested_category=CategoryTaxonomy.ASSIGNMENT,
-            graph=_sample_graph(),
-        )
-
-    assert exc_info.value.attempts[-1].outcome is SynthesisGenerationOutcome.ARTIFACT_INVALID
-    assert exc_info.value.last_artifact_diagnostics is not None
-    assert exc_info.value.last_artifact_diagnostics.error_codes == [
-        "canonical_answer_schema_mismatch"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_synthesis_agent_runtime_records_category_backoff_from_generation_failures(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = _config_with_synthesis_output(tmp_path)
-    config.synthesis.runtime.max_generation_attempts = 1
-    config.synthesis.runtime.max_consecutive_category_discards = 1
-    runtime = SynthesisAgentRuntime(config, phase_backends={})
-    _install_runtime_stubs(
-        monkeypatch,
-        runtime,
-        results={
-            SynthesisPhase.SCHEMA_EXPLORATION: _schema_result(),
-            SynthesisPhase.CATEGORY_INFERENCE: _category_result(),
-            SynthesisPhase.LABEL_CONSTRUCTION: _label_result(),
-            SynthesisPhase.TASK_SYNTHESIS: _task_result(),
-            SynthesisPhase.ARTIFACT_GENERATION: _artifact_result(solution_source=""),
-        },
-    )
-
-    with pytest.raises(SynthesisArtifactGenerationError):
-        await runtime.synthesize_environment_draft(
-            db_id="sakila",
-            requested_category=CategoryTaxonomy.ASSIGNMENT,
-            graph=_sample_graph(),
-        )
-
-    status = await runtime.category_status(db_id="sakila")
-    assignment_status = status[CategoryTaxonomy.ASSIGNMENT]
-    assert assignment_status.backed_off is True
-    assert assignment_status.last_outcome is SynthesisGenerationOutcome.ARTIFACT_INVALID
-    assert assignment_status.last_error_codes == ["solution_source_missing"]
-
-
-def test_synthesis_runtime_keeps_zero_legacy_import_boundary() -> None:
-    runtime_path = Path("src/rl_task_foundry/synthesis/runtime.py")
-    module = ast.parse(runtime_path.read_text(encoding="utf-8"), filename=str(runtime_path))
-    forbidden_roots = {"tools", "tasks", "truth", "verification"}
-
-    for node in ast.walk(module):
-        if not isinstance(node, ast.ImportFrom) or node.module is None:
-            continue
-        if not node.module.startswith("rl_task_foundry."):
-            continue
-        root = node.module.split(".", 2)[1]
-        assert root not in forbidden_roots, node.module
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert not node.module.startswith(banned_prefixes)

@@ -20,13 +20,14 @@ import yaml
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
-    CategoryTaxonomy,
     EnvironmentContract,
     EnvironmentStatus,
     OutputFieldContract,
     OutputFieldType,
+    TopicName,
     difficulty_vector_json,
     flatten_difficulty_vector,
+    normalize_topic,
 )
 from rl_task_foundry.synthesis.runtime import SynthesisEnvironmentDraft
 
@@ -97,12 +98,12 @@ class EnvironmentRegistryCommitResult:
     semantic_similarity: float | None = None
 
 
-@dataclass(slots=True)
+@dataclass(init=False, slots=True)
 class EnvironmentRegistryRecord:
     env_id: str
     db_id: str
     domain: str
-    category: CategoryTaxonomy
+    topic: str
     difficulty_band: DifficultyBand
     created_at: datetime
     status: EnvironmentStatus
@@ -111,26 +112,107 @@ class EnvironmentRegistryRecord:
     filesystem_path: Path
     question: str | None = None
 
+    def __init__(
+        self,
+        *,
+        env_id: str,
+        db_id: str,
+        domain: str,
+        topic: str | None = None,
+        category: object | None = None,
+        difficulty_band: DifficultyBand,
+        created_at: datetime,
+        status: EnvironmentStatus,
+        generator_version: str,
+        exact_signature: str,
+        filesystem_path: Path,
+        question: str | None = None,
+    ) -> None:
+        resolved_topic = topic if topic is not None else category
+        self.env_id = env_id
+        self.db_id = db_id
+        self.domain = domain
+        self.topic = normalize_topic(resolved_topic)
+        self.difficulty_band = difficulty_band
+        self.created_at = created_at
+        self.status = status
+        self.generator_version = generator_version
+        self.exact_signature = exact_signature
+        self.filesystem_path = filesystem_path
+        self.question = question
 
-@dataclass(slots=True)
+    @property
+    def category(self) -> TopicName:
+        return TopicName(self.topic)
+
+
+@dataclass(init=False, slots=True)
 class EnvironmentRegistryCoverageEntry:
     db_id: str
-    category: CategoryTaxonomy
+    topic: str
     difficulty_band: DifficultyBand
     count: int
 
+    def __init__(
+        self,
+        *,
+        db_id: str,
+        topic: str | None = None,
+        category: object | None = None,
+        difficulty_band: DifficultyBand,
+        count: int,
+    ) -> None:
+        resolved_topic = topic if topic is not None else category
+        self.db_id = db_id
+        self.topic = normalize_topic(resolved_topic)
+        self.difficulty_band = difficulty_band
+        self.count = count
 
-@dataclass(slots=True)
+    @property
+    def category(self) -> TopicName:
+        return TopicName(self.topic)
+
+
+@dataclass(init=False, slots=True)
 class SemanticDedupCandidate:
     env_id: str
     db_id: str
     domain: str
-    category: CategoryTaxonomy
+    topic: str
     difficulty_band: DifficultyBand
     question: str | None
     constraint_summaries: tuple[str, ...]
     semantic_text: str
     filesystem_path: Path
+
+    def __init__(
+        self,
+        *,
+        env_id: str,
+        db_id: str,
+        domain: str,
+        topic: str | None = None,
+        category: object | None = None,
+        difficulty_band: DifficultyBand,
+        question: str | None,
+        constraint_summaries: tuple[str, ...],
+        semantic_text: str,
+        filesystem_path: Path,
+    ) -> None:
+        resolved_topic = topic if topic is not None else category
+        self.env_id = env_id
+        self.db_id = db_id
+        self.domain = domain
+        self.topic = normalize_topic(resolved_topic)
+        self.difficulty_band = difficulty_band
+        self.question = question
+        self.constraint_summaries = constraint_summaries
+        self.semantic_text = semantic_text
+        self.filesystem_path = filesystem_path
+
+    @property
+    def category(self) -> TopicName:
+        return TopicName(self.topic)
 
 
 @dataclass(slots=True)
@@ -215,7 +297,7 @@ class EnvironmentRegistryWriter:
         if self.near_dup_enabled:
             semantic_duplicate = self._lookup_semantic_duplicate(
                 db_id=env.db_id,
-                category=env.category,
+                        topic=env.topic,
                 semantic_text=semantic_text,
                 semantic_signature=semantic_signature,
             )
@@ -274,7 +356,7 @@ class EnvironmentRegistryWriter:
                 if self.near_dup_enabled:
                     semantic_duplicate = self._lookup_semantic_duplicate(
                         db_id=env.db_id,
-                        category=env.category,
+                        topic=env.topic,
                         semantic_text=semantic_text,
                         semantic_signature=semantic_signature,
                         conn=conn,
@@ -324,7 +406,7 @@ class EnvironmentRegistryWriter:
                         env.env_id,
                         env.db_id,
                         env.domain,
-                        env.category.value,
+                        env.topic,
                         difficulty_band.value,
                         env.created_at.isoformat(),
                         env.status.value,
@@ -350,7 +432,7 @@ class EnvironmentRegistryWriter:
                 )
                 self._increment_coverage_counter(
                     conn,
-                    f"db={env.db_id}|category={env.category.value}|difficulty_band={difficulty_band.value}",
+                    f"db={env.db_id}|topic={env.topic}|difficulty_band={difficulty_band.value}",
                 )
                 conn.commit()
         except Exception:
@@ -363,7 +445,7 @@ class EnvironmentRegistryWriter:
         if self.near_dup_enabled:
             self._register_semantic_scope_entry(
                 db_id=env.db_id,
-                category=env.category,
+                topic=env.topic,
                 env_id=env.env_id,
                 difficulty_band=difficulty_band,
                 filesystem_path=final_dir,
@@ -381,14 +463,14 @@ class EnvironmentRegistryWriter:
         self,
         *,
         db_id: str | None = None,
-        category: CategoryTaxonomy | None = None,
+        topic: str | None = None,
     ) -> int:
-        return self._count_environments(db_id=db_id, category=category)
+        return self._count_environments(db_id=db_id, topic=topic)
 
     def coverage_snapshot(self) -> dict[str, int]:
         return {
             (
-                f"db={entry.db_id}|category={entry.category.value}"
+                f"db={entry.db_id}|topic={entry.topic}"
                 f"|difficulty_band={entry.difficulty_band.value}"
             ): entry.count
             for entry in self.coverage_entries()
@@ -398,9 +480,9 @@ class EnvironmentRegistryWriter:
         self,
         *,
         db_id: str | None = None,
-        category: CategoryTaxonomy | None = None,
+        topic: str | None = None,
     ) -> list[EnvironmentRegistryCoverageEntry]:
-        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
             """
             SELECT db_id, category, difficulty_band, COUNT(*) AS count
@@ -417,7 +499,7 @@ class EnvironmentRegistryWriter:
         return [
             EnvironmentRegistryCoverageEntry(
                 db_id=str(row["db_id"]),
-                category=CategoryTaxonomy(str(row["category"])),
+                topic=normalize_topic(str(row["category"])),
                 difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                 count=int(row["count"]),
             )
@@ -429,11 +511,11 @@ class EnvironmentRegistryWriter:
         *,
         limit: int = 20,
         db_id: str | None = None,
-        category: CategoryTaxonomy | None = None,
+        topic: str | None = None,
     ) -> list[EnvironmentRegistryRecord]:
         if limit <= 0:
             return []
-        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
             """
             SELECT
@@ -466,7 +548,7 @@ class EnvironmentRegistryWriter:
                     env_id=str(row["env_id"]),
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
-                    category=CategoryTaxonomy(str(row["category"])),
+                    topic=normalize_topic(str(row["category"])),
                     difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                     created_at=datetime.fromisoformat(str(row["created_at"])),
                     status=EnvironmentStatus(str(row["status"])),
@@ -483,11 +565,11 @@ class EnvironmentRegistryWriter:
         *,
         limit: int = 20,
         db_id: str | None = None,
-        category: CategoryTaxonomy | None = None,
+        topic: str | None = None,
     ) -> list[SemanticDedupCandidate]:
         if limit <= 0:
             return []
-        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
             """
             SELECT
@@ -516,7 +598,7 @@ class EnvironmentRegistryWriter:
             semantic_text = _optional_string(payload.get("semantic_dedup_text"))
             if not semantic_text:
                 semantic_text = _fallback_semantic_text(
-                    category=CategoryTaxonomy(str(row["category"])),
+                    topic=normalize_topic(str(row["category"])),
                     question=question,
                     constraint_summaries=constraint_summaries,
                 )
@@ -525,7 +607,7 @@ class EnvironmentRegistryWriter:
                     env_id=str(row["env_id"]),
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
-                    category=CategoryTaxonomy(str(row["category"])),
+                    topic=normalize_topic(str(row["category"])),
                     difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                     question=question,
                     constraint_summaries=constraint_summaries,
@@ -540,15 +622,15 @@ class EnvironmentRegistryWriter:
         *,
         limit: int = 20,
         db_id: str | None = None,
-        category: CategoryTaxonomy | None = None,
+        topic: str | None = None,
     ) -> EnvironmentRegistrySnapshot:
         return EnvironmentRegistrySnapshot(
-            environment_count=self._count_environments(db_id=db_id, category=category),
-            coverage=self.coverage_entries(db_id=db_id, category=category),
+            environment_count=self._count_environments(db_id=db_id, topic=topic),
+            coverage=self.coverage_entries(db_id=db_id, topic=topic),
             recent_environments=self.list_environments(
                 limit=limit,
                 db_id=db_id,
-                category=category,
+                topic=topic,
             ),
         )
 
@@ -567,7 +649,7 @@ class EnvironmentRegistryWriter:
         self,
         *,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
         semantic_text: str,
         semantic_signature: str,
         conn: sqlite3.Connection | None = None,
@@ -580,7 +662,7 @@ class EnvironmentRegistryWriter:
             return None
         scope = self._semantic_scope_index(
             db_id=db_id,
-            category=category,
+            topic=topic,
             conn=conn,
         )
         candidate_ids = scope.lsh.query(target)
@@ -654,10 +736,6 @@ class EnvironmentRegistryWriter:
             draft.atomic_tool_bundle.source,
             encoding="utf-8",
         )
-        (directory / "solution.py").write_text(
-            draft.artifacts.solution_source,
-            encoding="utf-8",
-        )
         (directory / "registry_metadata.json").write_text(
             json.dumps(
                 {
@@ -699,7 +777,7 @@ class EnvironmentRegistryWriter:
         material = "|".join(
             [
                 env.db_id,
-                env.category.value,
+                env.topic,
                 env.tool_signature,
                 env.task_signature,
             ]
@@ -719,7 +797,7 @@ class EnvironmentRegistryWriter:
             "env_id": env.env_id,
             "db_id": env.db_id,
             "domain": env.domain,
-            "category": env.category.value,
+            "topic": env.topic,
             "difficulty_band": difficulty_band.value,
             "created_at": env.created_at.isoformat(),
             "status": env.status.value,
@@ -738,10 +816,11 @@ class EnvironmentRegistryWriter:
         self,
         *,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
         conn: sqlite3.Connection | None = None,
     ) -> _SemanticScopeIndex:
-        scope_key = (db_id, category.value)
+        normalized_topic = normalize_topic(topic)
+        scope_key = (db_id, normalized_topic)
         existing = self._semantic_scope_indexes.get(scope_key)
         if existing is not None:
             return existing
@@ -766,14 +845,14 @@ class EnvironmentRegistryWriter:
                 FROM environments
                 WHERE db_id = ? AND category = ?
                 """,
-                (db_id, category.value),
+                (db_id, normalized_topic),
             ).fetchall()
         finally:
             if manages_connection:
                 connection.close()
         for row in rows:
             env_id = str(row["env_id"])
-            signature = self._semantic_signature_for_row(row=row, category=category)
+            signature = self._semantic_signature_for_row(row=row, topic=normalized_topic)
             minhash = _decode_minhash_to_minhash(signature, num_perm=self.minhash_num_perm)
             if minhash is None:
                 continue
@@ -791,13 +870,13 @@ class EnvironmentRegistryWriter:
         self,
         *,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
         env_id: str,
         difficulty_band: DifficultyBand,
         filesystem_path: Path,
         semantic_signature: str,
     ) -> None:
-        scope_key = (db_id, category.value)
+        scope_key = (db_id, normalize_topic(topic))
         scope = self._semantic_scope_indexes.get(scope_key)
         if scope is None:
             return
@@ -818,7 +897,7 @@ class EnvironmentRegistryWriter:
         self,
         *,
         row: sqlite3.Row,
-        category: CategoryTaxonomy,
+        topic: str,
     ) -> str:
         signature = _optional_string(row["semantic_minhash_signature"])
         version = row["semantic_dedup_text_version"]
@@ -834,7 +913,7 @@ class EnvironmentRegistryWriter:
         )
         if not existing_text:
             existing_text = _fallback_semantic_text(
-                category=category,
+                topic=topic,
                 question=_optional_string(payload.get("question")),
                 constraint_summaries=_constraint_summaries_from_payload(payload),
             )
@@ -846,9 +925,9 @@ class EnvironmentRegistryWriter:
         self,
         *,
         db_id: str | None,
-        category: CategoryTaxonomy | None,
+        topic: str | None,
     ) -> int:
-        where_sql, params = self._build_filters(db_id=db_id, category=category)
+        where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS count FROM environments " + where_sql,
@@ -860,16 +939,16 @@ class EnvironmentRegistryWriter:
     def _build_filters(
         *,
         db_id: str | None,
-        category: CategoryTaxonomy | None,
+        topic: str | None,
     ) -> tuple[str, tuple[object, ...]]:
         clauses: list[str] = []
         params: list[object] = []
         if db_id is not None:
             clauses.append("db_id = ?")
             params.append(db_id)
-        if category is not None:
+        if topic is not None:
             clauses.append("category = ?")
-            params.append(category.value)
+            params.append(normalize_topic(topic))
         if not clauses:
             return "", ()
         return "WHERE " + " AND ".join(clauses), tuple(params)
@@ -1052,7 +1131,7 @@ def build_semantic_dedup_text(environment: EnvironmentContract) -> str:
     lines = [
         f"db_id:{environment.db_id}",
         f"domain:{environment.domain}",
-        f"category:{task.category.value}",
+        f"topic:{task.topic}",
         f"question:{task.question}",
         f"output_schema:{output_shape or '<empty>'}",
         f"constraints:{constraints or '<none>'}",
@@ -1110,12 +1189,12 @@ def _constraint_summaries_from_payload(payload: dict[str, Any]) -> tuple[str, ..
 
 def _fallback_semantic_text(
     *,
-    category: CategoryTaxonomy,
+    topic: str,
     question: str | None,
     constraint_summaries: tuple[str, ...],
 ) -> str:
     parts = [
-        f"category:{category.value}",
+        f"topic:{normalize_topic(topic)}",
         f"question:{question or '<missing>'}",
         "constraints:" + (" | ".join(constraint_summaries) or "<none>"),
     ]

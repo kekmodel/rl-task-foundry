@@ -29,7 +29,6 @@ from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
-    CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
     CrossInstanceSet,
@@ -43,11 +42,9 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    SolutionContract,
     TaskContract,
     difficulty_vector_json,
 )
-from rl_task_foundry.synthesis.cross_instance import evaluate_cross_instance_draft
 from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryWriter,
@@ -60,7 +57,6 @@ from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_use
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.runtime import (
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
-    GeneratedArtifactBundle,
     MaterializedCanonicalAnswerRecord,
     MaterializedInstanceRecord,
     SynthesisEnvironmentDraft,
@@ -155,7 +151,6 @@ class ProofEnvironmentRunSummary:
     solver_pass_rate: float | None = None
     solver_ci_low: float | None = None
     solver_ci_high: float | None = None
-    cross_instance_error_codes: tuple[str, ...] = ()
     registry_status: EnvironmentRegistryCommitStatus | None = None
     registry_env_id: str | None = None
     bundle_root: Path | None = None
@@ -195,7 +190,7 @@ class ProofEnvironmentRunner:
             status="completed",
             expected_contract={
                 "db_id": PROOF_DB_ID,
-                "category": CategoryTaxonomy.ITINERARY.value,
+                "topic": "itinerary",
             },
             actual_data={
                 "env_id": draft.environment.env_id,
@@ -215,31 +210,6 @@ class ProofEnvironmentRunner:
             },
             diagnostics={},
         )
-        cross_instance_summary = evaluate_cross_instance_draft(draft)
-        phase_monitor.emit(
-            phase="cross_instance",
-            status="passed" if cross_instance_summary.passed else "failed",
-            expected_contract={
-                "minimum_required": draft.environment.cross_instance_set.minimum_required,
-            },
-            actual_data={
-                "instance_count": cross_instance_summary.instance_count,
-                "canonical_answer_count": cross_instance_summary.canonical_answer_count,
-                "error_codes": list(cross_instance_summary.error_codes),
-            },
-            checks={"passed": cross_instance_summary.passed},
-            diagnostics={"env_id": draft.environment.env_id},
-        )
-        if not cross_instance_summary.passed:
-            return ProofEnvironmentRunSummary(
-                db_id=draft.environment.db_id,
-                env_id=draft.environment.env_id,
-                fixture_sql_root=fixture_files.root_dir,
-                quality_gate_status="reject_cross_instance",
-                flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
-                cross_instance_error_codes=cross_instance_summary.error_codes,
-            )
         rollout_summary = await self.environment_orchestrator.run_draft(draft)
         phase_monitor.emit(
             phase="rollout",
@@ -399,7 +369,7 @@ def build_proof_environment_draft(
         },
     ]
     canonical_answer_json = canonical_json(canonical_answer)
-    solution_fingerprint = "sha256:" + sha256(canonical_answer_json.encode("utf-8")).hexdigest()
+    label_signature = "sha256:" + sha256(canonical_answer_json.encode("utf-8")).hexdigest()
 
     task = TaskContract(
         question=(
@@ -409,7 +379,7 @@ def build_proof_environment_draft(
             "day 1의 city 이름, 그다음 day 2의 city 이름, 그다음 day 3의 city 이름의 "
             "사전순이 가장 앞서는 답을 고르세요."
         ),
-        category=CategoryTaxonomy.ITINERARY,
+        topic="itinerary",
         output_schema=output_schema,
         constraint_summary=[
             ConstraintSummaryItem(
@@ -450,7 +420,7 @@ def build_proof_environment_draft(
         env_id=PROOF_ENV_ID,
         db_id=PROOF_DB_ID,
         domain="travel_planning",
-        category=CategoryTaxonomy.ITINERARY,
+        topic="itinerary",
         atomic_tool_set_ref=f"db://{PROOF_DB_ID}",
         difficulty_vector=task.difficulty_vector,
         created_at=created_at,
@@ -465,7 +435,6 @@ def build_proof_environment_draft(
             max_tool_rows=50,
         ),
         task=task,
-        solution=SolutionContract(),
         instance_space=InstanceSpaceContract(
             anchor_query=AnchorQueryContract(
                 sql=(
@@ -487,31 +456,31 @@ def build_proof_environment_draft(
                         "budget_bucket": "mid",
                     },
                     parameter_values={"day_count": 3},
-                    expected_solution_fingerprint=solution_fingerprint,
+                    expected_label_signature=label_signature,
                 )
             ],
         ),
     )
-    rendered_prompt = build_rendered_user_prompt(task)
+    anchor_entity = {"anchor_id": 1}
+    rendered_prompt = build_rendered_user_prompt(
+        task,
+        anchor_entity=anchor_entity,
+        canonical_answer=canonical_answer,
+    )
     return SynthesisEnvironmentDraft(
         created_at=created_at,
         db_id=PROOF_DB_ID,
-        requested_category=CategoryTaxonomy.ITINERARY,
+        requested_topic="itinerary",
         schema_summary={"included_table_count": 5, "fixture": "proof_trip_fixture"},
-        selected_category=CategoryTaxonomy.ITINERARY,
+        selected_topic="itinerary",
         environment=environment,
         atomic_tool_bundle=_proof_atomic_tool_bundle(),
-        artifacts=GeneratedArtifactBundle(solution_source=_proof_solution_source()),
         instances=[
             MaterializedInstanceRecord(
                 instance_id="instance_0001",
                 rendered_user_prompt=rendered_prompt,
                 params={"day_count": 3},
-                anchor_values={
-                    "anchor_id": 1,
-                    "season": "spring",
-                    "budget_bucket": "mid",
-                },
+                anchor_values=anchor_entity,
             )
         ],
         canonical_answers=[
@@ -519,7 +488,7 @@ def build_proof_environment_draft(
                 instance_id="instance_0001",
                 canonical_answer=canonical_answer,
                 canonical_answer_json=canonical_answer_json,
-                solution_fingerprint=solution_fingerprint,
+                label_signature=label_signature,
             )
         ],
         generation_attempts=[],
@@ -767,40 +736,6 @@ async def traverse_proof_city_to_proof_activity_via_city_id(conn, city_id, limit
     return [dict(row) for row in rows]
 """.strip() + "\n"
     return AtomicToolBundle(db_id=PROOF_DB_ID, tools=tools, source=source)
-
-
-def _proof_solution_source() -> str:
-    return """
-def solve(tools):
-    anchor = tools.get_proof_anchor_by_id({"anchor_id": 1})
-    cities = tools.list_proof_city_by_season_eq({"season": anchor["season"], "limit": 20})
-    plans = []
-    for city in cities:
-        lodgings = tools.traverse_proof_city_to_proof_lodging_via_city_id(
-            {"city_id": city["city_id"], "limit": 20}
-        )
-        activities = tools.traverse_proof_city_to_proof_activity_via_city_id(
-            {"city_id": city["city_id"], "limit": 20}
-        )
-        if not lodgings or not activities:
-            continue
-        plans.append(
-            {
-                "city_id": city["city_id"],
-                "city": city["city_name"],
-                "lodging": lodgings[0]["lodging_name"],
-                "activity": activities[0]["activity_name"],
-                "total_cost": lodgings[0]["nightly_cost"] + activities[0]["ticket_cost"],
-                "neighbors": [
-                    row["neighbor_city_id"]
-                    for row in tools.list_proof_city_link_by_city_id_eq(
-                        {"city_id": city["city_id"], "limit": 20}
-                    )
-                ],
-            }
-        )
-    return plans
-""".strip() + "\n"
 
 def _sha256_hex(payload: str) -> str:
     return "sha256:" + sha256(payload.encode("utf-8")).hexdigest()

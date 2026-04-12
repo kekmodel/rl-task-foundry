@@ -15,15 +15,35 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class CategoryTaxonomy(StrEnum):
-    ITINERARY = "itinerary"
-    ASSIGNMENT = "assignment"
-    BUNDLE_SELECTION = "bundle_selection"
-    ELIGIBILITY_FILTER = "eligibility_filter"
-    NO_REPEAT_RECOMMENDATION = "no_repeat_recommendation"
-    THRESHOLD_ROUTING = "threshold_routing"
-    TEMPORAL_PLANNING = "temporal_planning"
-    OTHER = "other"
+class TopicName(str):
+    """Compatibility helper for older `.value` call sites while topics are plain strings."""
+
+    @property
+    def value(self) -> str:
+        return str(self)
+
+
+class CategoryTaxonomy:
+    """Compatibility constants only. Topics are plain strings, not enums."""
+
+    ITINERARY = TopicName("itinerary")
+    ASSIGNMENT = TopicName("assignment")
+    BUNDLE_SELECTION = TopicName("bundle_selection")
+    ELIGIBILITY_FILTER = TopicName("eligibility_filter")
+    NO_REPEAT_RECOMMENDATION = TopicName("no_repeat_recommendation")
+    THRESHOLD_ROUTING = TopicName("threshold_routing")
+    TEMPORAL_PLANNING = TopicName("temporal_planning")
+    OTHER = TopicName("other")
+
+
+def normalize_topic(value: object) -> str:
+    if isinstance(value, TopicName):
+        return str(value)
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized:
+            return normalized
+    raise ValueError("topic must be a non-empty string")
 
 
 class DifficultyAxis(StrEnum):
@@ -318,17 +338,20 @@ class ToolContract(StrictModel):
 
 class TaskContract(StrictModel):
     question: str
-    category: CategoryTaxonomy
+    topic: str
     output_schema: OutputSchemaContract
     constraint_summary: list[ConstraintSummaryItem] = Field(default_factory=list)
     difficulty_vector: DifficultyVectorContract = Field(default_factory=DifficultyVectorContract)
     instance_parameters: dict[str, RuntimeValue] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _validate_topic(self) -> TaskContract:
+        self.topic = normalize_topic(self.topic)
+        return self
 
-class SolutionContract(StrictModel):
-    entrypoint: Literal["solve"] = "solve"
-    role: Literal["oracle_reference"] = "oracle_reference"
-    visible_to_solver: Literal[False] = False
+    @property
+    def category(self) -> TopicName:
+        return TopicName(self.topic)
 
 
 class ToolSelfTestContract(StrictModel):
@@ -444,12 +467,16 @@ class InstanceContract(StrictModel):
     instance_id: str
     anchor_values: dict[str, RuntimeValue] = Field(default_factory=dict)
     parameter_values: dict[str, RuntimeValue] = Field(default_factory=dict)
-    expected_solution_fingerprint: str | None = None
+    expected_label_signature: str | None = None
+
+    @property
+    def expected_solution_fingerprint(self) -> str | None:
+        return self.expected_label_signature
 
 
 class CrossInstanceSet(StrictModel):
     minimum_required: int = Field(default=3, ge=1)
-    require_distinct_solution_fingerprints: bool = True
+    require_distinct_label_signatures: bool = True
     instances: list[InstanceContract] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -457,17 +484,21 @@ class CrossInstanceSet(StrictModel):
         instance_ids = [instance.instance_id for instance in self.instances]
         if len(set(instance_ids)) != len(instance_ids):
             raise ValueError("cross-instance sets must not reuse instance_id values")
-        if self.require_distinct_solution_fingerprints:
+        if self.require_distinct_label_signatures:
             fingerprints = [
-                instance.expected_solution_fingerprint
+                instance.expected_label_signature
                 for instance in self.instances
-                if instance.expected_solution_fingerprint is not None
+                if instance.expected_label_signature is not None
             ]
             if len(set(fingerprints)) != len(fingerprints):
                 raise ValueError(
                     "cross-instance solution fingerprints must be distinct when required"
                 )
         return self
+
+    @property
+    def require_distinct_solution_fingerprints(self) -> bool:
+        return self.require_distinct_label_signatures
 
 
 class EnvironmentQualityMetrics(StrictModel):
@@ -492,7 +523,7 @@ class EnvironmentContract(StrictModel):
     env_id: str
     db_id: str
     domain: str
-    category: CategoryTaxonomy
+    topic: str
     atomic_tool_set_ref: str
     difficulty_vector: DifficultyVectorContract
     created_at: datetime
@@ -505,14 +536,18 @@ class EnvironmentContract(StrictModel):
     )
     rollout_constraints: RolloutConstraintsContract
     task: TaskContract
-    solution: SolutionContract
     instance_space: InstanceSpaceContract
     cross_instance_set: CrossInstanceSet = Field(default_factory=CrossInstanceSet)
 
     @model_validator(mode="after")
     def _validate_contract_consistency(self) -> EnvironmentContract:
-        if self.task.category != self.category:
-            raise ValueError("environment category must match task category")
+        self.topic = normalize_topic(self.topic)
+        if self.task.topic != self.topic:
+            raise ValueError("environment topic must match task topic")
         if self.task.difficulty_vector != self.difficulty_vector:
             raise ValueError("environment difficulty_vector must match task difficulty_vector")
         return self
+
+    @property
+    def category(self) -> TopicName:
+        return TopicName(self.topic)

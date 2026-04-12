@@ -1,4 +1,4 @@
-"""LLM-friendly prompt builders for the synthesis pipeline."""
+"""LLM-friendly prompt builders for the label-first synthesis pipeline."""
 
 from __future__ import annotations
 
@@ -16,159 +16,55 @@ LANGUAGE_NAMES = {
 
 TASK_LANGUAGE_INSTRUCTION = (
     "Generate the user-facing question, constraint descriptions, and tie-breaker wording in "
-    "{language}. All code (solution.py), field names, and tool calls must remain in English."
+    "{language}. All schema field names, code identifiers, and tool names must remain in English."
 )
 
 ERROR_TEMPLATES = {
-    "top_level_statement_forbidden": (
-        "Do not place statements other than imports and function definitions at module top level."
-    ),
-    "execution_error": (
-        "A runtime execution error occurred: {detail}. Common causes include inventing "
-        "unsupported helpers such as tools.query(), using raw SQL inside generated code, or "
-        "calling tool names that do not exist."
-    ),
-    "import_not_allowlisted": "{module_name} is not allowlisted. Use only allowed imports.",
-    "call_count_limit_exceeded": (
-        "Tool calls exceeded the budget. Rewrite the code to use a more efficient validation path."
-    ),
     "canonical_answer_schema_mismatch": (
-        "The solution output does not match output_schema. Return JSON that matches the schema."
+        "The canonical answer could not be validated against the inferred schema. Return a valid "
+        "canonical answer JSON object or JSON array."
     ),
-    "tool_return_key_not_in_returns_schema": (
-        "Only access keys that are declared in the tool returns_schema."
-    ),
-    "tool_return_key_access_forbidden": (
-        "Only access named fields on object-valued tool results whose returns_schema declares them."
-    ),
-    "lambda_forbidden": (
-        "Do not use lambda expressions. Write explicit local variables and loops instead."
+    "call_count_limit_exceeded": (
+        "The previous task was too easy or too shallow. Increase the latent task difficulty by "
+        "following the current crank hint."
     ),
 }
 
-FEW_SHOT_TRIP_EXAMPLE = {
-    "category": "itinerary",
+FEW_SHOT_EXAMPLE = {
     "label": {
-        "canonical_answer_json": '[{"activity":"Han River Night Walk","city":"Seoul","city_id":101,"day":1,"hotel":"Seoul Station Stay","total_cost":180},{"activity":"Fortress Loop Tour","city":"Suwon","city_id":102,"day":2,"hotel":"Suwon Fortress Hotel","total_cost":160}]',
-        "output_schema": {
-            "version": "v2",
-            "root": {
-                "name": "itinerary",
-                "type": "list",
-                "ordered": True,
-                "items": {
-                    "name": "entry",
-                    "type": "object",
-                    "fields": [
-                        {"name": "day", "type": "int"},
-                        {"name": "city_id", "type": "int"},
-                        {"name": "city", "type": "str"},
-                        {"name": "hotel", "type": "str"},
-                        {"name": "activity", "type": "str"},
-                        {"name": "total_cost", "type": "int"},
-                    ],
-                },
-            },
-            "primary_output_format": "json_array",
-        },
+        "canonical_answer_json": '[{"city":"Seoul","day":1,"hotel":"Seoul Station Stay","total_cost":180},{"city":"Suwon","day":2,"hotel":"Suwon Fortress Hotel","total_cost":160}]',
+        "anchor_entity": {"anchor_id": 1},
         "difficulty_vector": {
             "search_cost": 2.0,
             "solution_space": 2.0,
             "constraint_density": 2.0,
         },
         "instance_parameters": {},
+        "label_summary": "The cheapest valid two-day itinerary is unique after applying connectivity and tie-break rules.",
     },
     "task": {
-        "question": "Plan a 2-day spring itinerary. Visit connected cities without repetition, choose the cheapest valid lodging and the first listed activity in each city, and break ties by city name.",
+        "question": "봄 시즌 기준으로 연결된 두 도시를 중복 없이 방문하는 2일 일정을 짜 주세요. 각 날짜마다 가장 저렴한 숙소를 고르고, 하루 총비용이 같으면 도시 이름이 사전순으로 앞서는 쪽을 선택해 주세요.",
         "constraint_summary": [
             {
                 "key": "connected_cities_only",
                 "kind": "other",
-                "summary": "Each next city must be reachable from the previous city through the city-link relation.",
+                "summary": "Each next city must be reachable from the previous city.",
             },
             {
                 "key": "no_repeat_city",
                 "kind": "uniqueness",
                 "summary": "Do not repeat a city.",
             },
-            {
-                "key": "daily_budget_cap",
-                "kind": "threshold",
-                "summary": "Each day's lodging plus activity cost must stay at or below 200.",
-            },
         ],
         "instance_space": {
             "anchor_query": {
-                "sql": "SELECT city_id FROM city ORDER BY city_id",
-                "outputs": ["city_id"],
+                "sql": "SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
+                "outputs": ["anchor_id"],
             },
             "parameters": {},
             "sampling": {"strategy": "deterministic_hash", "seed": 0},
             "instance_count": 1,
         },
-    },
-    "proposed_environment": {
-        "task": {
-            "question": "Plan a 2-day spring itinerary. Visit connected cities without repetition, choose the cheapest valid lodging and the first listed activity in each city, and break ties by city name.",
-            "category": "itinerary",
-            "output_schema": {
-                "version": "v2",
-                "root": {
-                    "name": "itinerary",
-                    "type": "list",
-                    "ordered": True,
-                    "items": {
-                        "name": "entry",
-                        "type": "object",
-                        "fields": [
-                            {"name": "day", "type": "int"},
-                            {"name": "city_id", "type": "int"},
-                            {"name": "city", "type": "str"},
-                            {"name": "hotel", "type": "str"},
-                            {"name": "activity", "type": "str"},
-                            {"name": "total_cost", "type": "int"},
-                        ],
-                    },
-                },
-                "primary_output_format": "json_array",
-            },
-            "constraint_summary": [
-                {
-                    "key": "connected_cities_only",
-                    "kind": "other",
-                    "summary": "Each next city must be reachable from the previous city through the city-link relation.",
-                },
-                {
-                    "key": "no_repeat_city",
-                    "kind": "uniqueness",
-                    "summary": "Do not repeat a city.",
-                },
-                {
-                    "key": "daily_budget_cap",
-                    "kind": "threshold",
-                    "summary": "Each day's lodging plus activity cost must stay at or below 200.",
-                },
-            ],
-            "difficulty_vector": {
-                "search_cost": 2.0,
-                "solution_space": 2.0,
-                "constraint_density": 2.0,
-            },
-            "instance_parameters": {},
-        },
-        "solution": {"entrypoint": "solve"},
-        "instance_space": {
-            "anchor_query": {
-                "sql": "SELECT city_id FROM city ORDER BY city_id",
-                "outputs": ["city_id"],
-            },
-            "parameters": {},
-            "sampling": {"strategy": "deterministic_hash", "seed": 0},
-            "instance_count": 1,
-        },
-    },
-    "artifacts": {
-        "solution_source": "def solve(tools):\n    city_ids = [101, 102]\n    answer = []\n    for day, city_id in enumerate(city_ids, start=1):\n        city = tools.get_proof_city_by_id({\"city_id\": city_id})\n        lodgings = tools.traverse_proof_city_to_proof_lodging_via_city_id({\"city_id\": city_id, \"limit\": 1})\n        activities = tools.traverse_proof_city_to_proof_activity_via_city_id({\"city_id\": city_id, \"limit\": 1})\n        lodging = lodgings[0]\n        activity = activities[0]\n        answer.append({\n            \"day\": day,\n            \"city_id\": city_id,\n            \"city\": city[\"city_name\"],\n            \"hotel\": lodging[\"lodging_name\"],\n            \"activity\": activity[\"activity_name\"],\n            \"total_cost\": lodging[\"nightly_cost\"] + activity[\"ticket_cost\"],\n        })\n    return answer\n",
     },
 }
 
@@ -195,10 +91,7 @@ def _schema_orientation_lines(request: SynthesisStageRequest) -> list[str]:
                 continue
             qualified_name = table.get("qualified_name") or table.get("table_name")
             columns = table.get("column_names") or []
-            pk = table.get("primary_key") or []
-            lines.append(
-                f"- {qualified_name} | pk={pk} | columns={columns[:8]}"
-            )
+            lines.append(f"- {qualified_name}: columns={columns[:8]}")
     return lines
 
 
@@ -210,10 +103,6 @@ def _phase_relevant_previous_outputs(request: SynthesisStageRequest) -> dict[str
             SynthesisPhase.CATEGORY_INFERENCE,
         ],
         SynthesisPhase.TASK_SYNTHESIS: [SynthesisPhase.LABEL_CONSTRUCTION],
-        SynthesisPhase.ARTIFACT_GENERATION: [
-            SynthesisPhase.LABEL_CONSTRUCTION,
-            SynthesisPhase.TASK_SYNTHESIS,
-        ],
     }
     wanted = phase_map.get(request.phase, [])
     return {
@@ -233,491 +122,129 @@ def _grounded_tool_evidence_lines(request: SynthesisStageRequest) -> list[str]:
     return [f"- {line}" for line in sample_observations[:8] if isinstance(line, str) and line.strip()]
 
 
-def _leaf_output_field_names(field: dict[str, Any]) -> set[str]:
-    field_type = field.get("type")
-    if field_type == "object":
-        names: set[str] = set()
-        for child in field.get("fields", []):
-            if isinstance(child, dict):
-                names.update(_leaf_output_field_names(child))
-        return names
-    if field_type == "list":
-        items = field.get("items")
-        if isinstance(items, dict):
-            return _leaf_output_field_names(items)
-        return set()
-    field_name = field.get("name")
-    if isinstance(field_name, str) and field_name:
-        return {field_name}
-    return set()
-
-
-def _json_schema_object_keys(schema: Any) -> set[str]:
-    if not isinstance(schema, dict):
-        return set()
-    keys: set[str] = set()
-    if isinstance(schema.get("properties"), dict):
-        keys.update(str(key) for key in schema["properties"])
-    if isinstance(schema.get("items"), dict):
-        keys.update(_json_schema_object_keys(schema["items"]))
-    for branch in schema.get("anyOf", []):
-        keys.update(_json_schema_object_keys(branch))
-    return keys
-
-
-def _relevant_atomic_tool_lines(request: SynthesisStageRequest) -> list[str]:
-    if not request.available_atomic_tools:
-        return []
-    anchor_outputs: set[str] = set()
-    output_field_names: set[str] = set()
-    observed_tool_names: set[str] = set()
-
-    task_output = request.previous_outputs.get(SynthesisPhase.TASK_SYNTHESIS)
-    if task_output is not None:
-        instance_space = getattr(task_output, "instance_space", None)
-        anchor_query = getattr(instance_space, "anchor_query", None)
-        outputs = getattr(anchor_query, "outputs", None)
-        if isinstance(outputs, list):
-            anchor_outputs = {str(name) for name in outputs}
-
-    label_output = request.previous_outputs.get(SynthesisPhase.LABEL_CONSTRUCTION)
-    if label_output is not None:
-        output_schema = label_output.output_schema.model_dump(mode="json")
-        root = output_schema.get("root")
-        if isinstance(root, dict):
-            output_field_names = _leaf_output_field_names(root)
-
-    for line in _grounded_tool_evidence_lines(request):
-        stripped = line.removeprefix("- ").strip()
-        if "(" in stripped:
-            observed_tool_names.add(stripped.split("(", 1)[0].strip())
-
-    ranked: list[tuple[int, str]] = []
-    for definition in request.available_atomic_tools:
-        if not isinstance(definition, dict):
-            continue
-        name = definition.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-        params_schema = definition.get("params_schema")
-        returns_schema = definition.get("returns_schema")
-        param_names = (
-            set(params_schema.get("properties", {}).keys())
-            if isinstance(params_schema, dict)
-            else set()
-        )
-        return_keys = _json_schema_object_keys(returns_schema)
-        score = 0
-        if anchor_outputs & param_names:
-            score += 3
-        if output_field_names & return_keys:
-            score += 3
-        if name in observed_tool_names:
-            score += 2
-        if any(token in name for token in sorted(anchor_outputs | output_field_names)):
-            score += 1
-        if score <= 0:
-            continue
-        params_rendered = ", ".join(sorted(param_names)) if param_names else "no params"
-        return_keys_rendered = ", ".join(sorted(return_keys)) if return_keys else "scalar/null"
-        ranked.append(
-            (
-                -score,
-                f"- {name}({params_rendered}) -> keys [{return_keys_rendered}]",
-            )
-        )
-    ranked.sort()
-    return [line for _, line in ranked[:12]]
-
-
 def _recent_memory_lines(request: SynthesisStageRequest) -> list[str]:
     entries = request.memory[-3:]
-    return [
-        f"- {entry.phase.value}: {entry.summary}"
-        for entry in entries
-        if entry.summary
-    ]
+    return [f"- {entry.phase.value}: {entry.summary}" for entry in entries if entry.summary]
 
 
 def _render_error_feedback(request: SynthesisStageRequest) -> list[str]:
-    return []
+    if request.latest_quality_gate_feedback is None:
+        return []
+    status = request.latest_quality_gate_feedback.status
+    template = ERROR_TEMPLATES.get(status)
+    return [template] if template is not None else []
 
 
 def _render_difficulty_feedback(request: SynthesisStageRequest) -> str | None:
-    if request.latest_quality_gate_feedback is None and request.crank_hint is None:
-        return None
-    lines: list[str] = []
-    if request.latest_quality_gate_feedback is not None:
-        feedback = request.latest_quality_gate_feedback
-        lines.append(
-            "The previous synthesized task was outside the solver pass-rate band. "
-            f"Status: {feedback.status}. Pass rate: {feedback.pass_rate:.2f} "
-            f"(CI {feedback.ci_lower:.2f}-{feedback.ci_upper:.2f})."
-        )
-        if feedback.previous_question:
-            lines.append(f"Do not repeat this previous question: {feedback.previous_question}")
-        if feedback.previous_semantic_dedup_text:
-            lines.append(
-                "Do not repeat this previous latent task signature: "
-                f"{feedback.previous_semantic_dedup_text}"
-            )
     if request.crank_hint:
-        lines.append(request.crank_hint)
-    return "\n".join(lines) if lines else None
-
-
-def _fact_value_type_for_output_type(type_name: str | None) -> str:
-    mapping = {
-        "string": "str",
-        "str": "str",
-        "enum": "str",
-        "int": "int",
-        "integer": "int",
-        "float": "float",
-        "number": "float",
-        "bool": "bool",
-        "boolean": "bool",
-        "date": "date",
-        "datetime": "datetime",
-    }
-    return mapping.get(type_name or "", "str")
-
-
-def _collect_fact_examples_from_output_field(
-    field: dict[str, Any],
-    *,
-    cardinality: str = "one",
-    entity_ref: str = "answer",
-) -> list[dict[str, Any]]:
-    field_type = field.get("type")
-    if field_type == "object":
-        facts: list[dict[str, Any]] = []
-        for child in field.get("fields", []):
-            if isinstance(child, dict):
-                facts.extend(
-                    _collect_fact_examples_from_output_field(
-                        child,
-                        cardinality=cardinality,
-                        entity_ref=entity_ref,
-                    )
-                )
-        return facts
-    if field_type == "list":
-        items = field.get("items")
-        if isinstance(items, dict):
-            return _collect_fact_examples_from_output_field(
-                items,
-                cardinality="many",
-                entity_ref="answer_item",
-            )
-        return []
-    field_name = field.get("name")
-    if not isinstance(field_name, str) or not field_name:
-        return []
-    return [
-        {
-            "key": field_name,
-            "entity_ref": entity_ref,
-            "attribute": field_name,
-            "value_type": _fact_value_type_for_output_type(field_type),
-            "nullable": bool(field.get("nullable", False)),
-            "cardinality": cardinality,
-        }
-    ]
-
-
-def _artifact_fact_schema_example(request: SynthesisStageRequest) -> dict[str, Any]:
-    label_output = request.previous_outputs.get(SynthesisPhase.LABEL_CONSTRUCTION)
-    if isinstance(label_output, object) and hasattr(label_output, "output_schema"):
-        output_schema = label_output.output_schema.model_dump(mode="json")
-        root = output_schema.get("root")
-        if isinstance(root, dict):
-            facts = _collect_fact_examples_from_output_field(root)
-            if facts:
-                return {"facts": facts[:6]}
-    return {
-        "facts": [
-            {
-                "key": "store_id",
-                "entity_ref": "answer",
-                "attribute": "store_id",
-                "value_type": "int",
-                "nullable": False,
-                "cardinality": "one",
-            }
-        ]
-    }
+        return request.crank_hint
+    return None
 
 
 def _phase_output_contract(phase: SynthesisPhase, request: SynthesisStageRequest) -> dict[str, Any]:
     if phase == SynthesisPhase.SCHEMA_EXPLORATION:
         return {
             "domain_hypothesis": "movie rental support workflows",
-            "candidate_categories": ["assignment", "other"],
+            "candidate_topics": ["assignment", "other"],
             "sample_observations": [
                 "count_customer() returned 599",
-                "top_k_payment_by_amount_desc(limit=3) revealed customer and amount patterns",
+                "top_3_payment_by_amount_desc(limit=3) showed repeated high-value customers",
             ],
-            "memory_summary": "grounded schema and data exploration completed",
+            "memory_summary": "grounded schema exploration completed",
         }
     if phase == SynthesisPhase.CATEGORY_INFERENCE:
         return {
-            "selected_category": (
-                request.requested_category.value
-                if request.requested_category is not None
-                else "assignment"
-            ),
-            "rationale": "This category remains feasible with the grounded tool composition.",
-            "memory_summary": "category inference completed",
+            "selected_topic": request.requested_topic or "assignment",
+            "rationale": "This topic is feasible with the observed tables, rows, and tool paths.",
+            "memory_summary": "topic inference completed",
         }
     if phase == SynthesisPhase.LABEL_CONSTRUCTION:
         return {
             "canonical_answer_json": '{"store_id": 1}',
-            "output_schema": {
-                "version": "v2",
-                "root": {
-                    "name": "answer",
-                    "type": "object",
-                    "fields": [{"name": "store_id", "type": "int"}],
-                },
-                "primary_output_format": "json_object",
-            },
+            "anchor_entity": {"customer_id": 148},
             "difficulty_vector": {
-                "search_cost": 1.0,
+                "search_cost": 2.0,
                 "solution_space": 1.0,
                 "constraint_density": 1.0,
             },
             "instance_parameters": {},
-            "label_summary": "The label is grounded in concrete observed rows and has a unique answer.",
+            "label_summary": "The answer is unique after grounded tie-break rules are applied.",
             "memory_summary": "label construction completed",
         }
-    if phase == SynthesisPhase.TASK_SYNTHESIS:
-        return {
-            "question": "Return the store_id implied by the grounded customer-support scenario.",
-            "constraint_summary": [
-                {
-                    "key": "tie_break",
-                    "kind": "uniqueness",
-                    "summary": "If multiple candidates remain, choose the smallest store_id.",
-                }
-            ],
-            "instance_space": {
-                "anchor_query": {
-                    "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                    "outputs": ["customer_id"],
-                },
-                "parameters": {},
-                "sampling": {"strategy": "deterministic_hash", "seed": 0},
-                "instance_count": 1,
-            },
-            "memory_summary": "task synthesis completed",
-        }
-    label_output = request.previous_outputs.get(SynthesisPhase.LABEL_CONSTRUCTION)
-    task_output = request.previous_outputs.get(SynthesisPhase.TASK_SYNTHESIS)
-    output_schema: Any = {
-        "version": "v2",
-        "root": {
-            "name": "answer",
-            "type": "object",
-            "fields": [{"name": "store_id", "type": "int"}],
-        },
-        "primary_output_format": "json_object",
-    }
-    difficulty_vector: Any = {
-        "search_cost": 1.0,
-        "solution_space": 1.0,
-        "constraint_density": 1.0,
-    }
-    instance_parameters: Any = {}
-    question = "Return the correct JSON answer for the grounded scenario."
-    constraint_summary: Any = [
-        {
-            "key": "tie_break",
-            "kind": "uniqueness",
-            "summary": "If multiple candidates remain, choose the smallest stable key.",
-        }
-    ]
-    instance_space: Any = {
-        "anchor_query": {
-            "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-            "outputs": ["customer_id"],
-        },
-        "parameters": {},
-        "sampling": {"strategy": "deterministic_hash", "seed": 0},
-        "instance_count": 1,
-    }
-    if label_output is not None:
-        output_schema = label_output.output_schema.model_dump(mode="json")
-        difficulty_vector = label_output.difficulty_vector.model_dump(mode="json")
-        instance_parameters = label_output.instance_parameters
-    if task_output is not None:
-        question = task_output.question
-        constraint_summary = [
-            item.model_dump(mode="json") for item in task_output.constraint_summary
-        ]
-        instance_space = task_output.instance_space.model_dump(mode="json")
     return {
-        "proposed_environment": {
-            "task": {
-                "question": question,
-                "category": (
-                    request.requested_category.value
-                    if request.requested_category is not None
-                    else "assignment"
-                ),
-                "output_schema": output_schema,
-                "constraint_summary": constraint_summary,
-                "difficulty_vector": difficulty_vector,
-                "instance_parameters": instance_parameters,
+        "question": "사용자 입장에서 자연스럽게 묻는 요청문을 작성하세요.",
+        "constraint_summary": [
+            {
+                "key": "stable_tie_break",
+                "kind": "uniqueness",
+                "summary": "Break ties with a stable deterministic rule.",
+            }
+        ],
+        "instance_space": {
+            "anchor_query": {
+                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                "outputs": ["customer_id"],
             },
-            "solution": {"entrypoint": "solve"},
-            "instance_space": instance_space,
+            "parameters": {},
+            "sampling": {"strategy": "deterministic_hash", "seed": 0},
+            "instance_count": 1,
         },
-        "artifacts": {
-            "solution_source": "python source string",
-        },
+        "memory_summary": "task synthesis completed",
     }
 
 
 def build_synthesis_phase_instructions(phase: SynthesisPhase) -> str:
     common = (
-        "You are one phase of a synthesis agent that creates verifiable database task "
-        "environments for RLVR training. Always return exactly one JSON object that matches "
-        "the required output contract. Do not emit markdown fences or extra prose."
+        "You are one phase of a synthesis agent that builds grounded RLVR database tasks. "
+        "Return exactly one JSON object matching the required output contract. "
+        "Do not emit markdown fences or extra commentary."
     )
     if phase == SynthesisPhase.SCHEMA_EXPLORATION:
         return (
-            f"{common} This is the grounded data-exploration phase. Use the provided tools to "
-            "inspect real database rows or aggregates before deciding anything. You must ground "
-            "the result in actual tool calls and produce non-empty "
-            "`sample_observations`. Use a small number of high-signal tool calls and stop as "
-            "soon as you can justify one grounded category proposal and one answerable data "
-            "path. Do not assume new tools can be created."
+            f"{common} This is the data exploration phase. Use the provided function tools to inspect "
+            "real database rows and produce concrete sample observations. Do not guess hidden values."
         )
     if phase == SynthesisPhase.CATEGORY_INFERENCE:
         return (
-            f"{common} Choose the best feasible category from the grounded exploration output. "
-            "Do not invent unsupported categories or hypothetical tools."
+            f"{common} Choose one grounded topic string that matches the observed schema and sample rows."
         )
     if phase == SynthesisPhase.LABEL_CONSTRUCTION:
         return (
-            f"{common} Construct the latent label first. Decide the canonical answer JSON, "
-            "output schema, and difficulty vector from grounded evidence before any user-facing "
-            "question or code is written."
-        )
-    if phase == SynthesisPhase.TASK_SYNTHESIS:
-        return (
-            f"{common} Reverse-design the user-facing task from the already-fixed label. "
-            "Do not change the label, schema, or difficulty; only surface them naturally."
+            f"{common} Construct the latent label first. Decide the canonical answer JSON, anchor entity, "
+            "and difficulty vector from grounded evidence before writing any user-facing request."
         )
     return (
-        f"{common} This is the code-generation phase. The label and task outputs from prior "
-        "phases are authoritative. Keep generated code aligned with them, use only English for "
-        "code and field names. Do not invent new tools. `proposed_environment.task` must fully "
-        "restate the authoritative question, output_schema, constraint_summary, difficulty_vector, "
-        "and instance_parameters. Generate only `solution.py`. The solution may call only named "
-        "atomic tools through the `tools` object, for example `tools.get_customer_by_id(...)` or "
-        "`await tools.get_customer_by_id(...)`. Never use raw SQL, `tools.query(...)`, "
-        "`tools.execute(...)`, or invented helper APIs. Do not use lambda expressions; prefer "
-        "explicit loops and named variables."
+        f"{common} Reverse-design the natural user request from the already-fixed label. "
+        "Do not change the canonical answer or difficulty. Surface the constraints naturally in the request."
     )
 
 
 def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
     sections: list[str] = []
-
     sections.append("# Domain\n" f"{request.domain_name}: {request.scenario_description}")
-
-    if request.requested_category is not None:
-        sections.append(f"# Requested Category\n{request.requested_category.value}")
+    if request.requested_topic is not None:
+        sections.append(f"# Requested Topic\n{request.requested_topic}")
 
     schema_lines = _schema_orientation_lines(request)
     if schema_lines:
         sections.append("# Schema Orientation\n" + "\n".join(schema_lines))
 
-    if request.phase in {
-        SynthesisPhase.TASK_SYNTHESIS,
-        SynthesisPhase.ARTIFACT_GENERATION,
-    }:
-        sections.append(
-            "# User-Facing Language\n"
-            + TASK_LANGUAGE_INSTRUCTION.format(language=_language_name(request))
-        )
-
     previous_outputs = _phase_relevant_previous_outputs(request)
     if previous_outputs:
         sections.append("# Previous Phase Outputs\n" + _json_block(previous_outputs))
 
-    if request.phase == SynthesisPhase.ARTIFACT_GENERATION:
-        label_output = request.previous_outputs.get(SynthesisPhase.LABEL_CONSTRUCTION)
-        task_output = request.previous_outputs.get(SynthesisPhase.TASK_SYNTHESIS)
-        if label_output is not None and task_output is not None:
-            sections.append(
-                "# Authoritative Task Contract\n"
-                + _json_block(
-                    {
-                        "task": {
-                            "question": task_output.question,
-                            "category": (
-                                request.requested_category.value
-                                if request.requested_category is not None
-                                else "assignment"
-                            ),
-                            "output_schema": label_output.output_schema.model_dump(mode="json"),
-                            "constraint_summary": [
-                                item.model_dump(mode="json")
-                                for item in task_output.constraint_summary
-                            ],
-                            "difficulty_vector": label_output.difficulty_vector.model_dump(
-                                mode="json"
-                            ),
-                            "instance_parameters": label_output.instance_parameters,
-                        },
-                        "instance_space": task_output.instance_space.model_dump(mode="json"),
-                    }
-                )
-            )
-        grounded_tool_evidence = _grounded_tool_evidence_lines(request)
-        if grounded_tool_evidence:
-            sections.append("# Grounded Tool Evidence\n" + "\n".join(grounded_tool_evidence))
-        relevant_tool_lines = _relevant_atomic_tool_lines(request)
-        if relevant_tool_lines:
-            sections.append("# Relevant Atomic Tools\n" + "\n".join(relevant_tool_lines))
+    grounded_tool_evidence = _grounded_tool_evidence_lines(request)
+    if grounded_tool_evidence:
+        sections.append("# Grounded Evidence\n" + "\n".join(grounded_tool_evidence))
 
     recent_memory = _recent_memory_lines(request)
     if recent_memory:
         sections.append("# Recent Memory\n" + "\n".join(recent_memory))
 
-    if request.phase == SynthesisPhase.SCHEMA_EXPLORATION:
+    if request.phase == SynthesisPhase.TASK_SYNTHESIS:
         sections.append(
-            "# Exploration Goal\n"
-            "Inspect the real database through the provided SDK tools. Ground your answer in "
-            "actual observed rows or aggregates. Do not guess hidden values."
-        )
-    elif request.phase == SynthesisPhase.CATEGORY_INFERENCE:
-        sections.append(
-            "# Category Goal\n"
-            "Choose the best feasible category using grounded exploration results."
-        )
-    elif request.phase == SynthesisPhase.LABEL_CONSTRUCTION:
-        sections.append(
-            "# Label Goal\n"
-            "Decide the canonical answer first. The answer must be grounded in observed data and "
-            "must be directly canonicalizable against the output schema."
-        )
-    elif request.phase == SynthesisPhase.TASK_SYNTHESIS:
-        sections.append(
-            "# Task Goal\n"
-            "Write a natural user-facing question and constraint summaries that surface the fixed "
-            "label semantics without changing them."
-        )
-    else:
-        sections.append(
-            "# Code Goal\n"
-            "Generate solution.py that reproduces the already-fixed label. Do not rely on text "
-            "reasoning for correctness. The code must implement the authoritative task contract "
-            "exactly. Use only named atomic tools through the `tools` object. Never use raw SQL "
-            "or invented helpers such as tools.query(...)."
+            "# User-Facing Language\n"
+            + TASK_LANGUAGE_INSTRUCTION.format(language=_language_name(request))
         )
 
     error_feedback = _render_error_feedback(request)
@@ -728,11 +255,11 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
     if difficulty_feedback:
         sections.append("# Difficulty Guidance\n" + difficulty_feedback)
 
-    if request.phase in {SynthesisPhase.TASK_SYNTHESIS, SynthesisPhase.ARTIFACT_GENERATION}:
+    if request.phase == SynthesisPhase.TASK_SYNTHESIS:
         sections.append(
             "# One-Shot Example\n"
             "Use this only as a structural example. Do not copy values verbatim.\n"
-            + _json_block(FEW_SHOT_TRIP_EXAMPLE)
+            + _json_block(FEW_SHOT_EXAMPLE)
         )
 
     sections.append(

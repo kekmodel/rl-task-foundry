@@ -8,7 +8,6 @@ from pathlib import Path
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryRecord,
     EnvironmentRegistryWriter,
@@ -41,10 +40,10 @@ class EnvironmentBundleExporter:
         bundle_root: Path,
         *,
         db_id: str | None = None,
-        category: CategoryTaxonomy | None = None,
+        topic: str | None = None,
         env_id: str | None = None,
     ) -> EnvironmentBundleExportSummary:
-        records = self._environment_records(db_id=db_id, category=category, env_id=env_id)
+        records = self._environment_records(db_id=db_id, topic=topic, env_id=env_id)
         self._prepare_bundle_root(bundle_root)
 
         databases_dir = bundle_root / "databases"
@@ -74,14 +73,14 @@ class EnvironmentBundleExporter:
         self,
         *,
         db_id: str | None,
-        category: CategoryTaxonomy | None,
+        topic: str | None,
         env_id: str | None,
     ) -> list[EnvironmentRegistryRecord]:
-        count = self.registry.environment_count(db_id=db_id, category=category)
+        count = self.registry.environment_count(db_id=db_id, topic=topic)
         records = self.registry.list_environments(
             limit=count,
             db_id=db_id,
-            category=category,
+            topic=topic,
         )
         if env_id is not None:
             records = [record for record in records if record.env_id == env_id]
@@ -120,9 +119,7 @@ class EnvironmentBundleExporter:
     ) -> None:
         source_dir = record.filesystem_path
         target_dir = bundle_root / "environments" / record.env_id
-        audit_dir = target_dir / "audit"
         target_dir.mkdir(parents=True, exist_ok=True)
-        audit_dir.mkdir(parents=True, exist_ok=True)
 
         self._copy_required_file(source_dir / "environment.yaml", target_dir / "environment.yaml")
         self._copy_required_file(source_dir / "instances.jsonl", target_dir / "instances.jsonl")
@@ -130,7 +127,6 @@ class EnvironmentBundleExporter:
             source_dir / "canonical_answers.jsonl",
             target_dir / "canonical_answers.jsonl",
         )
-        self._copy_required_file(source_dir / "solution.py", audit_dir / "solution.py")
 
     @staticmethod
     def _copy_required_file(source: Path, target: Path) -> None:

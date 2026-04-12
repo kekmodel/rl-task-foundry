@@ -12,7 +12,6 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentRolloutSummary
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
-    InstanceContract,
     build_difficulty_vector,
 )
 from rl_task_foundry.synthesis.environment_registry import (
@@ -56,13 +55,13 @@ class _FakeSynthesisRuntime:
         self,
         *,
         db_id: str,
-        requested_category: CategoryTaxonomy,
+        requested_topic: str,
         retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> object:
         self.calls.append(
             {
                 "db_id": db_id,
-                "requested_category": requested_category,
+                "requested_topic": requested_topic,
                 "retry_seed": retry_seed,
             }
         )
@@ -198,7 +197,7 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
         summary = await runner.run(
             output_root,
             db_id="sakila",
-            category=CategoryTaxonomy.ASSIGNMENT,
+            topic=CategoryTaxonomy.ASSIGNMENT,
         )
     finally:
         await runner.close()
@@ -233,16 +232,7 @@ async def test_real_db_trial_runner_retries_too_easy_with_harder_synthesis(
             "environment": base_second_draft.environment.model_copy(
                 update={
                     "cross_instance_set": base_second_draft.environment.cross_instance_set.model_copy(
-                        update={
-                            "instances": [
-                                InstanceContract(
-                                    instance_id="instance_0001",
-                                    anchor_values={},
-                                    parameter_values={},
-                                    expected_solution_fingerprint="sha256:harder-answer",
-                                )
-                            ]
-                        }
+                        update={"minimum_required": 1}
                     )
                 }
             ),
@@ -250,13 +240,17 @@ async def test_real_db_trial_runner_retries_too_easy_with_harder_synthesis(
                 MaterializedInstanceRecord(
                     instance_id="instance_0001",
                     rendered_user_prompt=(
+                        "<entity>\n"
+                        "{\"customer_id\": 2}\n"
+                        "</entity>\n\n"
                         "두 hop 탐색이 필요한 더 어려운 배정 질문입니다.\n\n"
                         "# Submit Result Format\n"
-                        "{\"type\":\"object\",\"properties\":{\"customer\":{\"type\":\"string\"},"
-                        "\"day\":{\"type\":\"string\"}}}"
+                        "{\"properties\":{\"customer\":{\"title\":\"Customer\",\"type\":\"string\"},"
+                        "\"day\":{\"format\":\"date\",\"title\":\"Day\",\"type\":\"string\"}},"
+                        "\"required\":[\"customer\",\"day\"],\"title\":\"AnswerSchema\",\"type\":\"object\"}"
                     ),
-                    params={},
-                    anchor_values={},
+                    params={"customer_id": 2},
+                    anchor_values={"customer_id": 2},
                 )
             ],
             "canonical_answers": [
@@ -264,18 +258,9 @@ async def test_real_db_trial_runner_retries_too_easy_with_harder_synthesis(
                     instance_id="instance_0001",
                     canonical_answer={"customer": "Bob", "day": "2026-04-13"},
                     canonical_answer_json='{"customer":"Bob","day":"2026-04-13"}',
-                    solution_fingerprint="sha256:harder-answer",
+                    label_signature="sha256:harder-answer",
                 )
             ],
-            "artifacts": base_second_draft.artifacts.model_copy(
-                update={
-                    "solution_source": (
-                        "def solve(tools):\n"
-                        "    customer = tools.lookup_customer({'customer_id': 2})\n"
-                        "    return {'customer': customer['customer_name'], 'day': '2026-04-13'}\n"
-                    )
-                }
-            ),
         }
     )
     runtime = _FakeSynthesisRuntime(drafts=[first_draft, second_draft])
@@ -306,7 +291,7 @@ async def test_real_db_trial_runner_retries_too_easy_with_harder_synthesis(
         summary = await runner.run(
             tmp_path / "real_trial",
             db_id="sakila",
-            category=CategoryTaxonomy.ASSIGNMENT,
+            topic=CategoryTaxonomy.ASSIGNMENT,
         )
     finally:
         await runner.close()
@@ -363,7 +348,7 @@ async def test_real_db_trial_runner_surfaces_artifact_generation_error_codes(
         summary = await runner.run(
             tmp_path / "real_trial",
             db_id="sakila",
-            category=CategoryTaxonomy.ASSIGNMENT,
+            topic=CategoryTaxonomy.ASSIGNMENT,
         )
     finally:
         await runner.close()

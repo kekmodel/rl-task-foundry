@@ -9,7 +9,6 @@ from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
-    CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
     CrossInstanceSet,
@@ -23,7 +22,6 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    SolutionContract,
     TaskContract,
     build_difficulty_vector,
 )
@@ -35,8 +33,8 @@ from rl_task_foundry.synthesis.environment_registry import (
     build_semantic_dedup_text,
     bucketize_difficulty_vector,
 )
+from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.runtime import (
-    GeneratedArtifactBundle,
     MaterializedCanonicalAnswerRecord,
     MaterializedInstanceRecord,
     SynthesisEnvironmentDraft,
@@ -47,17 +45,21 @@ def _sample_draft(
     tmp_env_id: str = "env_assignment_registrytest",
     *,
     db_id: str = "sakila",
-    category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
+    topic: str = "assignment",
     question: str = "고객 배정 계획을 만들어 주세요.",
     created_at: datetime | None = None,
     difficulty_vector: DifficultyVectorContract | None = None,
     tool_signature: str = "sha256:tool",
     task_signature: str = "sha256:task",
+    canonical_answer: dict[str, object] | None = None,
 ) -> SynthesisEnvironmentDraft:
     created_at = created_at or datetime(2026, 4, 12, tzinfo=timezone.utc)
+    canonical_answer = canonical_answer or {"customer": "Alice", "day": "2026-04-12"}
+    canonical_answer_json = canonical_json(canonical_answer)
+    label_signature = "sha256:answer"
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(
-            name="assignment",
+            name="answer",
             type=OutputFieldType.OBJECT,
             fields=[
                 OutputFieldContract(name="customer", type=OutputFieldType.STRING),
@@ -67,7 +69,7 @@ def _sample_draft(
     )
     task = TaskContract(
         question=question,
-        category=category,
+        topic=topic,
         output_schema=output_schema,
         constraint_summary=[
             ConstraintSummaryItem(
@@ -78,12 +80,13 @@ def _sample_draft(
         ],
         difficulty_vector=difficulty_vector
         or build_difficulty_vector(solution_space=2.0, constraint_density=2.0),
+        instance_parameters={"customer_id": 1},
     )
     environment = EnvironmentContract(
         env_id=tmp_env_id,
         db_id=db_id,
         domain="service_operations",
-        category=category,
+        topic=topic,
         atomic_tool_set_ref=f"db://{db_id}",
         difficulty_vector=task.difficulty_vector,
         created_at=created_at,
@@ -98,7 +101,6 @@ def _sample_draft(
             max_tool_rows=100,
         ),
         task=task,
-        solution=SolutionContract(),
         instance_space=InstanceSpaceContract(
             anchor_query=AnchorQueryContract(
                 sql="SELECT customer_id FROM customer ORDER BY customer_id",
@@ -110,9 +112,9 @@ def _sample_draft(
             instances=[
                 InstanceContract(
                     instance_id="instance_0001",
-                    parameter_values={},
-                    anchor_values={},
-                    expected_solution_fingerprint="sha256:answer",
+                    parameter_values={"customer_id": 1},
+                    anchor_values={"customer_id": 1},
+                    expected_label_signature=label_signature,
                 )
             ],
         ),
@@ -120,42 +122,33 @@ def _sample_draft(
     return SynthesisEnvironmentDraft(
         created_at=created_at,
         db_id=db_id,
-        requested_category=category,
+        requested_topic=topic,
         schema_summary={"included_table_count": 2},
-        selected_category=category,
+        selected_topic=topic,
         environment=environment,
         atomic_tool_bundle=AtomicToolBundle(
             db_id=db_id,
             tools=[],
             source="async def get_assignments(conn, customer_id, limit=10):\n    return []\n",
         ),
-        artifacts=GeneratedArtifactBundle(
-            solution_source=(
-                "def solve(tools):\n"
-                "    return {\"customer\": \"Alice\", \"day\": \"2026-04-12\"}\n"
-            )
-        ),
         instances=[
             MaterializedInstanceRecord(
                 instance_id="instance_0001",
-                rendered_user_prompt=(
-                    "고객 배정 계획을 만들어 주세요.\n\n"
-                    "# Submit Result Format\n"
-                    "{\"type\":\"object\",\"properties\":{\"customer\":{\"type\":\"string\"},"
-                    "\"day\":{\"type\":\"string\"}}}"
+                rendered_user_prompt=build_rendered_user_prompt(
+                    task,
+                    anchor_entity={"customer_id": 1},
+                    canonical_answer=canonical_answer,
                 ),
-                params={},
-                anchor_values={},
+                params={"customer_id": 1},
+                anchor_values={"customer_id": 1},
             )
         ],
         canonical_answers=[
             MaterializedCanonicalAnswerRecord(
                 instance_id="instance_0001",
-                canonical_answer={"customer": "Alice", "day": "2026-04-12"},
-                canonical_answer_json=canonical_json(
-                    {"customer": "Alice", "day": "2026-04-12"}
-                ),
-                solution_fingerprint="sha256:answer",
+                canonical_answer=canonical_answer,
+                canonical_answer_json=canonical_answer_json,
+                label_signature=label_signature,
             )
         ],
         generation_attempts=[],
@@ -179,7 +172,7 @@ def test_bucketize_difficulty_vector() -> None:
     )
 
 
-def test_environment_registry_writer_commits_solution_only_bundle(tmp_path: Path) -> None:
+def test_environment_registry_writer_commits_label_only_bundle(tmp_path: Path) -> None:
     writer = EnvironmentRegistryWriter(
         root_dir=tmp_path / "environments",
         index_db_path=tmp_path / "environment_registry.db",
@@ -194,9 +187,8 @@ def test_environment_registry_writer_commits_solution_only_bundle(tmp_path: Path
     assert (env_dir / "instances.jsonl").exists()
     assert (env_dir / "canonical_answers.jsonl").exists()
     assert (env_dir / "tools.py").read_text(encoding="utf-8") == draft.atomic_tool_bundle.source
-    assert (env_dir / "solution.py").exists()
-    assert not (env_dir / "verifier.py").exists()
-    assert not (env_dir / "shadow_verifier.py").exists()
+    assert not (env_dir / "solution.py").exists()
+    assert not (env_dir / "audit").exists()
 
     metadata = json.loads((env_dir / "registry_metadata.json").read_text(encoding="utf-8"))
     assert metadata["instance_count"] == 1
@@ -204,18 +196,15 @@ def test_environment_registry_writer_commits_solution_only_bundle(tmp_path: Path
     assert metadata["generation_attempts"] == []
 
 
-def test_environment_registry_exact_signature_ignores_solution_source(tmp_path: Path) -> None:
+def test_environment_registry_exact_signature_ignores_label_signature(tmp_path: Path) -> None:
     writer = EnvironmentRegistryWriter(
         root_dir=tmp_path / "environments",
         index_db_path=tmp_path / "environment_registry.db",
     )
     first = _sample_draft(tmp_env_id="env_a")
-    second = _sample_draft(tmp_env_id="env_b").model_copy(
-        update={
-            "artifacts": GeneratedArtifactBundle(
-                solution_source="def solve(tools):\n    return {'customer': 'Bob', 'day': '2026-04-13'}\n"
-            )
-        }
+    second = _sample_draft(
+        tmp_env_id="env_b",
+        canonical_answer={"customer": "Bob", "day": "2026-04-13"},
     )
 
     first_result = writer.commit_draft(first)
@@ -281,3 +270,4 @@ def test_build_semantic_dedup_text_uses_task_surface() -> None:
 
     assert "고객 배정 계획" in semantic_text
     assert "unique_customer" in semantic_text
+    assert "topic:assignment" in semantic_text

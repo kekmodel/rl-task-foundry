@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+import inspect
 from typing import Protocol
 
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryStatus,
     SynthesisDifficultyRetrySeed,
@@ -27,13 +27,13 @@ class SynthesisRuntimeHandle(Protocol):
         self,
         *,
         db_id: str | None = None,
-    ) -> dict[CategoryTaxonomy, SynthesisCategoryStatus]: ...
+    ) -> dict[str, SynthesisCategoryStatus]: ...
 
     async def synthesize_environment_draft(
         self,
         *,
         db_id: str,
-        requested_category: CategoryTaxonomy,
+        requested_topic: str,
         graph: SchemaGraph | None = None,
         retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> SynthesisEnvironmentDraft: ...
@@ -41,13 +41,36 @@ class SynthesisRuntimeHandle(Protocol):
     async def close(self) -> None: ...
 
 
-@dataclass(slots=True)
+@dataclass(init=False, slots=True)
 class SynthesisDbRegistryEntry:
     db_id: str
-    categories: list[CategoryTaxonomy]
+    topics: list[str]
     database: DatabaseConfig | None = None
     domain: DomainConfig | None = None
     graph: SchemaGraph | None = None
+
+    def __init__(
+        self,
+        *,
+        db_id: str,
+        topics: list[str] | None = None,
+        categories: list[object] | None = None,
+        database: DatabaseConfig | None = None,
+        domain: DomainConfig | None = None,
+        graph: SchemaGraph | None = None,
+    ) -> None:
+        resolved_topics = topics if topics is not None else categories
+        if not resolved_topics:
+            raise ValueError("SynthesisDbRegistryEntry requires at least one topic")
+        self.db_id = db_id
+        self.topics = [str(topic).strip() for topic in resolved_topics if str(topic).strip()]
+        self.database = database
+        self.domain = domain
+        self.graph = graph
+
+    @property
+    def categories(self) -> list[str]:
+        return list(self.topics)
 
 
 @dataclass(slots=True)
@@ -91,8 +114,8 @@ class SynthesisOrchestrator:
             snapshots.append(
                 SynthesisDbSnapshot(
                     db_id=entry.db_id,
-                    categories=list(entry.categories),
-                    category_status=category_status,
+                    topics=list(entry.topics),
+                    topic_status=category_status,
                 )
             )
         return snapshots
@@ -116,14 +139,22 @@ class SynthesisOrchestrator:
         if step.decision.status != SynthesisSelectionStatus.READY:
             return step
         assert step.decision.db_id is not None
-        assert step.decision.category is not None
+        assert step.decision.topic is not None
         entry = next(item for item in registry if item.db_id == step.decision.db_id)
         runtime = self._runtime_for(entry)
-        draft = await runtime.synthesize_environment_draft(
-            db_id=entry.db_id,
-            requested_category=step.decision.category,
-            graph=entry.graph,
-        )
+        signature = inspect.signature(runtime.synthesize_environment_draft)
+        if "requested_topic" in signature.parameters:
+            draft = await runtime.synthesize_environment_draft(
+                db_id=entry.db_id,
+                requested_topic=step.decision.topic,
+                graph=entry.graph,
+            )
+        else:
+            draft = await runtime.synthesize_environment_draft(
+                db_id=entry.db_id,
+                requested_category=step.decision.topic,
+                graph=entry.graph,
+            )
         return SynthesisOrchestrationStep(
             decision=step.decision,
             snapshots=step.snapshots,

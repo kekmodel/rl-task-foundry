@@ -46,7 +46,7 @@ def test_build_proof_environment_draft_is_compositional() -> None:
     root = draft.environment.task.output_schema.root
     assert draft.environment.db_id == PROOF_DB_ID
     assert draft.environment.env_id == PROOF_ENV_ID
-    assert draft.environment.category is CategoryTaxonomy.ITINERARY
+    assert draft.environment.topic == CategoryTaxonomy.ITINERARY
     assert draft.environment.atomic_tool_set_ref == f"db://{PROOF_DB_ID}"
     assert root.type is OutputFieldType.LIST
     assert root.sort_key == ("day",)
@@ -164,7 +164,6 @@ async def test_proof_environment_runner_commits_and_exports_bundle(tmp_path: Pat
     ]
     assert [line["phase"] for line in phase_monitor_lines] == [
         "draft_build",
-        "cross_instance",
         "rollout",
         "quality_gate",
         "registry_commit",
@@ -225,7 +224,7 @@ async def test_proof_environment_runner_skips_commit_when_quality_gate_rejects(
 
 
 @pytest.mark.asyncio
-async def test_proof_environment_runner_rejects_cross_instance_mismatch_before_rollout(
+async def test_proof_environment_runner_ignores_cross_instance_metadata_for_rollout(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
@@ -233,9 +232,25 @@ async def test_proof_environment_runner_rejects_cross_instance_mismatch_before_r
         root_dir=tmp_path / "registry" / "environments",
         index_db_path=tmp_path / "registry" / "environment_registry.db",
     )
+    class _FakeRuntime:
+        async def run(self, episode, *, replica_index: int):
+            return SolverResult(
+                task_id=episode.task_id,
+                solver_id="solver_a",
+                provider="codex_oauth",
+                model="gpt-5.4-mini",
+                replica_index=replica_index,
+                transcript_ref="memory://transcript",
+                tool_trace_ref="memory://tools",
+                raw_output_text='[{"day":1,"city":"Gangneung","lodging":"X","activity":"Y","total_cost":500}]',
+                structured_output=None,
+                status="completed",
+                termination_reason="submitted",
+            )
+
     orchestrator = EnvironmentOrchestrator(
         config,
-        runtime_factory=lambda *_args: pytest.fail("rollout should be skipped"),
+        runtime_factory=lambda *_args: _FakeRuntime(),
         tool_executor_factory=lambda _bundle: {},
     )
     runner = ProofEnvironmentRunner(
@@ -270,9 +285,8 @@ async def test_proof_environment_runner_rejects_cross_instance_mismatch_before_r
         monkeypatch.undo()
         await runner.close()
 
-    assert summary.quality_gate_status == "reject_cross_instance"
-    assert "insufficient_instances" in summary.cross_instance_error_codes
-    assert summary.solver_pass_rate is None
+    assert summary.quality_gate_status == "reject_too_hard"
+    assert summary.solver_pass_rate == 0.0
     assert summary.phase_monitor_log_path is not None
     assert summary.registry_status is None
     assert summary.bundle_root is None

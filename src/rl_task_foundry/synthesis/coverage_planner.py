@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.environment_registry import (
     DifficultyBand,
     EnvironmentRegistryCoverageEntry,
@@ -17,7 +16,7 @@ from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 @dataclass(slots=True)
 class SynthesisCoverageCellPlan:
     db_id: str
-    category: CategoryTaxonomy
+    topic: str
     difficulty_band: DifficultyBand
     current_count: int
     target_count: int
@@ -27,17 +26,25 @@ class SynthesisCoverageCellPlan:
     def satisfied(self) -> bool:
         return self.deficit == 0
 
+    @property
+    def category(self) -> str:
+        return self.topic
+
 
 @dataclass(slots=True)
 class SynthesisCoveragePairPlan:
     db_id: str
-    category: CategoryTaxonomy
+    topic: str
     cells: tuple[SynthesisCoverageCellPlan, ...]
     total_current_count: int
     total_target_count: int
     total_deficit: int
     missing_bands: tuple[DifficultyBand, ...]
     max_band_deficit: int
+
+    @property
+    def category(self) -> str:
+        return self.topic
 
 
 @dataclass(slots=True)
@@ -110,14 +117,14 @@ class SynthesisCoveragePlanner:
         pair_plans: list[SynthesisCoveragePairPlan] = []
         cell_plans: list[SynthesisCoverageCellPlan] = []
         for entry in registry:
-            for category in entry.categories:
+            for topic in entry.topics:
                 pair_cells: list[SynthesisCoverageCellPlan] = []
                 for difficulty_band in self.tracked_bands:
-                    current_count = counts.get((entry.db_id, category, difficulty_band), 0)
+                    current_count = counts.get((entry.db_id, topic, difficulty_band), 0)
                     deficit = max(0, self.target_count_per_band - current_count)
                     cell = SynthesisCoverageCellPlan(
                         db_id=entry.db_id,
-                        category=category,
+                        topic=topic,
                         difficulty_band=difficulty_band,
                         current_count=current_count,
                         target_count=self.target_count_per_band,
@@ -128,7 +135,7 @@ class SynthesisCoveragePlanner:
                 pair_plans.append(
                     SynthesisCoveragePairPlan(
                         db_id=entry.db_id,
-                        category=category,
+                        topic=topic,
                         cells=tuple(pair_cells),
                         total_current_count=sum(cell.current_count for cell in pair_cells),
                         total_target_count=sum(cell.target_count for cell in pair_cells),
@@ -143,14 +150,14 @@ class SynthesisCoveragePlanner:
             key=lambda pair: (
                 -pair.total_deficit,
                 pair.db_id,
-                pair.category.value,
+                pair.topic,
             )
         )
         cell_plans.sort(
             key=lambda cell: (
                 -cell.deficit,
                 cell.db_id,
-                cell.category.value,
+                cell.topic,
                 _difficulty_band_order(cell.difficulty_band),
             )
         )

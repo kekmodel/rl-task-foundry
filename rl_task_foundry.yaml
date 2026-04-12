@@ -89,12 +89,12 @@ solver_runtime:
   canonical_state_store: "run_db"
 
 calibration:
-  lower_pass_rate: 0.2
-  upper_pass_rate: 0.8
+  lower_pass_rate: 0.25
+  upper_pass_rate: 0.75
   ci_alpha: 0.1
-  canary_replica_count: 2
-  post_canary_batch_size: 2
-  full_replica_limit: 6
+  canary_replica_count: 3
+  post_canary_batch_size: 3
+  full_replica_limit: 30
   safe_early_termination: true
   difficulty_weight_hops: 100.0
   difficulty_weight_family: 10.0

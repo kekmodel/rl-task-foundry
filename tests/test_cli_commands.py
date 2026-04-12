@@ -255,7 +255,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "real db trial complete" in result.stdout
     assert "trial_status=accepted" in result.stdout
     assert "db_id=sakila" in result.stdout
-    assert "requested_category=assignment" in result.stdout
+    assert "requested_topic=assignment" in result.stdout
     assert "flow_id=flow_trial_test" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
     assert "summary_path=" in result.stdout
@@ -432,9 +432,11 @@ def test_cli_export_bundle_writes_environment_api_layout(monkeypatch, tmp_path: 
     assert "database_count=1" in result.stdout
     assert "environment_count=1" in result.stdout
     assert (output_dir / "databases" / "sakila" / "atomic_tools.py").exists()
-    assert (
-        output_dir / "environments" / "env_assignment_registrytest" / "audit" / "solution.py"
-    ).exists()
+    env_dir = output_dir / "environments" / "env_assignment_registrytest"
+    assert (env_dir / "environment.yaml").exists()
+    assert (env_dir / "instances.jsonl").exists()
+    assert (env_dir / "canonical_answers.jsonl").exists()
+    assert not (env_dir / "audit").exists()
 
 def test_cli_validate_config_applies_runtime_overrides():
     result = CliRunner().invoke(

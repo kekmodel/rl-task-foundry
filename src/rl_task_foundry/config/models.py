@@ -110,9 +110,9 @@ class CalibrationConfig(StrictModel):
     lower_pass_rate: float = Field(ge=0.0, le=1.0)
     upper_pass_rate: float = Field(ge=0.0, le=1.0)
     ci_alpha: float = Field(default=0.1, ge=0.0, le=1.0)
-    canary_replica_count: int = Field(default=2, ge=1)
-    post_canary_batch_size: int = Field(default=2, ge=1)
-    full_replica_limit: int = Field(default=6, ge=1)
+    canary_replica_count: int = Field(default=3, ge=1)
+    post_canary_batch_size: int = Field(default=3, ge=1)
+    full_replica_limit: int = Field(default=30, ge=1)
     safe_early_termination: bool = True
     difficulty_weight_hops: float = 100.0
     difficulty_weight_family: float = 10.0

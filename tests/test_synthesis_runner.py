@@ -32,11 +32,11 @@ from tests.test_synthesis_environment_registry import _sample_draft
 
 @dataclass(slots=True)
 class _FakeRuntime:
-    category_status_payload: dict[CategoryTaxonomy, SynthesisCategoryStatus] = field(
+    category_status_payload: dict[str, SynthesisCategoryStatus] = field(
         default_factory=dict
     )
     category_status_calls: list[str | None] = field(default_factory=list)
-    synthesize_calls: list[tuple[str, CategoryTaxonomy, object | None]] = field(
+    synthesize_calls: list[tuple[str, str, object | None]] = field(
         default_factory=list
     )
     closed: bool = False
@@ -45,7 +45,7 @@ class _FakeRuntime:
         self,
         *,
         db_id: str | None = None,
-    ) -> dict[CategoryTaxonomy, SynthesisCategoryStatus]:
+    ) -> dict[str, SynthesisCategoryStatus]:
         self.category_status_calls.append(db_id)
         return self.category_status_payload
 
@@ -53,14 +53,14 @@ class _FakeRuntime:
         self,
         *,
         db_id: str,
-        requested_category: CategoryTaxonomy,
+        requested_topic: str,
         graph: object | None = None,
     ) -> object:
-        self.synthesize_calls.append((db_id, requested_category, graph))
+        self.synthesize_calls.append((db_id, requested_topic, graph))
         return _sample_draft(
-            tmp_env_id=f"env_{db_id}_{requested_category.value}_{len(self.synthesize_calls)}",
+            tmp_env_id=f"env_{db_id}_{requested_topic}_{len(self.synthesize_calls)}",
             db_id=db_id,
-            category=requested_category,
+            topic=requested_topic,
             created_at=datetime.now(timezone.utc),
         )
 
@@ -210,7 +210,6 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
         json.loads(line)
         for line in summary.phase_monitor_log_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert any(line["phase"] == "cross_instance" for line in phase_monitor_lines)
     assert any(line["phase"] == "quality_gate" for line in phase_monitor_lines)
     assert any(line["phase"] == "registry_commit" for line in phase_monitor_lines)
     assert created["sakila"].synthesize_calls == [
@@ -465,7 +464,7 @@ async def test_synthesis_registry_runner_records_quality_metrics_on_accepted_dra
 
 
 @pytest.mark.asyncio
-async def test_synthesis_registry_runner_rejects_cross_instance_inconsistency_before_rollout(
+async def test_synthesis_registry_runner_ignores_cross_instance_metadata_before_rollout(
     tmp_path: Path,
 ) -> None:
     config = _config_with_run_db(tmp_path)
@@ -481,20 +480,20 @@ async def test_synthesis_registry_runner_rejects_cross_instance_inconsistency_be
             self,
             *,
             db_id: str | None = None,
-        ) -> dict[CategoryTaxonomy, SynthesisCategoryStatus]:
+        ) -> dict[str, SynthesisCategoryStatus]:
             return {}
 
         async def synthesize_environment_draft(
             self,
             *,
             db_id: str,
-            requested_category: CategoryTaxonomy,
+            requested_topic: str,
             graph: object | None = None,
         ) -> object:
             draft = _sample_draft(
-                tmp_env_id=f"env_{db_id}_{requested_category.value}_bad_cross_instance",
+                tmp_env_id=f"env_{db_id}_{requested_topic}_bad_cross_instance",
                 db_id=db_id,
-                category=requested_category,
+                topic=requested_topic,
                 created_at=datetime.now(timezone.utc),
             )
             environment = draft.environment.model_copy(
@@ -530,15 +529,14 @@ async def test_synthesis_registry_runner_rejects_cross_instance_inconsistency_be
     finally:
         await runner.close()
 
-    assert summary.outcome == SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
+    assert summary.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
     assert summary.generated_drafts == 1
-    assert summary.quality_rejected_envs == 1
-    assert summary.registry_committed_envs == 0
-    assert summary.remaining_pairs == 1
-    assert summary.steps[0].quality_gate_status == "reject_cross_instance"
-    assert "insufficient_instances" in summary.steps[0].cross_instance_error_codes
-    assert fake_registry.committed_drafts == []
-    assert quality_orchestrator.run_calls == []
+    assert summary.quality_rejected_envs == 0
+    assert summary.registry_committed_envs == 1
+    assert summary.remaining_pairs == 0
+    assert summary.steps[0].quality_gate_status == "accept"
+    assert len(fake_registry.committed_drafts) == 1
+    assert len(quality_orchestrator.run_calls) == 1
 
 
 @pytest.mark.asyncio

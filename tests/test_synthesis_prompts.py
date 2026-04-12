@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.contracts import build_difficulty_vector
 from rl_task_foundry.synthesis.prompts import (
     build_synthesis_phase_input,
@@ -12,7 +11,6 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisPhase,
     SynthesisQualityGateFeedback,
     SynthesisStageRequest,
-    TaskSynthesisOutput,
 )
 
 
@@ -32,7 +30,7 @@ def test_schema_exploration_prompt_keeps_tool_json_out_of_user_message() -> None
         domain_name="customer_support",
         task_language="ko",
         scenario_description="help requests",
-        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        requested_topic="assignment",
         schema_summary={
             "table_count": 2,
             "edge_count": 1,
@@ -50,7 +48,6 @@ def test_schema_exploration_prompt_keeps_tool_json_out_of_user_message() -> None
 
     assert "# Domain" in prompt
     assert "# Schema Orientation" in prompt
-    assert "# Exploration Goal" in prompt
     assert "# Required Output Contract" in prompt
     assert "public.customer" in prompt
     assert "available_atomic_tools" not in prompt
@@ -58,130 +55,51 @@ def test_schema_exploration_prompt_keeps_tool_json_out_of_user_message() -> None
     assert "difficulty_crank_index" not in prompt
 
 
-def test_task_synthesis_prompt_includes_language_policy_for_solution_only() -> None:
+def test_task_synthesis_prompt_includes_language_policy_and_one_shot() -> None:
     request = SynthesisStageRequest(
         phase=SynthesisPhase.TASK_SYNTHESIS,
         db_id="sakila",
         domain_name="customer_support",
         task_language="ko",
         scenario_description="help requests",
-        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        requested_topic="assignment",
         previous_outputs={
+            SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
+                domain_hypothesis="customer support",
+                candidate_topics=["assignment"],
+                sample_observations=["customer 148 belongs to store 1"],
+                memory_summary="schema done",
+            ),
             SynthesisPhase.LABEL_CONSTRUCTION: LabelConstructionOutput(
                 canonical_answer_json='{"store_id": 1}',
-                output_schema={
-                    "version": "v2",
-                    "root": {
-                        "name": "answer",
-                        "type": "object",
-                        "fields": [{"name": "store_id", "type": "int"}],
-                    },
-                    "primary_output_format": "json_object",
-                },
+                anchor_entity={"customer_id": 148},
                 difficulty_vector=build_difficulty_vector(search_cost=2.0),
                 instance_parameters={},
                 label_summary="grounded answer",
                 memory_summary="label complete",
-            )
+            ),
         },
     )
 
     prompt = build_synthesis_phase_input(request)
 
     assert "# User-Facing Language" in prompt
-    assert "Generate the user-facing question" in prompt
     assert "Korean" in prompt
-    assert "All code (solution.py), field names, and tool calls must remain in English." in prompt
+    assert "All schema field names, code identifiers, and tool names must remain in English." in prompt
+    assert "# One-Shot Example" in prompt
+    assert "canonical_answer_json" in prompt
+    assert "solution.py" not in prompt
     assert "verifier.py" not in prompt
-    assert "shadow_verifier.py" not in prompt
 
 
-def test_artifact_generation_prompt_uses_solution_only_contract() -> None:
+def test_task_synthesis_prompt_includes_quality_feedback_without_debug_dump() -> None:
     request = SynthesisStageRequest(
-        phase=SynthesisPhase.ARTIFACT_GENERATION,
-        db_id="sakila",
-        atomic_tool_set_ref="db://sakila",
-        available_atomic_tools=[
-            {
-                "name": "get_customer_by_id",
-                "description": "Get customer for given primary key.",
-                "params_schema": {
-                    "type": "object",
-                    "properties": {"customer_id": {"type": "integer"}},
-                },
-                "returns_schema": {
-                    "anyOf": [
-                        {
-                            "type": "object",
-                            "properties": {"customer_id": {"type": "integer"}},
-                        },
-                        {"type": "null"},
-                    ]
-                },
-            }
-        ],
-        domain_name="customer_support",
-        task_language="ko",
-        scenario_description="help requests",
-        requested_category=CategoryTaxonomy.ASSIGNMENT,
-        previous_outputs={
-            SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
-                domain_hypothesis="customer support",
-                candidate_categories=[CategoryTaxonomy.ASSIGNMENT],
-                sample_observations=["get_customer_by_id(148) returned customer_id 148"],
-                memory_summary="schema done",
-            ),
-            SynthesisPhase.LABEL_CONSTRUCTION: LabelConstructionOutput(
-                canonical_answer_json='{"store_id": 1}',
-                output_schema={
-                    "version": "v2",
-                    "root": {
-                        "name": "answer",
-                        "type": "object",
-                        "fields": [{"name": "store_id", "type": "int"}],
-                    },
-                    "primary_output_format": "json_object",
-                },
-                difficulty_vector=build_difficulty_vector(search_cost=2.0),
-                instance_parameters={},
-                label_summary="grounded answer",
-                memory_summary="label complete",
-            ),
-            SynthesisPhase.TASK_SYNTHESIS: TaskSynthesisOutput(
-                question="질문",
-                constraint_summary=[],
-                instance_space={
-                    "anchor_query": {
-                        "sql": "SELECT customer_id FROM customer",
-                        "outputs": ["customer_id"],
-                    },
-                    "parameters": {},
-                    "sampling": {"strategy": "deterministic_hash", "seed": 0},
-                    "instance_count": 1,
-                },
-                memory_summary="task complete",
-            ),
-        },
-    )
-
-    prompt = build_synthesis_phase_input(request)
-
-    assert "# Relevant Atomic Tools" in prompt
-    assert "get_customer_by_id(customer_id)" in prompt
-    assert "Generate solution.py" in prompt
-    assert "verifier.py" not in prompt
-    assert "shadow_verifier.py" not in prompt
-    assert "\"solution_source\": \"python source string\"" in prompt
-
-
-def test_artifact_generation_prompt_includes_quality_feedback_without_debug_dump() -> None:
-    request = SynthesisStageRequest(
-        phase=SynthesisPhase.ARTIFACT_GENERATION,
+        phase=SynthesisPhase.TASK_SYNTHESIS,
         db_id="sakila",
         domain_name="customer_support",
         task_language="ko",
         scenario_description="help requests",
-        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        requested_topic="assignment",
         crank_hint="Increase search_cost by adding a new table join.",
         latest_quality_gate_feedback=SynthesisQualityGateFeedback(
             status="reject_too_easy",
@@ -197,13 +115,20 @@ def test_artifact_generation_prompt_includes_quality_feedback_without_debug_dump
     prompt = build_synthesis_phase_input(request)
 
     assert "# Difficulty Guidance" in prompt
-    assert "reject_too_easy" in prompt
     assert "Increase search_cost" in prompt
     assert "latest_quality_gate_feedback" not in prompt
 
 
-def test_artifact_generation_instructions_are_solution_only() -> None:
-    instructions = build_synthesis_phase_instructions(SynthesisPhase.ARTIFACT_GENERATION)
-
-    assert "Generate only `solution.py`." in instructions
-    assert "verifier" not in instructions
+def test_prompt_instructions_cover_only_four_phases() -> None:
+    assert "data exploration phase" in build_synthesis_phase_instructions(
+        SynthesisPhase.SCHEMA_EXPLORATION
+    )
+    assert "grounded topic string" in build_synthesis_phase_instructions(
+        SynthesisPhase.CATEGORY_INFERENCE
+    )
+    assert "Construct the latent label first" in build_synthesis_phase_instructions(
+        SynthesisPhase.LABEL_CONSTRUCTION
+    )
+    assert "Reverse-design the natural user request" in build_synthesis_phase_instructions(
+        SynthesisPhase.TASK_SYNTHESIS
+    )

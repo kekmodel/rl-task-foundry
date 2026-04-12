@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from ast import literal_eval
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -169,14 +168,10 @@ def _parse_submission_output_string(final_output: str) -> dict[str, Any] | None:
     text = final_output.strip()
     if not text.startswith("{"):
         return None
-    parsed: Any
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        try:
-            parsed = literal_eval(text)
-        except (ValueError, SyntaxError):
-            return None
+        return None
     return parsed if isinstance(parsed, dict) else None
 
 

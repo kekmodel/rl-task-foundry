@@ -16,8 +16,7 @@ from rl_task_foundry.pipeline.environment_orchestrator import (
     evaluate_rollout_summary,
 )
 from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
-from rl_task_foundry.synthesis.cross_instance import evaluate_cross_instance_draft
+from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryWriter,
@@ -49,16 +48,15 @@ QUALITY_RETRY_SEMANTIC_SIMILARITY_THRESHOLD = 0.98
 class RealDbTrialStatus(StrEnum):
     ACCEPTED = "accepted"
     REGISTRY_DUPLICATE = "registry_duplicate"
-    REJECT_CROSS_INSTANCE = "reject_cross_instance"
     REJECT_TOO_HARD = "reject_too_hard"
     REJECT_TOO_EASY = "reject_too_easy"
     SYNTHESIS_FAILED = "synthesis_failed"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(init=False, frozen=True, slots=True)
 class RealDbTrialSummary:
     db_id: str
-    requested_category: CategoryTaxonomy
+    requested_topic: str
     trial_status: RealDbTrialStatus
     summary_path: Path
     flow_id: str | None = None
@@ -77,7 +75,6 @@ class RealDbTrialSummary:
     backend_failures: tuple[str, ...] = ()
     attempt_outcomes: tuple[str, ...] = ()
     error_codes: tuple[str, ...] = ()
-    cross_instance_error_codes: tuple[str, ...] = ()
     solver_pass_rate: float | None = None
     solver_ci_low: float | None = None
     solver_ci_high: float | None = None
@@ -86,6 +83,69 @@ class RealDbTrialSummary:
     registry_status: EnvironmentRegistryCommitStatus | None = None
     registry_env_id: str | None = None
     bundle_root: Path | None = None
+
+    def __init__(
+        self,
+        *,
+        db_id: str,
+        requested_topic: str | None = None,
+        requested_category: object | None = None,
+        trial_status: RealDbTrialStatus,
+        summary_path: Path,
+        flow_id: str | None = None,
+        phase_monitor_log_path: Path | None = None,
+        debug_root: Path | None = None,
+        debug_traces_dir: Path | None = None,
+        synthesis_traces_dir: Path | None = None,
+        solver_traces_dir: Path | None = None,
+        synthesis_session_db_path: Path | None = None,
+        solver_session_db_path: Path | None = None,
+        env_id: str | None = None,
+        quality_gate_status: str | None = None,
+        synthesis_error_type: str | None = None,
+        synthesis_error_message: str | None = None,
+        synthesis_phase: str | None = None,
+        backend_failures: tuple[str, ...] = (),
+        attempt_outcomes: tuple[str, ...] = (),
+        error_codes: tuple[str, ...] = (),
+        solver_pass_rate: float | None = None,
+        solver_ci_low: float | None = None,
+        solver_ci_high: float | None = None,
+        quality_retry_count: int = 0,
+        quality_retry_history: tuple[str, ...] = (),
+        registry_status: EnvironmentRegistryCommitStatus | None = None,
+        registry_env_id: str | None = None,
+        bundle_root: Path | None = None,
+    ) -> None:
+        resolved_topic = requested_topic if requested_topic is not None else requested_category
+        object.__setattr__(self, "db_id", db_id)
+        object.__setattr__(self, "requested_topic", normalize_topic(resolved_topic))
+        object.__setattr__(self, "trial_status", trial_status)
+        object.__setattr__(self, "summary_path", summary_path)
+        object.__setattr__(self, "flow_id", flow_id)
+        object.__setattr__(self, "phase_monitor_log_path", phase_monitor_log_path)
+        object.__setattr__(self, "debug_root", debug_root)
+        object.__setattr__(self, "debug_traces_dir", debug_traces_dir)
+        object.__setattr__(self, "synthesis_traces_dir", synthesis_traces_dir)
+        object.__setattr__(self, "solver_traces_dir", solver_traces_dir)
+        object.__setattr__(self, "synthesis_session_db_path", synthesis_session_db_path)
+        object.__setattr__(self, "solver_session_db_path", solver_session_db_path)
+        object.__setattr__(self, "env_id", env_id)
+        object.__setattr__(self, "quality_gate_status", quality_gate_status)
+        object.__setattr__(self, "synthesis_error_type", synthesis_error_type)
+        object.__setattr__(self, "synthesis_error_message", synthesis_error_message)
+        object.__setattr__(self, "synthesis_phase", synthesis_phase)
+        object.__setattr__(self, "backend_failures", backend_failures)
+        object.__setattr__(self, "attempt_outcomes", attempt_outcomes)
+        object.__setattr__(self, "error_codes", error_codes)
+        object.__setattr__(self, "solver_pass_rate", solver_pass_rate)
+        object.__setattr__(self, "solver_ci_low", solver_ci_low)
+        object.__setattr__(self, "solver_ci_high", solver_ci_high)
+        object.__setattr__(self, "quality_retry_count", quality_retry_count)
+        object.__setattr__(self, "quality_retry_history", quality_retry_history)
+        object.__setattr__(self, "registry_status", registry_status)
+        object.__setattr__(self, "registry_env_id", registry_env_id)
+        object.__setattr__(self, "bundle_root", bundle_root)
 
 
 @dataclass(slots=True)
@@ -110,8 +170,9 @@ class RealDbTrialRunner:
         output_root: Path,
         *,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
     ) -> RealDbTrialSummary:
+        topic = normalize_topic(topic)
         output_root.mkdir(parents=True, exist_ok=True)
         summary_path = output_root / "trial_summary.json"
         debug_root = output_root / "debug"
@@ -161,7 +222,7 @@ class RealDbTrialRunner:
                 return self._write_summary(
                     RealDbTrialSummary(
                         db_id=db_id,
-                        requested_category=category,
+                        requested_topic=topic,
                         trial_status=RealDbTrialStatus.REJECT_TOO_EASY,
                         summary_path=summary_path,
                         flow_id=flow_id,
@@ -228,7 +289,7 @@ class RealDbTrialRunner:
             try:
                 draft = await runtime.synthesize_environment_draft(
                     db_id=db_id,
-                    requested_category=category,
+                    requested_topic=topic,
                     retry_seed=active_retry_seed,
                 )
             except SynthesisArtifactGenerationError as exc:
@@ -240,7 +301,7 @@ class RealDbTrialRunner:
                 synthesis_failed_summary = self._synthesis_failure_summary(
                     summary_path=summary_path,
                     db_id=db_id,
-                    category=category,
+                    topic=topic,
                     exc=exc,
                     flow_id=flow_id,
                     phase_monitor_log_path=phase_monitor_log_path,
@@ -269,7 +330,7 @@ class RealDbTrialRunner:
                 return self._write_summary(
                     RealDbTrialSummary(
                         db_id=db_id,
-                        requested_category=category,
+                        requested_topic=topic,
                         trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                         summary_path=summary_path,
                         flow_id=flow_id,
@@ -299,7 +360,7 @@ class RealDbTrialRunner:
                 return self._write_summary(
                     RealDbTrialSummary(
                         db_id=db_id,
-                        requested_category=category,
+                        requested_topic=topic,
                         trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                         summary_path=summary_path,
                         flow_id=flow_id,
@@ -328,7 +389,7 @@ class RealDbTrialRunner:
                 return self._write_summary(
                     RealDbTrialSummary(
                         db_id=db_id,
-                        requested_category=category,
+                        requested_topic=topic,
                         trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                         summary_path=summary_path,
                         flow_id=flow_id,
@@ -375,8 +436,8 @@ class RealDbTrialRunner:
                         "canonical_answer_jsons": [
                             answer.canonical_answer_json for answer in draft.canonical_answers
                         ],
-                        "solution_fingerprints": [
-                            answer.solution_fingerprint for answer in draft.canonical_answers
+                        "label_signatures": [
+                            answer.label_signature for answer in draft.canonical_answers
                         ],
                     },
                     checks=semantic_retry_diagnostics,
@@ -427,47 +488,6 @@ class RealDbTrialRunner:
                     }
                 )
                 continue
-            cross_instance_summary = evaluate_cross_instance_draft(draft)
-            phase_monitor.emit(
-                phase="cross_instance",
-                status="passed" if cross_instance_summary.passed else "failed",
-                expected_contract={
-                    "minimum_required": draft.environment.cross_instance_set.minimum_required,
-                    "require_distinct_solution_fingerprints": (
-                        draft.environment.cross_instance_set.require_distinct_solution_fingerprints
-                    ),
-                },
-                actual_data={
-                    "instance_count": cross_instance_summary.instance_count,
-                    "canonical_answer_count": cross_instance_summary.canonical_answer_count,
-                    "error_codes": list(cross_instance_summary.error_codes),
-                },
-                checks={"passed": cross_instance_summary.passed},
-                diagnostics={"env_id": draft.environment.env_id},
-            )
-            if not cross_instance_summary.passed:
-                return self._write_summary(
-                    RealDbTrialSummary(
-                        db_id=db_id,
-                        requested_category=category,
-                        trial_status=RealDbTrialStatus.REJECT_CROSS_INSTANCE,
-                        summary_path=summary_path,
-                        flow_id=flow_id,
-                        phase_monitor_log_path=phase_monitor_log_path,
-                        debug_root=debug_root,
-                        debug_traces_dir=debug_traces_dir,
-                        synthesis_traces_dir=synthesis_traces_dir,
-                        solver_traces_dir=solver_traces_dir,
-                        synthesis_session_db_path=synthesis_session_db_path,
-                        solver_session_db_path=solver_session_db_path,
-                        env_id=draft.environment.env_id,
-                        cross_instance_error_codes=cross_instance_summary.error_codes,
-                        quality_retry_count=retry_seed.difficulty_crank_index,
-                        quality_retry_history=tuple(
-                            axis.value for axis in retry_seed.difficulty_crank_history
-                        ),
-                    )
-                )
             environment_orchestrator = self._environment_orchestrator_for_trial(debug_traces_dir)
             rollout_summary = await environment_orchestrator.run_draft(draft)
             phase_monitor.emit(
@@ -534,7 +554,7 @@ class RealDbTrialRunner:
                 return self._write_summary(
                     RealDbTrialSummary(
                         db_id=db_id,
-                        requested_category=category,
+                        requested_topic=topic,
                         trial_status=_quality_gate_trial_status(quality_gate_summary.status),
                         summary_path=summary_path,
                         flow_id=flow_id,
@@ -604,7 +624,7 @@ class RealDbTrialRunner:
             return self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
-                    requested_category=category,
+                    requested_topic=topic,
                     trial_status=final_status,
                     summary_path=summary_path,
                     flow_id=flow_id,
@@ -641,7 +661,7 @@ class RealDbTrialRunner:
         *,
         summary_path: Path,
         db_id: str,
-        category: CategoryTaxonomy,
+        topic: str,
         exc: SynthesisArtifactGenerationError,
         flow_id: str,
         phase_monitor_log_path: Path,
@@ -659,7 +679,7 @@ class RealDbTrialRunner:
         )
         return RealDbTrialSummary(
             db_id=db_id,
-            requested_category=category,
+            requested_topic=topic,
             trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
             summary_path=summary_path,
             flow_id=flow_id,
@@ -679,7 +699,7 @@ class RealDbTrialRunner:
     @staticmethod
     def _summary_payload(summary: RealDbTrialSummary) -> dict[str, object]:
         payload = asdict(summary)
-        payload["requested_category"] = summary.requested_category.value
+        payload["requested_topic"] = summary.requested_topic
         payload["trial_status"] = summary.trial_status.value
         payload["summary_path"] = str(summary.summary_path)
         for key in (
@@ -783,8 +803,8 @@ def _quality_gate_feedback_from_draft(
         previous_canonical_answers=[
             answer.canonical_answer_json for answer in draft.canonical_answers
         ],
-        previous_solution_fingerprints=[
-            answer.solution_fingerprint for answer in draft.canonical_answers
+        previous_label_signatures=[
+            answer.label_signature for answer in draft.canonical_answers
         ],
     )
 
@@ -827,20 +847,20 @@ def _evaluate_quality_retry_semantic_change(
     current_canonical_answers = [
         answer.canonical_answer_json for answer in draft.canonical_answers
     ]
-    current_solution_fingerprints = [
-        answer.solution_fingerprint for answer in draft.canonical_answers
+    current_label_signatures = [
+        answer.label_signature for answer in draft.canonical_answers
     ]
     same_canonical_answers = (
         bool(feedback.previous_canonical_answers)
         and current_canonical_answers == feedback.previous_canonical_answers
     )
-    same_solution_fingerprints = (
-        bool(feedback.previous_solution_fingerprints)
-        and current_solution_fingerprints == feedback.previous_solution_fingerprints
+    same_label_signatures = (
+        bool(feedback.previous_label_signatures)
+        and current_label_signatures == feedback.previous_label_signatures
     )
     passed = not (
         (same_question or same_rendered_user_prompt or same_semantic_dedup_text)
-        and (same_canonical_answers or same_solution_fingerprints)
+        and (same_canonical_answers or same_label_signatures)
     )
     return {
         "passed": passed,
@@ -849,7 +869,7 @@ def _evaluate_quality_retry_semantic_change(
         "same_semantic_dedup_text": same_semantic_dedup_text,
         "semantic_similarity": semantic_similarity,
         "same_canonical_answers": same_canonical_answers,
-        "same_solution_fingerprints": same_solution_fingerprints,
+        "same_label_signatures": same_label_signatures,
     }
 
 

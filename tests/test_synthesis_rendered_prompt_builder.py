@@ -4,7 +4,6 @@ import ast
 from pathlib import Path
 
 from rl_task_foundry.synthesis.contracts import (
-    CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
     OutputFieldContract,
@@ -12,42 +11,13 @@ from rl_task_foundry.synthesis.contracts import (
     OutputSchemaContract,
     TaskContract,
 )
-from rl_task_foundry.synthesis.rendered_prompt_builder import (
-    build_output_schema_prompt_payload,
-    build_rendered_user_prompt,
-)
+from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 
 
-def test_build_output_schema_prompt_payload_includes_ordering_metadata() -> None:
-    field = OutputFieldContract(
-        name="itinerary",
-        type=OutputFieldType.LIST,
-        ordered=False,
-        sort_key=("day",),
-        unique_elements=True,
-        items=OutputFieldContract(
-            name="entry",
-            type=OutputFieldType.OBJECT,
-            fields=[
-                OutputFieldContract(name="day", type=OutputFieldType.INT),
-                OutputFieldContract(name="city", type=OutputFieldType.STRING),
-            ],
-        ),
-    )
-
-    payload = build_output_schema_prompt_payload(field)
-
-    assert payload["type"] == "list"
-    assert payload["ordered"] is False
-    assert payload["sort_key"] == ["day"]
-    assert payload["unique_elements"] is True
-    assert payload["items"]["properties"]["day"]["type"] == "int"
-
-
-def test_build_rendered_user_prompt_includes_constraints_and_instance_parameters() -> None:
+def test_build_rendered_user_prompt_uses_entity_block_and_auto_schema() -> None:
     task = TaskContract(
         question="3일 itinerary를 만들어 주세요.",
-        category=CategoryTaxonomy.ITINERARY,
+        topic="itinerary",
         output_schema=OutputSchemaContract(
             root=OutputFieldContract(
                 name="itinerary",
@@ -75,18 +45,22 @@ def test_build_rendered_user_prompt_includes_constraints_and_instance_parameters
         instance_parameters={"season": "spring", "day_count": 3},
     )
 
-    prompt = build_rendered_user_prompt(task)
+    prompt = build_rendered_user_prompt(
+        task,
+        anchor_entity={"customer_id": 148},
+        canonical_answer=[{"day": 1, "city": "Seoul"}],
+    )
 
-    assert "3일 itinerary를 만들어 주세요." in prompt
-    assert "Constraints:" in prompt
-    assert "- city는 중복되면 안 된다." in prompt
-    assert "Instance Parameters:" in prompt
-    assert '- season: "spring"' in prompt
-    assert "- day_count: 3" in prompt
+    assert prompt.startswith("<entity>\n")
+    assert '{"customer_id": 148}' in prompt
+    assert "</entity>\n\n3일 itinerary를 만들어 주세요." in prompt
     assert "\n\n# Submit Result Format\n" in prompt
-    assert "# Submit Result Format" in prompt
-    assert '"sort_key": [' in prompt
-    assert "Submit your final answer via submit_result as a JSON string matching this schema." in prompt
+    assert "Constraints:" not in prompt
+    assert "Instance Parameters:" not in prompt
+    assert "submit_result as a JSON string matching this schema" not in prompt
+    assert '"type": "array"' in prompt
+    assert '"day"' in prompt
+    assert '"city"' in prompt
 
 
 def test_synthesis_rendered_prompt_builder_module_has_zero_legacy_imports() -> None:

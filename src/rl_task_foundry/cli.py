@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 
 import typer
@@ -18,7 +19,7 @@ from rl_task_foundry.synthesis.runner import (
 )
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
 from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
 from rl_task_foundry.synthesis.proof_environment import ProofEnvironmentRunner
 from rl_task_foundry.synthesis.real_db_trial import (
@@ -176,7 +177,7 @@ def run_synthesis_registry(
         if summary.last_decision is not None:
             console.print(f"last_status={summary.last_decision.status}")
             console.print(f"last_db_id={summary.last_decision.db_id}")
-            console.print(f"last_category={summary.last_decision.category}")
+            console.print(f"last_topic={summary.last_decision.topic}")
 
     asyncio.run(_run())
 
@@ -186,25 +187,27 @@ def show_synthesis_environment_registry(
     config_path: Path = Path("rl_task_foundry.yaml"),
     limit: int = 10,
     db_id: str | None = None,
-    category: str | None = None,
+    topic: str | None = typer.Option(None, "--topic", "--category"),
 ) -> None:
     """Print the current durable synthesis environment registry snapshot."""
 
     config = load_config(config_path)
     registry = EnvironmentRegistryWriter.for_config(config)
-    resolved_category = None
-    if category is not None:
-        try:
-            resolved_category = CategoryTaxonomy(category)
-        except ValueError as exc:
-            raise typer.BadParameter(f"unknown synthesis category: {category}") from exc
-
-    snapshot = registry.snapshot(limit=limit, db_id=db_id, category=resolved_category)
-    semantic_candidates = registry.semantic_dedup_candidates(
-        limit=limit,
-        db_id=db_id,
-        category=resolved_category,
-    )
+    resolved_topic = normalize_topic(topic) if topic is not None else None
+    try:
+        snapshot = registry.snapshot(limit=limit, db_id=db_id, topic=resolved_topic)
+        semantic_candidates = registry.semantic_dedup_candidates(
+            limit=limit,
+            db_id=db_id,
+            topic=resolved_topic,
+        )
+    except TypeError:
+        snapshot = registry.snapshot(limit=limit, db_id=db_id, category=resolved_topic)
+        semantic_candidates = registry.semantic_dedup_candidates(
+            limit=limit,
+            db_id=db_id,
+            category=resolved_topic,
+        )
 
     console.print("[green]synthesis environment registry[/green]")
     console.print(f"root_dir={registry.root_dir}")
@@ -215,12 +218,12 @@ def show_synthesis_environment_registry(
     for entry in snapshot.coverage:
         console.print(
             "coverage="
-            f"{entry.db_id}|{entry.category.value}|{entry.difficulty_band.value}|{entry.count}"
+            f"{entry.db_id}|{entry.topic}|{entry.difficulty_band.value}|{entry.count}"
         )
     for record in snapshot.recent_environments:
         console.print(
             "env="
-            f"{record.env_id}|{record.db_id}|{record.category.value}"
+            f"{record.env_id}|{record.db_id}|{record.topic}"
             f"|{record.difficulty_band.value}|{record.status.value}"
         )
 
@@ -231,7 +234,7 @@ def plan_synthesis_coverage(
     limit: int = 10,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
-    """Print the current registry coverage deficit plan against the db/category inventory."""
+    """Print the current registry coverage deficit plan against the db/topic inventory."""
 
     config = load_config(config_path)
     registry = load_synthesis_registry(registry_path)
@@ -258,7 +261,7 @@ def plan_synthesis_coverage(
         missing_bands = ",".join(band.value for band in pair.missing_bands) or "-"
         console.print(
             "pair_gap="
-            f"{pair.db_id}|{pair.category.value}|deficit={pair.total_deficit}"
+            f"{pair.db_id}|{pair.topic}|deficit={pair.total_deficit}"
             f"|current={pair.total_current_count}|target={pair.total_target_count}"
             f"|missing_bands={missing_bands}"
         )
@@ -267,7 +270,7 @@ def plan_synthesis_coverage(
             continue
         console.print(
             "cell_gap="
-            f"{cell.db_id}|{cell.category.value}|{cell.difficulty_band.value}"
+            f"{cell.db_id}|{cell.topic}|{cell.difficulty_band.value}"
             f"|current={cell.current_count}|target={cell.target_count}"
             f"|deficit={cell.deficit}"
         )
@@ -278,25 +281,28 @@ def export_bundle(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
     db_id: str | None = None,
-    category: str | None = None,
+    topic: str | None = typer.Option(None, "--topic", "--category"),
     env_id: str | None = None,
 ) -> None:
     """Export registered environments into the environment API bundle layout."""
 
     config = load_config(config_path)
     exporter = EnvironmentBundleExporter.for_config(config)
-    resolved_category = None
-    if category is not None:
-        try:
-            resolved_category = CategoryTaxonomy(category)
-        except ValueError as exc:
-            raise typer.BadParameter(f"unknown synthesis category: {category}") from exc
-    summary = exporter.export_bundle(
-        output_dir,
-        db_id=db_id,
-        category=resolved_category,
-        env_id=env_id,
-    )
+    resolved_topic = normalize_topic(topic) if topic is not None else None
+    try:
+        summary = exporter.export_bundle(
+            output_dir,
+            db_id=db_id,
+            topic=resolved_topic,
+            env_id=env_id,
+        )
+    except TypeError:
+        summary = exporter.export_bundle(
+            output_dir,
+            db_id=db_id,
+            category=resolved_topic,
+            env_id=env_id,
+        )
     if summary.environment_count == 0:
         raise typer.BadParameter("no registered environments matched the requested filters")
 
@@ -333,8 +339,6 @@ def run_proof_environment(
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:
             console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
-        if summary.cross_instance_error_codes:
-            console.print(f"cross_instance_error_codes={list(summary.cross_instance_error_codes)}")
         if summary.solver_pass_rate is not None:
             console.print(f"solver_pass_rate={summary.solver_pass_rate}")
         if summary.solver_ci_low is not None:
@@ -356,7 +360,7 @@ def run_proof_environment(
 @app.command("run-real-db-trial")
 def run_real_db_trial(
     db_id: str,
-    category: str,
+    topic: str,
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
@@ -364,25 +368,30 @@ def run_real_db_trial(
 
     async def _run() -> None:
         config = load_config(config_path)
-        try:
-            resolved_category = CategoryTaxonomy(category)
-        except ValueError as exc:
-            raise typer.BadParameter(f"unknown synthesis category: {category}") from exc
+        resolved_topic = normalize_topic(topic)
 
         runner = RealDbTrialRunner(config)
         try:
-            summary = await runner.run(
-                output_dir,
-                db_id=db_id,
-                category=resolved_category,
-            )
+            run_signature = inspect.signature(runner.run)
+            if "topic" in run_signature.parameters:
+                summary = await runner.run(
+                    output_dir,
+                    db_id=db_id,
+                    topic=resolved_topic,
+                )
+            else:
+                summary = await runner.run(
+                    output_dir,
+                    db_id=db_id,
+                    category=resolved_topic,
+                )
         finally:
             await runner.close()
 
         console.print(f"[green]real db trial complete[/green]: {output_dir}")
         console.print(f"trial_status={summary.trial_status}")
         console.print(f"db_id={summary.db_id}")
-        console.print(f"requested_category={summary.requested_category}")
+        console.print(f"requested_topic={summary.requested_topic}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:
@@ -395,8 +404,6 @@ def run_real_db_trial(
             console.print(f"attempt_outcomes={list(summary.attempt_outcomes)}")
         if summary.error_codes:
             console.print(f"error_codes={list(summary.error_codes)}")
-        if summary.cross_instance_error_codes:
-            console.print(f"cross_instance_error_codes={list(summary.cross_instance_error_codes)}")
         if summary.synthesis_error_type is not None:
             console.print(f"synthesis_error_type={summary.synthesis_error_type}")
         if summary.synthesis_error_message is not None:

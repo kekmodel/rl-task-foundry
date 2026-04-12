@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
-    CategoryTaxonomy,
     ConstraintKind,
     ConstraintSummaryItem,
     CrossInstanceSet,
@@ -27,7 +26,6 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
-    SolutionContract,
     TaskContract,
     ToolContract,
     ToolEmptyResultBehavior,
@@ -100,7 +98,7 @@ def test_instance_space_supports_contract_shapes() -> None:
     assert instance_space.parameters["day_count"].kind == "int_range"
 
 
-def test_environment_contract_round_trips_without_verifier_fields() -> None:
+def test_environment_contract_round_trips_without_generated_artifacts() -> None:
     output_schema = _build_output_schema()
     difficulty_vector = build_difficulty_vector(
         search_cost=2.0,
@@ -109,7 +107,7 @@ def test_environment_contract_round_trips_without_verifier_fields() -> None:
     )
     task = TaskContract(
         question="3일 일정표를 만들어 주세요.",
-        category=CategoryTaxonomy.ITINERARY,
+        topic="itinerary",
         output_schema=output_schema,
         constraint_summary=[
             ConstraintSummaryItem(
@@ -125,7 +123,7 @@ def test_environment_contract_round_trips_without_verifier_fields() -> None:
         env_id="env_trip_fixture_v1",
         db_id="proof_trip_fixture",
         domain="travel",
-        category=CategoryTaxonomy.ITINERARY,
+        topic="itinerary",
         atomic_tool_set_ref="db://proof_trip_fixture",
         difficulty_vector=difficulty_vector,
         created_at=datetime(2026, 4, 11, 13, 40, 0, tzinfo=timezone.utc),
@@ -139,7 +137,6 @@ def test_environment_contract_round_trips_without_verifier_fields() -> None:
             max_tool_rows=100,
         ),
         task=task,
-        solution=SolutionContract(),
         instance_space=InstanceSpaceContract(
             anchor_query=AnchorQueryContract(
                 sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
@@ -148,25 +145,31 @@ def test_environment_contract_round_trips_without_verifier_fields() -> None:
         ),
         cross_instance_set=CrossInstanceSet(
             instances=[
-                InstanceContract(instance_id="instance_1"),
-                InstanceContract(instance_id="instance_2"),
+                InstanceContract(
+                    instance_id="instance_1",
+                    expected_label_signature="sha256:a",
+                ),
+                InstanceContract(
+                    instance_id="instance_2",
+                    expected_label_signature="sha256:b",
+                ),
             ]
         ),
     )
 
     round_tripped = EnvironmentContract.model_validate_json(contract.model_dump_json())
 
-    assert round_tripped.task.category is CategoryTaxonomy.ITINERARY
+    assert round_tripped.task.topic == "itinerary"
     assert round_tripped.atomic_tool_set_ref == "db://proof_trip_fixture"
     assert round_tripped.rollout_constraints.max_tool_rows == 100
     assert round_tripped.quality_metrics.solver_pass_rate is None
 
 
-def test_environment_contract_rejects_task_category_mismatch() -> None:
+def test_environment_contract_rejects_task_topic_mismatch() -> None:
     output_schema = _build_output_schema()
     task = TaskContract(
         question="일정표를 만들어 주세요.",
-        category=CategoryTaxonomy.ASSIGNMENT,
+        topic="assignment",
         output_schema=output_schema,
         difficulty_vector=build_difficulty_vector(solution_space=3.0),
     )
@@ -176,7 +179,7 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
             env_id="env_bad",
             db_id="proof_trip_fixture",
             domain="travel",
-            category=CategoryTaxonomy.ITINERARY,
+            topic="itinerary",
             atomic_tool_set_ref="db://proof_trip_fixture",
             difficulty_vector=build_difficulty_vector(solution_space=3.0),
             created_at=datetime(2026, 4, 11, 13, 40, 0, tzinfo=timezone.utc),
@@ -189,13 +192,29 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
                 max_tool_rows=100,
             ),
             task=task,
-            solution=SolutionContract(),
             instance_space=InstanceSpaceContract(
                 anchor_query=AnchorQueryContract(
                     sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
                     outputs=["anchor_id"],
                 )
             ),
+        )
+
+
+def test_cross_instance_set_rejects_duplicate_label_signatures_when_required() -> None:
+    with pytest.raises(ValidationError):
+        CrossInstanceSet(
+            require_distinct_label_signatures=True,
+            instances=[
+                InstanceContract(
+                    instance_id="instance_a",
+                    expected_label_signature="sha256:abc",
+                ),
+                InstanceContract(
+                    instance_id="instance_b",
+                    expected_label_signature="sha256:abc",
+                ),
+            ],
         )
 
 
@@ -238,19 +257,3 @@ def test_float_range_parameter_space_rejects_invalid_bounds() -> None:
 def test_tool_parameter_contract_requires_enum_values_for_enum_types() -> None:
     with pytest.raises(ValidationError):
         ToolParameterContract(name="bucket", type=ToolParameterType.ENUM)
-
-
-def test_cross_instance_set_rejects_duplicate_solution_fingerprints_when_required() -> None:
-    with pytest.raises(ValidationError):
-        CrossInstanceSet(
-            instances=[
-                InstanceContract(
-                    instance_id="instance_1",
-                    expected_solution_fingerprint="sha256:abc",
-                ),
-                InstanceContract(
-                    instance_id="instance_2",
-                    expected_solution_fingerprint="sha256:abc",
-                ),
-            ]
-        )
