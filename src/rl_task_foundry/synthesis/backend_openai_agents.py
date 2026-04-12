@@ -39,7 +39,6 @@ def _load_sdk_components() -> SimpleNamespace:
         ModelSettings,
         OpenAIChatCompletionsModel,
         Runner,
-        SQLiteSession,
         set_tracing_disabled,
     )
     from openai import AsyncOpenAI
@@ -51,7 +50,6 @@ def _load_sdk_components() -> SimpleNamespace:
         ModelSettings=ModelSettings,
         OpenAIChatCompletionsModel=OpenAIChatCompletionsModel,
         Runner=Runner,
-        SQLiteSession=SQLiteSession,
         set_tracing_disabled=set_tracing_disabled,
     )
 
@@ -415,13 +413,8 @@ class OpenAIAgentsSynthesisBackend:
         return sdk_tools
 
     def _build_session(self, sdk: SimpleNamespace, request: SynthesisStageRequest) -> Any | None:
-        if not self.runtime_config.sdk_sessions_enabled or self.session_db_path is None:
-            return None
-        self.session_db_path.parent.mkdir(parents=True, exist_ok=True)
-        return sdk.SQLiteSession(
-            session_id=f"{request.db_id}:{request.phase.value}:{self.provider_name}",
-            db_path=str(self.session_db_path),
-        )
+        del sdk, request
+        return None
 
     def _write_artifact(
         self,

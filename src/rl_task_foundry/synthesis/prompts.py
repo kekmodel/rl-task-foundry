@@ -31,41 +31,29 @@ ERROR_TEMPLATES = {
 }
 
 FEW_SHOT_EXAMPLE = {
-    "label": {
-        "canonical_answer_json": '[{"city":"Seoul","day":1,"hotel":"Seoul Station Stay","total_cost":180},{"city":"Suwon","day":2,"hotel":"Suwon Fortress Hotel","total_cost":160}]',
-        "anchor_entity": {"anchor_id": 1},
-        "difficulty_vector": {
-            "search_cost": 2.0,
-            "solution_space": 2.0,
-            "constraint_density": 2.0,
+    "question": "봄 시즌 기준으로 연결된 두 도시를 중복 없이 방문하는 2일 일정을 짜 주세요. 각 날짜마다 가장 저렴한 숙소를 고르고, 하루 총비용이 같으면 도시 이름이 사전순으로 앞서는 쪽을 선택해 주세요.",
+    "constraint_summary": [
+        {
+            "key": "connected_cities_only",
+            "kind": "other",
+            "summary": "Each next city must be reachable from the previous city.",
         },
-        "instance_parameters": {},
-        "label_summary": "The cheapest valid two-day itinerary is unique after applying connectivity and tie-break rules.",
-    },
-    "task": {
-        "question": "봄 시즌 기준으로 연결된 두 도시를 중복 없이 방문하는 2일 일정을 짜 주세요. 각 날짜마다 가장 저렴한 숙소를 고르고, 하루 총비용이 같으면 도시 이름이 사전순으로 앞서는 쪽을 선택해 주세요.",
-        "constraint_summary": [
-            {
-                "key": "connected_cities_only",
-                "kind": "other",
-                "summary": "Each next city must be reachable from the previous city.",
-            },
-            {
-                "key": "no_repeat_city",
-                "kind": "uniqueness",
-                "summary": "Do not repeat a city.",
-            },
-        ],
-        "instance_space": {
-            "anchor_query": {
-                "sql": "SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
-                "outputs": ["anchor_id"],
-            },
-            "parameters": {},
-            "sampling": {"strategy": "deterministic_hash", "seed": 0},
-            "instance_count": 1,
+        {
+            "key": "no_repeat_city",
+            "kind": "uniqueness",
+            "summary": "Do not repeat a city.",
         },
+    ],
+    "instance_space": {
+        "anchor_query": {
+            "sql": "SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
+            "outputs": ["anchor_id"],
+        },
+        "parameters": {},
+        "sampling": {"strategy": "deterministic_hash", "seed": 0},
+        "instance_count": 1,
     },
+    "memory_summary": "task synthesis completed",
 }
 
 

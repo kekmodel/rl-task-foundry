@@ -439,7 +439,34 @@ def test_tool_use_behavior_stops_on_failed_submit():
     )
 
     assert result.is_final_output is True
-    assert result.final_output["submitted"] is False
+    assert json.loads(result.final_output)["submitted"] is False
+
+
+def test_tool_use_behavior_serializes_successful_submit_as_json_string():
+    class FakeToolsToFinalOutputResult:
+        def __init__(self, *, is_final_output: bool, final_output):
+            self.is_final_output = is_final_output
+            self.final_output = final_output
+
+    behavior = OpenAIAgentsSolverBackend._build_tool_use_behavior(
+        SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
+    )
+
+    result = behavior(
+        None,
+        [
+            SimpleNamespace(
+                tool=SimpleNamespace(name="submit_result"),
+                output={
+                    "submitted": True,
+                    "answer_text": '{"store_id":1}',
+                },
+            )
+        ],
+    )
+
+    assert result.is_final_output is True
+    assert result.final_output == '{"answer_text": "{\\"store_id\\":1}", "submitted": true}'
 
 
 def test_extract_submission_output_classifies_invalid_submit():

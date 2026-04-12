@@ -10,6 +10,7 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
 from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
+from rl_task_foundry.synthesis.canonicalize import CanonicalizationError
 from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
@@ -275,6 +276,167 @@ async def test_synthesize_environment_draft_materializes_label_first_prompt_and_
         SynthesisPhase.LABEL_CONSTRUCTION,
         SynthesisPhase.TASK_SYNTHESIS,
     ]
+
+
+@pytest.mark.asyncio
+async def test_synthesize_environment_draft_passes_configured_task_language_to_all_phases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config_with_synthesis_output(tmp_path).model_copy(deep=True)
+    config.domain.language = "en"
+    runtime = SynthesisAgentRuntime(config)
+    seen: list[tuple[SynthesisPhase, str]] = []
+
+    results = {
+        SynthesisPhase.SCHEMA_EXPLORATION: _schema_result(),
+        SynthesisPhase.CATEGORY_INFERENCE: _category_result(),
+        SynthesisPhase.LABEL_CONSTRUCTION: _label_result(),
+        SynthesisPhase.TASK_SYNTHESIS: _task_result(),
+    }
+
+    async def _fake_run_phase(self, request):
+        seen.append((request.phase, request.task_language))
+        return results[request.phase]
+
+    async def _fake_bind_db_id(self, db_id: str):
+        self._bound_db_id = db_id
+
+    async def _fake_ensure_category_available(self, db_id: str, topic: str):
+        return None
+
+    async def _fake_introspect_graph(self):
+        return _sample_graph()
+
+    async def _fake_ensure_atomic_tool_bundle(self, *, db_id: str, graph: SchemaGraph):
+        return _sample_atomic_tool_bundle(db_id)
+
+    async def _fake_prime_phase_backends_with_atomic_tools(self, *, db_id: str, bundle):
+        return None
+
+    async def _fake_reset(self, db_id: str, topic: str):
+        return None
+
+    async def _fake_record_discard(self, db_id: str, topic: str, outcome=None, error_codes=None):
+        return None
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_phase", _fake_run_phase)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_bind_db_id", _fake_bind_db_id)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_category_available",
+        _fake_ensure_category_available,
+    )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_introspect_graph", _fake_introspect_graph)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_atomic_tool_bundle",
+        _fake_ensure_atomic_tool_bundle,
+    )
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_prime_phase_backends_with_atomic_tools",
+        _fake_prime_phase_backends_with_atomic_tools,
+    )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_reset_category_failure_state", _fake_reset)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_record_category_discard", _fake_record_discard)
+
+    await runtime.synthesize_environment_draft(db_id="sakila", requested_topic="assignment")
+
+    assert seen == [
+        (SynthesisPhase.SCHEMA_EXPLORATION, "en"),
+        (SynthesisPhase.CATEGORY_INFERENCE, "en"),
+        (SynthesisPhase.LABEL_CONSTRUCTION, "en"),
+        (SynthesisPhase.TASK_SYNTHESIS, "en"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_canonical_materialization_failure_does_not_force_harder_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
+    captured: list[SynthesisStageRequest] = []
+    task_calls = 0
+
+    async def _fake_run_phase(self, request):
+        nonlocal task_calls
+        captured.append(request)
+        if request.phase == SynthesisPhase.SCHEMA_EXPLORATION:
+            return _schema_result()
+        if request.phase == SynthesisPhase.CATEGORY_INFERENCE:
+            return _category_result()
+        if request.phase == SynthesisPhase.LABEL_CONSTRUCTION:
+            return _label_result(canonical_answer_json='{"store_id": 1}')
+        task_calls += 1
+        return _task_result()
+
+    async def _fake_bind_db_id(self, db_id: str):
+        self._bound_db_id = db_id
+
+    async def _fake_ensure_category_available(self, db_id: str, topic: str):
+        return None
+
+    async def _fake_introspect_graph(self):
+        return _sample_graph()
+
+    async def _fake_ensure_atomic_tool_bundle(self, *, db_id: str, graph: SchemaGraph):
+        return _sample_atomic_tool_bundle(db_id)
+
+    async def _fake_prime_phase_backends_with_atomic_tools(self, *, db_id: str, bundle):
+        return None
+
+    async def _fake_reset(self, db_id: str, topic: str):
+        return None
+
+    async def _fake_record_discard(self, db_id: str, topic: str, outcome=None, error_codes=None):
+        return None
+
+    def _fake_materialize_instances_and_canonical_answers(
+        self,
+        *,
+        task,
+        instance_space,
+        canonical_answer_json,
+        anchor_entity,
+    ):
+        raise CanonicalizationError("$.store_id", "forced failure")
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_phase", _fake_run_phase)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_bind_db_id", _fake_bind_db_id)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_category_available",
+        _fake_ensure_category_available,
+    )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_introspect_graph", _fake_introspect_graph)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_atomic_tool_bundle",
+        _fake_ensure_atomic_tool_bundle,
+    )
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_prime_phase_backends_with_atomic_tools",
+        _fake_prime_phase_backends_with_atomic_tools,
+    )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_reset_category_failure_state", _fake_reset)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_record_category_discard", _fake_record_discard)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_materialize_instances_and_canonical_answers",
+        _fake_materialize_instances_and_canonical_answers,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await runtime.synthesize_environment_draft(db_id="sakila", requested_topic="assignment")
+
+    assert "bounded retry budget" in str(exc_info.value)
+    task_requests = [request for request in captured if request.phase is SynthesisPhase.TASK_SYNTHESIS]
+    assert len(task_requests) >= 2
+    assert all(request.difficulty_crank_index == 0 for request in task_requests)
+    assert all(request.difficulty_crank_history == [] for request in task_requests)
 
 
 def test_runtime_rejects_ungrounded_schema_exploration(tmp_path: Path) -> None:

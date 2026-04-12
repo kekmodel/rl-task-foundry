@@ -47,7 +47,7 @@ def test_cli_validate_config_command():
         "max_batch_values=128,float_precision=2"
     ) in normalized
     assert (
-        "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=True,"
+        "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=False,"
         "memory_window=8,max_generation_attempts=5,"
         "max_difficulty_cranks=6,"
         "max_consecutive_category_discards=3,category_backoff_duration_s=3600"

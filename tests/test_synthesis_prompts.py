@@ -87,7 +87,9 @@ def test_task_synthesis_prompt_includes_language_policy_and_one_shot() -> None:
     assert "Korean" in prompt
     assert "All schema field names, code identifiers, and tool names must remain in English." in prompt
     assert "# One-Shot Example" in prompt
-    assert "canonical_answer_json" in prompt
+    assert '"question"' in prompt
+    assert '"memory_summary"' in prompt
+    assert '"label"' not in prompt
     assert "solution.py" not in prompt
     assert "verifier.py" not in prompt
 

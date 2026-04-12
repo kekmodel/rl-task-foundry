@@ -317,12 +317,12 @@ class OpenAIAgentsSolverBackend:
                 if _is_successful_submission(output):
                     return sdk.ToolsToFinalOutputResult(
                         is_final_output=True,
-                        final_output=output,
+                        final_output=json.dumps(output, ensure_ascii=False, sort_keys=True),
                     )
                 if _is_failed_submission(output):
                     return sdk.ToolsToFinalOutputResult(
                         is_final_output=True,
-                        final_output=output,
+                        final_output=json.dumps(output, ensure_ascii=False, sort_keys=True),
                     )
             return sdk.ToolsToFinalOutputResult(is_final_output=False, final_output=None)
 

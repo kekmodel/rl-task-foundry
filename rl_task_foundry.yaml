@@ -71,7 +71,7 @@ synthesis:
   runtime:
     max_turns: 8
     tracing: true
-    sdk_sessions_enabled: true
+    sdk_sessions_enabled: false
     explicit_memory_window: 8
     max_generation_attempts: 5
     max_difficulty_cranks: 6

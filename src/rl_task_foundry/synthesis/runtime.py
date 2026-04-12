@@ -886,6 +886,7 @@ class SynthesisAgentRuntime:
                     atomic_tool_set_ref=atomic_tool_set_ref,
                     available_atomic_tools=available_atomic_tools,
                     domain_name=self.config.domain.name,
+                    task_language=self.config.domain.language,
                     scenario_description=self.config.domain.scenario_description,
                     requested_topic=requested_topic,
                     attempt_index=1,
@@ -1745,7 +1746,7 @@ class SynthesisAgentRuntime:
                         count=difficulty_crank_count,
                         history=difficulty_crank_history,
                     )
-                retry_requires_harder = True
+                retry_requires_harder = crank_request_active
                 if attempt_index >= max_iterations:
                     raise SynthesisArtifactGenerationError(
                         "label-first synthesis exhausted its bounded retry budget after canonical answer materialization failures",
@@ -2085,23 +2086,6 @@ class SynthesisAgentRuntime:
             ],
         )
         return [instance], [canonical_record], cross_instance_set
-
-    @staticmethod
-    def _normalize_solution_answer(
-        output_schema: OutputSchemaContract,
-        answer: object,
-    ) -> object:
-        root = output_schema.root
-        if (
-            isinstance(answer, dict)
-            and set(answer) == {root.name}
-            and (
-                root.type is not OutputFieldType.OBJECT
-                or root.name not in {child.name for child in root.fields}
-            )
-        ):
-            return answer[root.name]
-        return answer
 
     async def _bind_db_id(self, db_id: str) -> None:
         async with self._bind_lock:
