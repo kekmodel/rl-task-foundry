@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -525,6 +526,10 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.registration_diagnostics.verifier.probe_fetch_facts_return_keys == ["city"]
     assert [entry.phase for entry in draft.memory] == list(SynthesisPhase)
     assert draft.provider_status["codex_oauth"].observed_at.tzinfo is not None
+    for request in backend.requests:
+        assert request.atomic_tool_set_ref == "db://sakila"
+        assert request.available_atomic_tools
+        assert all("name" in tool for tool in request.available_atomic_tools)
 
 
 @pytest.mark.asyncio
@@ -1495,6 +1500,15 @@ async def test_openai_agents_synthesis_backend_uses_structured_output_and_tracin
         SynthesisStageRequest(
             phase=SynthesisPhase.SCHEMA_EXPLORATION,
             db_id="sakila",
+            atomic_tool_set_ref="db://sakila",
+            available_atomic_tools=[
+                {
+                    "name": "get_customer_by_id",
+                    "description": "Lookup a customer by id.",
+                    "params_schema": {"type": "object"},
+                    "returns_schema": {"type": "object"},
+                }
+            ],
             domain_name="customer_support",
             user_role="end user",
             agent_role="organization AI assistant",
@@ -1514,6 +1528,12 @@ async def test_openai_agents_synthesis_backend_uses_structured_output_and_tracin
     assert FakeRunner.calls[0]["max_turns"] == config.synthesis.runtime.max_turns
     assert FakeSQLiteSession.last_instance.session_id == "sakila:schema_exploration:codex_oauth"
     assert FakeAgent.last_instance.kwargs["output_type"] is SchemaExplorationOutput
+    assert "available atomic tools" in FakeAgent.last_instance.kwargs["instructions"]
+    assert "new tools can be created" in FakeAgent.last_instance.kwargs["instructions"]
+    request_input = json.loads(FakeRunner.calls[0]["input"])
+    assert request_input["atomic_tool_set_ref"] == "db://sakila"
+    assert request_input["available_atomic_tool_names"] == ["get_customer_by_id"]
+    assert request_input["available_atomic_tools"][0]["name"] == "get_customer_by_id"
     assert (tmp_path / "synthesis_traces" / "transcripts").exists()
 
 

@@ -162,6 +162,8 @@ SynthesisPhaseOutput = (
 class SynthesisStageRequest(StrictModel):
     phase: SynthesisPhase
     db_id: str
+    atomic_tool_set_ref: str | None = None
+    available_atomic_tools: list[dict[str, object]] = Field(default_factory=list)
     domain_name: str
     user_role: str
     agent_role: str
@@ -497,6 +499,8 @@ class SynthesisAgentRuntime:
             db_id=db_id,
             graph=resolved_graph,
         )
+        atomic_tool_set_ref = f"db://{db_id}"
+        available_atomic_tools = atomic_tool_bundle.actor_tool_definitions()
         schema_summary = summarize_schema_graph(resolved_graph)
         try:
             stage_results: list[SynthesisStageResult] = []
@@ -511,6 +515,8 @@ class SynthesisAgentRuntime:
                 request = SynthesisStageRequest(
                     phase=phase,
                     db_id=db_id,
+                    atomic_tool_set_ref=atomic_tool_set_ref,
+                    available_atomic_tools=available_atomic_tools,
                     domain_name=self.config.domain.name,
                     user_role=self.config.domain.user_role,
                     agent_role=self.config.domain.agent_role,
@@ -549,6 +555,8 @@ class SynthesisAgentRuntime:
                 stage_results=stage_results,
                 memory=memory,
                 tool_traces=tool_traces,
+                atomic_tool_set_ref=atomic_tool_set_ref,
+                available_atomic_tools=available_atomic_tools,
             )
 
             materialized_at = datetime.now(timezone.utc)
@@ -756,6 +764,8 @@ class SynthesisAgentRuntime:
         stage_results: list[SynthesisStageResult],
         memory: list[SynthesisMemoryEntry],
         tool_traces: list[SynthesisToolTraceEntry],
+        atomic_tool_set_ref: str,
+        available_atomic_tools: list[dict[str, object]],
     ) -> tuple[
         ArtifactGenerationOutput,
         RegistrationBundleReport,
@@ -773,6 +783,8 @@ class SynthesisAgentRuntime:
             request = SynthesisStageRequest(
                 phase=SynthesisPhase.ARTIFACT_GENERATION,
                 db_id=db_id,
+                atomic_tool_set_ref=atomic_tool_set_ref,
+                available_atomic_tools=available_atomic_tools,
                 domain_name=self.config.domain.name,
                 user_role=self.config.domain.user_role,
                 agent_role=self.config.domain.agent_role,
