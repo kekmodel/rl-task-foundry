@@ -17,6 +17,7 @@ from rl_task_foundry.synthesis.prompts import (
     build_synthesis_phase_input,
     build_synthesis_phase_instructions,
 )
+from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.runtime import (
     ArtifactGenerationOutput,
     CategoryInferenceOutput,
@@ -32,6 +33,7 @@ from rl_task_foundry.synthesis.runtime import (
 def _load_sdk_components() -> SimpleNamespace:
     from agents import (
         Agent,
+        AgentOutputSchema,
         ModelSettings,
         OpenAIChatCompletionsModel,
         Runner,
@@ -42,6 +44,7 @@ def _load_sdk_components() -> SimpleNamespace:
 
     return SimpleNamespace(
         Agent=Agent,
+        AgentOutputSchema=AgentOutputSchema,
         AsyncOpenAI=AsyncOpenAI,
         ModelSettings=ModelSettings,
         OpenAIChatCompletionsModel=OpenAIChatCompletionsModel,
@@ -146,21 +149,224 @@ def _phase_output_type(phase: SynthesisPhase) -> type[BaseModel]:
     return ArtifactGenerationOutput
 
 
-def _normalize_phase_payload(phase: SynthesisPhase, final_output: Any) -> BaseModel:
-    output_type = _phase_output_type(phase)
+def _build_agent(
+    sdk: SimpleNamespace,
+    *,
+    request: SynthesisStageRequest,
+    model: Any,
+    structured_output: bool,
+) -> Any:
+    output_type: Any | None = None
+    if structured_output:
+        output_type = _phase_output_type(request.phase)
+        if request.phase == SynthesisPhase.ARTIFACT_GENERATION:
+            output_schema_factory = getattr(sdk, "AgentOutputSchema", None)
+            if output_schema_factory is not None:
+                output_type = output_schema_factory(output_type, strict_json_schema=False)
+    return sdk.Agent(
+        name=f"synthesis-{request.phase.value}",
+        instructions=build_synthesis_phase_instructions(request.phase),
+        model=model,
+        tools=[],
+        output_type=output_type,
+        model_settings=sdk.ModelSettings(parallel_tool_calls=False),
+    )
+
+
+def _normalize_category_value(value: Any) -> str | None:
+    if isinstance(value, CategoryTaxonomy):
+        return value.value
+    if not isinstance(value, str):
+        return None
+    try:
+        return CategoryTaxonomy(value).value
+    except ValueError:
+        return None
+
+
+def _normalize_fact_value_type(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    mapping = {
+        "str": "str",
+        "string": "str",
+        "int": "int",
+        "integer": "int",
+        "float": "float",
+        "number": "float",
+        "bool": "bool",
+        "boolean": "bool",
+        "date": "date",
+        "datetime": "datetime",
+        "list[str]": "list[str]",
+        "list[int]": "list[int]",
+        "list[float]": "list[float]",
+    }
+    return mapping.get(normalized)
+
+
+def _repair_split_json_object(text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    try:
+        prefix, index = decoder.raw_decode(text)
+    except json.JSONDecodeError:
+        return None
+    remainder = text[index:].strip()
+    if not remainder.startswith(",") or not isinstance(prefix, dict):
+        return None
+    try:
+        suffix = json.loads("{" + remainder[1:])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(suffix, dict):
+        return None
+    merged = dict(prefix)
+    for key, value in suffix.items():
+        merged.setdefault(key, value)
+    return merged
+
+
+def _normalize_phase_payload(request: SynthesisStageRequest, final_output: Any) -> BaseModel:
+    output_type = _phase_output_type(request.phase)
     if isinstance(final_output, output_type):
         return final_output
     if isinstance(final_output, BaseModel):
         return output_type.model_validate(final_output.model_dump(mode="python"))
     if isinstance(final_output, dict):
+        final_output = _coerce_phase_payload_dict(request, final_output)
         return output_type.model_validate(final_output)
     if isinstance(final_output, str):
         payload_text = _extract_json_object_text(final_output)
-        parsed = json.loads(payload_text)
+        try:
+            parsed = json.loads(payload_text)
+        except json.JSONDecodeError:
+            repaired = _repair_split_json_object(payload_text)
+            if repaired is None:
+                raise
+            parsed = repaired
         if not isinstance(parsed, dict):
             raise RuntimeError("synthesis backend expected a JSON object payload")
+        parsed = _coerce_phase_payload_dict(request, parsed)
         return output_type.model_validate(parsed)
     raise RuntimeError("synthesis backend returned an unsupported final_output type")
+
+
+def _coerce_phase_payload_dict(
+    request: SynthesisStageRequest,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if request.phase == SynthesisPhase.ARTIFACT_GENERATION:
+        proposed_environment = payload.get("proposed_environment")
+        if isinstance(proposed_environment, dict):
+            normalized_proposed_environment = dict(proposed_environment)
+            for key in ("solution", "verifier", "shadow_verifier", "instance_space"):
+                if key in payload and key not in normalized_proposed_environment:
+                    normalized_proposed_environment[key] = payload[key]
+            for verifier_key in ("verifier", "shadow_verifier"):
+                verifier_payload = normalized_proposed_environment.get(verifier_key)
+                if not isinstance(verifier_payload, dict):
+                    continue
+                facts_schema = verifier_payload.get("facts_schema")
+                if not isinstance(facts_schema, dict):
+                    continue
+                facts = facts_schema.get("facts")
+                if not isinstance(facts, list):
+                    continue
+                normalized_facts: list[object] = []
+                changed = False
+                for fact in facts:
+                    if not isinstance(fact, dict):
+                        normalized_facts.append(fact)
+                        continue
+                    if {"key", "entity_ref", "attribute", "value_type"} <= set(fact):
+                        normalized_facts.append(fact)
+                        continue
+                    fact_name = fact.get("name")
+                    fact_value_type = _normalize_fact_value_type(fact.get("type"))
+                    if isinstance(fact_name, str) and fact_value_type is not None:
+                        normalized_facts.append(
+                            {
+                                "key": fact_name,
+                                "entity_ref": "answer",
+                                "attribute": fact_name,
+                                "value_type": fact_value_type,
+                            }
+                        )
+                        changed = True
+                        continue
+                    normalized_facts.append(fact)
+                if changed:
+                    updated_verifier = dict(verifier_payload)
+                    updated_facts_schema = dict(facts_schema)
+                    updated_facts_schema["facts"] = normalized_facts
+                    updated_verifier["facts_schema"] = updated_facts_schema
+                    normalized_proposed_environment[verifier_key] = updated_verifier
+            normalized_payload = dict(payload)
+            normalized_payload["proposed_environment"] = normalized_proposed_environment
+            legacy_artifacts = normalized_payload.get("artifacts")
+            if isinstance(legacy_artifacts, dict):
+                normalized_artifacts = dict(legacy_artifacts)
+                for legacy_name, contract_name in (
+                    ("solution.py", "solution_source"),
+                    ("verifier.py", "verifier_source"),
+                    ("shadow_verifier.py", "shadow_verifier_source"),
+                ):
+                    if contract_name not in normalized_artifacts and legacy_name in normalized_artifacts:
+                        normalized_artifacts[contract_name] = normalized_artifacts[legacy_name]
+                normalized_payload["artifacts"] = normalized_artifacts
+            return normalized_payload
+        return payload
+
+    phase = request.phase
+    if phase == SynthesisPhase.CATEGORY_INFERENCE:
+        if "selected_category" in payload and "rationale" in payload:
+            return payload
+        selected_category = _normalize_category_value(payload.get("category"))
+        if selected_category is None and request.requested_category is not None:
+            selected_category = request.requested_category.value
+        remapped = {
+            "selected_category": selected_category,
+            "rationale": payload.get("validation_notes")
+            or payload.get("unique_answer_strategy")
+            or payload.get("recommended_task_type")
+            or "category inference completed",
+            "memory_summary": payload.get("memory_summary", "category inference completed"),
+        }
+        return remapped
+
+    if phase != SynthesisPhase.SCHEMA_EXPLORATION:
+        return payload
+    if "domain_hypothesis" in payload and "candidate_categories" in payload:
+        return payload
+
+    task_category = payload.get("task_category")
+    candidate_categories: list[str] = []
+    normalized_task_category = _normalize_category_value(task_category)
+    if normalized_task_category is not None:
+        candidate_categories.append(normalized_task_category)
+    raw_categories = payload.get("categories")
+    if isinstance(raw_categories, list):
+        for item in raw_categories:
+            candidate_name = item.get("name") if isinstance(item, dict) else item
+            normalized_candidate = _normalize_category_value(candidate_name)
+            if normalized_candidate is None or normalized_candidate in candidate_categories:
+                continue
+            candidate_categories.append(normalized_candidate)
+    # Schema-exploration payloads from real runs sometimes describe capability clusters
+    # instead of taxonomy labels. Preserve forward progress by falling back to the
+    # requested category when the model's output is otherwise semantically useful.
+    if not candidate_categories and request.requested_category is not None:
+        candidate_categories.append(request.requested_category.value)
+
+    remapped = {
+        "domain_hypothesis": payload.get("domain_fit")
+        or payload.get("compositionality")
+        or "schema exploration completed",
+        "candidate_categories": candidate_categories,
+        "memory_summary": payload.get("memory_summary", "schema exploration completed"),
+    }
+    return remapped
 
 
 @dataclass(slots=True)
@@ -238,33 +444,67 @@ class OpenAIAgentsSynthesisBackend:
             sdk.set_tracing_disabled(
                 disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"
             )
-        agent = sdk.Agent(
-            name=f"synthesis-{request.phase.value}",
-            instructions=build_synthesis_phase_instructions(request.phase),
-            model=self._build_model(sdk),
-            tools=[],
-            output_type=_phase_output_type(request.phase),
-            model_settings=sdk.ModelSettings(parallel_tool_calls=False),
+        model = self._build_model(sdk)
+        agent = _build_agent(
+            sdk,
+            request=request,
+            model=model,
+            structured_output=True,
         )
         session = self._build_session(sdk, request)
 
         request_input = build_synthesis_phase_input(request)
         started_at = perf_counter()
-        run_result = await sdk.Runner.run(
-            agent,
-            request_input,
-            max_turns=self.runtime_config.max_turns,
-            session=session,
-        )
+        try:
+            run_result = await sdk.Runner.run(
+                agent,
+                request_input,
+                max_turns=self.runtime_config.max_turns,
+                session=session,
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "ModelBehaviorError":
+                raise
+            # Some openai-compatible endpoints reject SDK-managed structured output.
+            # Retry once with plain text JSON and normalize locally.
+            fallback_agent = _build_agent(
+                sdk,
+                request=request,
+                model=model,
+                structured_output=False,
+            )
+            run_result = await sdk.Runner.run(
+                fallback_agent,
+                request_input,
+                max_turns=self.runtime_config.max_turns,
+                session=None,
+            )
         latency_ms = int((perf_counter() - started_at) * 1000)
 
-        payload_model = _normalize_phase_payload(request.phase, run_result.final_output)
         tool_traces = _extract_tool_traces(
             run_result,
             request=request,
             provider=self.provider_name,
             model=self.model_name,
         )
+        try:
+            payload_model = _normalize_phase_payload(request, run_result.final_output)
+        except Exception as exc:
+            self._write_artifact(
+                kind="normalize_failures",
+                request=request,
+                payload={
+                    "phase": request.phase.value,
+                    "input": request_input,
+                    "raw_final_output": run_result.final_output,
+                    "latency_ms": latency_ms,
+                    "turn_count": _extract_turn_count(run_result),
+                    "token_usage": _extract_token_usage(run_result),
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            raise
         transcript_ref = self._write_artifact(
             kind="transcripts",
             request=request,

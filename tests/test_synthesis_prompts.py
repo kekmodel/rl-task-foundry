@@ -46,6 +46,49 @@ def test_build_synthesis_phase_input_includes_atomic_tool_context() -> None:
     assert payload["available_atomic_tools"][0]["name"] == "get_customer_by_id"
     assert "only tools" in payload["available_atomic_tools_role"]
     assert "tool.py" in payload["available_atomic_tools_role"]
+    assert payload["artifact_generation_output_contract"]["proposed_environment"]["task"][
+        "category"
+    ] == "assignment"
+    assert payload["artifact_generation_output_contract"]["proposed_environment"]["task"][
+        "output_schema"
+    ]["root"]["fields"][0]["name"] == "store_id"
+    assert payload["artifact_generation_output_contract"]["artifacts"] == {
+        "solution_source": "python source string",
+        "verifier_source": "python source string",
+        "shadow_verifier_source": "python source string",
+    }
+    assert "never copy the sample question" in payload["artifact_generation_contract_role"]
+    assert "answer_schema" in payload["artifact_generation_legacy_keys_forbidden"]
+
+
+def test_build_synthesis_phase_input_condenses_tool_schema_for_schema_exploration() -> None:
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.SCHEMA_EXPLORATION,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[
+            {
+                "name": "get_customer_by_id",
+                "description": "Lookup a customer by id.",
+                "params_schema": {"type": "object"},
+                "returns_schema": {"type": "object"},
+            }
+        ],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+    )
+
+    payload = json.loads(build_synthesis_phase_input(request))
+
+    assert payload["available_atomic_tools"] == [
+        {
+            "name": "get_customer_by_id",
+            "description": "Lookup a customer by id.",
+        }
+    ]
 
 
 def test_build_synthesis_phase_input_includes_difficulty_crank_context() -> None:
@@ -92,3 +135,7 @@ def test_artifact_generation_instructions_forbid_new_tool_generation() -> None:
     assert "Do not generate `tool.py` or `tool_self_test.py`" in instructions
     assert "available_atomic_tools" in instructions
     assert "unique canonical JSON answer" in instructions
+    assert "`proposed_environment.task`" in instructions
+    assert "`artifacts.solution_source`" in instructions
+    assert "`answer_schema`" in instructions
+    assert "do not copy contract placeholders" in instructions

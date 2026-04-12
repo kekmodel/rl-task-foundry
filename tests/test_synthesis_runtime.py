@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import ModelRef, OutputConfig, ProviderConfig
@@ -1882,7 +1883,164 @@ async def test_openai_agents_synthesis_backend_uses_structured_output_and_tracin
     assert request_input["atomic_tool_set_ref"] == "db://sakila"
     assert request_input["available_atomic_tool_names"] == ["get_customer_by_id"]
     assert request_input["available_atomic_tools"][0]["name"] == "get_customer_by_id"
+    assert "params_schema" not in request_input["available_atomic_tools"][0]
+    assert "returns_schema" not in request_input["available_atomic_tools"][0]
     assert (tmp_path / "synthesis_traces" / "transcripts").exists()
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_relaxes_strict_json_schema_for_artifact_generation(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgentOutputSchema:
+        last_call = None
+
+        def __init__(self, output_type, strict_json_schema=True):
+            self.output_type = output_type
+            self.strict_json_schema = strict_json_schema
+            self.__class__.last_call = self
+
+    class FakeAgent:
+        last_instance = None
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.last_instance = self
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            raise RuntimeError("stop after agent construction")
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AgentOutputSchema=FakeAgentOutputSchema,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    with pytest.raises(RuntimeError, match="stop after agent construction"):
+        await backend.run_stage(
+            SynthesisStageRequest(
+                phase=SynthesisPhase.ARTIFACT_GENERATION,
+                db_id="sakila",
+                atomic_tool_set_ref="db://sakila",
+                available_atomic_tools=[],
+                domain_name="customer_support",
+                user_role="end user",
+                agent_role="organization AI assistant",
+                scenario_description="help requests",
+                requested_category=CategoryTaxonomy.ASSIGNMENT,
+                schema_summary={"table_count": 2},
+                previous_outputs=_payloads(),
+            )
+        )
+
+    assert FakeAgentOutputSchema.last_call is not None
+    assert FakeAgentOutputSchema.last_call.output_type is ArtifactGenerationOutput
+    assert FakeAgentOutputSchema.last_call.strict_json_schema is False
+    assert FakeAgent.last_instance.kwargs["output_type"] is FakeAgentOutputSchema.last_call
+
+
+def test_openai_agents_synthesis_backend_repairs_split_artifact_generation_json() -> None:
+    repaired = backend_module._repair_split_json_object(
+        '{"proposed_environment":{"task":{}},"verifier":{"entrypoint":"verify"}},'
+        '"artifacts":{"solution_source":"x"}}'
+    )
+
+    assert repaired == {
+        "proposed_environment": {"task": {}},
+        "verifier": {"entrypoint": "verify"},
+        "artifacts": {"solution_source": "x"},
+    }
+
+
+def test_openai_agents_synthesis_backend_coerces_artifact_generation_fact_shorthand() -> None:
+    proposed_environment = _sample_proposed_environment().model_dump(mode="python")
+    proposed_environment["verifier"]["facts_schema"] = {
+        "facts": [
+            {"name": "customer_id", "type": "int"},
+            {"name": "total_amount", "type": "number"},
+        ]
+    }
+    proposed_environment["shadow_verifier"]["facts_schema"] = {
+        "facts": [
+            {"name": "customer_id", "type": "int"},
+            {"name": "total_amount", "type": "number"},
+        ]
+    }
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.ARTIFACT_GENERATION,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        previous_outputs=_payloads(),
+    )
+
+    payload = backend_module._normalize_phase_payload(
+        request,
+        {
+            "proposed_environment": proposed_environment,
+            "artifacts": _sample_artifacts().model_dump(mode="python"),
+        },
+    )
+
+    assert isinstance(payload, ArtifactGenerationOutput)
+    verifier_facts = payload.proposed_environment.verifier.facts_schema.facts
+    shadow_facts = payload.proposed_environment.shadow_verifier.facts_schema.facts
+    assert verifier_facts[0].key == "customer_id"
+    assert verifier_facts[0].entity_ref == "answer"
+    assert verifier_facts[0].attribute == "customer_id"
+    assert verifier_facts[0].value_type == "int"
+    assert shadow_facts[1].key == "total_amount"
+    assert shadow_facts[1].value_type == "float"
 
 
 @pytest.mark.asyncio
@@ -1982,3 +2140,548 @@ async def test_openai_agents_synthesis_backend_accepts_markdown_fenced_json(
 
     assert isinstance(result.payload, CategoryInferenceOutput)
     assert result.payload.selected_category == CategoryTaxonomy.ASSIGNMENT
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_coerces_schema_exploration_alias_payload(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            return SimpleNamespace(
+                final_output={
+                    "task_category": "assignment",
+                    "compositionality": "single-hop lookup and traversal tasks",
+                    "supported_query_patterns": ["retrieve one row by primary key"],
+                    "limitations": ["no arbitrary aggregation"],
+                    "domain_fit": "movie rental support workflows",
+                },
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        requests=1,
+                        input_tokens=10,
+                        output_tokens=6,
+                        total_tokens=16,
+                    )
+                ),
+                new_items=[],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    result = await backend.run_stage(
+        SynthesisStageRequest(
+            phase=SynthesisPhase.SCHEMA_EXPLORATION,
+            db_id="sakila",
+            atomic_tool_set_ref="db://sakila",
+            available_atomic_tools=[],
+            domain_name="customer_support",
+            user_role="end user",
+            agent_role="organization AI assistant",
+            scenario_description="help requests",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            schema_summary={"table_count": 2},
+        )
+    )
+
+    assert isinstance(result.payload, SchemaExplorationOutput)
+    assert result.payload.domain_hypothesis == "movie rental support workflows"
+    assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_coerces_schema_exploration_category_clusters(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            return SimpleNamespace(
+                final_output={
+                    "categories": [
+                        {
+                            "name": "single_record_lookup",
+                            "description": "retrieve one row by primary key",
+                        },
+                        {
+                            "name": "direct_relation_traversal",
+                            "description": "follow one-hop foreign keys",
+                        },
+                    ],
+                    "unsupported_categories": [
+                        {
+                            "name": "aggregation_general",
+                            "reason": "no general aggregate tools",
+                        }
+                    ],
+                    "domain_fit": "movie rental support workflows",
+                },
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        requests=1,
+                        input_tokens=10,
+                        output_tokens=6,
+                        total_tokens=16,
+                    )
+                ),
+                new_items=[],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    result = await backend.run_stage(
+        SynthesisStageRequest(
+            phase=SynthesisPhase.SCHEMA_EXPLORATION,
+            db_id="sakila",
+            atomic_tool_set_ref="db://sakila",
+            available_atomic_tools=[],
+            domain_name="customer_support",
+            user_role="end user",
+            agent_role="organization AI assistant",
+            scenario_description="help requests",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            schema_summary={"table_count": 2},
+        )
+    )
+
+    assert isinstance(result.payload, SchemaExplorationOutput)
+    assert result.payload.domain_hypothesis == "movie rental support workflows"
+    assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_coerces_category_inference_alias_payload(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            return SimpleNamespace(
+                final_output={
+                    "category": "assignment",
+                    "feasible": True,
+                    "recommended_task_type": "single-entity lookup with one-hop traversal",
+                    "unique_answer_strategy": "pick a unique answer task",
+                    "validation_notes": "assignment is supported by the available tool graph",
+                    "suggested_constraints": ["keep one-hop traversal"],
+                    "attempt_index": 1,
+                },
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        requests=1,
+                        input_tokens=10,
+                        output_tokens=6,
+                        total_tokens=16,
+                    )
+                ),
+                new_items=[],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    result = await backend.run_stage(
+        SynthesisStageRequest(
+            phase=SynthesisPhase.CATEGORY_INFERENCE,
+            db_id="sakila",
+            atomic_tool_set_ref="db://sakila",
+            available_atomic_tools=[],
+            domain_name="customer_support",
+            user_role="end user",
+            agent_role="organization AI assistant",
+            scenario_description="help requests",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            schema_summary={"table_count": 2},
+            previous_outputs={
+                SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
+                    domain_hypothesis="movie rental support workflows",
+                    candidate_categories=[CategoryTaxonomy.ASSIGNMENT],
+                    memory_summary="schema exploration completed",
+                )
+            },
+        )
+    )
+
+    assert isinstance(result.payload, CategoryInferenceOutput)
+    assert result.payload.selected_category == CategoryTaxonomy.ASSIGNMENT
+    assert result.payload.rationale == "assignment is supported by the available tool graph"
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_retries_without_structured_output_on_model_behavior_error(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        instances: list[object] = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.instances.append(self)
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class ModelBehaviorError(RuntimeError):
+        pass
+
+    class FakeRunner:
+        calls: list[dict[str, object]] = []
+
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            FakeRunner.calls.append(
+                {
+                    "agent": agent,
+                    "input": input,
+                    "max_turns": max_turns,
+                    "session": session,
+                }
+            )
+            if agent.kwargs["output_type"] is not None:
+                raise ModelBehaviorError("structured output rejected")
+            return SimpleNamespace(
+                final_output=(
+                    '{"domain_hypothesis":"customer_support",'
+                    '"candidate_categories":["assignment"],'
+                    '"memory_summary":"schema exploration complete"}'
+                ),
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        requests=1,
+                        input_tokens=10,
+                        output_tokens=6,
+                        total_tokens=16,
+                    )
+                ),
+                new_items=[],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    result = await backend.run_stage(
+        SynthesisStageRequest(
+            phase=SynthesisPhase.SCHEMA_EXPLORATION,
+            db_id="sakila",
+            atomic_tool_set_ref="db://sakila",
+            available_atomic_tools=[
+                {
+                    "name": "get_customer_by_id",
+                    "description": "Lookup a customer by id.",
+                    "params_schema": {"type": "object"},
+                    "returns_schema": {"type": "object"},
+                }
+            ],
+            domain_name="customer_support",
+            user_role="end user",
+            agent_role="organization AI assistant",
+            scenario_description="help requests",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            schema_summary={"table_count": 2},
+        )
+    )
+
+    assert isinstance(result.payload, SchemaExplorationOutput)
+    assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
+    assert len(FakeRunner.calls) == 2
+    assert FakeRunner.calls[0]["agent"].kwargs["output_type"] is SchemaExplorationOutput
+    assert FakeRunner.calls[1]["agent"].kwargs["output_type"] is None
+    assert FakeRunner.calls[1]["session"] is None
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_writes_normalize_failure_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            return SimpleNamespace(
+                final_output={"memory_summary": "missing required fields"},
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        requests=1,
+                        input_tokens=10,
+                        output_tokens=6,
+                        total_tokens=16,
+                    )
+                ),
+                new_items=[],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    with pytest.raises(ValidationError):
+        await backend.run_stage(
+            SynthesisStageRequest(
+                phase=SynthesisPhase.ARTIFACT_GENERATION,
+                db_id="sakila",
+                atomic_tool_set_ref="db://sakila",
+                available_atomic_tools=[],
+                domain_name="customer_support",
+                user_role="end user",
+                agent_role="organization AI assistant",
+                scenario_description="help requests",
+                requested_category=CategoryTaxonomy.ASSIGNMENT,
+                schema_summary={"table_count": 2},
+            )
+        )
+
+    failure_path = (
+        tmp_path
+        / "synthesis_traces"
+        / "normalize_failures"
+        / "sakila__artifact_generation__codex_oauth__gpt-5.4-mini.json"
+    )
+    assert failure_path.exists()
+    payload = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert payload["error_type"] == "ValidationError"
+    assert payload["phase"] == "artifact_generation"
+    assert payload["raw_final_output"] == {"memory_summary": "missing required fields"}
