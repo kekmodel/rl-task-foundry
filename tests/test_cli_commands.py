@@ -17,6 +17,10 @@ from rl_task_foundry.synthesis.environment_registry import (
 )
 from rl_task_foundry.synthesis.contracts import EnvironmentStatus
 from rl_task_foundry.synthesis.proof_environment import ProofEnvironmentRunSummary
+from rl_task_foundry.synthesis.real_db_trial import (
+    RealDbTrialStatus,
+    RealDbTrialSummary,
+)
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunOutcome,
     SynthesisRegistryRunSummary,
@@ -192,6 +196,66 @@ def test_cli_run_proof_environment_reports_summary(monkeypatch, tmp_path) -> Non
     assert "quality_gate_status=accept" in result.stdout
     assert "bundle_root=" in result.stdout
     assert captured["output_dir"] == output_dir
+    assert captured["closed"] is True
+
+
+def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    @dataclass
+    class _DummyTrialRunner:
+        _config: object
+
+        async def run(
+            self,
+            output_dir: Path,
+            *,
+            db_id: str,
+            category: CategoryTaxonomy,
+        ) -> RealDbTrialSummary:
+            captured["output_dir"] = output_dir
+            captured["db_id"] = db_id
+            captured["category"] = category
+            return RealDbTrialSummary(
+                db_id=db_id,
+                requested_category=category,
+                trial_status=RealDbTrialStatus.ACCEPTED,
+                summary_path=output_dir / "trial_summary.json",
+                env_id="env_real_trial",
+                quality_gate_status="accept",
+                solver_pass_rate=0.5,
+                solver_ci_low=0.2,
+                solver_ci_high=0.8,
+                registry_status=EnvironmentRegistryCommitStatus.COMMITTED,
+                registry_env_id="env_real_trial",
+                bundle_root=output_dir / "bundle",
+            )
+
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr("rl_task_foundry.cli.RealDbTrialRunner", _DummyTrialRunner)
+
+    output_dir = tmp_path / "real_trial_output"
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-real-db-trial",
+            "sakila",
+            "assignment",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "real db trial complete" in result.stdout
+    assert "trial_status=accepted" in result.stdout
+    assert "db_id=sakila" in result.stdout
+    assert "requested_category=assignment" in result.stdout
+    assert "summary_path=" in result.stdout
+    assert captured["output_dir"] == output_dir
+    assert captured["db_id"] == "sakila"
+    assert captured["category"] == CategoryTaxonomy.ASSIGNMENT
     assert captured["closed"] is True
 
 

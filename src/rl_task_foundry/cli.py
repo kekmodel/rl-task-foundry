@@ -21,6 +21,10 @@ from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
 from rl_task_foundry.synthesis.proof_environment import ProofEnvironmentRunner
+from rl_task_foundry.synthesis.real_db_trial import (
+    RealDbTrialRunner,
+    RealDbTrialStatus,
+)
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 
 app = typer.Typer(no_args_is_help=True)
@@ -359,6 +363,72 @@ def run_proof_environment(
         if summary.bundle_root is not None:
             console.print(f"bundle_root={summary.bundle_root}")
         if summary.quality_gate_status != "accept":
+            raise typer.Exit(code=1)
+
+    asyncio.run(_run())
+
+
+@app.command("run-real-db-trial")
+def run_real_db_trial(
+    db_id: str,
+    category: str,
+    output_dir: Path,
+    config_path: Path = Path("rl_task_foundry.yaml"),
+) -> None:
+    """Run a real-database single-environment trial and persist a trial summary."""
+
+    async def _run() -> None:
+        config = load_config(config_path)
+        try:
+            resolved_category = CategoryTaxonomy(category)
+        except ValueError as exc:
+            raise typer.BadParameter(f"unknown synthesis category: {category}") from exc
+
+        runner = RealDbTrialRunner(config)
+        try:
+            summary = await runner.run(
+                output_dir,
+                db_id=db_id,
+                category=resolved_category,
+            )
+        finally:
+            await runner.close()
+
+        console.print(f"[green]real db trial complete[/green]: {output_dir}")
+        console.print(f"trial_status={summary.trial_status}")
+        console.print(f"db_id={summary.db_id}")
+        console.print(f"requested_category={summary.requested_category}")
+        if summary.env_id is not None:
+            console.print(f"env_id={summary.env_id}")
+        if summary.quality_gate_status is not None:
+            console.print(f"quality_gate_status={summary.quality_gate_status}")
+        if summary.attempt_outcomes:
+            console.print(f"attempt_outcomes={list(summary.attempt_outcomes)}")
+        if summary.error_codes:
+            console.print(f"error_codes={list(summary.error_codes)}")
+        if summary.cross_instance_error_codes:
+            console.print(f"cross_instance_error_codes={list(summary.cross_instance_error_codes)}")
+        if summary.synthesis_error_type is not None:
+            console.print(f"synthesis_error_type={summary.synthesis_error_type}")
+        if summary.synthesis_error_message is not None:
+            console.print(f"synthesis_error_message={summary.synthesis_error_message}")
+        if summary.solver_pass_rate is not None:
+            console.print(f"solver_pass_rate={summary.solver_pass_rate}")
+        if summary.solver_ci_low is not None:
+            console.print(f"solver_ci_low={summary.solver_ci_low}")
+        if summary.solver_ci_high is not None:
+            console.print(f"solver_ci_high={summary.solver_ci_high}")
+        if summary.registry_status is not None:
+            console.print(f"registry_status={summary.registry_status}")
+        if summary.registry_env_id is not None:
+            console.print(f"registry_env_id={summary.registry_env_id}")
+        if summary.bundle_root is not None:
+            console.print(f"bundle_root={summary.bundle_root}")
+        console.print(f"summary_path={summary.summary_path}")
+        if summary.trial_status not in (
+            RealDbTrialStatus.ACCEPTED,
+            RealDbTrialStatus.REGISTRY_DUPLICATE,
+        ):
             raise typer.Exit(code=1)
 
     asyncio.run(_run())
