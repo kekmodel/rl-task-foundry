@@ -2,20 +2,31 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
 from rl_task_foundry.calibration.early_stop import EarlyStopDecision, safe_early_stop
-from rl_task_foundry.tasks.models import VerifyResult
 
 
-def compute_pass_rate(results: list[VerifyResult]) -> float:
+class PassExactResult(Protocol):
+    pass_exact: bool
+
+
+def _passed(result: bool | PassExactResult) -> bool:
+    if isinstance(result, bool):
+        return result
+    return result.pass_exact
+
+
+def compute_pass_rate(results: list[bool | PassExactResult]) -> float:
     """Compute exact pass rate from verification results."""
 
     if not results:
         return 0.0
-    return sum(1 for result in results if result.pass_exact) / len(results)
+    return sum(1 for result in results if _passed(result)) / len(results)
 
 
-def accepted_by_band(results: list[VerifyResult], band: PassRateBand) -> bool:
+def accepted_by_band(results: list[bool | PassExactResult], band: PassRateBand) -> bool:
     """Return whether a task should be accepted by pass-rate band."""
 
     return band.contains(compute_pass_rate(results))
@@ -24,14 +35,14 @@ def accepted_by_band(results: list[VerifyResult], band: PassRateBand) -> bool:
 def calibration_decision(
     *,
     total_replicas: int,
-    results: list[VerifyResult],
+    results: list[bool | PassExactResult],
     band: PassRateBand,
     ci_alpha: float,
 ) -> EarlyStopDecision:
     """Combine deterministic bounds and CI-based banding."""
 
     completed_replicas = len(results)
-    passes_so_far = sum(1 for result in results if result.pass_exact)
+    passes_so_far = sum(1 for result in results if _passed(result))
     deterministic = safe_early_stop(
         total_replicas=total_replicas,
         completed_replicas=completed_replicas,

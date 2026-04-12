@@ -70,52 +70,10 @@ class ModelsConfig(StrictModel):
         return sum(solver.replicas for solver in self.solvers)
 
 
-class ToolCompilerConfig(StrictModel):
-    max_hops: int = 4
-    allow_aggregates: bool = True
-    allow_timelines: bool = True
-    max_list_cardinality: int = 20
-    naming_temperature_l2: float = Field(default=1.0, ge=0.0, le=2.0)
-    business_alias_overrides: dict[str, str] = Field(default_factory=dict)
-
-
 class AtomicToolConfig(StrictModel):
     max_tool_count: int = Field(default=256, ge=8)
     bounded_result_limit: int = Field(default=100, ge=1)
     max_batch_values: int = Field(default=128, ge=1)
-
-
-class TaskComposerConfig(StrictModel):
-    label_tier: Literal["A", "B"] = "A"
-    question_families: list[str]
-    selected_tool_level: Literal[1, 2] = 1
-    negative_outcome_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
-    max_attempts_per_anchor: int = 6
-    anchor_samples_per_source: int = Field(default=3, ge=1)
-    anchor_sampling_order: Literal["hash", "pk"] = "hash"
-    question_temperature: float = Field(default=1.0, ge=0.0, le=2.0)
-    question_validation_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    family_min_required_hops: dict[str, int] = Field(default_factory=dict)
-    max_status_lookup_answer_fields: int = Field(default=2, ge=1, le=4)
-    enable_exists_status_lookup: bool = True
-    exclude_answer_column_patterns: list[str] = Field(default_factory=list)
-    exclude_anchor_table_patterns: list[str] = Field(
-        default_factory=lambda: [
-            "(^|_)(city|country|state|province|region|language|category|taxonomy|dimension|lookup|mapping|xref|bridge|association|relation)($|_)"
-        ]
-    )
-    aggregate_discouraged_target_patterns: list[str] = Field(default_factory=list)
-    causal_discouraged_target_patterns: list[str] = Field(
-        default_factory=lambda: [
-            "(^|_)(address|city|country|state|province|region|zipcode|postal|postcode|currency|timezone)($|_)"
-        ]
-    )
-    causal_preferred_answer_patterns: list[str] = Field(
-        default_factory=lambda: [
-            "(^|_)(status|category|type|kind|title|label|code|language|method|channel|plan|tier|level|provider|carrier|reason|option|mode|format|service|policy|destination)($|_)"
-        ]
-    )
-    causal_min_scalar_hops: int = Field(default=3, ge=2)
 
 
 class RegistrationWorkerConfig(StrictModel):
@@ -296,9 +254,7 @@ class AppConfig(StrictModel):
     provider_resilience: ProviderResilienceConfig = Field(
         default_factory=ProviderResilienceConfig
     )
-    tool_compiler: ToolCompilerConfig
     atomic_tools: AtomicToolConfig = Field(default_factory=AtomicToolConfig)
-    task_composer: TaskComposerConfig
     synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
     solver_runtime: SolverRuntimeConfig
     calibration: CalibrationConfig

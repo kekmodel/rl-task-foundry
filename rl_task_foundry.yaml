@@ -63,51 +63,10 @@ provider_resilience:
   probe_interval_s: 30
   release_semaphore_on_backoff: true
 
-tool_compiler:
-  max_hops: 4
-  allow_aggregates: true
-  allow_timelines: true
-  max_list_cardinality: 20
-  naming_temperature_l2: 1.0
-  business_alias_overrides: {}
-
 atomic_tools:
   max_tool_count: 256
   bounded_result_limit: 100
   max_batch_values: 128
-
-task_composer:
-  label_tier: "A"
-  question_families:
-    - "status_lookup"
-    - "causal_chain"
-    - "timeline_resolution"
-    - "aggregate_verification"
-  selected_tool_level: 1
-  negative_outcome_ratio: 0.2
-  max_attempts_per_anchor: 6
-  anchor_samples_per_source: 3
-  anchor_sampling_order: "hash"
-  question_temperature: 1.0
-  question_validation_temperature: 0.0
-  family_min_required_hops:
-    status_lookup: 2
-    timeline_resolution: 2
-    causal_chain: 3
-    aggregate_verification: 2
-  max_status_lookup_answer_fields: 2
-  enable_exists_status_lookup: true
-  exclude_answer_column_patterns:
-    - "(^|_)last_update($|_)"
-  exclude_anchor_table_patterns:
-    - "(^|_)(city|country|state|province|region|language|category|taxonomy|dimension|lookup|mapping|xref|bridge|association|relation)($|_)"
-  aggregate_discouraged_target_patterns:
-    - "(^|_)(address|city|country|state|province|region|language|currency)($|_)"
-  causal_discouraged_target_patterns:
-    - "(^|_)(address|city|country|state|province|region|zipcode|postal|postcode|currency|timezone)($|_)"
-  causal_preferred_answer_patterns:
-    - "(^|_)(status|category|type|kind|title|label|code|language|method|channel|plan|tier|level|provider|carrier|reason|option|mode|format|service|policy|destination)($|_)"
-  causal_min_scalar_hops: 3
 
 synthesis:
   runtime:

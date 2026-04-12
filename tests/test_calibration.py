@@ -1,7 +1,6 @@
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
 from rl_task_foundry.calibration.early_stop import safe_early_stop
 from rl_task_foundry.calibration.runner import calibration_decision
-from rl_task_foundry.tasks.models import VerifyResult
 
 
 def test_safe_early_stop_respects_upper_and_lower_bounds():
@@ -42,13 +41,7 @@ def test_clopper_pearson_interval_and_ci_decision():
     assert 0.0 <= interval.lower <= interval.upper <= 1.0
 
     band = PassRateBand(lower=0.2, upper=0.8)
-    results = [
-        VerifyResult(task_id="task", solver_id="s1", pass_exact=False),
-        VerifyResult(task_id="task", solver_id="s2", pass_exact=False),
-        VerifyResult(task_id="task", solver_id="s3", pass_exact=False),
-        VerifyResult(task_id="task", solver_id="s4", pass_exact=False),
-        VerifyResult(task_id="task", solver_id="s5", pass_exact=False),
-    ]
+    results = [False, False, False, False, False]
     assert (
         calibration_decision(
             total_replicas=6,

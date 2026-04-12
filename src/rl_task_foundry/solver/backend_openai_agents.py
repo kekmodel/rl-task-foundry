@@ -397,13 +397,9 @@ class OpenAIAgentsSolverBackend:
 
     @staticmethod
     def _coerce_run_input(input_item: object) -> tuple[str, str]:
-        if isinstance(input_item, SolverEpisodeInput):
-            return input_item.task_id, input_item.rendered_user_prompt
-        task_id = getattr(input_item, "task_id", None)
-        rendered_user_prompt = getattr(input_item, "question", None)
-        if isinstance(task_id, str) and isinstance(rendered_user_prompt, str):
-            return task_id, rendered_user_prompt
-        raise TypeError("solver runtime requires SolverEpisodeInput or TaskSpec-like input")
+        if not isinstance(input_item, SolverEpisodeInput):
+            raise TypeError("solver runtime requires SolverEpisodeInput")
+        return input_item.task_id, input_item.rendered_user_prompt
 
     async def run(self, episode: object, *, replica_index: int) -> SolverResult:
         sdk = _load_sdk_components()

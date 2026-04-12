@@ -12,10 +12,6 @@ def test_load_config_uses_solver_replicas_source_of_truth():
     assert "codex_oauth" in config.providers
     assert "local_server" in config.providers
     assert config.providers["local_server"].base_url == "http://127.0.0.1:8000/v1"
-    assert config.task_composer.selected_tool_level == 1
-    assert config.task_composer.negative_outcome_ratio == 0.2
-    assert config.task_composer.question_temperature == 1.0
-    assert config.tool_compiler.naming_temperature_l2 == 1.0
     assert config.atomic_tools.max_tool_count == 256
     assert config.atomic_tools.bounded_result_limit == 100
     assert config.atomic_tools.max_batch_values == 128

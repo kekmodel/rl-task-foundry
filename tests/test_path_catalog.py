@@ -127,7 +127,7 @@ async def _load_sakila_catalog():
         visibility_overrides=config.privacy.visibility_overrides,
     )
     graph = await introspector.introspect()
-    return build_path_catalog(graph, max_hops=config.tool_compiler.max_hops)
+    return build_path_catalog(graph, max_hops=4)
 
 
 @pytest.mark.asyncio
