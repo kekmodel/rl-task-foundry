@@ -1147,6 +1147,190 @@ async def test_synthesis_agent_runtime_rejects_weakened_difficulty_vector_betwee
 
 
 @pytest.mark.asyncio
+async def test_synthesis_agent_runtime_rejects_multi_axis_difficulty_crank(monkeypatch):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 3
+    payloads = _payloads()
+    backend = _AttemptAwareBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        base_payloads=payloads,
+        artifact_payloads_by_attempt={
+            1: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={
+                        DifficultyAxis.SLOT_COUNT: 3.0,
+                        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
+                    }
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt one",
+            ),
+            2: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={
+                        DifficultyAxis.SLOT_COUNT: 4.0,
+                        DifficultyAxis.CONSTRAINT_COUNT: 5.0,
+                    }
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt two invalid multi-axis crank",
+            ),
+            3: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={
+                        DifficultyAxis.SLOT_COUNT: 3.0,
+                        DifficultyAxis.CONSTRAINT_COUNT: 5.0,
+                    }
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt three valid single-axis crank",
+            ),
+        },
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+    registration_calls = 0
+    checks = iter(
+        [
+            _failing_self_consistency_result(
+                facts_match_result=True,
+                check_constraints_result=False,
+                verify_result=False,
+            ),
+            _passing_self_consistency_result(),
+        ]
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        nonlocal registration_calls
+        registration_calls += 1
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return next(checks)
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    assert [attempt.outcome for attempt in draft.self_consistency_attempts] == [
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+        SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_INVALID,
+        SynthesisSelfConsistencyOutcome.PASSED,
+    ]
+    assert draft.self_consistency_attempts[1].error_message is not None
+    assert "constraint_count,slot_count" in draft.self_consistency_attempts[1].error_message
+    assert registration_calls == 2
+    artifact_requests = [
+        request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
+    ]
+    assert [request.attempt_index for request in artifact_requests] == [1, 2, 3]
+    assert artifact_requests[0].difficulty_crank_index == 0
+    assert artifact_requests[0].difficulty_crank_history == []
+    assert artifact_requests[1].strongest_difficulty_vector == {
+        DifficultyAxis.SLOT_COUNT: 3.0,
+        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
+    }
+    assert artifact_requests[1].difficulty_crank_index == 0
+    assert artifact_requests[1].difficulty_crank_history == []
+    assert artifact_requests[2].strongest_difficulty_vector == {
+        DifficultyAxis.SLOT_COUNT: 3.0,
+        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
+    }
+    assert artifact_requests[2].difficulty_crank_index == 0
+    assert artifact_requests[2].difficulty_crank_history == []
+    assert artifact_requests[2].latest_self_consistency_diagnostics is not None
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_enforces_difficulty_crank_limit(monkeypatch):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 3
+    config.synthesis.runtime.max_difficulty_cranks = 1
+    payloads = _payloads()
+    backend = _AttemptAwareBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        base_payloads=payloads,
+        artifact_payloads_by_attempt={
+            1: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 3.0}
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt one",
+            ),
+            2: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 4.0}
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt two valid crank",
+            ),
+            3: ArtifactGenerationOutput(
+                proposed_environment=_sample_proposed_environment(
+                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 5.0}
+                ),
+                artifacts=_sample_artifacts(),
+                memory_summary="attempt three crank limit exceeded",
+            ),
+        },
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+    registration_calls = 0
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        nonlocal registration_calls
+        registration_calls += 1
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _failing_self_consistency_result(
+            facts_match_result=True,
+            check_constraints_result=False,
+            verify_result=False,
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    assert [attempt.outcome for attempt in exc_info.value.attempts] == [
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+        SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_LIMIT_EXCEEDED,
+    ]
+    assert exc_info.value.attempts[2].error_message == "difficulty crank limit exceeded: max=1"
+    assert registration_calls == 2
+    artifact_requests = [
+        request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
+    ]
+    assert [request.attempt_index for request in artifact_requests] == [1, 2, 3]
+    assert artifact_requests[2].difficulty_crank_index == 1
+    assert artifact_requests[2].difficulty_crank_history == [DifficultyAxis.SLOT_COUNT]
+    assert artifact_requests[2].strongest_difficulty_vector == {
+        DifficultyAxis.SLOT_COUNT: 4.0
+    }
+
+
+@pytest.mark.asyncio
 async def test_synthesis_agent_runtime_enters_category_backoff_after_consecutive_discards(
     monkeypatch,
 ):

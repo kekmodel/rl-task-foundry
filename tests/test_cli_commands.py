@@ -44,6 +44,7 @@ def test_cli_validate_config_command():
     assert (
         "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=True,"
         "memory_window=8,max_self_consistency_iterations=5,"
+        "max_difficulty_cranks=6,"
         "max_consecutive_category_discards=3,category_backoff_duration_s=3600"
     ) in normalized
     assert "registration_lane=" in normalized

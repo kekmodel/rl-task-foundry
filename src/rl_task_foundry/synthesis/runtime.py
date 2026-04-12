@@ -182,6 +182,9 @@ class SynthesisStageRequest(StrictModel):
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
     latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
     latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
+    strongest_difficulty_vector: dict[DifficultyAxis, float] = Field(default_factory=dict)
+    difficulty_crank_index: int = Field(default=0, ge=0)
+    difficulty_crank_history: list[DifficultyAxis] = Field(default_factory=list)
 
 
 class SynthesisStageResult(StrictModel):
@@ -275,6 +278,8 @@ class SynthesisSelfConsistencyOutcome(StrEnum):
     CATEGORY_MISMATCH = "category_mismatch"
     SELF_CONSISTENCY_FAILED = "self_consistency_failed"
     DIFFICULTY_WEAKENED = "difficulty_weakened"
+    DIFFICULTY_CRANK_INVALID = "difficulty_crank_invalid"
+    DIFFICULTY_CRANK_LIMIT_EXCEEDED = "difficulty_crank_limit_exceeded"
 
 
 class SynthesisSelfConsistencyDiagnostics(StrictModel):
@@ -445,6 +450,22 @@ def _weakened_difficulty_axes(
         if current_value is None or current_value < previous_value:
             weakened.append(axis.value)
     return weakened
+
+
+def _strengthened_difficulty_axes(
+    *,
+    previous: dict[DifficultyAxis, float] | None,
+    current: dict[DifficultyAxis, float],
+) -> list[DifficultyAxis]:
+    if previous is None:
+        return []
+    strengthened: list[DifficultyAxis] = []
+    for axis in set(previous) | set(current):
+        previous_value = previous.get(axis, 0.0)
+        current_value = current.get(axis, 0.0)
+        if current_value > previous_value:
+            strengthened.append(axis)
+    return sorted(strengthened, key=lambda axis: axis.value)
 
 
 @dataclass(slots=True)
@@ -811,6 +832,8 @@ class SynthesisAgentRuntime:
         latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
         latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
         strongest_difficulty_vector: dict[DifficultyAxis, float] | None = None
+        difficulty_crank_count = 0
+        difficulty_crank_history: list[DifficultyAxis] = []
         max_iterations = self.config.synthesis.runtime.max_self_consistency_iterations
 
         for attempt_index in range(1, max_iterations + 1):
@@ -830,6 +853,9 @@ class SynthesisAgentRuntime:
                 memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
                 latest_registration_diagnostics=latest_registration_diagnostics,
                 latest_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                strongest_difficulty_vector=strongest_difficulty_vector or {},
+                difficulty_crank_index=difficulty_crank_count,
+                difficulty_crank_history=list(difficulty_crank_history),
             )
             result = await self._run_phase(request)
             assert isinstance(result.payload, ArtifactGenerationOutput)
@@ -842,6 +868,10 @@ class SynthesisAgentRuntime:
                 artifact_payload.proposed_environment.task.difficulty_vector
             )
             weakened_axes = _weakened_difficulty_axes(
+                previous=strongest_difficulty_vector,
+                current=current_difficulty_vector,
+            )
+            strengthened_axes = _strengthened_difficulty_axes(
                 previous=strongest_difficulty_vector,
                 current=current_difficulty_vector,
             )
@@ -867,6 +897,54 @@ class SynthesisAgentRuntime:
                         last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
                     )
                 continue
+            if len(strengthened_axes) > 1:
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_INVALID,
+                    provider=result.provider,
+                    model=result.model,
+                    memory_summary=result.memory_entry.summary,
+                    error_message=(
+                        "difficulty crank changed multiple axes: "
+                        + ",".join(axis.value for axis in strengthened_axes)
+                    ),
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "artifact generation exhausted self-consistency budget after invalid difficulty crank changes",
+                        attempts=attempts,
+                        last_registration_diagnostics=latest_registration_diagnostics,
+                        last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                    )
+                continue
+            if len(strengthened_axes) == 1:
+                next_crank_count = difficulty_crank_count + 1
+                if next_crank_count > self.config.synthesis.runtime.max_difficulty_cranks:
+                    attempt = SynthesisSelfConsistencyAttempt(
+                        attempt_index=attempt_index,
+                        outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_LIMIT_EXCEEDED,
+                        provider=result.provider,
+                        model=result.model,
+                        memory_summary=result.memory_entry.summary,
+                        error_message=(
+                            "difficulty crank limit exceeded: "
+                            f"max={self.config.synthesis.runtime.max_difficulty_cranks}"
+                        ),
+                    )
+                    attempts.append(attempt)
+                    memory.append(self._attempt_feedback_entry(attempt))
+                    if attempt_index >= max_iterations:
+                        raise SynthesisSelfConsistencyError(
+                            "artifact generation exhausted self-consistency budget after exceeding the difficulty crank limit",
+                            attempts=attempts,
+                            last_registration_diagnostics=latest_registration_diagnostics,
+                            last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                        )
+                    continue
+                difficulty_crank_count = next_crank_count
+                difficulty_crank_history.append(strengthened_axes[0])
             if artifact_payload.proposed_environment.task.category != requested_category:
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
@@ -884,7 +962,7 @@ class SynthesisAgentRuntime:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget on category mismatch",
                         attempts=attempts,
-                    )
+                )
                 continue
             strongest_difficulty_vector = current_difficulty_vector
 

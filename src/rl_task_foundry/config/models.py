@@ -140,6 +140,7 @@ class SynthesisRuntimeConfig(StrictModel):
     sdk_sessions_enabled: bool = True
     explicit_memory_window: int = Field(default=8, ge=1)
     max_self_consistency_iterations: int = Field(default=5, ge=1)
+    max_difficulty_cranks: int = Field(default=6, ge=1)
     max_consecutive_category_discards: int = Field(default=3, ge=1)
     category_backoff_duration_s: int = Field(default=3600, ge=1)
 

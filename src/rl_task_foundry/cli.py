@@ -81,6 +81,8 @@ def validate_config(
         f"memory_window={config.synthesis.runtime.explicit_memory_window},"
         "max_self_consistency_iterations="
         f"{config.synthesis.runtime.max_self_consistency_iterations},"
+        "max_difficulty_cranks="
+        f"{config.synthesis.runtime.max_difficulty_cranks},"
         "max_consecutive_category_discards="
         f"{config.synthesis.runtime.max_consecutive_category_discards},"
         "category_backoff_duration_s="

@@ -90,5 +90,14 @@ def build_synthesis_phase_input(request: SynthesisStageRequest) -> str:
         "latest_self_consistency_diagnostics_role": (
             "structured solution/verifier feedback from the most recent failed artifact attempt"
         ),
+        "strongest_difficulty_vector": {
+            axis.value: value for axis, value in request.strongest_difficulty_vector.items()
+        },
+        "difficulty_crank_index": request.difficulty_crank_index,
+        "difficulty_crank_history": [axis.value for axis in request.difficulty_crank_history],
+        "difficulty_crank_role": (
+            "difficulty escalation policy context. Increase at most one difficulty axis per "
+            "attempt and never weaken previously established difficulty."
+        ),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
