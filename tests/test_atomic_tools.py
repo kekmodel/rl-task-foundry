@@ -319,7 +319,7 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
         "returns_schema",
     }
     assert "async def get_customer_by_id(conn, customer_id):" in bundle.source
-    assert "async def list_customer_ids(conn, limit):" in bundle.source
+    assert "async def list_customer_ids(conn, limit, _shuffle_seed=None):" in bundle.source
     assert "MAX_BATCH_VALUES = 128" in bundle.source
     assert "MAX_BOUNDED_RESULT_LIMIT = 100" in bundle.source
     assert "limit = _bounded_limit(limit)" in bundle.source
@@ -329,6 +329,18 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
     assert "INSERT" not in bundle.source
     assert "UPDATE" not in bundle.source
     assert "DELETE" not in bundle.source
+
+
+def test_atomic_tool_generator_applies_seeded_row_shuffle_to_unordered_tools_only() -> None:
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    tool_by_name = {tool.name: tool for tool in bundle.tools}
+
+    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"customer_id\"::text, ''), COALESCE($2::text, ''))) ASC" in tool_by_name["list_customer_ids"].sql
+    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["filter_order_by_status_eq"].sql
+    assert "ORDER BY t.\"total_amount\" ASC," in tool_by_name["top_k_order_by_total_amount_asc"].sql
+    assert "md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($2::text, ''))) ASC" in tool_by_name["top_k_order_by_total_amount_asc"].sql
+    assert "md5(" not in tool_by_name["count_customer"].sql
+    assert "md5(" not in tool_by_name["top_k_order_grouped_by_customer_id_sum_total_amount_desc"].sql
 
 
 def test_atomic_multi_row_tools_require_limit_param_with_runtime_cap() -> None:

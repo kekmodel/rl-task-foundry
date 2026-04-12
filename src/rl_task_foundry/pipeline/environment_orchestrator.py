@@ -13,9 +13,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
-from importlib.util import module_from_spec, spec_from_file_location
+from hashlib import sha256
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
@@ -34,8 +33,12 @@ from rl_task_foundry.synthesis.runtime import (
     MaterializedInstanceRecord,
     SynthesisEnvironmentDraft,
 )
-
-ToolExecutor = Callable[[dict[str, Any]], Any]
+from rl_task_foundry.synthesis.tool_runtime import (
+    ToolExecutor,
+    bind_atomic_tool_executor,
+    load_atomic_tool_module,
+    with_tool_shuffle_seed,
+)
 EnvironmentRuntimeFactory = Callable[
     [
         SolverModelConfig,
@@ -51,6 +54,11 @@ EnvironmentToolExecutorFactory = Callable[
     dict[str, ToolExecutor] | Awaitable[dict[str, ToolExecutor]],
 ]
 EnvironmentSolverRunFactory = Callable[[], Awaitable["EnvironmentSolverRun"]]
+
+
+def _build_shuffle_seed(*parts: object) -> str:
+    payload = "|".join(str(part) for part in parts)
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,12 +164,23 @@ class EnvironmentOrchestrator:
             for solver_config in self.config.models.solvers:
                 provider_config = self.config.providers[solver_config.provider]
                 for replica_index in range(solver_config.replicas):
+                    shuffle_seed = _build_shuffle_seed(
+                        "solver",
+                        bundle.environment.env_id,
+                        instance.instance_id,
+                        solver_config.solver_id,
+                        replica_index,
+                    )
+                    seeded_tool_executors = {
+                        name: with_tool_shuffle_seed(executor, shuffle_seed=shuffle_seed)
+                        for name, executor in tool_executors.items()
+                    }
                     runtime = self._runtime_for_solver(
                         solver_config,
                         provider_config,
                         bundle.environment,
                         tool_definitions,
-                        tool_executors,
+                        seeded_tool_executors,
                     )
                     calls.append(
                         partial(
@@ -307,12 +326,12 @@ class EnvironmentOrchestrator:
         pools = await self._database_pools_for_tools()
         materializer = self._tool_materializer()
         materialization = materializer.materialize_bundle(bundle)
-        module = _load_atomic_tool_module(
+        module = load_atomic_tool_module(
             materialization.source_path,
             module_name=f"rl_task_foundry_atomic_tools_{bundle.db_id}",
         )
         resolved = {
-            tool.name: _bind_atomic_tool_executor(
+            tool.name: bind_atomic_tool_executor(
                 module=module,
                 tool_name=tool.name,
                 pools=pools,
@@ -439,30 +458,3 @@ def evaluate_rollout_summary(
         band_lower=band.lower,
         band_upper=band.upper,
     )
-
-
-def _load_atomic_tool_module(source_path: Path, *, module_name: str) -> ModuleType:
-    spec = spec_from_file_location(module_name, source_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"unable to load atomic tool module: {source_path}")
-    module = module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _bind_atomic_tool_executor(
-    *,
-    module: ModuleType,
-    tool_name: str,
-    pools: DatabasePools,
-) -> ToolExecutor:
-    function = getattr(module, tool_name)
-
-    async def _execute(kwargs: dict[str, Any]) -> Any:
-        async with pools.solver_connection() as conn:
-            result = function(conn, **kwargs)
-            if inspect.isawaitable(result):
-                return await result
-            return result
-
-    return _execute

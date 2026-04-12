@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -89,13 +90,15 @@ def _next_difficulty_crank_axis(history: list[DifficultyAxis]) -> DifficultyAxis
     if not history:
         return DifficultyAxis.SEARCH_COST
     last_axis = history[-1]
-    repeat_count = history.count(last_axis)
+    repeat_count = 1
+    for axis in reversed(history[:-1]):
+        if axis != last_axis:
+            break
+        repeat_count += 1
     if repeat_count < 2:
         return last_axis
     last_index = DIFFICULTY_CRANK_ORDER.index(last_axis)
-    if last_index + 1 < len(DIFFICULTY_CRANK_ORDER):
-        return DIFFICULTY_CRANK_ORDER[last_index + 1]
-    return last_axis
+    return DIFFICULTY_CRANK_ORDER[(last_index + 1) % len(DIFFICULTY_CRANK_ORDER)]
 
 
 def _merge_strongest_difficulty_vector(
@@ -158,6 +161,78 @@ def _preview_payload(value: object) -> object:
     return value
 
 
+def _stable_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
+
+
+def _is_single_tool_derivable(answer: object, result: object) -> bool:
+    if _stable_json(answer) == _stable_json(result):
+        return True
+
+    if isinstance(answer, dict):
+        if isinstance(result, dict):
+            return all(key in result and result[key] == value for key, value in answer.items())
+        if isinstance(result, list):
+            return any(_is_single_tool_derivable(answer, item) for item in result)
+        return False
+
+    if isinstance(answer, list):
+        if not isinstance(result, list) or len(result) < len(answer):
+            return False
+        prefix = result[: len(answer)]
+        if _stable_json(answer) == _stable_json(prefix):
+            return True
+        if answer and all(isinstance(item, dict) for item in answer) and all(
+            isinstance(item, dict) for item in prefix
+        ):
+            if all(
+                all(key in result_item and result_item[key] == value for key, value in answer_item.items())
+                for answer_item, result_item in zip(answer, prefix)
+            ):
+                return True
+        if answer and all(not isinstance(item, (dict, list)) for item in answer) and all(
+            isinstance(item, dict) for item in prefix
+        ):
+            shared_keys = set(prefix[0].keys())
+            for item in prefix[1:]:
+                shared_keys &= set(item.keys())
+            for key in shared_keys:
+                if [item.get(key) for item in prefix] == answer:
+                    return True
+        return False
+
+    if isinstance(result, dict):
+        return answer in result.values()
+    if isinstance(result, list):
+        if answer in result:
+            return True
+        return any(_is_single_tool_derivable(answer, item) for item in result)
+    return False
+
+
+def _single_tool_derivation_source(
+    answer: object,
+    tool_calls: list[dict[str, object]],
+) -> str | None:
+    for record in tool_calls:
+        if _is_single_tool_derivable(answer, record.get("result")):
+            return str(record.get("tool_name", "unknown_tool"))
+    return None
+
+
+def _answer_uses_only_identifier_fields(answer: object) -> bool:
+    def _keys_are_identifier_only(mapping: dict[str, object]) -> bool:
+        if not mapping:
+            return False
+        return all(isinstance(key, str) and key.endswith("_id") for key in mapping)
+
+    if isinstance(answer, dict):
+        return _keys_are_identifier_only(answer)
+    if isinstance(answer, list) and answer and all(isinstance(item, dict) for item in answer):
+        return all(_keys_are_identifier_only(item) for item in answer)
+    return False
+
+
 @dataclass(slots=True)
 class SubmitDraftController:
     config: AppConfig
@@ -166,6 +241,7 @@ class SubmitDraftController:
     build_draft: Any
     phase_monitor: PipelinePhaseMonitorLogger | None = None
     max_submissions: int = 5
+    forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
     accepted_draft: SynthesisEnvironmentDraft | None = None
     attempts: list[SubmitDraftAttemptRecord] = field(default_factory=list)
     strongest_difficulty_vector: DifficultyVectorContract = field(
@@ -176,6 +252,7 @@ class SubmitDraftController:
     last_quality_gate_status: str | None = None
     last_quality_gate_pass_rate: float | None = None
     _atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
+    _raw_atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
     _tool_call_count_at_last_submission: int = field(default=0, init=False)
 
     def submissions_left(self) -> int:
@@ -188,6 +265,13 @@ class SubmitDraftController:
         params: dict[str, object],
         result: object,
     ) -> None:
+        self._raw_atomic_tool_calls.append(
+            {
+                "tool_name": tool_name,
+                "params": params,
+                "result": result,
+            }
+        )
         self._atomic_tool_calls.append(
             {
                 "tool_name": tool_name,
@@ -205,10 +289,24 @@ class SubmitDraftController:
         error_codes: list[str] = []
         for error_item in error.errors():
             location = tuple(str(part) for part in error_item.get("loc", ()))
-            if location == ("anchor_entity",):
+            error_type = str(error_item.get("type", ""))
+            if error_type == "missing" and len(location) == 1:
+                error_codes.append(f"{location[0]}_required")
+            elif location == ("anchor_entity",):
                 error_codes.append("anchor_entity_required")
             else:
                 error_codes.append("submit_payload_invalid")
+        raw_question = parsed.get("question")
+        if isinstance(raw_question, str) and re.search(r"\b[a-z][a-z0-9_]*_id\b", raw_question.lower()):
+            error_codes.append("question_raw_identifier_leak")
+        raw_canonical = parsed.get("canonical_answer_json")
+        if isinstance(raw_canonical, str):
+            try:
+                raw_answer = json.loads(raw_canonical)
+            except json.JSONDecodeError:
+                raw_answer = None
+            if raw_answer is not None and _answer_uses_only_identifier_fields(raw_answer):
+                error_codes.append("label_identifier_chain_forbidden")
         deduped_error_codes = list(dict.fromkeys(error_codes)) or ["submit_payload_invalid"]
         return self._record_rejection(
             submission_index=len(self.attempts) + 1,
@@ -234,6 +332,7 @@ class SubmitDraftController:
 
         submission_index = len(self.attempts) + 1
         error_codes: list[str] = []
+        invalid_diagnostics: dict[str, object] = {}
 
         if len(self._atomic_tool_calls) <= self._tool_call_count_at_last_submission:
             error_codes.append("no_new_grounded_observation")
@@ -251,6 +350,25 @@ class SubmitDraftController:
         )
         if placeholder_tokens:
             error_codes.append("placeholder_tokens_not_allowed")
+        try:
+            canonical_answer = json.loads(payload.canonical_answer_json)
+        except json.JSONDecodeError:
+            canonical_answer = None
+        if canonical_answer is not None:
+            derivation_tool = _single_tool_derivation_source(
+                canonical_answer,
+                self._raw_atomic_tool_calls,
+            )
+            if derivation_tool is not None:
+                error_codes.append("label_single_tool_derivable")
+                invalid_diagnostics["single_tool_name"] = derivation_tool
+        question_lower = payload.question.lower()
+        if re.search(r"\b[a-z][a-z0-9_]*_id\b", question_lower):
+            error_codes.append("question_raw_identifier_leak")
+        if any(token in question_lower for token in self.forbidden_question_tokens):
+            error_codes.append("question_internal_schema_leak")
+        if canonical_answer is not None and _answer_uses_only_identifier_fields(canonical_answer):
+            error_codes.append("label_identifier_chain_forbidden")
 
         weakened_axes = _weakened_difficulty_axes(
             previous=self.strongest_difficulty_vector,
@@ -272,6 +390,7 @@ class SubmitDraftController:
                 message=self._invalid_submission_message(error_codes),
                 error_codes=error_codes,
                 payload=payload,
+                diagnostics=invalid_diagnostics or None,
             )
 
         try:
@@ -295,6 +414,10 @@ class SubmitDraftController:
         self.last_quality_gate_status = quality_gate_summary.status.value
         self.last_quality_gate_pass_rate = quality_gate_summary.pass_rate
         self._tool_call_count_at_last_submission = len(self._atomic_tool_calls)
+        self.strongest_difficulty_vector = _merge_strongest_difficulty_vector(
+            self.strongest_difficulty_vector,
+            payload.difficulty_vector,
+        )
 
         if quality_gate_summary.status is EnvironmentQualityGateStatus.ACCEPT:
             accepted_draft = accepted_draft_with_quality_metrics(
@@ -328,19 +451,16 @@ class SubmitDraftController:
         attempts_left_after = self.submissions_left() - 1
         if quality_gate_summary.status is EnvironmentQualityGateStatus.REJECT_TOO_EASY:
             requested_axis = _next_difficulty_crank_axis(self.difficulty_crank_history)
-            self.strongest_difficulty_vector = _merge_strongest_difficulty_vector(
-                self.strongest_difficulty_vector,
-                payload.difficulty_vector,
-            )
             self.required_axis = requested_axis
             self.difficulty_crank_history.append(requested_axis)
+            strongest_axis_value = getattr(self.strongest_difficulty_vector, requested_axis.value)
             return self._record_rejection(
                 submission_index=submission_index,
                 message=(
                     "Rejected. solver pass rate "
                     f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
                     f"Crank {requested_axis.value}. {_difficulty_axis_hint(requested_axis)} "
-                    f"Make at least one new atomic tool call, gather new grounded evidence, and strengthen that axis before resubmitting. "
+                    f"Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that axis above {strongest_axis_value:.1f} with the smallest grounded step you can justify before resubmitting. "
                     f"{max(0, attempts_left_after)} attempts left."
                 ),
                 error_codes=["reject_too_easy"],
@@ -351,19 +471,19 @@ class SubmitDraftController:
                 payload=payload,
             )
 
-        self.required_axis = None
+        self.max_submissions = len(self.attempts) + 1
         return self._record_rejection(
             submission_index=submission_index,
             message=(
                 "Rejected. solver pass rate "
                 f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
-                f"Choose a different grounded anchor and resubmit. {max(0, attempts_left_after)} attempts left."
+                "This draft is too hard for the configured band."
             ),
             error_codes=["reject_too_hard"],
             pass_rate=quality_gate_summary.pass_rate,
             matched_solver_runs=quality_gate_summary.matched_solver_runs,
             total_solver_runs=quality_gate_summary.total_solver_runs,
-            diagnostics={},
+            diagnostics={"terminal_rejection": True},
             payload=payload,
         )
 
@@ -373,8 +493,25 @@ class SubmitDraftController:
                 "Rejected. Observe more real database facts with atomic tools before resubmitting."
             ),
             "anchor_entity_required": "Rejected. anchor_entity must contain at least one primary-key value.",
+            "canonical_answer_json_required": "Rejected. canonical_answer_json is required.",
+            "difficulty_vector_required": "Rejected. difficulty_vector is required.",
+            "question_required": "Rejected. question is required.",
+            "instance_space_required": "Rejected. instance_space is required.",
+            "label_summary_required": "Rejected. label_summary is required.",
             "placeholder_tokens_not_allowed": (
                 "Rejected. Replace every placeholder token with grounded names and values from the current database."
+            ),
+            "question_internal_schema_leak": (
+                "Rejected. Rewrite the user-facing question without raw table names, join-table names, or SQL keywords."
+            ),
+            "question_raw_identifier_leak": (
+                "Rejected. Rewrite the user-facing question without raw identifier field names such as customer_id or store_id. Keep identifiers only inside anchor_entity."
+            ),
+            "label_single_tool_derivable": (
+                "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations."
+            ),
+            "label_identifier_chain_forbidden": (
+                "Rejected. The canonical answer is only a chain of internal identifier fields. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
             ),
             "difficulty_weakened": (
                 "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."
@@ -388,7 +525,18 @@ class SubmitDraftController:
             "draft_validation_failed": "Rejected. The submitted draft could not be validated.",
         }
         primary = message_map.get(error_codes[0], "Rejected. Fix the draft and resubmit.")
+        additional_messages: list[str] = []
+        for error_code in error_codes[1:3]:
+            extra = message_map.get(error_code)
+            if extra is None:
+                continue
+            additional_messages.append(extra.removeprefix("Rejected. ").strip())
         attempts_left_after = self.submissions_left() - 1
+        if additional_messages:
+            return (
+                f"{primary} Also fix: {' '.join(additional_messages)} "
+                f"{max(0, attempts_left_after)} attempts left."
+            )
         return f"{primary} {max(0, attempts_left_after)} attempts left."
 
     def _record_rejection(
@@ -425,7 +573,7 @@ class SubmitDraftController:
             diagnostics={"error_codes": error_codes, **(diagnostics or {})},
         )
         if attempts_left_after <= 0:
-            return "Budget exhausted. No more attempts."
+            return f"{message} Budget exhausted. No more attempts."
         return message
 
     def _emit_monitor(
@@ -448,7 +596,7 @@ class SubmitDraftController:
                 "max_submissions": self.max_submissions,
             },
             actual_data={
-                "submission_index": len(self.attempts) + (0 if status == "accepted" else 0),
+                "submission_index": len(self.attempts),
                 "question": (
                     payload.question
                     if isinstance(payload, SubmitDraftPayload)
@@ -508,6 +656,7 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "natural user-facing question, constraint summary, instance space, and label summary. "
             "anchor_entity is mandatory and must include at least one real primary-key value, "
             "for example {\"customer_id\": 148} or {\"store_id\": 1}. "
+            "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "
             "After any rejection, make at least one new atomic tool call before calling submit_draft again."
         ),
         params_json_schema=params_json_schema,

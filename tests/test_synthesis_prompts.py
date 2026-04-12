@@ -48,6 +48,12 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "synthesis agent" in instructions
     assert "requested topic is fixed" in instructions
     assert "Before every submit_draft call" in instructions
+    assert "Single-call labels are forbidden." in instructions
+    assert "requires combining at least two distinct grounded observations" in instructions
+    assert "Do not repeat raw identifier field names" in instructions
+    assert "only chains of internal *_id fields" in instructions
+    assert "Do not mention raw table names" in instructions
     assert "keep working inside the same conversation" in instructions
+    assert "smallest grounded step" in instructions
     assert "When submit_draft returns Accepted, stop." in instructions
     assert "Do not emit markdown fences" in instructions

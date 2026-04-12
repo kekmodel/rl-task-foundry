@@ -30,12 +30,33 @@ def bind_atomic_tool_executor(
     pools: DatabasePools,
 ) -> ToolExecutor:
     function = getattr(module, tool_name)
+    accepts_shuffle_seed = "_shuffle_seed" in inspect.signature(function).parameters
 
     async def _execute(kwargs: dict[str, Any]) -> Any:
+        payload = dict(kwargs)
+        if not accepts_shuffle_seed:
+            payload.pop("_shuffle_seed", None)
         async with pools.solver_connection() as conn:
-            result = function(conn, **kwargs)
+            result = function(conn, **payload)
             if inspect.isawaitable(result):
                 return await result
             return result
+
+    return _execute
+
+
+def with_tool_shuffle_seed(
+    executor: ToolExecutor,
+    *,
+    shuffle_seed: str | None,
+) -> ToolExecutor:
+    async def _execute(kwargs: dict[str, Any]) -> Any:
+        payload = dict(kwargs)
+        if shuffle_seed is not None:
+            payload["_shuffle_seed"] = shuffle_seed
+        result = executor(payload)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     return _execute

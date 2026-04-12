@@ -8,19 +8,20 @@ import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
+from pydantic import ValidationError
 from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
-from rl_task_foundry.synthesis.contracts import (
-    ConstraintKind,
-    ConstraintSummaryItem,
-    InstanceSpaceContract,
-    build_difficulty_vector,
-)
+from rl_task_foundry.synthesis.contracts import DifficultyAxis
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
 )
-from rl_task_foundry.synthesis.submit_draft_tool import SubmitDraftPayload
+
+from rl_task_foundry.synthesis.submit_draft_tool import (
+    SubmitDraftController,
+    SubmitDraftPayload,
+    _next_difficulty_crank_axis,
+)
 
 
 def _config_with_synthesis_output(tmp_path: Path):
@@ -134,6 +135,11 @@ class _FakeBackend:
             params={"customer_id": 1},
             result={"store_id": 1},
         )
+        self.bound_controller.record_atomic_tool_call(
+            tool_name="count_customer",
+            params={},
+            result=5,
+        )
         if self.reject_payload is not None:
             await self.bound_controller.submit(self.reject_payload)
         if self.accept_payload is not None:
@@ -157,19 +163,19 @@ class _FakeBackend:
 def _accepted_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
-            "canonical_answer_json": '{"store_id": 1}',
+            "canonical_answer_json": '{"store_id": 1, "customer_count": 5}',
             "anchor_entity": {"customer_id": 1},
             "difficulty_vector": {
                 "search_cost": 2.0,
                 "solution_space": 1.0,
                 "constraint_density": 1.0,
             },
-            "question": "내가 속한 매장의 ID를 알려 주세요.",
+            "question": "내가 속한 매장의 ID와 전체 고객 수를 알려 주세요.",
             "constraint_summary": [
                 {
-                    "key": "single_store",
+                    "key": "store_and_count",
                     "kind": "cardinality",
-                    "summary": "Return exactly one store.",
+                    "summary": "Return exactly one store and one total customer count.",
                 }
             ],
             "instance_space": {
@@ -178,7 +184,7 @@ def _accepted_payload() -> SubmitDraftPayload:
                     "outputs": ["customer_id"],
                 }
             },
-            "label_summary": "The store_id is unique for this customer.",
+            "label_summary": "The store_id comes from the customer lookup and the total customer count comes from a separate aggregate.",
         }
     )
 
@@ -309,3 +315,217 @@ async def test_synthesize_environment_draft_raises_when_submit_budget_exhausts(
         )
 
     assert exc_info.value.attempts
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_questions_that_leak_internal_schema_terms(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+        forbidden_question_tokens=frozenset({"film_category", " join "}),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_film_category_by_id",
+        params={"film_id": 62, "category_id": 6},
+        result={"film_id": 62, "category_id": 6},
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"actor_id": 107},
+            "question": "film_category 를 통해 category_id를 확인하세요.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "raw table names" in message
+    assert controller.attempts[-1].error_codes == ("question_internal_schema_leak",)
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_questions_that_repeat_raw_identifier_fields(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_customer",
+        params={},
+        result=5,
+    )
+    payload = _accepted_payload().model_copy(
+        update={"question": "customer_id 1의 store_id와 customer_count를 알려 주세요."}
+    )
+
+    message = await controller.submit(payload)
+
+    assert "raw identifier field names" in message
+    assert controller.attempts[-1].error_codes == ("question_raw_identifier_leak",)
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_labels_derivable_from_single_tool_call(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_store_to_customer_via_store_id",
+        params={"store_id": 1, "limit": 3},
+        result=[
+            {"customer_id": 1},
+            {"customer_id": 2},
+            {"customer_id": 3},
+        ],
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"store_id": 1},
+            "canonical_answer_json": '[{"customer_id":1},{"customer_id":2},{"customer_id":3}]',
+            "question": "store_id 1 매장의 customer_id 목록을 알려주세요.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "single atomic tool call" in message
+    assert controller.attempts[-1].error_codes[0] == "label_single_tool_derivable"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_identifier_only_labels_even_when_multi_observation(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_store_to_address_via_address_id",
+        params={"store_id": 1},
+        result={"address_id": 1},
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "canonical_answer_json": '{"store_id": 1, "address_id": 1}',
+            "question": "내 매장의 기본 정보를 알려 주세요.",
+            "label_summary": "The answer combines the customer's store and the store's address.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "only a chain of internal identifier fields" in message
+    assert controller.attempts[-1].error_codes == ("label_identifier_chain_forbidden",)
+
+
+def test_next_difficulty_crank_axis_wraps_back_to_first_axis() -> None:
+    assert _next_difficulty_crank_axis(
+        [
+            DifficultyAxis.SEARCH_COST,
+            DifficultyAxis.SEARCH_COST,
+            DifficultyAxis.SOLUTION_SPACE,
+            DifficultyAxis.SOLUTION_SPACE,
+            DifficultyAxis.CONSTRAINT_DENSITY,
+            DifficultyAxis.CONSTRAINT_DENSITY,
+        ]
+    ) is DifficultyAxis.SEARCH_COST
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_too_hard_is_terminal_and_preserves_required_axis(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=0,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: SynthesisAgentRuntime(
+            _config_with_synthesis_output(tmp_path)
+        )._build_draft_from_submission(
+            db_id="sakila",
+            requested_topic="assignment",
+            atomic_tool_bundle=_sample_atomic_tool_bundle(),
+            submission=payload,
+            schema_summary={"tables": []},
+        ),
+    )
+    controller.required_axis = DifficultyAxis.SEARCH_COST
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_customer",
+        params={},
+        result=5,
+    )
+
+    message = await controller.submit(_accepted_payload())
+
+    assert controller.required_axis is DifficultyAxis.SEARCH_COST
+    assert controller.strongest_difficulty_vector.search_cost == 2.0
+    assert "too hard for the configured band" in message
+    assert "Budget exhausted. No more attempts." in message
+    assert controller.submissions_left() == 0
+
+
+def test_reject_invalid_payload_preserves_detail_when_budget_exhausts(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=0,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=1,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        SubmitDraftPayload.model_validate({})
+
+    message = controller.reject_invalid_payload(parsed={}, error=exc_info.value)
+
+    assert "canonical_answer_json is required" in message
+    assert "Budget exhausted. No more attempts." in message

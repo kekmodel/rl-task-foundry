@@ -327,7 +327,8 @@ class AtomicToolGenerator:
             JOIN {quote_table(source_table.schema_name, source_table.table_name)} AS source
               ON {_edge_join_sql("source", "target", edge)}
             WHERE {_pk_predicate_sql("target", target_table, start_index=1)}
-            ORDER BY {_order_by_sql("source", source_table, source_projection)}
+            ORDER BY {_seeded_order_hash_sql("source", source_table, seed_param_index=len(target_table.primary_key) + 2, projection_columns=source_projection)},
+                     {_order_by_sql("source", source_table, source_projection)}
             LIMIT ${len(target_table.primary_key) + 1}
             """
         )
@@ -449,7 +450,8 @@ class AtomicToolGenerator:
             f"""
             SELECT {_select_projection_sql("t", id_columns)}
             FROM {quote_table(table.schema_name, table.table_name)} AS t
-            ORDER BY {_order_by_sql("t", table, id_columns)}
+            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=2, projection_columns=id_columns)},
+                     {_order_by_sql("t", table, id_columns)}
             LIMIT $1
             """
         )
@@ -489,7 +491,8 @@ class AtomicToolGenerator:
             SELECT {_select_projection_sql("t", projection_columns)}
             FROM {quote_table(table.schema_name, table.table_name)} AS t
             WHERE t.{quote_ident(column.column_name)} = $1
-            ORDER BY {_order_by_sql("t", table, projection_columns)}
+            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=3, projection_columns=projection_columns)},
+                     {_order_by_sql("t", table, projection_columns)}
             LIMIT $2
             """
         )
@@ -529,7 +532,8 @@ class AtomicToolGenerator:
             SELECT {_select_projection_sql("t", projection_columns)}
             FROM {quote_table(table.schema_name, table.table_name)} AS t
             WHERE t.{quote_ident(column.column_name)} = ANY($1::{_postgres_array_cast(column)}[])
-            ORDER BY {_order_by_sql("t", table, projection_columns)}
+            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=3, projection_columns=projection_columns)},
+                     {_order_by_sql("t", table, projection_columns)}
             LIMIT $2
             """
         )
@@ -573,7 +577,8 @@ class AtomicToolGenerator:
             FROM {quote_table(table.schema_name, table.table_name)} AS t
             WHERE ($1 IS NULL OR t.{quote_ident(column.column_name)} >= $1)
               AND ($2 IS NULL OR t.{quote_ident(column.column_name)} <= $2)
-            ORDER BY {_order_by_sql("t", table, projection_columns)}
+            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=4, projection_columns=projection_columns)},
+                     {_order_by_sql("t", table, projection_columns)}
             LIMIT $3
             """
         )
@@ -616,7 +621,8 @@ class AtomicToolGenerator:
             SELECT {_select_projection_sql("t", projection_columns)}
             FROM {quote_table(table.schema_name, table.table_name)} AS t
             WHERE t.{quote_ident(column.column_name)} ILIKE $1
-            ORDER BY {_order_by_sql("t", table, projection_columns)}
+            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=3, projection_columns=projection_columns)},
+                     {_order_by_sql("t", table, projection_columns)}
             LIMIT $2
             """
         )
@@ -794,6 +800,7 @@ class AtomicToolGenerator:
                 FROM {quote_table(table.schema_name, table.table_name)} AS t
                 {where_sql}
                 ORDER BY t.{quote_ident(sort_column.column_name)} {direction_sql},
+                         {_seeded_order_hash_sql("t", table, seed_param_index=limit_index + 1, projection_columns=projection_columns)},
                          {_order_by_sql("t", table, projection_columns)}
                 LIMIT ${limit_index}
                 """
@@ -1410,6 +1417,21 @@ def _order_by_sql(alias: str, table: TableProfile, projection_columns: tuple[Col
     return ", ".join(f"{alias}.{quote_ident(column_name)} ASC" for column_name in column_names)
 
 
+def _seeded_order_hash_sql(
+    alias: str,
+    table: TableProfile,
+    *,
+    seed_param_index: int,
+    projection_columns: tuple[ColumnProfile, ...],
+) -> str:
+    column_names = list(table.primary_key) or [column.column_name for column in projection_columns]
+    parts = [
+        *(f"COALESCE({alias}.{quote_ident(column_name)}::text, '')" for column_name in column_names),
+        f"COALESCE(${seed_param_index}::text, '')",
+    ]
+    return f"md5(concat_ws('|', {', '.join(parts)})) ASC"
+
+
 def _pk_predicate_sql(alias: str, table: TableProfile, *, start_index: int) -> str:
     return " AND ".join(
         f"{alias}.{quote_ident(column_name)} = ${index}"
@@ -1480,6 +1502,9 @@ def _render_atomic_tool_source(
 def _render_tool_function(tool: AtomicToolDefinition) -> list[str]:
     signature_parts = _signature_param_parts(tool.params_schema)
     sql_param_names = _sql_param_names(tool.params_schema)
+    if _tool_requires_shuffle_seed(tool):
+        signature_parts.append("_shuffle_seed=None")
+        sql_param_names.append("_shuffle_seed")
     signature = ", ".join(["conn", *signature_parts])
     lines = [
         f"async def {tool.name}({signature}):",
@@ -1521,6 +1546,21 @@ def _render_tool_function(tool: AtomicToolDefinition) -> list[str]:
         lines.append(f"    return {call}")
     lines.append("")
     return lines
+
+
+def _tool_requires_shuffle_seed(tool: AtomicToolDefinition) -> bool:
+    if tool.family is AtomicToolFamily.T2_BOUNDED_ENUMERATION:
+        return tool.result_mode in {
+            AtomicToolResultMode.ROW_LIST,
+            AtomicToolResultMode.SCALAR_LIST,
+        }
+    if tool.family is AtomicToolFamily.T3_SINGLE_COLUMN_FILTER:
+        return True
+    if tool.family is AtomicToolFamily.T4_FK_TRAVERSAL:
+        return tool.result_mode is AtomicToolResultMode.ROW_LIST
+    if tool.family is AtomicToolFamily.T7_SORTED_TOP_K:
+        return True
+    return False
 
 
 def _ordered_param_names(params_schema: dict[str, Any]) -> list[str]:

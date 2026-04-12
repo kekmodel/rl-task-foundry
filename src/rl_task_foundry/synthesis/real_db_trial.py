@@ -200,7 +200,7 @@ class RealDbTrialRunner:
                     solver_traces_dir=solver_traces_dir,
                     synthesis_error_type=type(exc).__name__,
                     synthesis_error_message=str(exc),
-                    synthesis_phase=exc.phase.value if exc.phase is not None else None,
+                    synthesis_phase=exc.phase,
                     backend_failures=_encode_backend_failures(exc.backend_failures),
                 )
             )
@@ -219,7 +219,7 @@ class RealDbTrialRunner:
                     solver_traces_dir=solver_traces_dir,
                     synthesis_error_type=type(exc).__name__,
                     synthesis_error_message=str(exc),
-                    synthesis_phase=exc.phase.value if exc.phase is not None else None,
+                    synthesis_phase=exc.phase,
                 )
             )
         except SynthesisRuntimeError as exc:
