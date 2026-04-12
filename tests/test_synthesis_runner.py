@@ -132,6 +132,7 @@ def _config_with_run_db(tmp_path: Path):
         update={
             "run_db_path": tmp_path / "run.db",
             "traces_dir": tmp_path / "traces",
+            "events_jsonl_path": tmp_path / "events.jsonl",
         },
         deep=True,
     )
@@ -200,9 +201,23 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     assert summary.committed_env_ids == summary.generated_env_ids
     assert summary.registry_root_dir == fake_registry.root_dir
     assert summary.registry_index_db_path == fake_registry.index_db_path
+    assert summary.flow_id is not None
+    assert summary.event_log_path == tmp_path / "events.jsonl"
     assert summary.steps[0].draft_env_id is not None
     assert summary.steps[0].registry_status == EnvironmentRegistryCommitStatus.COMMITTED
     assert not hasattr(summary.steps[0], "draft")
+    event_lines = [
+        json.loads(line)
+        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert event_lines[0]["stage"] == "registry_run"
+    assert event_lines[0]["status"] == "started"
+    assert event_lines[-1]["stage"] == "registry_run"
+    assert event_lines[-1]["status"] == "completed"
+    assert any(event["stage"] == "quality_gate" for event in event_lines)
+    assert any(event["stage"] == "registry_commit" for event in event_lines)
+    assert any(event["stage"] == "checkpoint" for event in event_lines)
+    assert all(event["flow_id"] == summary.flow_id for event in event_lines)
     assert created["sakila"].synthesize_calls == [
         ("sakila", CategoryTaxonomy.ASSIGNMENT, None),
         ("sakila", CategoryTaxonomy.ITINERARY, None),

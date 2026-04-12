@@ -150,12 +150,33 @@ async def test_proof_environment_runner_commits_and_exports_bundle(tmp_path: Pat
         await runner.close()
 
     assert summary.quality_gate_status == "accept"
+    assert summary.flow_id is not None
+    assert summary.event_log_path == tmp_path / "proof_output" / "debug" / "pipeline_events.jsonl"
     assert summary.registry_status is EnvironmentRegistryCommitStatus.COMMITTED
     assert summary.bundle_root is not None
     assert (summary.fixture_sql_root / "schema.sql").exists()
     assert (summary.bundle_root / "databases" / PROOF_DB_ID / "atomic_tools.py").exists()
     assert (summary.bundle_root / "environments" / PROOF_ENV_ID / "environment.yaml").exists()
     assert writer.environment_count(db_id=PROOF_DB_ID) == 1
+    event_lines = [
+        json.loads(line)
+        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["stage"] for event in event_lines] == [
+        "proof_run",
+        "fixture_sql",
+        "draft",
+        "cross_instance",
+        "cross_instance",
+        "rollout",
+        "rollout",
+        "quality_gate",
+        "registry_commit",
+        "registry_commit",
+        "bundle_export",
+        "bundle_export",
+        "proof_run",
+    ]
 
 
 @pytest.mark.asyncio
@@ -204,6 +225,7 @@ async def test_proof_environment_runner_skips_commit_when_quality_gate_rejects(
         await runner.close()
 
     assert summary.quality_gate_status == "reject_too_hard"
+    assert summary.event_log_path is not None
     assert summary.registry_status is None
     assert summary.bundle_root is None
     assert writer.environment_count(db_id=PROOF_DB_ID) == 0
@@ -258,6 +280,7 @@ async def test_proof_environment_runner_rejects_cross_instance_mismatch_before_r
     assert summary.quality_gate_status == "reject_cross_instance"
     assert "insufficient_instances" in summary.cross_instance_error_codes
     assert summary.solver_pass_rate is None
+    assert summary.event_log_path is not None
     assert summary.registry_status is None
     assert summary.bundle_root is None
     assert writer.environment_count(db_id=PROOF_DB_ID) == 0

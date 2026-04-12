@@ -32,6 +32,7 @@ from rl_task_foundry.synthesis.orchestrator import (
     SynthesisOrchestrator,
     SynthesisRuntimeHandle,
 )
+from rl_task_foundry.synthesis.pipeline_events import PipelineFlowLogger, build_flow_id
 from rl_task_foundry.synthesis.runtime import SynthesisAgentRuntime, SynthesisEnvironmentDraft
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
@@ -91,6 +92,8 @@ class SynthesisRegistryRunSummary:
     registry_committed_envs: int
     registry_duplicate_envs: int
     remaining_pairs: int
+    flow_id: str | None = None
+    event_log_path: Path | None = None
     quality_accepted_envs: int = 0
     quality_rejected_envs: int = 0
     generated_env_ids: list[str] = field(default_factory=list)
@@ -149,10 +152,32 @@ class SynthesisRegistryRunner:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         _validate_unique_db_ids(registry)
+        flow_id = build_flow_id("synthesis_registry")
+        event_logger = PipelineFlowLogger(
+            event_log_path=self.base_config.output.events_jsonl_path,
+            flow_kind="synthesis_registry",
+            flow_id=flow_id,
+        )
+        event_logger.emit(
+            stage="registry_run",
+            status="started",
+            payload={
+                "checkpoint_namespace": checkpoint_namespace,
+                "max_steps": max_steps,
+                "db_count": len(registry),
+            },
+        )
         if not registry:
+            event_logger.emit(
+                stage="registry_run",
+                status="completed",
+                payload={"outcome": SynthesisRegistryRunOutcome.EMPTY_REGISTRY.value},
+            )
             return SynthesisRegistryRunSummary(
                 outcome=SynthesisRegistryRunOutcome.EMPTY_REGISTRY,
                 checkpoint_namespace=checkpoint_namespace,
+                flow_id=flow_id,
+                event_log_path=self.base_config.output.events_jsonl_path,
                 requested_steps=max_steps,
                 executed_steps=0,
                 total_pairs=0,
@@ -197,8 +222,30 @@ class SynthesisRegistryRunner:
                 outcome = SynthesisRegistryRunOutcome.COMPLETED_ALL
                 break
 
+            event_logger.emit(
+                stage="step",
+                status="started",
+                payload={
+                    "step_index": executed_steps + 1,
+                    "pending_pairs": sum(len(entry.categories) for entry in pending_registry),
+                },
+            )
             step = await orchestrator.run_next(pending_registry)
             executed_steps += 1
+            event_logger.emit(
+                stage="scheduler_decision",
+                status=step.decision.status.value,
+                payload={
+                    "step_index": executed_steps,
+                    "db_id": step.decision.db_id,
+                    "category": (
+                        step.decision.category.value
+                        if step.decision.category is not None
+                        else None
+                    ),
+                    "reason": step.decision.reason,
+                },
+            )
 
             if step.decision.status != SynthesisSelectionStatus.READY:
                 steps.append(SynthesisRegistryStepSummary(decision=step.decision))
@@ -215,6 +262,15 @@ class SynthesisRegistryRunner:
             assert step.decision.category is not None
             cross_instance_summary = evaluate_cross_instance_draft(step.draft)
             if not cross_instance_summary.passed:
+                event_logger.emit(
+                    stage="cross_instance",
+                    status="failed",
+                    payload={
+                        "step_index": executed_steps,
+                        "env_id": step.draft.environment.env_id,
+                        "error_codes": list(cross_instance_summary.error_codes),
+                    },
+                )
                 generated_drafts += 1
                 quality_rejected_envs += 1
                 cross_instance_rejected_envs += 1
@@ -235,7 +291,30 @@ class SynthesisRegistryRunner:
             )
 
             rollout_summary = await environment_orchestrator.run_draft(step.draft)
+            event_logger.emit(
+                stage="rollout",
+                status="completed",
+                payload={
+                    "step_index": executed_steps,
+                    "env_id": step.draft.environment.env_id,
+                    "planned_solver_runs": rollout_summary.planned_solver_runs,
+                    "total_solver_runs": rollout_summary.total_solver_runs,
+                    "matched_solver_runs": rollout_summary.matched_solver_runs,
+                    "early_stop_decision": rollout_summary.early_stop_decision,
+                },
+            )
             quality_gate_summary = evaluate_rollout_summary(self.base_config, rollout_summary)
+            event_logger.emit(
+                stage="quality_gate",
+                status=quality_gate_summary.status.value,
+                payload={
+                    "step_index": executed_steps,
+                    "env_id": step.draft.environment.env_id,
+                    "pass_rate": quality_gate_summary.pass_rate,
+                    "ci_low": quality_gate_summary.ci_lower,
+                    "ci_high": quality_gate_summary.ci_upper,
+                },
+            )
             generated_drafts += 1
             generated_env_ids.append(step.draft.environment.env_id)
             if quality_gate_summary.status.value != "accept":
@@ -260,6 +339,15 @@ class SynthesisRegistryRunner:
                 quality_gate_summary=quality_gate_summary,
             )
             commit_result = environment_registry.commit_draft(accepted_draft)
+            event_logger.emit(
+                stage="registry_commit",
+                status=commit_result.status.value,
+                payload={
+                    "step_index": executed_steps,
+                    "env_id": accepted_draft.environment.env_id,
+                    "registry_env_id": commit_result.env_id,
+                },
+            )
             steps.append(
                 SynthesisRegistryStepSummary(
                     decision=step.decision,
@@ -289,6 +377,16 @@ class SynthesisRegistryRunner:
                 },
             )
             checkpoint.flush()
+            event_logger.emit(
+                stage="checkpoint",
+                status="flushed",
+                payload={
+                    "step_index": executed_steps,
+                    "db_id": step.decision.db_id,
+                    "category": step.decision.category.value,
+                    "env_id": commit_result.env_id,
+                },
+            )
             processed_pairs_after_run += 1
             if commit_result.status == EnvironmentRegistryCommitStatus.COMMITTED:
                 registry_committed_envs += 1
@@ -312,10 +410,24 @@ class SynthesisRegistryRunner:
         assert generated_drafts == quality_accepted_envs + quality_rejected_envs
         assert processed_pairs_after_run == initially_processed_pairs + quality_accepted_envs
         assert remaining_pairs == total_pairs - processed_pairs_after_run
+        event_logger.emit(
+            stage="registry_run",
+            status="completed",
+            payload={
+                "outcome": outcome.value,
+                "executed_steps": executed_steps,
+                "generated_drafts": generated_drafts,
+                "quality_accepted_envs": quality_accepted_envs,
+                "quality_rejected_envs": quality_rejected_envs,
+                "remaining_pairs": remaining_pairs,
+            },
+        )
 
         return SynthesisRegistryRunSummary(
             outcome=outcome,
             checkpoint_namespace=checkpoint_namespace,
+            flow_id=flow_id,
+            event_log_path=self.base_config.output.events_jsonl_path,
             requested_steps=max_steps,
             executed_steps=executed_steps,
             total_pairs=total_pairs,

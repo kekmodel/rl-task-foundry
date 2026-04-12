@@ -54,6 +54,7 @@ from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryWriter,
 )
+from rl_task_foundry.synthesis.pipeline_events import PipelineFlowLogger, build_flow_id
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
@@ -158,6 +159,8 @@ class ProofEnvironmentRunSummary:
     env_id: str
     fixture_sql_root: Path
     quality_gate_status: str
+    flow_id: str | None = None
+    event_log_path: Path | None = None
     solver_pass_rate: float | None = None
     solver_ci_low: float | None = None
     solver_ci_high: float | None = None
@@ -187,26 +190,102 @@ class ProofEnvironmentRunner:
 
     async def run(self, output_root: Path) -> ProofEnvironmentRunSummary:
         output_root.mkdir(parents=True, exist_ok=True)
+        flow_id = build_flow_id("proof_environment")
+        event_log_path = output_root / "debug" / "pipeline_events.jsonl"
+        event_logger = PipelineFlowLogger(
+            event_log_path=event_log_path,
+            mirror_event_log_path=self.config.output.events_jsonl_path,
+            flow_kind="proof_environment",
+            flow_id=flow_id,
+        )
+        event_logger.emit(
+            stage="proof_run",
+            status="started",
+            payload={"output_root": output_root},
+        )
         fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
+        event_logger.emit(
+            stage="fixture_sql",
+            status="written",
+            payload={"fixture_sql_root": fixture_files.root_dir},
+        )
         draft = build_proof_environment_draft()
+        event_logger.emit(
+            stage="draft",
+            status="built",
+            payload={"env_id": draft.environment.env_id, "db_id": draft.environment.db_id},
+        )
+        event_logger.emit(
+            stage="cross_instance",
+            status="started",
+            payload={"env_id": draft.environment.env_id},
+        )
         cross_instance_summary = evaluate_cross_instance_draft(draft)
         if not cross_instance_summary.passed:
+            event_logger.emit(
+                stage="cross_instance",
+                status="failed",
+                payload={"error_codes": list(cross_instance_summary.error_codes)},
+            )
+            event_logger.emit(
+                stage="proof_run",
+                status="completed",
+                payload={"quality_gate_status": "reject_cross_instance"},
+            )
             return ProofEnvironmentRunSummary(
                 db_id=draft.environment.db_id,
                 env_id=draft.environment.env_id,
                 fixture_sql_root=fixture_files.root_dir,
                 quality_gate_status="reject_cross_instance",
+                flow_id=flow_id,
+                event_log_path=event_log_path,
                 cross_instance_error_codes=cross_instance_summary.error_codes,
             )
+        event_logger.emit(
+            stage="cross_instance",
+            status="passed",
+            payload={"env_id": draft.environment.env_id},
+        )
+        event_logger.emit(
+            stage="rollout",
+            status="started",
+            payload={"env_id": draft.environment.env_id},
+        )
         rollout_summary = await self.environment_orchestrator.run_draft(draft)
+        event_logger.emit(
+            stage="rollout",
+            status="completed",
+            payload={
+                "planned_solver_runs": rollout_summary.planned_solver_runs,
+                "total_solver_runs": rollout_summary.total_solver_runs,
+                "matched_solver_runs": rollout_summary.matched_solver_runs,
+                "early_stop_decision": rollout_summary.early_stop_decision,
+            },
+        )
         quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
+        event_logger.emit(
+            stage="quality_gate",
+            status=quality_gate_summary.status.value,
+            payload={
+                "pass_rate": quality_gate_summary.pass_rate,
+                "ci_low": quality_gate_summary.ci_lower,
+                "ci_high": quality_gate_summary.ci_upper,
+            },
+        )
 
         if quality_gate_summary.status is not EnvironmentQualityGateStatus.ACCEPT:
+            event_logger.emit(
+                stage="proof_run",
+                status="completed",
+                payload={"quality_gate_status": quality_gate_summary.status.value},
+            )
             return ProofEnvironmentRunSummary(
                 db_id=draft.environment.db_id,
                 env_id=draft.environment.env_id,
                 fixture_sql_root=fixture_files.root_dir,
                 quality_gate_status=quality_gate_summary.status.value,
+                flow_id=flow_id,
+                event_log_path=event_log_path,
                 solver_pass_rate=quality_gate_summary.pass_rate,
                 solver_ci_low=quality_gate_summary.ci_lower,
                 solver_ci_high=quality_gate_summary.ci_upper,
@@ -216,14 +295,41 @@ class ProofEnvironmentRunner:
             draft,
             quality_gate_summary=quality_gate_summary,
         )
+        event_logger.emit(
+            stage="registry_commit",
+            status="started",
+            payload={"env_id": accepted_draft.environment.env_id},
+        )
         commit_result = self.registry.commit_draft(accepted_draft)
+        event_logger.emit(
+            stage="registry_commit",
+            status=commit_result.status.value,
+            payload={"registry_env_id": commit_result.env_id},
+        )
         bundle_root = output_root / "bundle"
+        event_logger.emit(
+            stage="bundle_export",
+            status="started",
+            payload={"bundle_root": bundle_root, "env_id": commit_result.env_id},
+        )
         self.exporter.export_bundle(bundle_root, env_id=commit_result.env_id)
+        event_logger.emit(
+            stage="bundle_export",
+            status="completed",
+            payload={"bundle_root": bundle_root, "env_id": commit_result.env_id},
+        )
+        event_logger.emit(
+            stage="proof_run",
+            status="completed",
+            payload={"quality_gate_status": quality_gate_summary.status.value},
+        )
         return ProofEnvironmentRunSummary(
             db_id=accepted_draft.environment.db_id,
             env_id=accepted_draft.environment.env_id,
             fixture_sql_root=fixture_files.root_dir,
             quality_gate_status=quality_gate_summary.status.value,
+            flow_id=flow_id,
+            event_log_path=event_log_path,
             solver_pass_rate=quality_gate_summary.pass_rate,
             solver_ci_low=quality_gate_summary.ci_lower,
             solver_ci_high=quality_gate_summary.ci_upper,

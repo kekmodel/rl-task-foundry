@@ -180,6 +180,10 @@ def run_synthesis_registry(
         console.print(f"registry_committed_envs={summary.registry_committed_envs}")
         console.print(f"registry_duplicate_envs={summary.registry_duplicate_envs}")
         console.print(f"remaining_pairs={summary.remaining_pairs}")
+        if summary.flow_id is not None:
+            console.print(f"flow_id={summary.flow_id}")
+        if summary.event_log_path is not None:
+            console.print(f"event_log_path={summary.event_log_path}")
         if summary.registry_root_dir is not None:
             console.print(f"registry_root_dir={summary.registry_root_dir}")
         if summary.registry_index_db_path is not None:
@@ -348,6 +352,10 @@ def run_proof_environment(
         console.print(f"env_id={summary.env_id}")
         console.print(f"fixture_sql_root={summary.fixture_sql_root}")
         console.print(f"quality_gate_status={summary.quality_gate_status}")
+        if summary.flow_id is not None:
+            console.print(f"flow_id={summary.flow_id}")
+        if summary.event_log_path is not None:
+            console.print(f"event_log_path={summary.event_log_path}")
         if summary.cross_instance_error_codes:
             console.print(f"cross_instance_error_codes={list(summary.cross_instance_error_codes)}")
         if summary.solver_pass_rate is not None:
@@ -398,6 +406,10 @@ def run_real_db_trial(
         console.print(f"trial_status={summary.trial_status}")
         console.print(f"db_id={summary.db_id}")
         console.print(f"requested_category={summary.requested_category}")
+        if summary.flow_id is not None:
+            console.print(f"flow_id={summary.flow_id}")
+        if summary.event_log_path is not None:
+            console.print(f"event_log_path={summary.event_log_path}")
         if summary.env_id is not None:
             console.print(f"env_id={summary.env_id}")
         if summary.quality_gate_status is not None:

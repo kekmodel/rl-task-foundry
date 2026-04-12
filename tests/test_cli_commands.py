@@ -105,6 +105,8 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                 registry_committed_envs=1,
                 registry_duplicate_envs=0,
                 remaining_pairs=0,
+                flow_id="flow_registry_test",
+                event_log_path=Path("artifacts/events.jsonl"),
                 generated_env_ids=["env_assignment_deadbeef"],
                 committed_env_ids=["env_assignment_deadbeef"],
                 duplicate_env_ids=[],
@@ -153,6 +155,8 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert "registry_committed_envs=1" in result.stdout
     assert "registry_duplicate_envs=0" in result.stdout
     assert "remaining_pairs=0" in result.stdout
+    assert "flow_id=flow_registry_test" in result.stdout
+    assert "event_log_path=artifacts/events.jsonl" in result.stdout
     assert "last_status=ready" in result.stdout
     assert captured["max_steps"] == 2
     assert captured["checkpoint_namespace"] == "cli_registry_test"
@@ -173,6 +177,8 @@ def test_cli_run_proof_environment_reports_summary(monkeypatch, tmp_path) -> Non
                 env_id="env_proof_trip_fixture_itinerary_v1",
                 fixture_sql_root=output_dir / "fixture_db",
                 quality_gate_status="accept",
+                flow_id="flow_proof_test",
+                event_log_path=output_dir / "debug" / "pipeline_events.jsonl",
                 solver_pass_rate=0.5,
                 solver_ci_low=0.2,
                 solver_ci_high=0.8,
@@ -194,6 +200,8 @@ def test_cli_run_proof_environment_reports_summary(monkeypatch, tmp_path) -> Non
     assert "db_id=proof_trip_fixture" in result.stdout
     assert "env_id=env_proof_trip_fixture_itinerary_v1" in result.stdout
     assert "quality_gate_status=accept" in result.stdout
+    assert "flow_id=flow_proof_test" in result.stdout
+    assert "event_log_path=" in result.stdout
     assert "bundle_root=" in result.stdout
     assert captured["output_dir"] == output_dir
     assert captured["closed"] is True
@@ -221,6 +229,8 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 requested_category=category,
                 trial_status=RealDbTrialStatus.ACCEPTED,
                 summary_path=output_dir / "trial_summary.json",
+                flow_id="flow_trial_test",
+                event_log_path=output_dir / "debug" / "pipeline_events.jsonl",
                 env_id="env_real_trial",
                 quality_gate_status="accept",
                 synthesis_phase=None,
@@ -254,6 +264,8 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "trial_status=accepted" in result.stdout
     assert "db_id=sakila" in result.stdout
     assert "requested_category=assignment" in result.stdout
+    assert "flow_id=flow_trial_test" in result.stdout
+    assert "event_log_path=" in result.stdout
     assert "summary_path=" in result.stdout
     assert captured["output_dir"] == output_dir
     assert captured["db_id"] == "sakila"

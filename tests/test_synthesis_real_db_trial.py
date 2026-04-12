@@ -118,6 +118,7 @@ def _config_with_tmp_traces(tmp_path: Path):
         update={
             "traces_dir": tmp_path / "traces",
             "run_db_path": tmp_path / "run.db",
+            "events_jsonl_path": tmp_path / "events.jsonl",
         },
         deep=True,
     )
@@ -184,6 +185,8 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert summary.registry_status is EnvironmentRegistryCommitStatus.COMMITTED
     assert summary.registry_env_id == draft.environment.env_id
     assert summary.debug_root == output_root / "debug"
+    assert summary.flow_id is not None
+    assert summary.event_log_path == output_root / "debug" / "pipeline_events.jsonl"
     assert summary.debug_traces_dir == output_root / "debug" / "traces"
     assert summary.synthesis_traces_dir == output_root / "debug" / "traces" / "synthesis"
     assert summary.solver_traces_dir == output_root / "debug" / "traces"
@@ -197,8 +200,36 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert payload["trial_status"] == "accepted"
     assert payload["env_id"] == "env_real_trial"
     assert payload["quality_gate_status"] == "accept"
+    assert payload["event_log_path"] == str(output_root / "debug" / "pipeline_events.jsonl")
     assert payload["debug_root"] == str(output_root / "debug")
     assert payload["debug_traces_dir"] == str(output_root / "debug" / "traces")
+    event_lines = [
+        json.loads(line)
+        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["stage"] for event in event_lines] == [
+        "trial",
+        "synthesis",
+        "synthesis",
+        "cross_instance",
+        "cross_instance",
+        "rollout",
+        "rollout",
+        "quality_gate",
+        "registry_commit",
+        "registry_commit",
+        "bundle_export",
+        "bundle_export",
+        "trial",
+    ]
+    assert event_lines[0]["status"] == "started"
+    assert event_lines[-1]["status"] == "completed"
+    mirrored_lines = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(mirrored_lines) == len(event_lines)
+    assert all(event["flow_id"] == summary.flow_id for event in event_lines)
 
 
 @pytest.mark.asyncio
@@ -252,6 +283,18 @@ async def test_real_db_trial_runner_captures_phase_execution_taxonomy(
     assert summary.synthesis_error_type == "SynthesisPhaseExecutionError"
     assert summary.synthesis_phase == "schema_exploration"
     assert summary.backend_failures == ("codex_oauth/gpt-5.4-mini:ModelBehaviorError",)
+    assert summary.event_log_path is not None
+    event_lines = [
+        json.loads(line)
+        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["stage"] for event in event_lines] == [
+        "trial",
+        "synthesis",
+        "synthesis",
+        "trial",
+    ]
+    assert event_lines[2]["status"] == "failed"
     assert not registry.committed_drafts
     assert not exporter.calls
     assert not orchestrator.calls

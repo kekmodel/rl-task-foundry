@@ -15,6 +15,11 @@ from rl_task_foundry.synthesis.bundle_exporter import (
     EnvironmentBundleExporter,
     EnvironmentBundleExportSummary,
 )
+from rl_task_foundry.synthesis.pipeline_events import (
+    PipelineFlowEvent,
+    PipelineFlowLogger,
+    build_flow_id,
+)
 from rl_task_foundry.synthesis.canonicalize import (
     CanonicalizationError,
     RewardResult,
@@ -191,6 +196,8 @@ __all__ = [
     "AtomicToolMaterializer",
     "AtomicToolResultMode",
     "AnchorQueryContract",
+    "PipelineFlowEvent",
+    "PipelineFlowLogger",
     "CanonicalizationError",
     "CategoryTaxonomy",
     "CrossInstanceConsistencyStatus",
@@ -252,6 +259,7 @@ __all__ = [
     "RegistrationBundleStatus",
     "ArtifactRegistrationResult",
     "build_registration_diagnostics",
+    "build_flow_id",
     "canonical_json",
     "canonicalize_field",
     "canonicalize_output",
