@@ -16,6 +16,7 @@ from rl_task_foundry.synthesis.environment_registry import (
     SemanticDedupCandidate,
 )
 from rl_task_foundry.synthesis.contracts import EnvironmentStatus
+from rl_task_foundry.synthesis.proof_environment import ProofEnvironmentRunSummary
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunOutcome,
     SynthesisRegistryRunSummary,
@@ -150,6 +151,46 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert "last_status=ready" in result.stdout
     assert captured["max_steps"] == 2
     assert captured["checkpoint_namespace"] == "cli_registry_test"
+    assert captured["closed"] is True
+
+
+def test_cli_run_proof_environment_reports_summary(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    @dataclass
+    class _DummyProofRunner:
+        _config: object
+
+        async def run(self, output_dir: Path) -> ProofEnvironmentRunSummary:
+            captured["output_dir"] = output_dir
+            return ProofEnvironmentRunSummary(
+                db_id="proof_trip_fixture",
+                env_id="env_proof_trip_fixture_itinerary_v1",
+                fixture_sql_root=output_dir / "fixture_db",
+                quality_gate_status="accept",
+                solver_pass_rate=0.5,
+                solver_ci_low=0.2,
+                solver_ci_high=0.8,
+                registry_status=EnvironmentRegistryCommitStatus.COMMITTED,
+                registry_env_id="env_proof_trip_fixture_itinerary_v1",
+                bundle_root=output_dir / "bundle",
+            )
+
+        async def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr("rl_task_foundry.cli.ProofEnvironmentRunner", _DummyProofRunner)
+
+    output_dir = tmp_path / "proof_output"
+    result = CliRunner().invoke(app, ["run-proof-environment", str(output_dir)])
+
+    assert result.exit_code == 0
+    assert "proof environment run complete" in result.stdout
+    assert "db_id=proof_trip_fixture" in result.stdout
+    assert "env_id=env_proof_trip_fixture_itinerary_v1" in result.stdout
+    assert "quality_gate_status=accept" in result.stdout
+    assert "bundle_root=" in result.stdout
+    assert captured["output_dir"] == output_dir
     assert captured["closed"] is True
 
 

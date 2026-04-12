@@ -25,6 +25,7 @@ from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryWriter,
 )
+from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.orchestrator import (
     SynthesisDbRegistryEntry,
     SynthesisOrchestrator,
@@ -231,7 +232,7 @@ class SynthesisRegistryRunner:
                 continue
 
             quality_accepted_envs += 1
-            accepted_draft = _accepted_draft_with_quality_metrics(
+            accepted_draft = accepted_draft_with_quality_metrics(
                 step.draft,
                 quality_gate_summary=quality_gate_summary,
             )
@@ -402,27 +403,3 @@ def _validate_unique_db_ids(registry: list[SynthesisDbRegistryEntry]) -> None:
             "synthesis registry must not contain duplicate db_id values: "
             + ", ".join(sorted(duplicates))
         )
-
-
-def _accepted_draft_with_quality_metrics(
-    draft: SynthesisEnvironmentDraft,
-    *,
-    quality_gate_summary: Any,
-) -> SynthesisEnvironmentDraft:
-    quality_metrics_payload = draft.environment.quality_metrics.model_dump(mode="python")
-    quality_metrics_payload.update(
-        {
-            "solver_pass_rate": quality_gate_summary.pass_rate,
-            "solver_ci_low": quality_gate_summary.ci_lower,
-            "solver_ci_high": quality_gate_summary.ci_upper,
-        }
-    )
-    environment_payload = draft.environment.model_dump(mode="python")
-    environment_payload.update(
-        {
-            "status": EnvironmentStatus.ACCEPTED,
-            "quality_metrics": quality_metrics_payload,
-        }
-    )
-    accepted_environment = EnvironmentContract.model_validate(environment_payload)
-    return draft.model_copy(update={"environment": accepted_environment})

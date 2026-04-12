@@ -95,3 +95,32 @@ def test_environment_bundle_exporter_filters_by_category(tmp_path: Path) -> None
     assert summary.environment_count == 1
     assert summary.env_ids == ("env_assignment_a",)
     assert not (summary.bundle_root / "environments" / "env_itinerary_b").exists()
+
+
+def test_environment_bundle_exporter_filters_by_env_id(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "registry" / "environments",
+        index_db_path=tmp_path / "registry" / "environment_registry.db",
+        near_dup_enabled=False,
+    )
+    first = _sample_draft(tmp_env_id="env_assignment_a")
+    second = _sample_draft(
+        tmp_env_id="env_assignment_b",
+        task_signature="sha256:task_b",
+    )
+    writer.commit_draft(first)
+    writer.commit_draft(second)
+
+    exporter = EnvironmentBundleExporter(
+        registry=writer,
+        materializer=writer.atomic_tool_materializer,
+    )
+
+    summary = exporter.export_bundle(
+        tmp_path / "bundle",
+        env_id="env_assignment_b",
+    )
+
+    assert summary.environment_count == 1
+    assert summary.env_ids == ("env_assignment_b",)
+    assert not (summary.bundle_root / "environments" / "env_assignment_a").exists()

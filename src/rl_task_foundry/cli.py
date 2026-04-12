@@ -20,6 +20,7 @@ from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
 from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
+from rl_task_foundry.synthesis.proof_environment import ProofEnvironmentRunner
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
 
 app = typer.Typer(no_args_is_help=True)
@@ -291,6 +292,7 @@ def export_bundle(
     config_path: Path = Path("rl_task_foundry.yaml"),
     db_id: str | None = None,
     category: str | None = None,
+    env_id: str | None = None,
 ) -> None:
     """Export registered environments into the environment API bundle layout."""
 
@@ -306,6 +308,7 @@ def export_bundle(
         output_dir,
         db_id=db_id,
         category=resolved_category,
+        env_id=env_id,
     )
     if summary.environment_count == 0:
         raise typer.BadParameter("no registered environments matched the requested filters")
@@ -317,6 +320,41 @@ def export_bundle(
         console.print(f"db_ids={list(summary.db_ids)}")
     if summary.env_ids:
         console.print(f"env_ids={list(summary.env_ids)}")
+
+
+@app.command("run-proof-environment")
+def run_proof_environment(
+    output_dir: Path,
+    config_path: Path = Path("rl_task_foundry.yaml"),
+) -> None:
+    """Run the synthetic proof-environment vertical slice and export its bundle."""
+
+    async def _run() -> None:
+        config = load_config(config_path)
+        runner = ProofEnvironmentRunner(config)
+        try:
+            summary = await runner.run(output_dir)
+        finally:
+            await runner.close()
+
+        console.print(f"[green]proof environment run complete[/green]: {output_dir}")
+        console.print(f"db_id={summary.db_id}")
+        console.print(f"env_id={summary.env_id}")
+        console.print(f"fixture_sql_root={summary.fixture_sql_root}")
+        console.print(f"quality_gate_status={summary.quality_gate_status}")
+        console.print(f"solver_pass_rate={summary.solver_pass_rate}")
+        console.print(f"solver_ci_low={summary.solver_ci_low}")
+        console.print(f"solver_ci_high={summary.solver_ci_high}")
+        if summary.registry_status is not None:
+            console.print(f"registry_status={summary.registry_status}")
+        if summary.registry_env_id is not None:
+            console.print(f"registry_env_id={summary.registry_env_id}")
+        if summary.bundle_root is not None:
+            console.print(f"bundle_root={summary.bundle_root}")
+        if summary.quality_gate_status != "accept":
+            raise typer.Exit(code=1)
+
+    asyncio.run(_run())
 
 
 @app.command("check-db")

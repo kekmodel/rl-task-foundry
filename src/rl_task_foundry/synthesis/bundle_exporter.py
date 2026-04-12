@@ -42,8 +42,9 @@ class EnvironmentBundleExporter:
         *,
         db_id: str | None = None,
         category: CategoryTaxonomy | None = None,
+        env_id: str | None = None,
     ) -> EnvironmentBundleExportSummary:
-        records = self._environment_records(db_id=db_id, category=category)
+        records = self._environment_records(db_id=db_id, category=category, env_id=env_id)
         self._prepare_bundle_root(bundle_root)
 
         databases_dir = bundle_root / "databases"
@@ -74,13 +75,17 @@ class EnvironmentBundleExporter:
         *,
         db_id: str | None,
         category: CategoryTaxonomy | None,
+        env_id: str | None,
     ) -> list[EnvironmentRegistryRecord]:
         count = self.registry.environment_count(db_id=db_id, category=category)
-        return self.registry.list_environments(
+        records = self.registry.list_environments(
             limit=count,
             db_id=db_id,
             category=category,
         )
+        if env_id is not None:
+            records = [record for record in records if record.env_id == env_id]
+        return records
 
     @staticmethod
     def _prepare_bundle_root(bundle_root: Path) -> None:
