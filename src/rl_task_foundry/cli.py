@@ -17,6 +17,7 @@ from rl_task_foundry.synthesis.runner import (
     load_synthesis_registry,
 )
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
+from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
 from rl_task_foundry.synthesis.runtime_policy import build_runtime_isolation_plan
@@ -278,6 +279,40 @@ def plan_synthesis_coverage(
             f"|current={cell.current_count}|target={cell.target_count}"
             f"|deficit={cell.deficit}"
         )
+
+
+@app.command("export-bundle")
+def export_bundle(
+    output_dir: Path,
+    config_path: Path = Path("rl_task_foundry.yaml"),
+    db_id: str | None = None,
+    category: str | None = None,
+) -> None:
+    """Export registered environments into the environment API bundle layout."""
+
+    config = load_config(config_path)
+    exporter = EnvironmentBundleExporter.for_config(config)
+    resolved_category = None
+    if category is not None:
+        try:
+            resolved_category = CategoryTaxonomy(category)
+        except ValueError as exc:
+            raise typer.BadParameter(f"unknown synthesis category: {category}") from exc
+    summary = exporter.export_bundle(
+        output_dir,
+        db_id=db_id,
+        category=resolved_category,
+    )
+    if summary.environment_count == 0:
+        raise typer.BadParameter("no registered environments matched the requested filters")
+
+    console.print(f"[green]bundle exported[/green]: {summary.bundle_root}")
+    console.print(f"database_count={summary.database_count}")
+    console.print(f"environment_count={summary.environment_count}")
+    if summary.db_ids:
+        console.print(f"db_ids={list(summary.db_ids)}")
+    if summary.env_ids:
+        console.print(f"env_ids={list(summary.env_ids)}")
 
 
 @app.command("check-db")

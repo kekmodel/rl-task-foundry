@@ -11,6 +11,10 @@ from rl_task_foundry.synthesis.atomic_tool_materializer import (
     AtomicToolMaterialization,
     AtomicToolMaterializer,
 )
+from rl_task_foundry.synthesis.bundle_exporter import (
+    EnvironmentBundleExporter,
+    EnvironmentBundleExportSummary,
+)
 from rl_task_foundry.synthesis.canonicalize import (
     CanonicalizationError,
     RewardResult,
@@ -175,6 +179,8 @@ __all__ = [
     "AtomicToolDefinition",
     "AtomicToolFamily",
     "AtomicToolGenerator",
+    "EnvironmentBundleExporter",
+    "EnvironmentBundleExportSummary",
     "AtomicToolMaterialization",
     "AtomicToolMaterializer",
     "AtomicToolResultMode",

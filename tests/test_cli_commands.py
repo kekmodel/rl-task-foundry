@@ -21,11 +21,14 @@ from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunSummary,
     SynthesisRegistryStepSummary,
 )
+from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
 from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryCommitStatus
+from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
     SynthesisSelectionStatus,
 )
+from tests.test_synthesis_environment_registry import _sample_draft
 
 
 def test_cli_validate_config_command():
@@ -281,6 +284,41 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
     assert "total_deficit=16" in result.stdout
     assert "pair_gap=sakila|itinerary|deficit=9" in result.stdout
     assert "cell_gap=sakila|assignment|medium|current=2|target=3|deficit=1" in result.stdout
+
+
+def test_cli_export_bundle_writes_environment_api_layout(monkeypatch, tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "registry" / "environments",
+        index_db_path=tmp_path / "registry" / "environment_registry.db",
+    )
+    writer.commit_draft(_sample_draft())
+    exporter = EnvironmentBundleExporter(
+        registry=writer,
+        materializer=writer.atomic_tool_materializer,
+    )
+
+    monkeypatch.setattr(
+        "rl_task_foundry.cli.EnvironmentBundleExporter.for_config",
+        lambda _config: exporter,
+    )
+
+    output_dir = tmp_path / "bundle"
+    result = CliRunner().invoke(
+        app,
+        [
+            "export-bundle",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "bundle exported" in result.stdout
+    assert "database_count=1" in result.stdout
+    assert "environment_count=1" in result.stdout
+    assert (output_dir / "databases" / "sakila" / "atomic_tools.py").exists()
+    assert (
+        output_dir / "environments" / "env_assignment_registrytest" / "audit" / "solution.py"
+    ).exists()
 
 def test_cli_validate_config_applies_runtime_overrides():
     result = CliRunner().invoke(
