@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.pipeline.environment_orchestrator import (
@@ -171,7 +170,7 @@ class ProofEnvironmentRunSummary:
 @dataclass(slots=True)
 class ProofEnvironmentRunner:
     config: AppConfig
-    environment_orchestrator: Any | None = None
+    environment_orchestrator: EnvironmentOrchestrator | None = None
     registry: EnvironmentRegistryWriter | None = None
     exporter: EnvironmentBundleExporter | None = None
 

@@ -192,6 +192,7 @@ class SynthesisStageResult(StrictModel):
     provider: str
     model: str
     payload: SynthesisPhaseOutput
+    payload_repair_codes: list[str] = Field(default_factory=list)
     memory_entry: SynthesisMemoryEntry
     tool_traces: list[SynthesisToolTraceEntry] = Field(default_factory=list)
 
@@ -308,6 +309,7 @@ class SynthesisSelfConsistencyDiagnostics(StrictModel):
     passed: bool
     error_codes: list[str] = Field(default_factory=list)
     weak_signal_codes: list[str] = Field(default_factory=list)
+    payload_repair_codes: list[str] = Field(default_factory=list)
     answer: object | None = None
     solution_tool_calls: int | None = None
     verifier_tool_calls: int | None = None
@@ -1030,6 +1032,19 @@ class SynthesisAgentRuntime:
                 bundle=artifact_payload.artifacts,
                 proposed_environment=artifact_payload.proposed_environment,
             )
+            if result.payload_repair_codes:
+                self_consistency_diagnostics = self_consistency_diagnostics.model_copy(
+                    update={
+                        "payload_repair_codes": list(
+                            dict.fromkeys(
+                                [
+                                    *self_consistency_diagnostics.payload_repair_codes,
+                                    *result.payload_repair_codes,
+                                ]
+                            )
+                        )
+                    }
+                )
             if not self_consistency_diagnostics.passed:
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
@@ -1153,6 +1168,11 @@ class SynthesisAgentRuntime:
                 detail_parts.append(
                     "self_consistency_errors="
                     + ",".join(self_consistency_diagnostics.error_codes)
+                )
+            if self_consistency_diagnostics.payload_repair_codes:
+                detail_parts.append(
+                    "payload_repairs="
+                    + ",".join(self_consistency_diagnostics.payload_repair_codes)
                 )
             if self_consistency_diagnostics.weak_signal_codes:
                 detail_parts.append(

@@ -7,8 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import Field
 
@@ -37,6 +37,9 @@ from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
     SynthesisSelectionStatus,
 )
+
+if TYPE_CHECKING:
+    from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentOrchestrator
 
 
 class SynthesisRegistryFileEntry(StrictModel):
@@ -120,7 +123,7 @@ class SynthesisRegistryRunner:
     environment_registry: EnvironmentRegistryWriter | None = None
     checkpoint: CheckpointStore | None = None
     orchestrator: SynthesisOrchestrator | None = None
-    environment_orchestrator: Any | None = None
+    environment_orchestrator: EnvironmentOrchestrator | None = None
 
     def __post_init__(self) -> None:
         if self.checkpoint is None:

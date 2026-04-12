@@ -6,7 +6,6 @@ import json
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.pipeline.environment_orchestrator import (
@@ -67,8 +66,8 @@ class RealDbTrialSummary:
 @dataclass(slots=True)
 class RealDbTrialRunner:
     config: AppConfig
-    synthesis_runtime: Any | None = None
-    environment_orchestrator: Any | None = None
+    synthesis_runtime: SynthesisAgentRuntime | None = None
+    environment_orchestrator: EnvironmentOrchestrator | None = None
     registry: EnvironmentRegistryWriter | None = None
     exporter: EnvironmentBundleExporter | None = None
 

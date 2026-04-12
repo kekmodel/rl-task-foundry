@@ -227,35 +227,53 @@ def _repair_split_json_object(text: str) -> dict[str, Any] | None:
     return merged
 
 
-def _normalize_phase_payload(request: SynthesisStageRequest, final_output: Any) -> BaseModel:
+def _dedupe_repair_codes(repair_codes: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for code in repair_codes:
+        if code in seen:
+            continue
+        seen.add(code)
+        deduped.append(code)
+    return deduped
+
+
+def _normalize_phase_payload(
+    request: SynthesisStageRequest,
+    final_output: Any,
+) -> tuple[BaseModel, list[str]]:
     output_type = _phase_output_type(request.phase)
     if isinstance(final_output, output_type):
-        return final_output
+        return final_output, []
     if isinstance(final_output, BaseModel):
-        return output_type.model_validate(final_output.model_dump(mode="python"))
+        return output_type.model_validate(final_output.model_dump(mode="python")), []
     if isinstance(final_output, dict):
-        final_output = _coerce_phase_payload_dict(request, final_output)
-        return output_type.model_validate(final_output)
+        final_output, repair_codes = _coerce_phase_payload_dict(request, final_output)
+        return output_type.model_validate(final_output), _dedupe_repair_codes(repair_codes)
     if isinstance(final_output, str):
         payload_text = _extract_json_object_text(final_output)
+        repair_codes: list[str] = []
         try:
             parsed = json.loads(payload_text)
         except json.JSONDecodeError:
             repaired = _repair_split_json_object(payload_text)
             if repaired is None:
                 raise
+            repair_codes.append("split_json_repaired")
             parsed = repaired
         if not isinstance(parsed, dict):
             raise RuntimeError("synthesis backend expected a JSON object payload")
-        parsed = _coerce_phase_payload_dict(request, parsed)
-        return output_type.model_validate(parsed)
+        parsed, coerced_codes = _coerce_phase_payload_dict(request, parsed)
+        repair_codes.extend(coerced_codes)
+        return output_type.model_validate(parsed), _dedupe_repair_codes(repair_codes)
     raise RuntimeError("synthesis backend returned an unsupported final_output type")
 
 
 def _coerce_phase_payload_dict(
     request: SynthesisStageRequest,
     payload: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[str]]:
+    repair_codes: list[str] = []
     if request.phase == SynthesisPhase.ARTIFACT_GENERATION:
         proposed_environment = payload.get("proposed_environment")
         if isinstance(proposed_environment, dict):
@@ -263,6 +281,7 @@ def _coerce_phase_payload_dict(
             for key in ("solution", "verifier", "shadow_verifier", "instance_space"):
                 if key in payload and key not in normalized_proposed_environment:
                     normalized_proposed_environment[key] = payload[key]
+                    repair_codes.append("artifact_proposed_environment_nested")
             for verifier_key in ("verifier", "shadow_verifier"):
                 verifier_payload = normalized_proposed_environment.get(verifier_key)
                 if not isinstance(verifier_payload, dict):
@@ -302,6 +321,7 @@ def _coerce_phase_payload_dict(
                     updated_facts_schema["facts"] = normalized_facts
                     updated_verifier["facts_schema"] = updated_facts_schema
                     normalized_proposed_environment[verifier_key] = updated_verifier
+                    repair_codes.append("facts_schema_normalized")
             normalized_payload = dict(payload)
             normalized_payload["proposed_environment"] = normalized_proposed_environment
             legacy_artifacts = normalized_payload.get("artifacts")
@@ -314,17 +334,16 @@ def _coerce_phase_payload_dict(
                 ):
                     if contract_name not in normalized_artifacts and legacy_name in normalized_artifacts:
                         normalized_artifacts[contract_name] = normalized_artifacts[legacy_name]
+                        repair_codes.append("artifact_key_remapped")
                 normalized_payload["artifacts"] = normalized_artifacts
-            return normalized_payload
-        return payload
+            return normalized_payload, _dedupe_repair_codes(repair_codes)
+        return payload, []
 
     phase = request.phase
     if phase == SynthesisPhase.CATEGORY_INFERENCE:
         if "selected_category" in payload and "rationale" in payload:
-            return payload
+            return payload, []
         selected_category = _normalize_category_value(payload.get("category"))
-        if selected_category is None and request.requested_category is not None:
-            selected_category = request.requested_category.value
         remapped = {
             "selected_category": selected_category,
             "rationale": payload.get("validation_notes")
@@ -333,12 +352,14 @@ def _coerce_phase_payload_dict(
             or "category inference completed",
             "memory_summary": payload.get("memory_summary", "category inference completed"),
         }
-        return remapped
+        if remapped["selected_category"] is not None:
+            repair_codes.append("category_inference_remapped")
+        return remapped, repair_codes
 
     if phase != SynthesisPhase.SCHEMA_EXPLORATION:
-        return payload
+        return payload, []
     if "domain_hypothesis" in payload and "candidate_categories" in payload:
-        return payload
+        return payload, []
 
     task_category = payload.get("task_category")
     candidate_categories: list[str] = []
@@ -353,11 +374,6 @@ def _coerce_phase_payload_dict(
             if normalized_candidate is None or normalized_candidate in candidate_categories:
                 continue
             candidate_categories.append(normalized_candidate)
-    # Schema-exploration payloads from real runs sometimes describe capability clusters
-    # instead of taxonomy labels. Preserve forward progress by falling back to the
-    # requested category when the model's output is otherwise semantically useful.
-    if not candidate_categories and request.requested_category is not None:
-        candidate_categories.append(request.requested_category.value)
 
     remapped = {
         "domain_hypothesis": payload.get("domain_fit")
@@ -366,7 +382,12 @@ def _coerce_phase_payload_dict(
         "candidate_categories": candidate_categories,
         "memory_summary": payload.get("memory_summary", "schema exploration completed"),
     }
-    return remapped
+    if (
+        remapped["domain_hypothesis"] != "schema exploration completed"
+        or candidate_categories
+    ):
+        repair_codes.append("schema_exploration_remapped")
+    return remapped, repair_codes
 
 
 @dataclass(slots=True)
@@ -488,7 +509,9 @@ class OpenAIAgentsSynthesisBackend:
             model=self.model_name,
         )
         try:
-            payload_model = _normalize_phase_payload(request, run_result.final_output)
+            payload_model, payload_repair_codes = _normalize_phase_payload(
+                request, run_result.final_output
+            )
         except Exception as exc:
             self._write_artifact(
                 kind="normalize_failures",
@@ -512,6 +535,7 @@ class OpenAIAgentsSynthesisBackend:
                 "phase": request.phase.value,
                 "input": request_input,
                 "final_output": payload_model.model_dump(mode="json"),
+                "payload_repair_codes": payload_repair_codes,
                 "latency_ms": latency_ms,
                 "turn_count": _extract_turn_count(run_result),
                 "token_usage": _extract_token_usage(run_result),
@@ -542,6 +566,7 @@ class OpenAIAgentsSynthesisBackend:
             provider=self.provider_name,
             model=self.model_name,
             payload=payload_model,
+            payload_repair_codes=payload_repair_codes,
             memory_entry=memory_entry,
             tool_traces=tool_traces,
         )

@@ -397,11 +397,13 @@ class _FakeBackend:
         provider_name: str,
         model_name: str,
         payloads: dict[SynthesisPhase, object],
+        payload_repair_codes_by_phase: dict[SynthesisPhase, list[str]] | None = None,
         fail_phases: set[SynthesisPhase] | None = None,
     ) -> None:
         self._provider_name = provider_name
         self._model_name = model_name
         self.payloads = payloads
+        self.payload_repair_codes_by_phase = payload_repair_codes_by_phase or {}
         self.fail_phases = fail_phases or set()
         self.calls: list[SynthesisPhase] = []
         self.requests: list[SynthesisStageRequest] = []
@@ -425,6 +427,7 @@ class _FakeBackend:
             provider=self.provider_name,
             model=self.model_name,
             payload=payload,
+            payload_repair_codes=self.payload_repair_codes_by_phase.get(request.phase, []),
             memory_entry=SynthesisMemoryEntry(
                 phase=request.phase,
                 provider=self.provider_name,
@@ -551,6 +554,44 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
         assert request.atomic_tool_set_ref == "db://sakila"
         assert request.available_atomic_tools
         assert all("name" in tool for tool in request.available_atomic_tools)
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_records_payload_repair_codes_in_diagnostics(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml")
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+        payload_repair_codes_by_phase={
+            SynthesisPhase.ARTIFACT_GENERATION: ["artifact_key_remapped"]
+        },
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    assert draft.self_consistency_diagnostics.payload_repair_codes == [
+        "artifact_key_remapped"
+    ]
 
 
 @pytest.mark.asyncio
@@ -2024,7 +2065,7 @@ def test_openai_agents_synthesis_backend_coerces_artifact_generation_fact_shorth
         previous_outputs=_payloads(),
     )
 
-    payload = backend_module._normalize_phase_payload(
+    payload, repair_codes = backend_module._normalize_phase_payload(
         request,
         {
             "proposed_environment": proposed_environment,
@@ -2041,6 +2082,33 @@ def test_openai_agents_synthesis_backend_coerces_artifact_generation_fact_shorth
     assert verifier_facts[0].value_type == "int"
     assert shadow_facts[1].key == "total_amount"
     assert shadow_facts[1].value_type == "float"
+    assert repair_codes == ["facts_schema_normalized"]
+
+
+def test_openai_agents_synthesis_backend_reports_split_json_repair_codes() -> None:
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.CATEGORY_INFERENCE,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        previous_outputs=_payloads(),
+    )
+
+    payload, repair_codes = backend_module._normalize_phase_payload(
+        request,
+        '{"category":"assignment"},'
+        '"validation_notes":"best match",'
+        '"memory_summary":"category selected"}',
+    )
+
+    assert isinstance(payload, CategoryInferenceOutput)
+    assert payload.selected_category == CategoryTaxonomy.ASSIGNMENT
+    assert repair_codes == ["split_json_repaired", "category_inference_remapped"]
 
 
 @pytest.mark.asyncio
@@ -2140,6 +2208,7 @@ async def test_openai_agents_synthesis_backend_accepts_markdown_fenced_json(
 
     assert isinstance(result.payload, CategoryInferenceOutput)
     assert result.payload.selected_category == CategoryTaxonomy.ASSIGNMENT
+    assert result.payload_repair_codes == []
 
 
 @pytest.mark.asyncio
@@ -2239,10 +2308,11 @@ async def test_openai_agents_synthesis_backend_coerces_schema_exploration_alias_
     assert isinstance(result.payload, SchemaExplorationOutput)
     assert result.payload.domain_hypothesis == "movie rental support workflows"
     assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
+    assert result.payload_repair_codes == ["schema_exploration_remapped"]
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_synthesis_backend_coerces_schema_exploration_category_clusters(
+async def test_openai_agents_synthesis_backend_rejects_schema_exploration_category_clusters_without_taxonomy_match(
     tmp_path,
     monkeypatch,
 ):
@@ -2332,24 +2402,21 @@ async def test_openai_agents_synthesis_backend_coerces_schema_exploration_catego
         traces_dir=tmp_path / "synthesis_traces",
     )
 
-    result = await backend.run_stage(
-        SynthesisStageRequest(
-            phase=SynthesisPhase.SCHEMA_EXPLORATION,
-            db_id="sakila",
-            atomic_tool_set_ref="db://sakila",
-            available_atomic_tools=[],
-            domain_name="customer_support",
-            user_role="end user",
-            agent_role="organization AI assistant",
-            scenario_description="help requests",
-            requested_category=CategoryTaxonomy.ASSIGNMENT,
-            schema_summary={"table_count": 2},
+    with pytest.raises(ValidationError):
+        await backend.run_stage(
+            SynthesisStageRequest(
+                phase=SynthesisPhase.SCHEMA_EXPLORATION,
+                db_id="sakila",
+                atomic_tool_set_ref="db://sakila",
+                available_atomic_tools=[],
+                domain_name="customer_support",
+                user_role="end user",
+                agent_role="organization AI assistant",
+                scenario_description="help requests",
+                requested_category=CategoryTaxonomy.ASSIGNMENT,
+                schema_summary={"table_count": 2},
+            )
         )
-    )
-
-    assert isinstance(result.payload, SchemaExplorationOutput)
-    assert result.payload.domain_hypothesis == "movie rental support workflows"
-    assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
 
 
 @pytest.mark.asyncio
@@ -2458,6 +2525,7 @@ async def test_openai_agents_synthesis_backend_coerces_category_inference_alias_
     assert isinstance(result.payload, CategoryInferenceOutput)
     assert result.payload.selected_category == CategoryTaxonomy.ASSIGNMENT
     assert result.payload.rationale == "assignment is supported by the available tool graph"
+    assert result.payload_repair_codes == ["category_inference_remapped"]
 
 
 @pytest.mark.asyncio
