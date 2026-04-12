@@ -69,6 +69,12 @@ from rl_task_foundry.synthesis.contracts import (
     ToolTimeoutBehavior,
     VerifierContract,
 )
+from rl_task_foundry.synthesis.cross_instance import (
+    CrossInstanceConsistencyStatus,
+    CrossInstanceConsistencySummary,
+    evaluate_cross_instance_consistency,
+    evaluate_cross_instance_draft,
+)
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
     RegistrationError,
@@ -187,6 +193,8 @@ __all__ = [
     "AnchorQueryContract",
     "CanonicalizationError",
     "CategoryTaxonomy",
+    "CrossInstanceConsistencyStatus",
+    "CrossInstanceConsistencySummary",
     "CategoryInferenceOutput",
     "ConstraintKind",
     "ConstraintSummaryItem",
@@ -214,6 +222,8 @@ __all__ = [
     "SynthesisCoveragePlanner",
     "EnvironmentQualityMetrics",
     "EnvironmentStatus",
+    "evaluate_cross_instance_consistency",
+    "evaluate_cross_instance_draft",
     "FactCardinality",
     "FactValueType",
     "FactSpec",

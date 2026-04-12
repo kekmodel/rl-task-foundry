@@ -456,6 +456,83 @@ async def test_synthesis_registry_runner_records_quality_metrics_on_accepted_dra
 
 
 @pytest.mark.asyncio
+async def test_synthesis_registry_runner_rejects_cross_instance_inconsistency_before_rollout(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_run_db(tmp_path)
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    quality_orchestrator = _FakeEnvironmentOrchestrator()
+
+    @dataclass(slots=True)
+    class _BadCrossInstanceRuntime:
+        async def category_status(
+            self,
+            *,
+            db_id: str | None = None,
+        ) -> dict[CategoryTaxonomy, SynthesisCategoryStatus]:
+            return {}
+
+        async def synthesize_environment_draft(
+            self,
+            *,
+            db_id: str,
+            requested_category: CategoryTaxonomy,
+            graph: object | None = None,
+        ) -> object:
+            draft = _sample_draft(
+                tmp_env_id=f"env_{db_id}_{requested_category.value}_bad_cross_instance",
+                db_id=db_id,
+                category=requested_category,
+                created_at=datetime.now(timezone.utc),
+            )
+            environment = draft.environment.model_copy(
+                update={
+                    "cross_instance_set": draft.environment.cross_instance_set.model_copy(
+                        update={"minimum_required": 2}
+                    )
+                }
+            )
+            return draft.model_copy(update={"environment": environment})
+
+        async def close(self) -> None:
+            return None
+
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=lambda _entry: _BadCrossInstanceRuntime(),
+        environment_registry=fake_registry,
+        environment_orchestrator=quality_orchestrator,
+    )
+
+    try:
+        summary = await runner.run_steps(
+            [
+                SynthesisDbRegistryEntry(
+                    db_id="sakila",
+                    categories=[CategoryTaxonomy.ASSIGNMENT],
+                )
+            ],
+            max_steps=1,
+            checkpoint_namespace="synthesis_cross_instance_reject",
+        )
+    finally:
+        await runner.close()
+
+    assert summary.outcome == SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
+    assert summary.generated_drafts == 1
+    assert summary.quality_rejected_envs == 1
+    assert summary.registry_committed_envs == 0
+    assert summary.remaining_pairs == 1
+    assert summary.steps[0].quality_gate_status == "reject_cross_instance"
+    assert "insufficient_instances" in summary.steps[0].cross_instance_error_codes
+    assert fake_registry.committed_drafts == []
+    assert quality_orchestrator.run_calls == []
+
+
+@pytest.mark.asyncio
 async def test_synthesis_registry_runner_preserves_category_order_across_checkpoint_shrinks(
     tmp_path: Path,
 ) -> None:

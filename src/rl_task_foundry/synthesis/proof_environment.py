@@ -50,6 +50,7 @@ from rl_task_foundry.synthesis.contracts import (
     TaskContract,
     VerifierContract,
 )
+from rl_task_foundry.synthesis.cross_instance import evaluate_cross_instance_draft
 from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryWriter,
@@ -158,9 +159,10 @@ class ProofEnvironmentRunSummary:
     env_id: str
     fixture_sql_root: Path
     quality_gate_status: str
-    solver_pass_rate: float
-    solver_ci_low: float
-    solver_ci_high: float
+    solver_pass_rate: float | None = None
+    solver_ci_low: float | None = None
+    solver_ci_high: float | None = None
+    cross_instance_error_codes: tuple[str, ...] = ()
     registry_status: EnvironmentRegistryCommitStatus | None = None
     registry_env_id: str | None = None
     bundle_root: Path | None = None
@@ -188,6 +190,15 @@ class ProofEnvironmentRunner:
         output_root.mkdir(parents=True, exist_ok=True)
         fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
         draft = build_proof_environment_draft()
+        cross_instance_summary = evaluate_cross_instance_draft(draft)
+        if not cross_instance_summary.passed:
+            return ProofEnvironmentRunSummary(
+                db_id=draft.environment.db_id,
+                env_id=draft.environment.env_id,
+                fixture_sql_root=fixture_files.root_dir,
+                quality_gate_status="reject_cross_instance",
+                cross_instance_error_codes=cross_instance_summary.error_codes,
+            )
         rollout_summary = await self.environment_orchestrator.run_draft(draft)
         quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
 

@@ -344,9 +344,14 @@ def run_proof_environment(
         console.print(f"env_id={summary.env_id}")
         console.print(f"fixture_sql_root={summary.fixture_sql_root}")
         console.print(f"quality_gate_status={summary.quality_gate_status}")
-        console.print(f"solver_pass_rate={summary.solver_pass_rate}")
-        console.print(f"solver_ci_low={summary.solver_ci_low}")
-        console.print(f"solver_ci_high={summary.solver_ci_high}")
+        if summary.cross_instance_error_codes:
+            console.print(f"cross_instance_error_codes={list(summary.cross_instance_error_codes)}")
+        if summary.solver_pass_rate is not None:
+            console.print(f"solver_pass_rate={summary.solver_pass_rate}")
+        if summary.solver_ci_low is not None:
+            console.print(f"solver_ci_low={summary.solver_ci_low}")
+        if summary.solver_ci_high is not None:
+            console.print(f"solver_ci_high={summary.solver_ci_high}")
         if summary.registry_status is not None:
             console.print(f"registry_status={summary.registry_status}")
         if summary.registry_env_id is not None:

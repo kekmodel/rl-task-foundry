@@ -20,6 +20,7 @@ from rl_task_foundry.synthesis.contracts import (
     EnvironmentStatus,
     StrictModel,
 )
+from rl_task_foundry.synthesis.cross_instance import evaluate_cross_instance_draft
 from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitResult,
     EnvironmentRegistryCommitStatus,
@@ -66,6 +67,7 @@ class SynthesisRegistryStepSummary:
     draft_env_id: str | None = None
     draft_created_at: datetime | None = None
     quality_gate_status: str | None = None
+    cross_instance_error_codes: list[str] = field(default_factory=list)
     quality_gate_pass_rate: float | None = None
     quality_gate_ci_low: float | None = None
     quality_gate_ci_high: float | None = None
@@ -179,6 +181,7 @@ class SynthesisRegistryRunner:
         registry_duplicate_envs = 0
         quality_accepted_envs = 0
         quality_rejected_envs = 0
+        cross_instance_rejected_envs = 0
         processed_pairs_after_run = initially_processed_pairs
         orchestrator = self.orchestrator
         environment_orchestrator = self.environment_orchestrator
@@ -207,6 +210,23 @@ class SynthesisRegistryRunner:
 
             assert step.decision.db_id is not None
             assert step.decision.category is not None
+            cross_instance_summary = evaluate_cross_instance_draft(step.draft)
+            if not cross_instance_summary.passed:
+                generated_drafts += 1
+                quality_rejected_envs += 1
+                cross_instance_rejected_envs += 1
+                quality_rejected_env_ids.append(step.draft.environment.env_id)
+                generated_env_ids.append(step.draft.environment.env_id)
+                steps.append(
+                    SynthesisRegistryStepSummary(
+                        decision=step.decision,
+                        draft_env_id=step.draft.environment.env_id,
+                        draft_created_at=step.draft.created_at,
+                        quality_gate_status="reject_cross_instance",
+                        cross_instance_error_codes=list(cross_instance_summary.error_codes),
+                    )
+                )
+                continue
             from rl_task_foundry.pipeline.environment_orchestrator import (
                 evaluate_rollout_summary,
             )

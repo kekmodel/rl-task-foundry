@@ -209,6 +209,60 @@ async def test_proof_environment_runner_skips_commit_when_quality_gate_rejects(
     assert writer.environment_count(db_id=PROOF_DB_ID) == 0
 
 
+@pytest.mark.asyncio
+async def test_proof_environment_runner_rejects_cross_instance_mismatch_before_rollout(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "registry" / "environments",
+        index_db_path=tmp_path / "registry" / "environment_registry.db",
+    )
+    orchestrator = EnvironmentOrchestrator(
+        config,
+        runtime_factory=lambda *_args: pytest.fail("rollout should be skipped"),
+        tool_executor_factory=lambda _bundle: {},
+    )
+    runner = ProofEnvironmentRunner(
+        config,
+        environment_orchestrator=orchestrator,
+        registry=writer,
+        exporter=EnvironmentBundleExporter(
+            registry=writer,
+            materializer=writer.atomic_tool_materializer,
+        ),
+    )
+
+    def _bad_draft():
+        draft = build_proof_environment_draft()
+        environment = draft.environment.model_copy(
+            update={
+                "cross_instance_set": draft.environment.cross_instance_set.model_copy(
+                    update={"minimum_required": 2}
+                )
+            }
+        )
+        return draft.model_copy(update={"environment": environment})
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        "rl_task_foundry.synthesis.proof_environment.build_proof_environment_draft",
+        _bad_draft,
+    )
+    try:
+        summary = await runner.run(tmp_path / "proof_output")
+    finally:
+        monkeypatch.undo()
+        await runner.close()
+
+    assert summary.quality_gate_status == "reject_cross_instance"
+    assert "insufficient_instances" in summary.cross_instance_error_codes
+    assert summary.solver_pass_rate is None
+    assert summary.registry_status is None
+    assert summary.bundle_root is None
+    assert writer.environment_count(db_id=PROOF_DB_ID) == 0
+
+
 def test_synthesis_proof_environment_module_has_zero_legacy_imports() -> None:
     from rl_task_foundry.synthesis import proof_environment as proof_module
 
