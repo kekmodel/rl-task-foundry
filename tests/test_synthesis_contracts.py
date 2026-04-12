@@ -29,6 +29,7 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
+    RolloutConstraintsContract,
     ShadowPromptStrategy,
     ShadowVerifierContract,
     SolutionContract,
@@ -192,26 +193,6 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
         difficulty_vector=difficulty_vector,
         instance_parameters={"budget_bucket": "mid"},
     )
-    tool = ToolContract(
-        name="get_hotels_by_city",
-        description="Return hotels available in the requested city.",
-        parameters=[
-            ToolParameterContract(name="city", type=ToolParameterType.STRING),
-        ],
-        return_schema=OutputFieldContract(
-            name="hotels",
-            type=OutputFieldType.LIST,
-            ordered=True,
-            items=OutputFieldContract(
-                name="hotel",
-                type=OutputFieldType.OBJECT,
-                fields=[
-                    OutputFieldContract(name="name", type=OutputFieldType.STRING),
-                    OutputFieldContract(name="price", type=OutputFieldType.FLOAT),
-                ],
-            ),
-        ),
-    )
     verifier = VerifierContract(facts_schema=_build_facts_schema())
     shadow_verifier = ShadowVerifierContract(
         facts_schema=_build_facts_schema(),
@@ -222,6 +203,7 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
         db_id="proof_trip_fixture",
         domain="travel",
         category=CategoryTaxonomy.ITINERARY,
+        atomic_tool_set_ref="db://proof_trip_fixture",
         difficulty_vector=difficulty_vector,
         created_at=datetime(2026, 4, 11, 13, 40, 0),
         generator_version="rewrite-v1",
@@ -229,7 +211,11 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
         task_signature="taskhash",
         verifier_signature="verifierhash",
         quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
-        tools=[tool],
+        rollout_constraints=RolloutConstraintsContract(
+            max_turns=16,
+            max_episode_duration_ms=80000,
+            max_tool_rows=100,
+        ),
         task=task,
         solution=SolutionContract(),
         verifier=verifier,
@@ -254,7 +240,8 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
     assert round_tripped.task.category is CategoryTaxonomy.ITINERARY
     assert round_tripped.shadow_verifier.official_judgment is False
     assert round_tripped.verifier.fetch_facts_function == "fetch_facts"
-    assert round_tripped.tool_self_test.entrypoint == "run_self_test"
+    assert round_tripped.atomic_tool_set_ref == "db://proof_trip_fixture"
+    assert round_tripped.rollout_constraints.max_tool_rows == 100
     assert round_tripped.quality_metrics.shadow_disagreement_rate is None
 
 
@@ -287,12 +274,18 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
             db_id="proof_trip_fixture",
             domain="travel",
             category=CategoryTaxonomy.ITINERARY,
+            atomic_tool_set_ref="db://proof_trip_fixture",
             difficulty_vector={DifficultyAxis.SLOT_COUNT: 3.0},
             created_at=datetime(2026, 4, 11, 13, 40, 0),
             generator_version="rewrite-v1",
             tool_signature="toolhash",
             task_signature="taskhash",
             verifier_signature="verifierhash",
+            rollout_constraints=RolloutConstraintsContract(
+                max_turns=16,
+                max_episode_duration_ms=80000,
+                max_tool_rows=100,
+            ),
             task=task,
             solution=SolutionContract(),
             verifier=VerifierContract(facts_schema=_build_facts_schema()),

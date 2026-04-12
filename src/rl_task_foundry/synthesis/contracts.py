@@ -407,6 +407,12 @@ class ShadowVerifierContract(VerifierContract):
     )
 
 
+class RolloutConstraintsContract(StrictModel):
+    max_turns: int = Field(ge=1)
+    max_episode_duration_ms: int = Field(ge=1)
+    max_tool_rows: int = Field(default=1000, ge=1)
+
+
 class AnchorQueryContract(StrictModel):
     sql: str = Field(min_length=1)
     outputs: list[str] = Field(default_factory=list)
@@ -550,6 +556,7 @@ class EnvironmentContract(StrictModel):
     db_id: str
     domain: str
     category: CategoryTaxonomy
+    atomic_tool_set_ref: str
     difficulty_vector: dict[DifficultyAxis, float]
     created_at: datetime
     generator_version: str
@@ -560,10 +567,9 @@ class EnvironmentContract(StrictModel):
     quality_metrics: EnvironmentQualityMetrics = Field(
         default_factory=EnvironmentQualityMetrics
     )
-    tools: list[ToolContract] = Field(default_factory=list)
+    rollout_constraints: RolloutConstraintsContract
     task: TaskContract
     solution: SolutionContract
-    tool_self_test: ToolSelfTestContract = Field(default_factory=ToolSelfTestContract)
     verifier: VerifierContract
     shadow_verifier: ShadowVerifierContract
     instance_space: InstanceSpaceContract

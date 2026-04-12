@@ -20,11 +20,10 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
+    RolloutConstraintsContract,
     ShadowVerifierContract,
     SolutionContract,
     TaskContract,
-    ToolContract,
-    ToolSelfTestContract,
     VerifierContract,
     AnchorQueryContract,
 )
@@ -101,6 +100,7 @@ def _sample_draft(
         db_id=db_id,
         domain="service_operations",
         category=category,
+        atomic_tool_set_ref=f"db://{db_id}",
         difficulty_vector=task.difficulty_vector,
         created_at=created_at,
         generator_version="test-version",
@@ -109,27 +109,13 @@ def _sample_draft(
         verifier_signature=verifier_signature,
         status=EnvironmentStatus.DRAFT,
         quality_metrics=EnvironmentQualityMetrics(self_consistency_pass=True),
-        tools=[
-            ToolContract(
-                name="get_assignments",
-                description="Return candidate assignments.",
-                return_schema=OutputFieldContract(
-                    name="rows",
-                    type=OutputFieldType.LIST,
-                    ordered=True,
-                    items=OutputFieldContract(
-                        name="row",
-                        type=OutputFieldType.OBJECT,
-                        fields=[
-                            OutputFieldContract(name="customer", type=OutputFieldType.STRING)
-                        ],
-                    ),
-                ),
-            )
-        ],
+        rollout_constraints=RolloutConstraintsContract(
+            max_turns=16,
+            max_episode_duration_ms=80000,
+            max_tool_rows=100,
+        ),
         task=task,
         solution=SolutionContract(),
-        tool_self_test=ToolSelfTestContract(),
         verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
         shadow_verifier=ShadowVerifierContract(facts_schema=MaterializedFactsSchema()),
         instance_space=InstanceSpaceContract(

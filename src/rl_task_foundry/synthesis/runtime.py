@@ -29,12 +29,11 @@ from rl_task_foundry.synthesis.contracts import (
     InstanceSpaceContract,
     OutputFieldContract,
     OutputFieldType,
+    RolloutConstraintsContract,
     ShadowVerifierContract,
     SolutionContract,
     StrictModel,
     TaskContract,
-    ToolContract,
-    ToolSelfTestContract,
     VerifierContract,
 )
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
@@ -59,6 +58,7 @@ RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
         "db_id",
         "domain",
         "category",
+        "atomic_tool_set_ref",
         "difficulty_vector",
         "created_at",
         "generator_version",
@@ -67,6 +67,7 @@ RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
         "verifier_signature",
         "status",
         "quality_metrics",
+        "rollout_constraints",
     }
 )
 
@@ -139,10 +140,8 @@ class CategoryInferenceOutput(StrictModel):
 
 
 class ProposedEnvironmentDraft(StrictModel):
-    tools: list[ToolContract] = Field(default_factory=list)
     task: TaskContract
     solution: SolutionContract
-    tool_self_test: ToolSelfTestContract = Field(default_factory=ToolSelfTestContract)
     verifier: VerifierContract
     shadow_verifier: ShadowVerifierContract
     instance_space: InstanceSpaceContract
@@ -1166,6 +1165,7 @@ class SynthesisAgentRuntime:
                 "db_id": db_id,
                 "domain": self.config.domain.name,
                 "category": requested_category,
+                "atomic_tool_set_ref": f"db://{db_id}",
                 "difficulty_vector": proposed_environment.task.difficulty_vector,
                 "created_at": created_at,
                 "generator_version": CURRENT_SYNTHESIS_GENERATOR_VERSION,
@@ -1176,12 +1176,24 @@ class SynthesisAgentRuntime:
                 "quality_metrics": EnvironmentQualityMetrics(
                     self_consistency_pass=self_consistency_pass
                 ).model_dump(mode="python"),
+                "rollout_constraints": self._build_rollout_constraints().model_dump(
+                    mode="python"
+                ),
                 "task": proposed_environment.task.model_copy(
                     update={"category": requested_category}
                 ).model_dump(mode="python"),
             }
         )
         return EnvironmentContract.model_validate(payload)
+
+    def _build_rollout_constraints(self) -> RolloutConstraintsContract:
+        return RolloutConstraintsContract(
+            max_turns=self.config.solver_runtime.max_turns,
+            max_episode_duration_ms=(
+                self.config.database.statement_timeout_ms * self.config.solver_runtime.max_turns
+            ),
+            max_tool_rows=self.config.atomic_tools.bounded_result_limit,
+        )
 
     def _build_verifier_probe_specs(
         self,

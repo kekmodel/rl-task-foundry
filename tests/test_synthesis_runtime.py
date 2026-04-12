@@ -23,11 +23,10 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
+    RolloutConstraintsContract,
     ShadowVerifierContract,
     SolutionContract,
     TaskContract,
-    ToolContract,
-    ToolSelfTestContract,
     VerifierContract,
 )
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
@@ -177,22 +176,6 @@ def _sample_proposed_environment(
         primary_output_format="json_array",
     )
     return ProposedEnvironmentDraft(
-        tools=[
-            ToolContract(
-                name="get_customer_assignments",
-                description="Return candidate assignments for a customer.",
-                return_schema=OutputFieldContract(
-                    name="rows",
-                    type=OutputFieldType.LIST,
-                    ordered=True,
-                    items=OutputFieldContract(
-                        name="row",
-                        type=OutputFieldType.OBJECT,
-                        fields=[OutputFieldContract(name="customer", type=OutputFieldType.STRING)],
-                    ),
-                ),
-            )
-        ],
         task=TaskContract(
             question="고객 배정 계획을 만들어 주세요.",
             category=category,
@@ -207,7 +190,6 @@ def _sample_proposed_environment(
             difficulty_vector=difficulty_vector or {},
         ),
         solution=SolutionContract(),
-        tool_self_test=ToolSelfTestContract(),
         verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
         shadow_verifier=ShadowVerifierContract(facts_schema=MaterializedFactsSchema()),
         instance_space={
@@ -518,6 +500,7 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.environment.status == EnvironmentStatus.DRAFT
     assert draft.environment.db_id == "sakila"
     assert draft.environment.domain == config.domain.name
+    assert draft.environment.atomic_tool_set_ref == "db://sakila"
     assert draft.environment.generator_version == CURRENT_SYNTHESIS_GENERATOR_VERSION
     assert draft.environment.env_id.startswith("env_assignment_")
     assert len(draft.environment.env_id.split("_")[-1]) == 16
@@ -527,6 +510,13 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.environment.tool_signature.startswith("sha256:")
     assert draft.environment.task_signature.startswith("sha256:")
     assert draft.environment.verifier_signature.startswith("sha256:")
+    assert draft.environment.rollout_constraints == RolloutConstraintsContract(
+        max_turns=config.solver_runtime.max_turns,
+        max_episode_duration_ms=(
+            config.database.statement_timeout_ms * config.solver_runtime.max_turns
+        ),
+        max_tool_rows=config.atomic_tools.bounded_result_limit,
+    )
     assert draft.registration_report.status == RegistrationBundleStatus.PASSED
     assert draft.registration_diagnostics.status == RegistrationBundleStatus.PASSED
     assert draft.self_consistency_diagnostics.passed is True
