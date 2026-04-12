@@ -54,6 +54,7 @@ from rl_task_foundry.synthesis.registration_runner import (
     build_registration_diagnostics,
     run_registration_bundle,
 )
+from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSelfConsistencyResult
 
@@ -1318,7 +1319,7 @@ class SynthesisAgentRuntime:
         params = dict(proposed_environment.task.instance_parameters)
         instance = MaterializedInstanceRecord(
             instance_id=instance_id,
-            rendered_user_prompt=self._rendered_user_prompt(proposed_environment.task),
+            rendered_user_prompt=build_rendered_user_prompt(proposed_environment.task),
             params=params,
             anchor_values={},
         )
@@ -1362,56 +1363,6 @@ class SynthesisAgentRuntime:
         ):
             return answer[root.name]
         return answer
-
-    def _rendered_user_prompt(self, task: TaskContract) -> str:
-        output_schema_text = json.dumps(
-            self._output_schema_prompt_payload(task.output_schema.root),
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        lines = [task.question.strip()]
-        if task.constraint_summary:
-            lines.extend(["", "Constraints:"])
-            lines.extend(f"- {item.summary}" for item in task.constraint_summary)
-        if task.instance_parameters:
-            lines.extend(["", "Instance Parameters:"])
-            lines.extend(
-                f"- {key}: {json.dumps(value, ensure_ascii=False)}"
-                for key, value in task.instance_parameters.items()
-            )
-        lines.extend(
-            [
-                "",
-                "Submit Result Format:",
-                output_schema_text,
-                "",
-                "Call submit_result with a JSON string that matches the format above.",
-            ]
-        )
-        return "\n".join(lines)
-
-    def _output_schema_prompt_payload(self, field: OutputFieldContract) -> dict[str, object]:
-        payload: dict[str, object] = {"type": field.type.value}
-        if field.description:
-            payload["description"] = field.description
-        if field.nullable:
-            payload["nullable"] = True
-        if field.type == OutputFieldType.ENUM and field.enum_values:
-            payload["enum"] = list(field.enum_values)
-        if field.type == OutputFieldType.OBJECT:
-            payload["properties"] = {
-                child.name: self._output_schema_prompt_payload(child) for child in field.fields
-            }
-            payload["required"] = [child.name for child in field.fields if not child.nullable]
-        elif field.type == OutputFieldType.LIST and field.items is not None:
-            payload["ordered"] = field.ordered
-            if field.sort_key is not None:
-                payload["sort_key"] = list(field.sort_key)
-            if field.unique_elements:
-                payload["unique_elements"] = True
-            payload["items"] = self._output_schema_prompt_payload(field.items)
-        return payload
 
     def _build_verifier_probe_specs(
         self,

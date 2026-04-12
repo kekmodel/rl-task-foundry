@@ -8,7 +8,6 @@ bundle export path used by accepted synthesized environments.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -55,6 +54,7 @@ from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryWriter,
 )
+from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
 from rl_task_foundry.synthesis.registration_runner import (
@@ -387,7 +387,7 @@ def build_proof_environment_draft(
         ),
     )
     report = _passed_registration_report()
-    rendered_prompt = _rendered_user_prompt(task)
+    rendered_prompt = build_rendered_user_prompt(task)
     return SynthesisEnvironmentDraft(
         created_at=created_at,
         db_id=PROOF_DB_ID,
@@ -771,59 +771,5 @@ def _passed_registration_report() -> RegistrationBundleReport:
         ),
     )
     return report
-
-
-def _rendered_user_prompt(task: TaskContract) -> str:
-    output_schema_text = json.dumps(
-        _output_schema_prompt_payload(task.output_schema.root),
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    )
-    lines = [task.question.strip()]
-    if task.constraint_summary:
-        lines.extend(["", "Constraints:"])
-        lines.extend(f"- {item.summary}" for item in task.constraint_summary)
-    if task.instance_parameters:
-        lines.extend(["", "Instance Parameters:"])
-        lines.extend(
-            f"- {key}: {json.dumps(value, ensure_ascii=False)}"
-            for key, value in task.instance_parameters.items()
-        )
-    lines.extend(
-        [
-            "",
-            "Submit Result Format:",
-            output_schema_text,
-            "",
-            "Call submit_result with a JSON string that matches the format above.",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _output_schema_prompt_payload(field: OutputFieldContract) -> dict[str, object]:
-    payload: dict[str, object] = {"type": field.type.value}
-    if field.description:
-        payload["description"] = field.description
-    if field.nullable:
-        payload["nullable"] = True
-    if field.type == OutputFieldType.ENUM and field.enum_values:
-        payload["enum"] = list(field.enum_values)
-    if field.type == OutputFieldType.OBJECT:
-        payload["properties"] = {
-            child.name: _output_schema_prompt_payload(child) for child in field.fields
-        }
-        payload["required"] = [child.name for child in field.fields if not child.nullable]
-    elif field.type == OutputFieldType.LIST and field.items is not None:
-        payload["ordered"] = field.ordered
-        if field.sort_key is not None:
-            payload["sort_key"] = list(field.sort_key)
-        if field.unique_elements:
-            payload["unique_elements"] = True
-        payload["items"] = _output_schema_prompt_payload(field.items)
-    return payload
-
-
 def _sha256_hex(payload: str) -> str:
     return "sha256:" + sha256(payload.encode("utf-8")).hexdigest()
