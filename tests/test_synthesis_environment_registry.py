@@ -11,7 +11,7 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
     CrossInstanceSet,
-    DifficultyAxis,
+    DifficultyVectorContract,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
@@ -27,6 +27,7 @@ from rl_task_foundry.synthesis.contracts import (
     TaskContract,
     VerifierContract,
     AnchorQueryContract,
+    build_difficulty_vector,
 )
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
@@ -66,7 +67,7 @@ def _sample_draft(
     category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
     question: str = "고객 배정 계획을 만들어 주세요.",
     created_at: datetime | None = None,
-    difficulty_vector: dict[DifficultyAxis, float] | None = None,
+    difficulty_vector: DifficultyVectorContract | None = None,
     tool_signature: str = "sha256:tool",
     task_signature: str = "sha256:task",
     verifier_signature: str = "sha256:verifier",
@@ -94,10 +95,7 @@ def _sample_draft(
             )
         ],
         difficulty_vector=difficulty_vector
-        or {
-            DifficultyAxis.SLOT_COUNT: 2.0,
-            DifficultyAxis.CONSTRAINT_COUNT: 2.0,
-        },
+        or build_difficulty_vector(solution_space=2.0, constraint_density=2.0),
     )
     environment = EnvironmentContract(
         env_id=tmp_env_id,
@@ -224,10 +222,10 @@ def _sample_draft(
 
 
 def test_bucketize_difficulty_vector() -> None:
-    assert bucketize_difficulty_vector({}) == DifficultyBand.UNSET
-    assert bucketize_difficulty_vector({DifficultyAxis.SLOT_COUNT: 2.0}) == DifficultyBand.LOW
-    assert bucketize_difficulty_vector({DifficultyAxis.SLOT_COUNT: 4.0}) == DifficultyBand.MEDIUM
-    assert bucketize_difficulty_vector({DifficultyAxis.SLOT_COUNT: 9.0}) == DifficultyBand.HIGH
+    assert bucketize_difficulty_vector(build_difficulty_vector()) == DifficultyBand.UNSET
+    assert bucketize_difficulty_vector(build_difficulty_vector(solution_space=2.0)) == DifficultyBand.LOW
+    assert bucketize_difficulty_vector(build_difficulty_vector(solution_space=4.0)) == DifficultyBand.MEDIUM
+    assert bucketize_difficulty_vector(build_difficulty_vector(solution_space=9.0)) == DifficultyBand.HIGH
 
 
 def test_environment_registry_writer_commits_bundle_and_updates_index(tmp_path: Path) -> None:
@@ -388,7 +386,7 @@ def test_environment_registry_snapshot_and_semantic_candidates(tmp_path: Path) -
         category=CategoryTaxonomy.ITINERARY,
         question="3일 여정을 짜 주세요.",
         created_at=datetime(2026, 4, 12, 11, tzinfo=timezone.utc),
-        difficulty_vector={DifficultyAxis.SLOT_COUNT: 9.0},
+        difficulty_vector=build_difficulty_vector(solution_space=9.0),
     )
 
     writer.commit_draft(first)

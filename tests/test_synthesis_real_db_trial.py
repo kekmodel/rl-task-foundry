@@ -10,7 +10,7 @@ import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentRolloutSummary
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, build_difficulty_vector
 from rl_task_foundry.synthesis.environment_registry import (
     DifficultyBand,
     EnvironmentRegistryCommitResult,
@@ -22,6 +22,7 @@ from rl_task_foundry.synthesis.real_db_trial import (
     _config_with_trial_traces_dir,
 )
 from rl_task_foundry.synthesis.runtime import (
+    SynthesisDifficultyRetrySeed,
     SynthesisBackendFailure,
     SynthesisPhase,
     SynthesisPhaseExecutionError,
@@ -36,8 +37,9 @@ from tests.test_synthesis_environment_registry import _sample_draft
 @dataclass(slots=True)
 class _FakeSynthesisRuntime:
     draft: object | None = None
+    drafts: list[object] | None = None
     exc: Exception | None = None
-    calls: list[tuple[str, CategoryTaxonomy]] | None = None
+    calls: list[dict[str, object]] | None = None
     closed: bool = False
 
     def __post_init__(self) -> None:
@@ -49,10 +51,19 @@ class _FakeSynthesisRuntime:
         *,
         db_id: str,
         requested_category: CategoryTaxonomy,
+        retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> object:
-        self.calls.append((db_id, requested_category))
+        self.calls.append(
+            {
+                "db_id": db_id,
+                "requested_category": requested_category,
+                "retry_seed": retry_seed,
+            }
+        )
         if self.exc is not None:
             raise self.exc
+        if self.drafts:
+            return self.drafts.pop(0)
         assert self.draft is not None
         return self.draft
 
@@ -62,16 +73,22 @@ class _FakeSynthesisRuntime:
 
 @dataclass(slots=True)
 class _FakeEnvironmentOrchestrator:
-    summary: EnvironmentRolloutSummary
+    summary: EnvironmentRolloutSummary | None = None
+    summaries: list[EnvironmentRolloutSummary] | None = None
     calls: list[object] | None = None
     closed: bool = False
 
     def __post_init__(self) -> None:
         if self.calls is None:
             self.calls = []
+        if self.summaries is None:
+            self.summaries = []
 
     async def run_draft(self, draft: object) -> EnvironmentRolloutSummary:
         self.calls.append(draft)
+        if self.summaries:
+            return self.summaries.pop(0)
+        assert self.summary is not None
         return self.summary
 
     async def close(self) -> None:
@@ -186,7 +203,7 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert summary.registry_env_id == draft.environment.env_id
     assert summary.debug_root == output_root / "debug"
     assert summary.flow_id is not None
-    assert summary.event_log_path == output_root / "debug" / "pipeline_events.jsonl"
+    assert summary.phase_monitor_log_path == output_root / "debug" / "phase_monitors.jsonl"
     assert summary.debug_traces_dir == output_root / "debug" / "traces"
     assert summary.synthesis_traces_dir == output_root / "debug" / "traces" / "synthesis"
     assert summary.solver_traces_dir == output_root / "debug" / "traces"
@@ -200,36 +217,259 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert payload["trial_status"] == "accepted"
     assert payload["env_id"] == "env_real_trial"
     assert payload["quality_gate_status"] == "accept"
-    assert payload["event_log_path"] == str(output_root / "debug" / "pipeline_events.jsonl")
+    assert payload["phase_monitor_log_path"] == str(output_root / "debug" / "phase_monitors.jsonl")
     assert payload["debug_root"] == str(output_root / "debug")
     assert payload["debug_traces_dir"] == str(output_root / "debug" / "traces")
-    event_lines = [
+    phase_monitor_lines = [
         json.loads(line)
-        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
+        for line in summary.phase_monitor_log_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert [event["stage"] for event in event_lines] == [
-        "trial",
-        "synthesis",
-        "synthesis",
+    assert [line["phase"] for line in phase_monitor_lines] == [
         "cross_instance",
-        "cross_instance",
-        "rollout",
         "rollout",
         "quality_gate",
         "registry_commit",
+        "bundle_export",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_real_db_trial_runner_retries_too_easy_with_harder_synthesis(
+    tmp_path: Path,
+) -> None:
+    first_draft = _sample_draft(
+        tmp_env_id="env_too_easy",
+        difficulty_vector=build_difficulty_vector(search_cost=1.0),
+        question="가장 이른 고객의 store를 반환하세요.",
+    )
+    second_draft = _sample_draft(
+        tmp_env_id="env_harder",
+        difficulty_vector=build_difficulty_vector(search_cost=2.0),
+        question="두 hop 탐색이 필요한 더 어려운 배정 질문입니다.",
+    )
+    second_draft = second_draft.model_copy(
+        update={
+            "instances": [
+                second_draft.instances[0].model_copy(
+                    update={
+                        "rendered_user_prompt": "두 hop 탐색이 필요한 더 어려운 배정 질문입니다.\n\n# Submit Result Format\n{}"
+                    }
+                )
+            ]
+        }
+    )
+    runtime = _FakeSynthesisRuntime(drafts=[first_draft, second_draft])
+    orchestrator = _FakeEnvironmentOrchestrator(
+        summaries=[
+            _rollout_summary(env_id=first_draft.environment.env_id, matched=2, total=2),
+            _rollout_summary(env_id=second_draft.environment.env_id, matched=1, total=2),
+        ]
+    )
+    registry = _FakeRegistry(
+        result=EnvironmentRegistryCommitResult(
+            status=EnvironmentRegistryCommitStatus.COMMITTED,
+            env_id=second_draft.environment.env_id,
+            exact_signature="sha256:trial",
+            difficulty_band=DifficultyBand.UNSET,
+            filesystem_path=tmp_path / "environments" / second_draft.environment.env_id,
+        )
+    )
+    exporter = _FakeExporter()
+    runner = RealDbTrialRunner(
+        _config_with_tmp_traces(tmp_path),
+        synthesis_runtime=runtime,
+        environment_orchestrator=orchestrator,
+        registry=registry,
+        exporter=exporter,
+    )
+    output_root = tmp_path / "real_trial_retry"
+
+    try:
+        summary = await runner.run(
+            output_root,
+            db_id="sakila",
+            category=CategoryTaxonomy.ASSIGNMENT,
+        )
+    finally:
+        await runner.close()
+
+    assert summary.trial_status is RealDbTrialStatus.ACCEPTED
+    assert summary.quality_retry_count == 1
+    assert summary.quality_retry_history == ("search_cost",)
+    assert len(runtime.calls) == 2
+    assert runtime.calls[0]["retry_seed"] is None
+    retry_seed = runtime.calls[1]["retry_seed"]
+    assert isinstance(retry_seed, SynthesisDifficultyRetrySeed)
+    assert retry_seed.retry_requires_harder is True
+    assert retry_seed.latest_quality_gate_feedback is not None
+    assert retry_seed.latest_quality_gate_feedback.status == "reject_too_easy"
+    assert retry_seed.latest_quality_gate_feedback.pass_rate == 1.0
+    assert retry_seed.latest_quality_gate_feedback.matched_solver_runs == 2
+    assert retry_seed.latest_quality_gate_feedback.total_solver_runs == 2
+    assert retry_seed.latest_quality_gate_feedback.previous_env_id == "env_too_easy"
+    assert retry_seed.latest_quality_gate_feedback.previous_question == "가장 이른 고객의 store를 반환하세요."
+    assert (
+        retry_seed.latest_quality_gate_feedback.previous_rendered_user_prompt
+        == first_draft.instances[0].rendered_user_prompt
+    )
+    phase_monitor_lines = [
+        json.loads(line)
+        for line in summary.phase_monitor_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [line["phase"] for line in phase_monitor_lines] == [
+        "cross_instance",
+        "rollout",
+        "quality_gate",
+        "quality_retry",
+        "cross_instance",
+        "rollout",
+        "quality_gate",
         "registry_commit",
         "bundle_export",
-        "bundle_export",
-        "trial",
     ]
-    assert event_lines[0]["status"] == "started"
-    assert event_lines[-1]["status"] == "completed"
-    mirrored_lines = [
+
+
+@pytest.mark.asyncio
+async def test_real_db_trial_runner_rejects_semantically_unchanged_harder_retry(
+    tmp_path: Path,
+) -> None:
+    first_draft = _sample_draft(
+        tmp_env_id="env_too_easy_repeat",
+        difficulty_vector=build_difficulty_vector(search_cost=1.0),
+        question="가장 이른 고객의 store를 반환하세요.",
+    )
+    first_draft = first_draft.model_copy(
+        update={
+            "instances": [
+                first_draft.instances[0].model_copy(
+                    update={
+                        "rendered_user_prompt": "가장 이른 고객의 store를 반환하세요.\n\n# Submit Result Format\n{}"
+                    }
+                )
+            ]
+        }
+    )
+    repeated_draft = _sample_draft(
+        tmp_env_id="env_repeat_same",
+        difficulty_vector=build_difficulty_vector(search_cost=1.0),
+        question="가장 이른 고객의 store를 반환하세요.",
+    )
+    repeated_draft = repeated_draft.model_copy(
+        update={
+            "instances": [
+                repeated_draft.instances[0].model_copy(
+                    update={
+                        "rendered_user_prompt": "가장 이른 고객의 store를 반환하세요.\n\n# Submit Result Format\n{}"
+                    }
+                )
+            ],
+            "canonical_answers": [
+                repeated_draft.canonical_answers[0].model_copy(
+                    update={"solution_fingerprint": "sha256:answer"}
+                )
+            ],
+        }
+    )
+    harder_draft = _sample_draft(
+        tmp_env_id="env_harder_after_repeat",
+        difficulty_vector=build_difficulty_vector(search_cost=2.0),
+        question="가장 이른 고객과 마지막 고객의 store를 비교해 더 작은 store_id를 반환하세요.",
+        task_signature="sha256:harder",
+    )
+    harder_draft = harder_draft.model_copy(
+        update={
+            "instances": [
+                harder_draft.instances[0].model_copy(
+                    update={
+                        "rendered_user_prompt": "가장 이른 고객과 마지막 고객의 store를 비교해 더 작은 store_id를 반환하세요.\n\n# Submit Result Format\n{}"
+                    }
+                )
+            ],
+            "canonical_answers": [
+                harder_draft.canonical_answers[0].model_copy(
+                    update={
+                        "canonical_answer_json": json.dumps(
+                            {"customer": "Bob", "day": "2026-04-13"},
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        "solution_fingerprint": "sha256:harder-answer",
+                    }
+                )
+            ],
+            "environment": harder_draft.environment.model_copy(
+                update={
+                    "cross_instance_set": harder_draft.environment.cross_instance_set.model_copy(
+                        update={
+                            "instances": [
+                                harder_draft.environment.cross_instance_set.instances[
+                                    0
+                                ].model_copy(
+                                    update={
+                                        "expected_solution_fingerprint": "sha256:harder-answer"
+                                    }
+                                )
+                            ]
+                        }
+                    )
+                }
+            ),
+        }
+    )
+    runtime = _FakeSynthesisRuntime(drafts=[first_draft, repeated_draft, harder_draft])
+    orchestrator = _FakeEnvironmentOrchestrator(
+        summaries=[
+            _rollout_summary(env_id=first_draft.environment.env_id, matched=2, total=2),
+            _rollout_summary(env_id=harder_draft.environment.env_id, matched=1, total=2),
+        ]
+    )
+    registry = _FakeRegistry(
+        result=EnvironmentRegistryCommitResult(
+            status=EnvironmentRegistryCommitStatus.COMMITTED,
+            env_id=harder_draft.environment.env_id,
+            exact_signature="sha256:trial",
+            difficulty_band=DifficultyBand.UNSET,
+            filesystem_path=tmp_path / "environments" / harder_draft.environment.env_id,
+        )
+    )
+    exporter = _FakeExporter()
+    runner = RealDbTrialRunner(
+        _config_with_tmp_traces(tmp_path),
+        synthesis_runtime=runtime,
+        environment_orchestrator=orchestrator,
+        registry=registry,
+        exporter=exporter,
+    )
+
+    try:
+        summary = await runner.run(
+            tmp_path / "real_trial_semantic_retry",
+            db_id="sakila",
+            category=CategoryTaxonomy.ASSIGNMENT,
+        )
+    finally:
+        await runner.close()
+
+    assert summary.trial_status is RealDbTrialStatus.ACCEPTED
+    assert len(runtime.calls) == 3
+    assert len(orchestrator.calls) == 2
+    phase_monitor_lines = [
         json.loads(line)
-        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in summary.phase_monitor_log_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert len(mirrored_lines) == len(event_lines)
-    assert all(event["flow_id"] == summary.flow_id for event in event_lines)
+    quality_retry_statuses = [
+        line["status"] for line in phase_monitor_lines if line["phase"] == "quality_retry"
+    ]
+    assert "semantic_change_rejected" in quality_retry_statuses
+    semantic_rejection = next(
+        line
+        for line in phase_monitor_lines
+        if line["phase"] == "quality_retry" and line["status"] == "semantic_change_rejected"
+    )
+    assert semantic_rejection["checks"]["same_question"] is True
+    assert semantic_rejection["checks"]["same_rendered_user_prompt"] is True
+    assert semantic_rejection["checks"]["same_solution_fingerprints"] is True
 
 
 @pytest.mark.asyncio
@@ -283,18 +523,7 @@ async def test_real_db_trial_runner_captures_phase_execution_taxonomy(
     assert summary.synthesis_error_type == "SynthesisPhaseExecutionError"
     assert summary.synthesis_phase == "schema_exploration"
     assert summary.backend_failures == ("codex_oauth/gpt-5.4-mini:ModelBehaviorError",)
-    assert summary.event_log_path is not None
-    event_lines = [
-        json.loads(line)
-        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert [event["stage"] for event in event_lines] == [
-        "trial",
-        "synthesis",
-        "synthesis",
-        "trial",
-    ]
-    assert event_lines[2]["status"] == "failed"
+    assert summary.phase_monitor_log_path is not None
     assert not registry.committed_drafts
     assert not exporter.calls
     assert not orchestrator.calls

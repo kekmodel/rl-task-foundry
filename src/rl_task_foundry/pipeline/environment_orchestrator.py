@@ -215,7 +215,27 @@ class EnvironmentOrchestrator:
         )
         provider_semaphore = self._provider_semaphore(solver_config.provider)
         async with provider_semaphore:
-            solver_result = await runtime.run(episode, replica_index=replica_index)
+            try:
+                solver_result = await runtime.run(episode, replica_index=replica_index)
+            except Exception as exc:
+                solver_result = SolverResult(
+                    task_id=episode.task_id,
+                    solver_id=solver_config.solver_id,
+                    provider=solver_config.provider,
+                    model=solver_config.model,
+                    replica_index=replica_index,
+                    transcript_ref="memory://solver-error/transcript",
+                    tool_trace_ref="memory://solver-error/tools",
+                    raw_output_text="",
+                    structured_output=None,
+                    explicit_memory_events=[],
+                    token_usage={},
+                    latency_ms=0,
+                    turn_count=0,
+                    status="failed",
+                    termination_reason=exc.__class__.__name__,
+                    termination_metadata={"detail": str(exc)},
+                )
         reward_result = compute_reward(
             submitted_answer_text=solver_result.raw_output_text,
             canonical_answer=canonical_record.canonical_answer,

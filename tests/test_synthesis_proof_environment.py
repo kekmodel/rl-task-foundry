@@ -54,7 +54,7 @@ def test_build_proof_environment_draft_is_compositional() -> None:
     assert len(draft.environment.task.constraint_summary) == 4
     assert len(draft.canonical_answers) == 1
     assert len(draft.canonical_answers[0].canonical_answer) == 3
-    assert "Submit Result Format:" in draft.instances[0].rendered_user_prompt
+    assert "# Submit Result Format" in draft.instances[0].rendered_user_prompt
     assert "연속된 day의 city는 인접한 지역이어야 합니다." in draft.instances[0].rendered_user_prompt
 
 
@@ -151,31 +151,24 @@ async def test_proof_environment_runner_commits_and_exports_bundle(tmp_path: Pat
 
     assert summary.quality_gate_status == "accept"
     assert summary.flow_id is not None
-    assert summary.event_log_path == tmp_path / "proof_output" / "debug" / "pipeline_events.jsonl"
+    assert summary.phase_monitor_log_path == tmp_path / "proof_output" / "debug" / "phase_monitors.jsonl"
     assert summary.registry_status is EnvironmentRegistryCommitStatus.COMMITTED
     assert summary.bundle_root is not None
     assert (summary.fixture_sql_root / "schema.sql").exists()
     assert (summary.bundle_root / "databases" / PROOF_DB_ID / "atomic_tools.py").exists()
     assert (summary.bundle_root / "environments" / PROOF_ENV_ID / "environment.yaml").exists()
     assert writer.environment_count(db_id=PROOF_DB_ID) == 1
-    event_lines = [
+    phase_monitor_lines = [
         json.loads(line)
-        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
+        for line in summary.phase_monitor_log_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert [event["stage"] for event in event_lines] == [
-        "proof_run",
-        "fixture_sql",
-        "draft",
+    assert [line["phase"] for line in phase_monitor_lines] == [
+        "draft_build",
         "cross_instance",
-        "cross_instance",
-        "rollout",
         "rollout",
         "quality_gate",
         "registry_commit",
-        "registry_commit",
         "bundle_export",
-        "bundle_export",
-        "proof_run",
     ]
 
 
@@ -225,7 +218,7 @@ async def test_proof_environment_runner_skips_commit_when_quality_gate_rejects(
         await runner.close()
 
     assert summary.quality_gate_status == "reject_too_hard"
-    assert summary.event_log_path is not None
+    assert summary.phase_monitor_log_path is not None
     assert summary.registry_status is None
     assert summary.bundle_root is None
     assert writer.environment_count(db_id=PROOF_DB_ID) == 0
@@ -280,7 +273,7 @@ async def test_proof_environment_runner_rejects_cross_instance_mismatch_before_r
     assert summary.quality_gate_status == "reject_cross_instance"
     assert "insufficient_instances" in summary.cross_instance_error_codes
     assert summary.solver_pass_rate is None
-    assert summary.event_log_path is not None
+    assert summary.phase_monitor_log_path is not None
     assert summary.registry_status is None
     assert summary.bundle_root is None
     assert writer.environment_count(db_id=PROOF_DB_ID) == 0

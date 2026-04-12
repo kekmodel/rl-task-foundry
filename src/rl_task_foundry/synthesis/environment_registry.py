@@ -25,6 +25,8 @@ from rl_task_foundry.synthesis.contracts import (
     EnvironmentStatus,
     OutputFieldContract,
     OutputFieldType,
+    difficulty_vector_json,
+    flatten_difficulty_vector,
 )
 from rl_task_foundry.synthesis.runtime import SynthesisEnvironmentDraft
 
@@ -736,9 +738,7 @@ class EnvironmentRegistryWriter:
             "generator_version": env.generator_version,
             "exact_signature": exact_signature,
             "question": env.task.question,
-            "difficulty_vector": {
-                axis.value: float(value) for axis, value in env.difficulty_vector.items()
-            },
+            "difficulty_vector": difficulty_vector_json(env.difficulty_vector),
             "constraint_summary": [
                 item.model_dump(mode="json") for item in env.task.constraint_summary
             ],
@@ -953,10 +953,17 @@ class EnvironmentRegistryWriter:
         return conn
 
 
-def bucketize_difficulty_vector(difficulty_vector: dict[object, float]) -> DifficultyBand:
-    if not difficulty_vector:
+def bucketize_difficulty_vector(difficulty_vector: object) -> DifficultyBand:
+    if difficulty_vector is None:
         return DifficultyBand.UNSET
-    total = sum(float(value) for value in difficulty_vector.values())
+    if hasattr(difficulty_vector, "flatten"):
+        total = sum(float(value) for value in flatten_difficulty_vector(difficulty_vector).values())
+    elif isinstance(difficulty_vector, dict):
+        total = sum(float(value) for value in difficulty_vector.values())
+    else:
+        return DifficultyBand.UNSET
+    if total == 0.0:
+        return DifficultyBand.UNSET
     if total <= 3.0:
         return DifficultyBand.LOW
     if total <= 8.0:
@@ -971,11 +978,9 @@ def build_semantic_dedup_text(environment: EnvironmentContract) -> str:
         f"{item.kind.value}:{item.key}:{item.summary}" for item in task.constraint_summary
     )
     difficulty = ", ".join(
-        f"{axis.value}={float(value):g}"
-        for axis, value in sorted(
-            task.difficulty_vector.items(),
-            key=lambda item: item[0].value,
-        )
+        f"{metric.value}={float(value):g}"
+        for metric, value in flatten_difficulty_vector(task.difficulty_vector).items()
+        if value > 0.0
     )
     lines = [
         f"db_id:{environment.db_id}",

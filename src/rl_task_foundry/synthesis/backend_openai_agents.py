@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
@@ -17,15 +17,18 @@ from rl_task_foundry.synthesis.prompts import (
     build_synthesis_phase_input,
     build_synthesis_phase_instructions,
 )
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, ConstraintKind
+from rl_task_foundry.synthesis.tool_runtime import ToolExecutor
 from rl_task_foundry.synthesis.runtime import (
     ArtifactGenerationOutput,
     CategoryInferenceOutput,
+    LabelConstructionOutput,
     SchemaExplorationOutput,
     SynthesisMemoryEntry,
     SynthesisPhase,
     SynthesisStageRequest,
     SynthesisStageResult,
+    TaskSynthesisOutput,
     SynthesisToolTraceEntry,
 )
 
@@ -146,7 +149,46 @@ def _phase_output_type(phase: SynthesisPhase) -> type[BaseModel]:
         return SchemaExplorationOutput
     if phase == SynthesisPhase.CATEGORY_INFERENCE:
         return CategoryInferenceOutput
+    if phase == SynthesisPhase.LABEL_CONSTRUCTION:
+        return LabelConstructionOutput
+    if phase == SynthesisPhase.TASK_SYNTHESIS:
+        return TaskSynthesisOutput
     return ArtifactGenerationOutput
+
+
+def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(definition, dict):
+        raise TypeError("tool definitions must be dict-like payloads")
+    return {
+        "name": definition["name"],
+        "description": definition["description"],
+        "params_schema": dict(definition.get("params_schema", {})),
+        "semantic_key": definition.get("semantic_key"),
+    }
+
+
+def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object:
+    from agents import FunctionTool
+    from agents.strict_schema import ensure_strict_json_schema
+
+    params_json_schema = ensure_strict_json_schema(dict(definition["params_schema"]))
+
+    async def _invoke_tool(_tool_context: Any, input_json: str) -> Any:
+        payload = json.loads(input_json) if input_json else {}
+        if not isinstance(payload, dict):
+            raise ValueError("Tool input must be a JSON object")
+        result = executor(payload)
+        if hasattr(result, "__await__"):
+            return await result
+        return result
+
+    return FunctionTool(
+        name=str(definition["name"]),
+        description=str(definition["description"]),
+        params_json_schema=params_json_schema,
+        on_invoke_tool=_invoke_tool,
+        strict_json_schema=True,
+    )
 
 
 def _build_agent(
@@ -155,22 +197,41 @@ def _build_agent(
     request: SynthesisStageRequest,
     model: Any,
     structured_output: bool,
+    tools: list[object] | None = None,
 ) -> Any:
     output_type: Any | None = None
     if structured_output:
         output_type = _phase_output_type(request.phase)
-        if request.phase == SynthesisPhase.ARTIFACT_GENERATION:
+        if request.phase in {
+            SynthesisPhase.LABEL_CONSTRUCTION,
+            SynthesisPhase.TASK_SYNTHESIS,
+            SynthesisPhase.ARTIFACT_GENERATION,
+        }:
             output_schema_factory = getattr(sdk, "AgentOutputSchema", None)
             if output_schema_factory is not None:
                 output_type = output_schema_factory(output_type, strict_json_schema=False)
+    model_settings_kwargs: dict[str, Any] = {"parallel_tool_calls": False}
+    if request.phase == SynthesisPhase.SCHEMA_EXPLORATION and tools:
+        model_settings_kwargs["tool_choice"] = "required"
     return sdk.Agent(
         name=f"synthesis-{request.phase.value}",
         instructions=build_synthesis_phase_instructions(request.phase),
         model=model,
-        tools=[],
+        tools=tools or [],
         output_type=output_type,
-        model_settings=sdk.ModelSettings(parallel_tool_calls=False),
+        model_settings=sdk.ModelSettings(**model_settings_kwargs),
     )
+
+
+def _phase_max_turns(
+    request: SynthesisStageRequest,
+    *,
+    runtime_max_turns: int,
+    tools: list[object],
+) -> int:
+    if request.phase == SynthesisPhase.SCHEMA_EXPLORATION and tools:
+        return max(runtime_max_turns, 12)
+    return runtime_max_turns
 
 
 def _normalize_category_value(value: Any) -> str | None:
@@ -184,9 +245,9 @@ def _normalize_category_value(value: Any) -> str | None:
         return None
 
 
-def _normalize_fact_value_type(value: Any) -> str | None:
+def _normalize_fact_value_type(value: Any) -> tuple[str | None, bool]:
     if not isinstance(value, str):
-        return None
+        return None, False
     normalized = value.strip().lower()
     mapping = {
         "str": "str",
@@ -203,7 +264,137 @@ def _normalize_fact_value_type(value: Any) -> str | None:
         "list[int]": "list[int]",
         "list[float]": "list[float]",
     }
-    return mapping.get(normalized)
+    if normalized in mapping:
+        return mapping[normalized], False
+    nullable_prefixes = ("nullable_", "optional_")
+    for prefix in nullable_prefixes:
+        if normalized.startswith(prefix):
+            base = mapping.get(normalized[len(prefix) :])
+            return base, base is not None
+    if normalized.endswith("_or_null"):
+        base = mapping.get(normalized[: -len("_or_null")])
+        return base, base is not None
+    if normalized.endswith("|null"):
+        base = mapping.get(normalized[: -len("|null")])
+        return base, base is not None
+    return None, False
+
+
+def _infer_fact_value_type_from_key(key: str) -> str:
+    normalized = key.strip().lower()
+    if (
+        normalized.endswith("_id")
+        or normalized.endswith("_count")
+        or normalized.endswith("_index")
+        or normalized.endswith("_position")
+        or normalized.endswith("_year")
+        or normalized.endswith("_month")
+        or normalized.endswith("_day")
+    ):
+        return "int"
+    if (
+        normalized.startswith("is_")
+        or normalized.startswith("has_")
+        or normalized.startswith("can_")
+        or normalized.endswith("_flag")
+        or normalized.endswith("_enabled")
+        or normalized.endswith("_active")
+    ):
+        return "bool"
+    if (
+        normalized.endswith("_amount")
+        or normalized.endswith("_price")
+        or normalized.endswith("_cost")
+        or normalized.endswith("_rate")
+        or normalized.endswith("_ratio")
+        or normalized.endswith("_score")
+        or normalized.endswith("_total")
+    ):
+        return "float"
+    if normalized.endswith("_date") or normalized == "date":
+        return "date"
+    if (
+        normalized.endswith("_at")
+        or normalized.endswith("_time")
+        or normalized.endswith("_timestamp")
+        or normalized.endswith("_datetime")
+    ):
+        return "datetime"
+    return "str"
+
+
+def _normalize_fact_schema_entry(fact: object) -> tuple[object, bool, str | None]:
+    if isinstance(fact, str) and fact.strip():
+        fact_name = fact.strip()
+        return (
+            {
+                "key": fact_name,
+                "entity_ref": "answer",
+                "attribute": fact_name,
+                "value_type": _infer_fact_value_type_from_key(fact_name),
+            },
+            True,
+            "facts_schema_key_list_normalized",
+        )
+    if not isinstance(fact, dict):
+        return fact, False, None
+    if {"key", "entity_ref", "attribute", "value_type"} <= set(fact):
+        normalized_value_type, inferred_nullable = _normalize_fact_value_type(
+            fact.get("value_type")
+        )
+        if normalized_value_type is None:
+            return fact, False, None
+        updated_fact = dict(fact)
+        changed = False
+        if updated_fact.get("value_type") != normalized_value_type:
+            updated_fact["value_type"] = normalized_value_type
+            changed = True
+        if inferred_nullable and updated_fact.get("nullable") is not True:
+            updated_fact["nullable"] = True
+            changed = True
+        if not changed:
+            return fact, False, None
+        return updated_fact, True, "facts_schema_nullable_alias_normalized"
+    fact_name = fact.get("name")
+    fact_value_type, inferred_nullable = _normalize_fact_value_type(fact.get("type"))
+    if isinstance(fact_name, str) and fact_value_type is not None:
+        normalized_fact = {
+            "key": fact_name,
+            "entity_ref": "answer",
+            "attribute": fact_name,
+            "value_type": fact_value_type,
+        }
+        if inferred_nullable:
+            normalized_fact["nullable"] = True
+        return (
+            normalized_fact,
+            True,
+            "facts_schema_normalized",
+        )
+    return fact, False, None
+
+
+def _normalize_constraint_kind(value: object) -> tuple[str | None, bool]:
+    if isinstance(value, ConstraintKind):
+        return value.value, False
+    if not isinstance(value, str):
+        return None, False
+    normalized = value.strip().lower()
+    try:
+        return ConstraintKind(normalized).value, False
+    except ValueError:
+        pass
+    alias_mapping = {
+        "relationship_traversal": ConstraintKind.OTHER.value,
+        "join_depth": ConstraintKind.OTHER.value,
+        "fk_traversal": ConstraintKind.OTHER.value,
+        "foreign_key_traversal": ConstraintKind.OTHER.value,
+        "tie_break": ConstraintKind.UNIQUENESS.value,
+    }
+    mapped = alias_mapping.get(normalized)
+    if mapped is not None:
+        return mapped, True
+    return None, False
 
 
 def _repair_split_json_object(text: str) -> dict[str, Any] | None:
@@ -278,7 +469,8 @@ def _coerce_phase_payload_dict(
         proposed_environment = payload.get("proposed_environment")
         if isinstance(proposed_environment, dict):
             normalized_proposed_environment = dict(proposed_environment)
-            for key in ("solution", "verifier", "shadow_verifier", "instance_space"):
+            promoted_keys = ("task", "solution", "verifier", "shadow_verifier", "instance_space")
+            for key in promoted_keys:
                 if key in payload and key not in normalized_proposed_environment:
                     normalized_proposed_environment[key] = payload[key]
                     repair_codes.append("artifact_proposed_environment_nested")
@@ -295,26 +487,12 @@ def _coerce_phase_payload_dict(
                 normalized_facts: list[object] = []
                 changed = False
                 for fact in facts:
-                    if not isinstance(fact, dict):
-                        normalized_facts.append(fact)
-                        continue
-                    if {"key", "entity_ref", "attribute", "value_type"} <= set(fact):
-                        normalized_facts.append(fact)
-                        continue
-                    fact_name = fact.get("name")
-                    fact_value_type = _normalize_fact_value_type(fact.get("type"))
-                    if isinstance(fact_name, str) and fact_value_type is not None:
-                        normalized_facts.append(
-                            {
-                                "key": fact_name,
-                                "entity_ref": "answer",
-                                "attribute": fact_name,
-                                "value_type": fact_value_type,
-                            }
-                        )
+                    normalized_fact, fact_changed, repair_code = _normalize_fact_schema_entry(fact)
+                    normalized_facts.append(normalized_fact)
+                    if fact_changed:
                         changed = True
-                        continue
-                    normalized_facts.append(fact)
+                    if repair_code is not None:
+                        repair_codes.append(repair_code)
                 if changed:
                     updated_verifier = dict(verifier_payload)
                     updated_facts_schema = dict(facts_schema)
@@ -322,8 +500,79 @@ def _coerce_phase_payload_dict(
                     updated_verifier["facts_schema"] = updated_facts_schema
                     normalized_proposed_environment[verifier_key] = updated_verifier
                     repair_codes.append("facts_schema_normalized")
+            task_payload = normalized_proposed_environment.get("task")
+            if isinstance(task_payload, dict):
+                task_updates: dict[str, Any] = {}
+                label_output = request.previous_outputs.get(SynthesisPhase.LABEL_CONSTRUCTION)
+                task_output = request.previous_outputs.get(SynthesisPhase.TASK_SYNTHESIS)
+                if isinstance(label_output, LabelConstructionOutput):
+                    if "output_schema" not in task_payload:
+                        task_updates["output_schema"] = label_output.output_schema.model_dump(
+                            mode="json"
+                        )
+                    if "difficulty_vector" not in task_payload:
+                        task_updates["difficulty_vector"] = label_output.difficulty_vector.model_dump(
+                            mode="json"
+                        )
+                    if "instance_parameters" not in task_payload:
+                        task_updates["instance_parameters"] = label_output.instance_parameters
+                if isinstance(task_output, TaskSynthesisOutput):
+                    if "question" not in task_payload:
+                        task_updates["question"] = task_output.question
+                    if "constraint_summary" not in task_payload:
+                        task_updates["constraint_summary"] = [
+                            item.model_dump(mode="json") for item in task_output.constraint_summary
+                        ]
+                if "category" not in task_payload and request.requested_category is not None:
+                    task_updates["category"] = request.requested_category.value
+                if task_updates:
+                    updated_task = dict(task_payload)
+                    updated_task.update(task_updates)
+                    normalized_proposed_environment["task"] = updated_task
+                    task_payload = updated_task
+                    repair_codes.append("artifact_task_completed_from_previous_outputs")
+                constraint_summary = task_payload.get("constraint_summary")
+                if isinstance(constraint_summary, list):
+                    normalized_constraints: list[object] = []
+                    changed = False
+                    for item in constraint_summary:
+                        if not isinstance(item, dict):
+                            normalized_constraints.append(item)
+                            continue
+                        normalized_kind, kind_changed = _normalize_constraint_kind(item.get("kind"))
+                        if normalized_kind is None:
+                            normalized_constraints.append(item)
+                            continue
+                        if kind_changed or item.get("kind") != normalized_kind:
+                            updated_item = dict(item)
+                            updated_item["kind"] = normalized_kind
+                            normalized_constraints.append(updated_item)
+                            changed = True
+                            repair_codes.append("constraint_kind_normalized")
+                        else:
+                            normalized_constraints.append(item)
+                    if changed:
+                        updated_task = dict(task_payload)
+                        updated_task["constraint_summary"] = normalized_constraints
+                        normalized_proposed_environment["task"] = updated_task
+            task_output = request.previous_outputs.get(SynthesisPhase.TASK_SYNTHESIS)
+            if (
+                "instance_space" not in normalized_proposed_environment
+                and isinstance(task_output, TaskSynthesisOutput)
+            ):
+                normalized_proposed_environment["instance_space"] = task_output.instance_space.model_dump(
+                    mode="json"
+                )
+                repair_codes.append("artifact_instance_space_completed_from_previous_outputs")
             normalized_payload = dict(payload)
             normalized_payload["proposed_environment"] = normalized_proposed_environment
+            pruned_top_level_fields: list[str] = []
+            for key in promoted_keys:
+                if key in normalized_payload:
+                    del normalized_payload[key]
+                    pruned_top_level_fields.append(key)
+            if pruned_top_level_fields:
+                repair_codes.append("artifact_top_level_fields_pruned")
             legacy_artifacts = normalized_payload.get("artifacts")
             if isinstance(legacy_artifacts, dict):
                 normalized_artifacts = dict(legacy_artifacts)
@@ -340,6 +589,66 @@ def _coerce_phase_payload_dict(
         return payload, []
 
     phase = request.phase
+    if phase == SynthesisPhase.LABEL_CONSTRUCTION:
+        if {
+            "canonical_answer_json",
+            "output_schema",
+            "difficulty_vector",
+            "label_summary",
+        } <= set(payload):
+            return payload, []
+        canonical_answer_json: str | None = None
+        for key in ("canonical_answer_json", "answer_json"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                canonical_answer_json = value.strip()
+                break
+        if canonical_answer_json is None and "canonical_answer" in payload:
+            canonical_answer_json = json.dumps(
+                payload["canonical_answer"],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            repair_codes.append("label_construction_answer_jsonized")
+        remapped = {
+            "canonical_answer_json": canonical_answer_json,
+            "output_schema": payload.get("output_schema"),
+            "difficulty_vector": payload.get("difficulty_vector")
+            or payload.get("difficulty")
+            or {},
+            "instance_parameters": payload.get("instance_parameters") or payload.get("params") or {},
+            "label_summary": payload.get("label_summary")
+            or payload.get("rationale")
+            or payload.get("uniqueness_strategy")
+            or "label construction completed",
+            "memory_summary": payload.get("memory_summary", "label construction completed"),
+        }
+        if canonical_answer_json is not None:
+            repair_codes.append("label_construction_remapped")
+        return remapped, repair_codes
+
+    if phase == SynthesisPhase.TASK_SYNTHESIS:
+        if {"question", "constraint_summary", "instance_space"} <= set(payload):
+            return payload, []
+        instance_space = payload.get("instance_space")
+        if instance_space is None and "anchor_query" in payload:
+            instance_space = {
+                "anchor_query": payload.get("anchor_query"),
+                "parameters": payload.get("parameters") or {},
+                "sampling": payload.get("sampling") or {"strategy": "deterministic_hash", "seed": 0},
+                "instance_count": payload.get("instance_count"),
+            }
+            repair_codes.append("task_synthesis_instance_space_nested")
+        remapped = {
+            "question": payload.get("question") or payload.get("user_prompt") or "",
+            "constraint_summary": payload.get("constraint_summary") or payload.get("constraints") or [],
+            "instance_space": instance_space,
+            "memory_summary": payload.get("memory_summary", "task synthesis completed"),
+        }
+        if remapped["question"] or remapped["instance_space"] is not None:
+            repair_codes.append("task_synthesis_remapped")
+        return remapped, repair_codes
+
     if phase == SynthesisPhase.CATEGORY_INFERENCE:
         if "selected_category" in payload and "rationale" in payload:
             return payload, []
@@ -358,13 +667,21 @@ def _coerce_phase_payload_dict(
 
     if phase != SynthesisPhase.SCHEMA_EXPLORATION:
         return payload, []
-    if "domain_hypothesis" in payload and "candidate_categories" in payload:
+    if {
+        "domain_hypothesis",
+        "candidate_categories",
+        "sample_observations",
+    } <= set(payload):
         return payload, []
 
-    task_category = payload.get("task_category")
     candidate_categories: list[str] = []
-    normalized_task_category = _normalize_category_value(task_category)
-    if normalized_task_category is not None:
+    sample_observations: list[str] = []
+    explicit_category = _normalize_category_value(payload.get("category"))
+    if explicit_category is not None:
+        candidate_categories.append(explicit_category)
+        repair_codes.append("schema_exploration_category_promoted")
+    normalized_task_category = _normalize_category_value(payload.get("task_category"))
+    if normalized_task_category is not None and normalized_task_category not in candidate_categories:
         candidate_categories.append(normalized_task_category)
     raw_categories = payload.get("categories")
     if isinstance(raw_categories, list):
@@ -375,16 +692,45 @@ def _coerce_phase_payload_dict(
                 continue
             candidate_categories.append(normalized_candidate)
 
+    raw_observations = payload.get("sample_observations") or payload.get("observations") or payload.get("sample_rows")
+    if isinstance(raw_observations, list):
+        for item in raw_observations:
+            if isinstance(item, str) and item.strip():
+                sample_observations.append(item.strip())
+                continue
+            if isinstance(item, dict):
+                insight = item.get("insight") or item.get("summary")
+                tool_name = item.get("tool_name") or item.get("tool")
+                result_preview = item.get("result_preview_json") or item.get("result_preview")
+                parts = [
+                    part
+                    for part in (
+                        f"tool={tool_name}" if isinstance(tool_name, str) and tool_name else None,
+                        insight if isinstance(insight, str) and insight else None,
+                        (
+                            f"result={result_preview}"
+                            if isinstance(result_preview, str) and result_preview
+                            else None
+                        ),
+                    )
+                    if part is not None
+                ]
+                if parts:
+                    sample_observations.append("; ".join(parts))
+
     remapped = {
         "domain_hypothesis": payload.get("domain_fit")
         or payload.get("compositionality")
+        or payload.get("reasoning")
         or "schema exploration completed",
         "candidate_categories": candidate_categories,
+        "sample_observations": sample_observations,
         "memory_summary": payload.get("memory_summary", "schema exploration completed"),
     }
     if (
         remapped["domain_hypothesis"] != "schema exploration completed"
         or candidate_categories
+        or sample_observations
     ):
         repair_codes.append("schema_exploration_remapped")
     return remapped, repair_codes
@@ -397,6 +743,8 @@ class OpenAIAgentsSynthesisBackend:
     runtime_config: SynthesisRuntimeConfig
     session_db_path: Path | None = None
     traces_dir: Path | None = None
+    tool_definitions: list[dict[str, Any]] = field(default_factory=list)
+    tool_executors: dict[str, ToolExecutor] = field(default_factory=dict)
 
     @property
     def provider_name(self) -> str:
@@ -429,6 +777,28 @@ class OpenAIAgentsSynthesisBackend:
             model=self.model_ref.model,
             openai_client=client,
         )
+
+    def bind_atomic_tools(
+        self,
+        *,
+        tool_definitions: list[dict[str, Any]],
+        tool_executors: dict[str, ToolExecutor],
+    ) -> None:
+        self.tool_definitions = [dict(definition) for definition in tool_definitions]
+        self.tool_executors = dict(tool_executors)
+
+    def _normalized_tool_definitions(self) -> list[dict[str, Any]]:
+        return [_normalize_tool_definition(definition) for definition in self.tool_definitions]
+
+    def _build_tools(self) -> list[object]:
+        sdk_tools: list[object] = []
+        for definition in self._normalized_tool_definitions():
+            tool_name = str(definition["name"])
+            executor = self.tool_executors.get(tool_name)
+            if executor is None:
+                continue
+            sdk_tools.append(_make_sdk_tool(definition, executor))
+        return sdk_tools
 
     def _build_session(self, sdk: SimpleNamespace, request: SynthesisStageRequest) -> Any | None:
         if not self.runtime_config.sdk_sessions_enabled or self.session_db_path is None:
@@ -466,21 +836,28 @@ class OpenAIAgentsSynthesisBackend:
                 disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"
             )
         model = self._build_model(sdk)
+        tools = self._build_tools() if request.phase == SynthesisPhase.SCHEMA_EXPLORATION else []
         agent = _build_agent(
             sdk,
             request=request,
             model=model,
             structured_output=True,
+            tools=tools,
         )
         session = self._build_session(sdk, request)
 
         request_input = build_synthesis_phase_input(request)
+        max_turns = _phase_max_turns(
+            request,
+            runtime_max_turns=self.runtime_config.max_turns,
+            tools=tools,
+        )
         started_at = perf_counter()
         try:
             run_result = await sdk.Runner.run(
                 agent,
                 request_input,
-                max_turns=self.runtime_config.max_turns,
+                max_turns=max_turns,
                 session=session,
             )
         except Exception as exc:
@@ -493,11 +870,12 @@ class OpenAIAgentsSynthesisBackend:
                 request=request,
                 model=model,
                 structured_output=False,
+                tools=tools,
             )
             run_result = await sdk.Runner.run(
                 fallback_agent,
                 request_input,
-                max_turns=self.runtime_config.max_turns,
+                max_turns=max_turns,
                 session=None,
             )
         latency_ms = int((perf_counter() - started_at) * 1000)

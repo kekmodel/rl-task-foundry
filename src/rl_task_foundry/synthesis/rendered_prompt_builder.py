@@ -30,16 +30,15 @@ def build_rendered_user_prompt(task: TaskContract) -> str:
             f"- {key}: {json.dumps(value, ensure_ascii=False)}"
             for key, value in task.instance_parameters.items()
         )
-    lines.extend(
+    prompt_body = "\n".join(lines).rstrip()
+    submit_result_block = "\n".join(
         [
-            "",
-            "Submit Result Format:",
+            "# Submit Result Format",
+            "Submit your final answer via submit_result as a JSON string matching this schema.",
             output_schema_text,
-            "",
-            "Call submit_result with a JSON string that matches the format above.",
         ]
     )
-    return "\n".join(lines)
+    return f"{prompt_body}\n\n{submit_result_block}"
 
 
 def build_output_schema_prompt_payload(field: OutputFieldContract) -> dict[str, object]:

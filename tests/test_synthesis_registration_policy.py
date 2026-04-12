@@ -6,7 +6,12 @@ from pathlib import Path
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
+from rl_task_foundry.synthesis.atomic_tools import (
+    AtomicToolBundle,
+    AtomicToolDefinition,
+    AtomicToolFamily,
+    AtomicToolResultMode,
+)
 from rl_task_foundry.synthesis.contracts import (
     FactSpec,
     FactValueType,
@@ -39,12 +44,19 @@ def _config_with_registration_output(tmp_path: Path):
     return config.model_copy(update={"output": output}, deep=True)
 
 
-def _materialize_atomic_tool_bundle(config, *, db_id: str = "sakila") -> str:
+def _materialize_atomic_tool_bundle(
+    config,
+    *,
+    db_id: str = "sakila",
+    source: str | None = None,
+    tools: list[AtomicToolDefinition] | None = None,
+) -> str:
     AtomicToolMaterializer.for_config(config).materialize_bundle(
         AtomicToolBundle(
             db_id=db_id,
-            tools=[],
-            source="""
+            tools=tools or [],
+            source=source
+            or """
 async def lookup_city(conn, customer_id):
     return {"city": "sasebo"}
 """,
@@ -946,6 +958,113 @@ def check_constraints(answer, facts):
     assert verifier_tool_calls is not None
 
 
+def test_registration_subprocess_pool_accepts_runtime_owned_atomic_tool_module_structure(
+    tmp_path: Path,
+) -> None:
+    trusted_atomic_tool_source = """
+from __future__ import annotations
+
+from typing import Any
+
+DB_ID = "sakila"
+MAX_BATCH_VALUES = 128
+
+def _row_to_dict(row: Any) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return dict(row)
+
+async def lookup_city(conn, customer_id):
+    return {"customer_id": customer_id, "city": "sasebo"}
+"""
+
+    async def _run() -> tuple[list[str], list[str]]:
+        config = _config_with_registration_output(tmp_path)
+        atomic_tool_set_ref = _materialize_atomic_tool_bundle(
+            config,
+            source=trusted_atomic_tool_source,
+        )
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.run_self_consistency_check(
+                atomic_tool_set_ref=atomic_tool_set_ref,
+                solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+                verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    city = answer.get("city")
+    return {"city": tools.lookup_city(city)["city"]}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return bool(facts.get("city"))
+""",
+                expected_fact_keys=["city"],
+            )
+            probe = await pool.probe_verifier_module(
+                atomic_tool_set_ref=atomic_tool_set_ref,
+                verifier_source=_valid_verifier_source(),
+                artifact_kind=ArtifactKind.VERIFIER_MODULE,
+                answer_sample={"city": "sample_city"},
+                expected_fact_keys=["city"],
+            )
+            return [error.code for error in result.errors], [error.code for error in probe.errors]
+        finally:
+            await pool.close()
+
+    self_consistency_error_codes, probe_error_codes = asyncio.run(_run())
+    assert self_consistency_error_codes == []
+    assert probe_error_codes == []
+
+
+def test_registration_subprocess_pool_excludes_tool_internal_calls_from_call_limit(
+    tmp_path: Path,
+) -> None:
+    recursive_tool_source = """
+def _deep_lookup(depth):
+    if depth <= 0:
+        return {"city": "sasebo"}
+    return _deep_lookup(depth - 1)
+
+async def lookup_city(conn, customer_id):
+    return _deep_lookup(64)
+"""
+
+    async def _run() -> list[str]:
+        base = _config_with_registration_output(tmp_path)
+        workers = base.synthesis.registration_workers.model_copy(update={"call_count_limit": 20})
+        synthesis = base.synthesis.model_copy(update={"registration_workers": workers})
+        config = base.model_copy(update={"synthesis": synthesis}, deep=True)
+        pool = await RegistrationSubprocessPool.start(config)
+        try:
+            result = await pool.run_self_consistency_check(
+                tool_source=recursive_tool_source,
+                solution_source="""
+def solve(tools):
+    return {"city": "sasebo"}
+""",
+                verifier_source=_valid_verifier_source(),
+                shadow_verifier_source=_valid_shadow_verifier_source(),
+                expected_fact_keys=["city"],
+            )
+            return [error.code for error in result.errors]
+        finally:
+            await pool.close()
+
+    error_codes = asyncio.run(_run())
+    assert error_codes == []
+
+
 def test_registration_runner_passes_valid_bundle() -> None:
     async def _run() -> tuple[str, bool, bool, int, int, int, int, int, int, int, list[str]]:
         config = load_config("rl_task_foundry.yaml")
@@ -1046,6 +1165,73 @@ def solve(tools):
     status, probe_executed, probe_errors = asyncio.run(_run())
     assert status == RegistrationBundleStatus.PASSED
     assert probe_executed is True
+    assert probe_errors == []
+
+
+def test_registration_runner_probe_accepts_batch_lookup_shape() -> None:
+    async def _run() -> tuple[str, list[str]]:
+        config = load_config("rl_task_foundry.yaml")
+        bundle = GeneratedArtifactBundle(
+            solution_source="""
+def solve(tools):
+    return {"city_id": 7, "city": "7"}
+""",
+            verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    rows = tools.lookup_city_by_ids_batch(ids=[answer.get("city_id")])
+    first_row = rows[0] if rows else None
+    return {"city": first_row.get("name") if first_row is not None else None}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return facts.get("city") is not None
+""",
+            shadow_verifier_source="""
+def verify(answer, tools):
+    shadow_facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, shadow_facts):
+        return False
+    return check_constraints(answer, shadow_facts)
+
+def fetch_facts(answer, tools):
+    city_id = answer.get("city_id")
+    city_rows = tools.lookup_city_by_ids_batch(ids=[city_id])
+    selected_city = city_rows[-1].get("name") if city_rows else None
+    return {"city": selected_city}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("city") == facts.get("city")
+
+def check_constraints(answer, facts):
+    return facts.get("city") is not None
+""",
+        )
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            tool_source="""
+async def lookup_city_by_ids_batch(conn, ids):
+    return [{"id": value, "name": str(value)} for value in ids]
+""",
+            verifier_probe_specs={
+                RegistrationArtifactName.VERIFIER: VerifierProbeSpec(
+                    answer_sample={"city_id": 7, "city": "7"},
+                    facts_schema=_city_facts_schema(),
+                )
+            },
+        )
+        return report.status, [error.code for error in report.verifier.probe_errors]
+
+    status, probe_errors = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.PASSED
     assert probe_errors == []
 
 
@@ -1171,3 +1357,158 @@ def solve(tools):
     status, error_code = asyncio.run(_run())
     assert status == RegistrationBundleStatus.FAILED
     assert error_code == "shadow_verifier_not_independent"
+
+
+def test_registration_runner_rejects_tool_return_key_outside_declared_schema(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> tuple[str, list[str]]:
+        config = _config_with_registration_output(tmp_path)
+        atomic_tool_set_ref = _materialize_atomic_tool_bundle(
+            config,
+            tools=[
+                AtomicToolDefinition(
+                    name="get_customer_by_id",
+                    family=AtomicToolFamily.T1_POINT_LOOKUP,
+                    description="Get customer for given primary key.",
+                    params_schema={
+                        "type": "object",
+                        "properties": {"customer_id": {"type": "integer"}},
+                        "required": ["customer_id"],
+                        "additionalProperties": False,
+                    },
+                    returns_schema={
+                        "anyOf": [
+                            {
+                                "type": "object",
+                                "properties": {"customer_id": {"type": "integer"}},
+                                "required": ["customer_id"],
+                                "additionalProperties": False,
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                    sql="SELECT customer_id FROM customer WHERE customer_id = $1 LIMIT 1",
+                    result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
+                    semantic_key="public.customer:get_by_id",
+                )
+            ],
+            source="""
+async def get_customer_by_id(conn, customer_id):
+    return {"customer_id": customer_id}
+""",
+        )
+        bundle = GeneratedArtifactBundle(
+            solution_source="""
+def solve(tools):
+    customer_row = tools.get_customer_by_id(customer_id=1)
+    return {"store_id": customer_row["store_id"]}
+""",
+            verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    row = tools.get_customer_by_id(customer_id=answer.get("customer_id", 1))
+    return {"customer_id": None if row is None else row["customer_id"]}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("customer_id") == facts.get("customer_id")
+
+def check_constraints(answer, facts):
+    return facts.get("customer_id") is not None
+""",
+            shadow_verifier_source="""
+def verify(answer, tools):
+    shadow_facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, shadow_facts):
+        return False
+    return check_constraints(answer, shadow_facts)
+
+def fetch_facts(answer, tools):
+    candidate_id = answer.get("customer_id", 1)
+    row = tools.get_customer_by_id(customer_id=candidate_id)
+    resolved_id = row.get("customer_id") if row is not None else None
+    return {"customer_id": resolved_id}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("customer_id") == facts.get("customer_id")
+
+def check_constraints(answer, facts):
+    return facts.get("customer_id") is not None
+""",
+        )
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            atomic_tool_set_ref=atomic_tool_set_ref,
+        )
+        return report.status, [error.code for error in report.solution.static_errors]
+
+    status, error_codes = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.FAILED
+    assert "tool_return_key_not_in_returns_schema" in error_codes
+
+
+def test_registration_runner_rejects_answer_key_outside_output_schema() -> None:
+    async def _run() -> tuple[str, list[str], list[str]]:
+        config = load_config("rl_task_foundry.yaml")
+        bundle = GeneratedArtifactBundle(
+            solution_source="""
+def solve(tools):
+    return {"store_id": 1}
+""",
+            verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    customer_id = answer.get("customer_id")
+    store_id = answer.get("store_id")
+    return {"customer_id": customer_id, "store_id": store_id}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("store_id") == facts.get("store_id")
+
+def check_constraints(answer, facts):
+    return facts.get("customer_id") is not None
+""",
+            shadow_verifier_source="""
+def verify(answer, tools):
+    facts = fetch_facts(answer, tools)
+    if not facts_match_answer_claims(answer, facts):
+        return False
+    return check_constraints(answer, facts)
+
+def fetch_facts(answer, tools):
+    store_id = answer.get("store_id")
+    return {"store_id": store_id}
+
+def facts_match_answer_claims(answer, facts):
+    return answer.get("store_id") == facts.get("store_id")
+
+def check_constraints(answer, facts):
+    return facts.get("store_id") is not None
+""",
+        )
+        report = await run_registration_bundle(
+            config=config,
+            bundle=bundle,
+            answer_field_names={"store_id"},
+        )
+        return (
+            report.status,
+            [error.code for error in report.verifier.static_errors],
+            [error.code for error in report.shadow_verifier.static_errors],
+        )
+
+    status, verifier_error_codes, shadow_error_codes = asyncio.run(_run())
+    assert status == RegistrationBundleStatus.FAILED
+    assert "answer_key_not_in_output_schema" in verifier_error_codes
+    assert "answer_key_not_in_output_schema" not in shadow_error_codes

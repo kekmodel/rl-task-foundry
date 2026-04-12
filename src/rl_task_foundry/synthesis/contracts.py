@@ -27,19 +27,13 @@ class CategoryTaxonomy(StrEnum):
 
 
 class DifficultyAxis(StrEnum):
-    SLOT_COUNT = "slot_count"
-    CONSTRAINT_COUNT = "constraint_count"
-    CONDITIONAL_DEPTH = "conditional_depth"
-    THRESHOLD_TIGHTNESS = "threshold_tightness"
-    UNIQUENESS_SCOPE = "uniqueness_scope"
-    TEMPORAL_SPAN = "temporal_span"
-    CANDIDATE_WIDTH = "candidate_width"
+    SEARCH_COST = "search_cost"
+    SOLUTION_SPACE = "solution_space"
+    CONSTRAINT_DENSITY = "constraint_density"
 
 
 class DifficultyAxisUnit(StrEnum):
-    COUNT = "count"
-    NORMALIZED_SCORE = "normalized_score"
-    DAYS = "days"
+    SCORE = "score"
 
 
 class EnvironmentStatus(StrEnum):
@@ -142,64 +136,85 @@ class InstanceSamplingStrategy(StrEnum):
 class DifficultyAxisSpec(StrictModel):
     axis: DifficultyAxis
     unit: DifficultyAxisUnit
+    crank_rank: int
     description: str
-    integral_only: bool = False
     minimum: float = 0.0
     maximum: float | None = None
 
 
+class DifficultyVectorContract(StrictModel):
+    search_cost: float = Field(default=0.0, ge=0.0)
+    solution_space: float = Field(default=0.0, ge=0.0)
+    constraint_density: float = Field(default=0.0, ge=0.0)
+
+    def flatten(self) -> dict[DifficultyAxis, float]:
+        return {
+            DifficultyAxis.SEARCH_COST: float(self.search_cost),
+            DifficultyAxis.SOLUTION_SPACE: float(self.solution_space),
+            DifficultyAxis.CONSTRAINT_DENSITY: float(self.constraint_density),
+        }
+
+    def total_score(self) -> float:
+        return sum(self.flatten().values())
+
+    def nonzero_axes(self) -> dict[DifficultyAxis, float]:
+        return {axis: value for axis, value in self.flatten().items() if value > 0.0}
+
+
 DIFFICULTY_AXIS_SPECS: dict[DifficultyAxis, DifficultyAxisSpec] = {
-    DifficultyAxis.SLOT_COUNT: DifficultyAxisSpec(
-        axis=DifficultyAxis.SLOT_COUNT,
-        unit=DifficultyAxisUnit.COUNT,
-        description="Number of answer slots or entity selections required.",
-        integral_only=True,
-        minimum=1.0,
-    ),
-    DifficultyAxis.CONSTRAINT_COUNT: DifficultyAxisSpec(
-        axis=DifficultyAxis.CONSTRAINT_COUNT,
-        unit=DifficultyAxisUnit.COUNT,
-        description="Count of hard constraints enforced by the verifier.",
-        integral_only=True,
+    DifficultyAxis.SEARCH_COST: DifficultyAxisSpec(
+        axis=DifficultyAxis.SEARCH_COST,
+        unit=DifficultyAxisUnit.SCORE,
+        crank_rank=1,
+        description="Tool-call search cost required to gather the DB facts needed for the answer.",
         minimum=0.0,
     ),
-    DifficultyAxis.CONDITIONAL_DEPTH: DifficultyAxisSpec(
-        axis=DifficultyAxis.CONDITIONAL_DEPTH,
-        unit=DifficultyAxisUnit.COUNT,
-        description="Maximum nesting depth of conditional constraints.",
-        integral_only=True,
+    DifficultyAxis.SOLUTION_SPACE: DifficultyAxisSpec(
+        axis=DifficultyAxis.SOLUTION_SPACE,
+        unit=DifficultyAxisUnit.SCORE,
+        crank_rank=2,
+        description="Size of the candidate solution space that must be explored or composed.",
         minimum=0.0,
     ),
-    DifficultyAxis.THRESHOLD_TIGHTNESS: DifficultyAxisSpec(
-        axis=DifficultyAxis.THRESHOLD_TIGHTNESS,
-        unit=DifficultyAxisUnit.NORMALIZED_SCORE,
-        description="Normalized strictness of numeric thresholds from 0.0 to 1.0.",
-        integral_only=False,
-        minimum=0.0,
-        maximum=1.0,
-    ),
-    DifficultyAxis.UNIQUENESS_SCOPE: DifficultyAxisSpec(
-        axis=DifficultyAxis.UNIQUENESS_SCOPE,
-        unit=DifficultyAxisUnit.COUNT,
-        description="Number of slots or entities participating in uniqueness constraints.",
-        integral_only=True,
-        minimum=0.0,
-    ),
-    DifficultyAxis.TEMPORAL_SPAN: DifficultyAxisSpec(
-        axis=DifficultyAxis.TEMPORAL_SPAN,
-        unit=DifficultyAxisUnit.DAYS,
-        description="Temporal horizon expressed in days or normalized day-equivalent units.",
-        integral_only=True,
-        minimum=0.0,
-    ),
-    DifficultyAxis.CANDIDATE_WIDTH: DifficultyAxisSpec(
-        axis=DifficultyAxis.CANDIDATE_WIDTH,
-        unit=DifficultyAxisUnit.COUNT,
-        description="Approximate width of the candidate search space available to the solver.",
-        integral_only=True,
+    DifficultyAxis.CONSTRAINT_DENSITY: DifficultyAxisSpec(
+        axis=DifficultyAxis.CONSTRAINT_DENSITY,
+        unit=DifficultyAxisUnit.SCORE,
+        crank_rank=3,
+        description="Inverse density of valid solutions after applying hard constraints.",
         minimum=0.0,
     ),
 }
+
+DIFFICULTY_CRANK_ORDER: tuple[DifficultyAxis, ...] = (
+    DifficultyAxis.SEARCH_COST,
+    DifficultyAxis.SOLUTION_SPACE,
+    DifficultyAxis.CONSTRAINT_DENSITY,
+)
+
+
+def flatten_difficulty_vector(
+    difficulty_vector: DifficultyVectorContract,
+) -> dict[DifficultyAxis, float]:
+    return difficulty_vector.flatten()
+
+
+def difficulty_vector_json(
+    difficulty_vector: DifficultyVectorContract,
+) -> dict[str, object]:
+    return difficulty_vector.model_dump(mode="json")
+
+
+def build_difficulty_vector(
+    *,
+    search_cost: float = 0.0,
+    solution_space: float = 0.0,
+    constraint_density: float = 0.0,
+) -> DifficultyVectorContract:
+    return DifficultyVectorContract(
+        search_cost=search_cost,
+        solution_space=solution_space,
+        constraint_density=constraint_density,
+    )
 
 
 ScalarRuntimeValue = str | int | float | bool | date | datetime | None
@@ -335,20 +350,8 @@ class TaskContract(StrictModel):
     category: CategoryTaxonomy
     output_schema: OutputSchemaContract
     constraint_summary: list[ConstraintSummaryItem] = Field(default_factory=list)
-    difficulty_vector: dict[DifficultyAxis, float] = Field(default_factory=dict)
+    difficulty_vector: DifficultyVectorContract = Field(default_factory=DifficultyVectorContract)
     instance_parameters: dict[str, RuntimeValue] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate_difficulty_vector(self) -> TaskContract:
-        for axis, value in self.difficulty_vector.items():
-            spec = DIFFICULTY_AXIS_SPECS[axis]
-            if value < spec.minimum:
-                raise ValueError(f"{axis.value} must be >= {spec.minimum}")
-            if spec.maximum is not None and value > spec.maximum:
-                raise ValueError(f"{axis.value} must be <= {spec.maximum}")
-            if spec.integral_only and not float(value).is_integer():
-                raise ValueError(f"{axis.value} must be an integer-valued difficulty axis")
-        return self
 
 
 class SolutionContract(StrictModel):
@@ -557,7 +560,7 @@ class EnvironmentContract(StrictModel):
     domain: str
     category: CategoryTaxonomy
     atomic_tool_set_ref: str
-    difficulty_vector: dict[DifficultyAxis, float]
+    difficulty_vector: DifficultyVectorContract
     created_at: datetime
     generator_version: str
     tool_signature: str

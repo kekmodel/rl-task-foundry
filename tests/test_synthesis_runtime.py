@@ -20,6 +20,7 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
     DifficultyAxis,
+    DifficultyVectorContract,
     EnvironmentContract,
     EnvironmentStatus,
     MaterializedFactsSchema,
@@ -31,6 +32,7 @@ from rl_task_foundry.synthesis.contracts import (
     SolutionContract,
     TaskContract,
     VerifierContract,
+    build_difficulty_vector,
 )
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
 from rl_task_foundry.synthesis.registration_runner import (
@@ -45,6 +47,7 @@ from rl_task_foundry.synthesis.runtime import (
     ArtifactGenerationOutput,
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
     CategoryInferenceOutput,
+    LabelConstructionOutput,
     ProposedEnvironmentDraft,
     RUNTIME_OWNED_ENVIRONMENT_FIELDS,
     SchemaExplorationOutput,
@@ -52,8 +55,10 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryBackoffError,
     SynthesisCategoryMismatchError,
     SynthesisDbBindingError,
+    SynthesisDifficultyRetrySeed,
     SynthesisMemoryEntry,
     SynthesisPhase,
+    SynthesisQualityGateFeedback,
     SynthesisRegistrationError,
     SynthesisSelfConsistencyError,
     SynthesisSelfConsistencyDiagnostics,
@@ -61,6 +66,7 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisStageRequest,
     SynthesisStageResult,
     SynthesisToolTraceEntry,
+    TaskSynthesisOutput,
 )
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisDbSnapshot,
@@ -160,7 +166,7 @@ def _config_with_synthesis_output(tmp_path):
 
 def _sample_proposed_environment(
     category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
-    difficulty_vector: dict[DifficultyAxis, float] | None = None,
+    difficulty_vector: DifficultyVectorContract | None = None,
 ) -> ProposedEnvironmentDraft:
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(
@@ -190,7 +196,7 @@ def _sample_proposed_environment(
                     summary="같은 고객을 중복 배정하지 않는다.",
                 )
             ],
-            difficulty_vector=difficulty_vector or {},
+            difficulty_vector=difficulty_vector or build_difficulty_vector(),
         ),
         solution=SolutionContract(),
         verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
@@ -238,6 +244,9 @@ def _payloads(
         SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
             domain_hypothesis="customer_support",
             candidate_categories=[category],
+            sample_observations=[
+                "tool=count_customer -> observed 5 customers",
+            ],
             memory_summary="schema explored",
         ),
         SynthesisPhase.CATEGORY_INFERENCE: CategoryInferenceOutput(
@@ -245,12 +254,42 @@ def _payloads(
             rationale="best match",
             memory_summary="category selected",
         ),
+        SynthesisPhase.LABEL_CONSTRUCTION: LabelConstructionOutput(
+            canonical_answer_json="[]",
+            output_schema=_sample_proposed_environment(category).task.output_schema,
+            difficulty_vector=build_difficulty_vector(),
+            instance_parameters={},
+            label_summary="canonical answer fixed from grounded evidence",
+            memory_summary="label constructed",
+        ),
+        SynthesisPhase.TASK_SYNTHESIS: TaskSynthesisOutput(
+            question=_sample_proposed_environment(category).task.question,
+            constraint_summary=_sample_proposed_environment(category).task.constraint_summary,
+            instance_space=_sample_proposed_environment(category).instance_space,
+            memory_summary="task synthesized",
+        ),
         SynthesisPhase.ARTIFACT_GENERATION: ArtifactGenerationOutput(
             proposed_environment=_sample_proposed_environment(category),
             artifacts=_sample_artifacts(),
             memory_summary="artifacts generated",
         ),
     }
+
+
+def _sample_label_output(
+    *,
+    category: CategoryTaxonomy = CategoryTaxonomy.ASSIGNMENT,
+    canonical_answer_json: str = "[]",
+    difficulty_vector: DifficultyVectorContract | None = None,
+) -> LabelConstructionOutput:
+    return LabelConstructionOutput(
+        canonical_answer_json=canonical_answer_json,
+        output_schema=_sample_proposed_environment(category).task.output_schema,
+        difficulty_vector=difficulty_vector or build_difficulty_vector(),
+        instance_parameters={},
+        label_summary="canonical answer fixed from grounded evidence",
+        memory_summary="label constructed",
+    )
 
 
 def _passing_registration_report() -> RegistrationBundleReport:
@@ -454,18 +493,19 @@ class _AttemptAwareBackend(_FakeBackend):
         provider_name: str,
         model_name: str,
         base_payloads: dict[SynthesisPhase, object],
-        artifact_payloads_by_attempt: dict[int, ArtifactGenerationOutput],
+        payloads_by_attempt: dict[SynthesisPhase, dict[int, object]] | None = None,
     ) -> None:
         super().__init__(
             provider_name=provider_name,
             model_name=model_name,
             payloads=base_payloads,
         )
-        self.artifact_payloads_by_attempt = artifact_payloads_by_attempt
+        self.payloads_by_attempt = payloads_by_attempt or {}
 
     async def run_stage(self, request: SynthesisStageRequest) -> SynthesisStageResult:
-        if request.phase == SynthesisPhase.ARTIFACT_GENERATION:
-            payload = self.artifact_payloads_by_attempt[request.attempt_index]
+        phase_payloads = self.payloads_by_attempt.get(request.phase)
+        if phase_payloads is not None and request.attempt_index in phase_payloads:
+            payload = phase_payloads[request.attempt_index]
             self.payloads = {**self.payloads, request.phase: payload}
         return await super().run_stage(request)
 
@@ -538,9 +578,73 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.registration_diagnostics.verifier.fetch_facts_tool_calls == 1
     assert draft.registration_diagnostics.verifier.probe_fetch_facts_return_keys == ["city"]
     assert len(draft.instances) == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_persists_phase_monitors_with_prompt_and_label_snapshots(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config_with_synthesis_output(tmp_path)
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=_payloads(),
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    phase_monitor_path = tmp_path / "phase_monitors.jsonl"
+    assert phase_monitor_path.exists()
+    records = [
+        json.loads(line)
+        for line in phase_monitor_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["phase"] for record in records] == [
+        "schema_exploration",
+        "category_inference",
+        "label_construction",
+        "task_synthesis",
+        "artifact_generation",
+        "registration_gate",
+        "self_consistency",
+        "canonical_materialization",
+    ]
+    label_record = next(record for record in records if record["phase"] == "label_construction")
+    assert label_record["actual_data"]["canonical_answer_json"] == "[]"
+    artifact_record = next(record for record in records if record["phase"] == "artifact_generation")
+    assert artifact_record["actual_data"]["question"] == draft.environment.task.question
+    assert "# Submit Result Format" in artifact_record["actual_data"]["user_prompt_preview"]
+    assert "difficulty_vector" in artifact_record["actual_data"]
+    canonical_record = next(
+        record for record in records if record["phase"] == "canonical_materialization"
+    )
+    assert canonical_record["actual_data"]["rendered_user_prompts"] == [
+        draft.instances[0].rendered_user_prompt
+    ]
+    assert canonical_record["actual_data"]["canonical_answer_jsons"] == [
+        draft.canonical_answers[0].canonical_answer_json
+    ]
     assert len(draft.canonical_answers) == 1
     assert draft.instances[0].instance_id == "instance_0001"
-    assert "Submit Result Format:" in draft.instances[0].rendered_user_prompt
+    assert "# Submit Result Format" in draft.instances[0].rendered_user_prompt
     assert draft.canonical_answers[0].canonical_answer == []
     assert draft.canonical_answers[0].canonical_answer_json == canonical_json([])
     assert draft.environment.cross_instance_set.minimum_required == 1
@@ -618,7 +722,7 @@ async def test_synthesis_agent_runtime_canonicalizes_materialized_answers(monkey
                 ),
                 primary_output_format="json_array",
             ),
-            difficulty_vector={},
+            difficulty_vector=build_difficulty_vector(),
         ),
         solution=SolutionContract(),
         verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
@@ -631,6 +735,21 @@ async def test_synthesis_agent_runtime_canonicalizes_materialized_answers(monkey
         },
     )
     payloads = _payloads(category=CategoryTaxonomy.ITINERARY)
+    payloads[SynthesisPhase.LABEL_CONSTRUCTION] = LabelConstructionOutput(
+        canonical_answer_json=json.dumps(
+            [
+                {"time": "2026-10-03", "city": "Busan"},
+                {"time": "2026-10-01", "city": "Seoul"},
+                {"time": "2026-10-02", "city": "Jeju"},
+            ],
+            ensure_ascii=False,
+        ),
+        output_schema=proposed_environment.task.output_schema,
+        difficulty_vector=build_difficulty_vector(),
+        instance_parameters={},
+        label_summary="canonical itinerary grounded from observed rows",
+        memory_summary="label constructed",
+    )
     payloads[SynthesisPhase.ARTIFACT_GENERATION] = ArtifactGenerationOutput(
         proposed_environment=proposed_environment,
         artifacts=_sample_artifacts(),
@@ -810,7 +929,6 @@ async def test_synthesis_agent_runtime_rejects_wrong_task_category_in_artifact_g
     monkeypatch,
 ):
     config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
-    config.synthesis.runtime.max_self_consistency_iterations = 1
     mismatched = _sample_proposed_environment(CategoryTaxonomy.OTHER)
     payloads = _payloads()
     payloads[SynthesisPhase.ARTIFACT_GENERATION] = ArtifactGenerationOutput(
@@ -831,16 +949,21 @@ async def test_synthesis_agent_runtime_rejects_wrong_task_category_in_artifact_g
     async def _fake_registration_gate(self, *, bundle, proposed_environment):
         return _passing_registration_report()
 
-    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
 
-    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
-        await runtime.synthesize_environment_draft(
-            db_id="sakila",
-            requested_category=CategoryTaxonomy.ASSIGNMENT,
-            graph=_sample_graph(),
-        )
-    assert [attempt.outcome for attempt in exc_info.value.attempts] == [
-        SynthesisSelfConsistencyOutcome.CATEGORY_MISMATCH
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+    )
+
+    assert draft.environment.task.category == CategoryTaxonomy.ASSIGNMENT
+    assert draft.self_consistency_diagnostics.payload_repair_codes == [
+        "artifact_task_overridden_from_task_synthesis"
     ]
 
 
@@ -1113,34 +1236,25 @@ async def test_synthesis_agent_runtime_rejects_weakened_difficulty_vector_betwee
         provider_name="codex_oauth",
         model_name="gpt-5.4-mini",
         base_payloads=payloads,
-        artifact_payloads_by_attempt={
-            1: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={
-                        DifficultyAxis.SLOT_COUNT: 3.0,
-                        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
-                    }
+        payloads_by_attempt={
+            SynthesisPhase.LABEL_CONSTRUCTION: {
+                1: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        solution_space=3.0,
+                        constraint_density=4.0,
+                    )
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt one",
-            ),
-            2: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 2.0}
+                2: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(solution_space=2.0)
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt two weakened",
-            ),
-            3: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={
-                        DifficultyAxis.SLOT_COUNT: 3.0,
-                        DifficultyAxis.CONSTRAINT_COUNT: 5.0,
-                    }
+                3: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        search_cost=1.0,
+                        solution_space=3.0,
+                        constraint_density=4.0,
+                    )
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt three strengthened",
-            ),
+            }
         },
     )
     runtime = SynthesisAgentRuntime(
@@ -1179,17 +1293,19 @@ async def test_synthesis_agent_runtime_rejects_weakened_difficulty_vector_betwee
         SynthesisSelfConsistencyOutcome.DIFFICULTY_WEAKENED,
         SynthesisSelfConsistencyOutcome.PASSED,
     ]
-    assert "constraint_count" in draft.self_consistency_attempts[1].error_message
+    assert "constraint_density" in draft.self_consistency_attempts[1].error_message
     artifact_requests = [
         request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
     ]
-    assert [request.attempt_index for request in artifact_requests] == [1, 2, 3]
-    assert artifact_requests[2].latest_self_consistency_diagnostics is not None
-    assert artifact_requests[2].latest_self_consistency_diagnostics.verify_result is False
+    assert [request.attempt_index for request in artifact_requests] == [1, 3]
+    assert artifact_requests[1].latest_self_consistency_diagnostics is not None
+    assert artifact_requests[1].latest_self_consistency_diagnostics.verify_result is False
 
 
 @pytest.mark.asyncio
-async def test_synthesis_agent_runtime_rejects_multi_axis_difficulty_crank(monkeypatch):
+async def test_synthesis_agent_runtime_projects_multi_axis_difficulty_crank_to_requested_axis(
+    monkeypatch,
+):
     config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
     config.synthesis.runtime.max_self_consistency_iterations = 3
     payloads = _payloads()
@@ -1197,37 +1313,29 @@ async def test_synthesis_agent_runtime_rejects_multi_axis_difficulty_crank(monke
         provider_name="codex_oauth",
         model_name="gpt-5.4-mini",
         base_payloads=payloads,
-        artifact_payloads_by_attempt={
-            1: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={
-                        DifficultyAxis.SLOT_COUNT: 3.0,
-                        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
-                    }
+        payloads_by_attempt={
+            SynthesisPhase.LABEL_CONSTRUCTION: {
+                1: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        solution_space=3.0,
+                        constraint_density=4.0,
+                    )
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt one",
-            ),
-            2: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={
-                        DifficultyAxis.SLOT_COUNT: 4.0,
-                        DifficultyAxis.CONSTRAINT_COUNT: 5.0,
-                    }
+                2: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        search_cost=1.0,
+                        solution_space=3.0,
+                        constraint_density=5.0,
+                    )
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt two invalid multi-axis crank",
-            ),
-            3: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={
-                        DifficultyAxis.SLOT_COUNT: 3.0,
-                        DifficultyAxis.CONSTRAINT_COUNT: 5.0,
-                    }
+                3: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        search_cost=1.0,
+                        solution_space=3.0,
+                        constraint_density=4.0,
+                    )
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt three valid single-axis crank",
-            ),
+            }
         },
     )
     runtime = SynthesisAgentRuntime(
@@ -1265,31 +1373,30 @@ async def test_synthesis_agent_runtime_rejects_multi_axis_difficulty_crank(monke
 
     assert [attempt.outcome for attempt in draft.self_consistency_attempts] == [
         SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
-        SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_INVALID,
         SynthesisSelfConsistencyOutcome.PASSED,
     ]
-    assert draft.self_consistency_attempts[1].error_message is not None
-    assert "constraint_count,slot_count" in draft.self_consistency_attempts[1].error_message
     assert registration_calls == 2
     artifact_requests = [
         request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
     ]
-    assert [request.attempt_index for request in artifact_requests] == [1, 2, 3]
+    assert [request.attempt_index for request in artifact_requests] == [1, 2]
     assert artifact_requests[0].difficulty_crank_index == 0
     assert artifact_requests[0].difficulty_crank_history == []
-    assert artifact_requests[1].strongest_difficulty_vector == {
-        DifficultyAxis.SLOT_COUNT: 3.0,
-        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
-    }
+    assert artifact_requests[1].strongest_difficulty_vector == build_difficulty_vector(
+        solution_space=3.0,
+        constraint_density=4.0,
+    )
     assert artifact_requests[1].difficulty_crank_index == 0
     assert artifact_requests[1].difficulty_crank_history == []
-    assert artifact_requests[2].strongest_difficulty_vector == {
-        DifficultyAxis.SLOT_COUNT: 3.0,
-        DifficultyAxis.CONSTRAINT_COUNT: 4.0,
-    }
-    assert artifact_requests[2].difficulty_crank_index == 0
-    assert artifact_requests[2].difficulty_crank_history == []
-    assert artifact_requests[2].latest_self_consistency_diagnostics is not None
+    assert artifact_requests[1].next_crank_axis == DifficultyAxis.SEARCH_COST
+    assert draft.environment.task.difficulty_vector == build_difficulty_vector(
+        search_cost=1.0,
+        solution_space=3.0,
+        constraint_density=4.0,
+    )
+    assert "artifact_task_overridden_from_task_synthesis" in (
+        draft.self_consistency_diagnostics.payload_repair_codes
+    )
 
 
 @pytest.mark.asyncio
@@ -1302,28 +1409,18 @@ async def test_synthesis_agent_runtime_enforces_difficulty_crank_limit(monkeypat
         provider_name="codex_oauth",
         model_name="gpt-5.4-mini",
         base_payloads=payloads,
-        artifact_payloads_by_attempt={
-            1: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 3.0}
+        payloads_by_attempt={
+            SynthesisPhase.LABEL_CONSTRUCTION: {
+                1: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(solution_space=3.0)
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt one",
-            ),
-            2: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 4.0}
+                2: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        search_cost=1.0,
+                        solution_space=3.0,
+                    )
                 ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt two valid crank",
-            ),
-            3: ArtifactGenerationOutput(
-                proposed_environment=_sample_proposed_environment(
-                    difficulty_vector={DifficultyAxis.SLOT_COUNT: 5.0}
-                ),
-                artifacts=_sample_artifacts(),
-                memory_summary="attempt three crank limit exceeded",
-            ),
+            }
         },
     )
     runtime = SynthesisAgentRuntime(
@@ -1364,12 +1461,144 @@ async def test_synthesis_agent_runtime_enforces_difficulty_crank_limit(monkeypat
     artifact_requests = [
         request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
     ]
-    assert [request.attempt_index for request in artifact_requests] == [1, 2, 3]
-    assert artifact_requests[2].difficulty_crank_index == 1
-    assert artifact_requests[2].difficulty_crank_history == [DifficultyAxis.SLOT_COUNT]
-    assert artifact_requests[2].strongest_difficulty_vector == {
-        DifficultyAxis.SLOT_COUNT: 4.0
-    }
+    assert [request.attempt_index for request in artifact_requests] == [1, 2]
+    assert artifact_requests[1].difficulty_crank_index == 0
+    assert artifact_requests[1].difficulty_crank_history == []
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_threads_quality_retry_seed_into_artifact_request(
+    monkeypatch,
+):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    backend = _AttemptAwareBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        base_payloads=_payloads(),
+        payloads_by_attempt={
+            SynthesisPhase.LABEL_CONSTRUCTION: {
+                1: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(search_cost=3.0)
+                )
+            }
+        },
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _passing_self_consistency_result()
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        graph=_sample_graph(),
+        retry_seed=SynthesisDifficultyRetrySeed(
+            strongest_difficulty_vector=build_difficulty_vector(search_cost=2.0),
+            difficulty_crank_index=1,
+            difficulty_crank_history=[DifficultyAxis.SEARCH_COST],
+            retry_requires_harder=True,
+            latest_quality_gate_feedback=SynthesisQualityGateFeedback(
+                status="reject_too_easy",
+                pass_rate=1.0,
+                ci_lower=0.6,
+                ci_upper=1.0,
+                matched_solver_runs=6,
+                total_solver_runs=6,
+                previous_env_id="env_prev",
+                previous_question="이전 질문",
+                previous_rendered_user_prompt="이전 prompt",
+                previous_semantic_dedup_text="question:이전 질문",
+                previous_canonical_answers=['{"store_id":1}'],
+                previous_solution_fingerprints=["sha256:prev"],
+            ),
+        ),
+    )
+
+    artifact_requests = [
+        request for request in backend.requests if request.phase == SynthesisPhase.ARTIFACT_GENERATION
+    ]
+    assert len(artifact_requests) == 1
+    assert artifact_requests[0].strongest_difficulty_vector == build_difficulty_vector(
+        search_cost=2.0
+    )
+    assert artifact_requests[0].difficulty_crank_index == 1
+    assert artifact_requests[0].difficulty_crank_history == [DifficultyAxis.SEARCH_COST]
+    assert artifact_requests[0].next_crank_axis == DifficultyAxis.SEARCH_COST
+    assert artifact_requests[0].latest_quality_gate_feedback is not None
+    assert artifact_requests[0].latest_quality_gate_feedback.status == "reject_too_easy"
+    assert artifact_requests[0].latest_quality_gate_feedback.previous_env_id == "env_prev"
+    assert (
+        artifact_requests[0].latest_quality_gate_feedback.previous_semantic_dedup_text
+        == "question:이전 질문"
+    )
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_rejects_out_of_order_difficulty_crank(monkeypatch):
+    config = load_config("rl_task_foundry.yaml").model_copy(deep=True)
+    config.synthesis.runtime.max_self_consistency_iterations = 2
+    payloads = _payloads()
+    backend = _AttemptAwareBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        base_payloads=payloads,
+        payloads_by_attempt={
+            SynthesisPhase.LABEL_CONSTRUCTION: {
+                1: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        solution_space=3.0,
+                        constraint_density=4.0,
+                    )
+                ),
+                2: _sample_label_output(
+                    difficulty_vector=build_difficulty_vector(
+                        solution_space=3.0,
+                        constraint_density=5.0,
+                    )
+                ),
+            }
+        },
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _diagnostic_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _failing_self_consistency_result(
+            facts_match_result=True,
+            check_constraints_result=False,
+            verify_result=False,
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    with pytest.raises(SynthesisSelfConsistencyError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            graph=_sample_graph(),
+        )
+
+    assert [attempt.outcome for attempt in exc_info.value.attempts] == [
+        SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+        SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_INVALID,
+    ]
+    assert exc_info.value.attempts[1].error_message is not None
+    assert "constraint_density" in exc_info.value.attempts[1].error_message
 
 
 @pytest.mark.asyncio
@@ -1752,6 +1981,7 @@ async def test_synthesis_agent_runtime_passes_atomic_tool_reference_to_self_cons
     )
 
     assert captured["atomic_tool_set_ref"] == "db://sakila"
+    assert captured["database_execution_config"]["dsn"] == config.database.dsn
     assert captured["solution_source"] == _sample_artifacts().solution_source
     assert captured["verifier_source"] == _sample_artifacts().verifier_source
     assert "tool_source" not in captured
@@ -1783,6 +2013,7 @@ async def test_synthesis_agent_runtime_passes_atomic_tool_reference_to_registrat
     )
 
     assert captured["atomic_tool_set_ref"] == "db://sakila"
+    assert captured["database_execution_config"]["dsn"] == config.database.dsn
     assert captured["bundle"] == _sample_artifacts()
     assert captured["pool"] is runtime._registration_pool
     assert "tool_source" not in captured
@@ -1843,6 +2074,9 @@ async def test_openai_agents_synthesis_backend_uses_structured_output_and_tracin
                 final_output={
                     "domain_hypothesis": "customer_support",
                     "candidate_categories": ["assignment"],
+                    "sample_observations": [
+                        "tool=count_customer -> observed 5 customers",
+                    ],
                     "memory_summary": "schema exploration complete",
                 },
                 _current_turn=2,
@@ -1918,21 +2152,165 @@ async def test_openai_agents_synthesis_backend_uses_structured_output_and_tracin
     assert FakeRunner.calls[0]["max_turns"] == config.synthesis.runtime.max_turns
     assert FakeSQLiteSession.last_instance.session_id == "sakila:schema_exploration:codex_oauth"
     assert FakeAgent.last_instance.kwargs["output_type"] is SchemaExplorationOutput
-    assert "available atomic tools" in FakeAgent.last_instance.kwargs["instructions"]
+    assert "provided tools" in FakeAgent.last_instance.kwargs["instructions"]
     assert "new tools can be created" in FakeAgent.last_instance.kwargs["instructions"]
-    request_input = json.loads(FakeRunner.calls[0]["input"])
-    assert request_input["atomic_tool_set_ref"] == "db://sakila"
-    assert request_input["available_atomic_tool_names"] == ["get_customer_by_id"]
-    assert request_input["available_atomic_tools"][0]["name"] == "get_customer_by_id"
-    assert "params_schema" not in request_input["available_atomic_tools"][0]
-    assert "returns_schema" not in request_input["available_atomic_tools"][0]
+    request_input = FakeRunner.calls[0]["input"]
+    assert "# Domain" in request_input
+    assert "# Requested Category" in request_input
+    assert "# Schema Orientation" in request_input
+    assert "# Exploration Goal" in request_input
+    assert "# Required Output Contract" in request_input
+    assert "User role:" not in request_input
+    assert "Assistant role:" not in request_input
+    assert "atomic_tool_set_ref" not in request_input
+    assert "available_atomic_tools" not in request_input
     assert (tmp_path / "synthesis_traces" / "transcripts").exists()
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_synthesis_backend_relaxes_strict_json_schema_for_artifact_generation(
+async def test_openai_agents_synthesis_backend_requires_tool_choice_when_schema_tools_are_bound(
     tmp_path,
     monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        last_instance = None
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.last_instance = self
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        calls: list[dict[str, object]] = []
+
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            FakeRunner.calls.append(
+                {
+                    "agent": agent,
+                    "input": input,
+                    "max_turns": max_turns,
+                    "session": session,
+                }
+            )
+            raise RuntimeError("stop after agent construction")
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+    backend.bind_atomic_tools(
+        tool_definitions=[
+            {
+                "name": "count_customer",
+                "description": "Get row count for customer.",
+                "params_schema": {"type": "object", "properties": {}},
+            }
+        ],
+        tool_executors={"count_customer": lambda _params: {"value": 5}},
+    )
+
+    with pytest.raises(RuntimeError, match="stop after agent construction"):
+        await backend.run_stage(
+            SynthesisStageRequest(
+                phase=SynthesisPhase.SCHEMA_EXPLORATION,
+                db_id="sakila",
+                atomic_tool_set_ref="db://sakila",
+                available_atomic_tools=[],
+                domain_name="customer_support",
+                user_role="end user",
+                agent_role="organization AI assistant",
+                scenario_description="help requests",
+                requested_category=CategoryTaxonomy.ASSIGNMENT,
+                schema_summary={"table_count": 2},
+            )
+        )
+
+    assert FakeAgent.last_instance is not None
+    assert FakeAgent.last_instance.kwargs["tools"]
+    assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
+    assert FakeRunner.calls[0]["max_turns"] == 12
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phase", "expected_output_type", "previous_outputs"),
+    [
+        (
+            SynthesisPhase.LABEL_CONSTRUCTION,
+            LabelConstructionOutput,
+            {
+                SynthesisPhase.SCHEMA_EXPLORATION: _payloads()[
+                    SynthesisPhase.SCHEMA_EXPLORATION
+                ],
+                SynthesisPhase.CATEGORY_INFERENCE: _payloads()[
+                    SynthesisPhase.CATEGORY_INFERENCE
+                ],
+            },
+        ),
+        (
+            SynthesisPhase.TASK_SYNTHESIS,
+            TaskSynthesisOutput,
+            {
+                SynthesisPhase.LABEL_CONSTRUCTION: _payloads()[
+                    SynthesisPhase.LABEL_CONSTRUCTION
+                ],
+            },
+        ),
+        (
+            SynthesisPhase.ARTIFACT_GENERATION,
+            ArtifactGenerationOutput,
+            _payloads(),
+        ),
+    ],
+)
+async def test_openai_agents_synthesis_backend_relaxes_strict_json_schema_for_complex_generation_phases(
+    tmp_path,
+    monkeypatch,
+    phase,
+    expected_output_type,
+    previous_outputs,
 ):
     class FakeAsyncOpenAI:
         def __init__(self, **_kwargs):
@@ -2005,7 +2383,7 @@ async def test_openai_agents_synthesis_backend_relaxes_strict_json_schema_for_ar
     with pytest.raises(RuntimeError, match="stop after agent construction"):
         await backend.run_stage(
             SynthesisStageRequest(
-                phase=SynthesisPhase.ARTIFACT_GENERATION,
+                phase=phase,
                 db_id="sakila",
                 atomic_tool_set_ref="db://sakila",
                 available_atomic_tools=[],
@@ -2015,12 +2393,12 @@ async def test_openai_agents_synthesis_backend_relaxes_strict_json_schema_for_ar
                 scenario_description="help requests",
                 requested_category=CategoryTaxonomy.ASSIGNMENT,
                 schema_summary={"table_count": 2},
-                previous_outputs=_payloads(),
+                previous_outputs=previous_outputs,
             )
         )
 
     assert FakeAgentOutputSchema.last_call is not None
-    assert FakeAgentOutputSchema.last_call.output_type is ArtifactGenerationOutput
+    assert FakeAgentOutputSchema.last_call.output_type is expected_output_type
     assert FakeAgentOutputSchema.last_call.strict_json_schema is False
     assert FakeAgent.last_instance.kwargs["output_type"] is FakeAgentOutputSchema.last_call
 
@@ -2083,6 +2461,209 @@ def test_openai_agents_synthesis_backend_coerces_artifact_generation_fact_shorth
     assert shadow_facts[1].key == "total_amount"
     assert shadow_facts[1].value_type == "float"
     assert repair_codes == ["facts_schema_normalized"]
+
+
+def test_openai_agents_synthesis_backend_prunes_top_level_artifact_environment_fields() -> None:
+    proposed_environment = _sample_proposed_environment().model_dump(mode="python")
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.ARTIFACT_GENERATION,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        previous_outputs=_payloads(),
+    )
+
+    payload, repair_codes = backend_module._normalize_phase_payload(
+        request,
+        {
+            "proposed_environment": proposed_environment,
+            "instance_space": proposed_environment["instance_space"],
+            "artifacts": _sample_artifacts().model_dump(mode="python"),
+        },
+    )
+
+    assert isinstance(payload, ArtifactGenerationOutput)
+    assert payload.proposed_environment.instance_space.anchor_query.sql.startswith("SELECT")
+    assert repair_codes == ["artifact_top_level_fields_pruned"]
+
+
+def test_openai_agents_synthesis_backend_completes_artifact_task_contract_from_previous_outputs() -> None:
+    proposed_environment = _sample_proposed_environment().model_dump(mode="python")
+    proposed_environment["task"] = {
+        "category": proposed_environment["task"]["category"],
+        "question": proposed_environment["task"]["question"],
+    }
+    del proposed_environment["instance_space"]
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.ARTIFACT_GENERATION,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        previous_outputs=_payloads(),
+    )
+
+    payload, repair_codes = backend_module._normalize_phase_payload(
+        request,
+        {
+            "proposed_environment": proposed_environment,
+            "artifacts": _sample_artifacts().model_dump(mode="python"),
+        },
+    )
+
+    assert isinstance(payload, ArtifactGenerationOutput)
+    assert payload.proposed_environment.task.output_schema == _sample_proposed_environment().task.output_schema
+    assert payload.proposed_environment.task.constraint_summary == _sample_proposed_environment().task.constraint_summary
+    assert payload.proposed_environment.task.difficulty_vector == build_difficulty_vector()
+    assert payload.proposed_environment.task.instance_parameters == {}
+    assert payload.proposed_environment.instance_space == _sample_proposed_environment().instance_space
+    assert repair_codes == [
+        "artifact_task_completed_from_previous_outputs",
+        "artifact_instance_space_completed_from_previous_outputs",
+    ]
+
+
+def test_openai_agents_synthesis_backend_normalizes_artifact_generation_string_fact_keys() -> None:
+    proposed_environment = _sample_proposed_environment().model_dump(mode="python")
+    proposed_environment["verifier"]["facts_schema"] = {
+        "facts": ["selected_store_id", "selected_store_total_amount", "selected_store_open_date"]
+    }
+    proposed_environment["shadow_verifier"]["facts_schema"] = {
+        "facts": ["selected_store_id", "is_primary_store"]
+    }
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.ARTIFACT_GENERATION,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        previous_outputs=_payloads(),
+    )
+
+    payload, repair_codes = backend_module._normalize_phase_payload(
+        request,
+        {
+            "proposed_environment": proposed_environment,
+            "artifacts": _sample_artifacts().model_dump(mode="python"),
+        },
+    )
+
+    assert isinstance(payload, ArtifactGenerationOutput)
+    verifier_facts = payload.proposed_environment.verifier.facts_schema.facts
+    shadow_facts = payload.proposed_environment.shadow_verifier.facts_schema.facts
+    assert verifier_facts[0].key == "selected_store_id"
+    assert verifier_facts[0].value_type == "int"
+    assert verifier_facts[1].value_type == "float"
+    assert verifier_facts[2].value_type == "date"
+    assert shadow_facts[1].value_type == "bool"
+    assert repair_codes == [
+        "facts_schema_key_list_normalized",
+        "facts_schema_normalized",
+    ]
+
+
+def test_openai_agents_synthesis_backend_normalizes_nullable_fact_value_type_aliases() -> None:
+    proposed_environment = _sample_proposed_environment().model_dump(mode="python")
+    proposed_environment["verifier"]["facts_schema"] = {
+        "facts": [
+            {
+                "key": "customer_store_id",
+                "entity_ref": "answer",
+                "attribute": "customer_store_id",
+                "value_type": "int_or_null",
+            }
+        ]
+    }
+    proposed_environment["shadow_verifier"]["facts_schema"] = {
+        "facts": [
+            {
+                "key": "customer_store_id",
+                "entity_ref": "answer",
+                "attribute": "customer_store_id",
+                "value_type": "optional_int",
+            }
+        ]
+    }
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.ARTIFACT_GENERATION,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        previous_outputs=_payloads(),
+    )
+
+    payload, repair_codes = backend_module._normalize_phase_payload(
+        request,
+        {
+            "proposed_environment": proposed_environment,
+            "artifacts": _sample_artifacts().model_dump(mode="python"),
+        },
+    )
+
+    assert isinstance(payload, ArtifactGenerationOutput)
+    verifier_fact = payload.proposed_environment.verifier.facts_schema.facts[0]
+    shadow_fact = payload.proposed_environment.shadow_verifier.facts_schema.facts[0]
+    assert verifier_fact.value_type == "int"
+    assert verifier_fact.nullable is True
+    assert shadow_fact.value_type == "int"
+    assert shadow_fact.nullable is True
+    assert repair_codes == [
+        "facts_schema_nullable_alias_normalized",
+        "facts_schema_normalized",
+    ]
+
+
+def test_openai_agents_synthesis_backend_normalizes_constraint_kind_aliases() -> None:
+    proposed_environment = _sample_proposed_environment().model_dump(mode="python")
+    proposed_environment["task"]["constraint_summary"] = [
+        {
+            "key": "join_depth",
+            "kind": "relationship_traversal",
+            "summary": "customer -> store traversal is required",
+        }
+    ]
+    request = SynthesisStageRequest(
+        phase=SynthesisPhase.ARTIFACT_GENERATION,
+        db_id="sakila",
+        atomic_tool_set_ref="db://sakila",
+        available_atomic_tools=[],
+        domain_name="customer_support",
+        user_role="end user",
+        agent_role="organization AI assistant",
+        scenario_description="help requests",
+        requested_category=CategoryTaxonomy.ASSIGNMENT,
+        previous_outputs=_payloads(),
+    )
+
+    payload, repair_codes = backend_module._normalize_phase_payload(
+        request,
+        {
+            "proposed_environment": proposed_environment,
+            "artifacts": _sample_artifacts().model_dump(mode="python"),
+        },
+    )
+
+    assert isinstance(payload, ArtifactGenerationOutput)
+    assert payload.proposed_environment.task.constraint_summary[0].kind == ConstraintKind.OTHER
+    assert repair_codes == ["constraint_kind_normalized"]
 
 
 def test_openai_agents_synthesis_backend_reports_split_json_repair_codes() -> None:
@@ -2200,6 +2781,7 @@ async def test_openai_agents_synthesis_backend_accepts_markdown_fenced_json(
                 SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
                     domain_hypothesis="customer_support",
                     candidate_categories=[CategoryTaxonomy.ASSIGNMENT],
+                    sample_observations=["tool=count_customer -> observed customers"],
                     memory_summary="schema explored",
                 )
             },
@@ -2248,6 +2830,9 @@ async def test_openai_agents_synthesis_backend_coerces_schema_exploration_alias_
                     "supported_query_patterns": ["retrieve one row by primary key"],
                     "limitations": ["no arbitrary aggregation"],
                     "domain_fit": "movie rental support workflows",
+                    "sample_observations": [
+                        "tool=count_customer -> observed customer rows",
+                    ],
                 },
                 _current_turn=1,
                 context_wrapper=SimpleNamespace(
@@ -2308,6 +2893,7 @@ async def test_openai_agents_synthesis_backend_coerces_schema_exploration_alias_
     assert isinstance(result.payload, SchemaExplorationOutput)
     assert result.payload.domain_hypothesis == "movie rental support workflows"
     assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
+    assert result.payload.sample_observations
     assert result.payload_repair_codes == ["schema_exploration_remapped"]
 
 
@@ -2420,6 +3006,119 @@ async def test_openai_agents_synthesis_backend_rejects_schema_exploration_catego
 
 
 @pytest.mark.asyncio
+async def test_openai_agents_synthesis_backend_promotes_explicit_schema_exploration_category_signal(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeSQLiteSession:
+        def __init__(self, session_id: str, db_path: str):
+            self.session_id = session_id
+            self.db_path = db_path
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            return SimpleNamespace(
+                final_output={
+                    "category": "assignment",
+                    "supported": True,
+                    "confidence": 0.96,
+                    "task_categories": [
+                        "single-hop entity lookup",
+                        "batch entity lookup",
+                        ],
+                        "reasoning": "assignment tasks are feasible with the current atomic tools",
+                        "unsupported_categories": ["free-form aggregation"],
+                        "sample_observations": [
+                            "count_customer() returned 599",
+                        ],
+                    },
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        requests=1,
+                        input_tokens=10,
+                        output_tokens=6,
+                        total_tokens=16,
+                    )
+                ),
+                new_items=[],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=FakeSQLiteSession,
+            set_tracing_disabled=lambda *, disabled: None,
+        ),
+    )
+
+    config = load_config("rl_task_foundry.yaml")
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=config.synthesis.runtime,
+        session_db_path=tmp_path / "synthesis_sessions.sqlite",
+        traces_dir=tmp_path / "synthesis_traces",
+    )
+
+    result = await backend.run_stage(
+        SynthesisStageRequest(
+            phase=SynthesisPhase.SCHEMA_EXPLORATION,
+            db_id="sakila",
+            atomic_tool_set_ref="db://sakila",
+            available_atomic_tools=[],
+            domain_name="customer_support",
+            user_role="end user",
+            agent_role="organization AI assistant",
+            scenario_description="help requests",
+            requested_category=CategoryTaxonomy.ASSIGNMENT,
+            schema_summary={"table_count": 2},
+        )
+    )
+
+    assert isinstance(result.payload, SchemaExplorationOutput)
+    assert result.payload.candidate_categories == [CategoryTaxonomy.ASSIGNMENT]
+    assert (
+        result.payload.domain_hypothesis
+        == "assignment tasks are feasible with the current atomic tools"
+    )
+    assert result.payload_repair_codes == [
+        "schema_exploration_category_promoted",
+        "schema_exploration_remapped",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_openai_agents_synthesis_backend_coerces_category_inference_alias_payload(
     tmp_path,
     monkeypatch,
@@ -2516,6 +3215,7 @@ async def test_openai_agents_synthesis_backend_coerces_category_inference_alias_
                 SynthesisPhase.SCHEMA_EXPLORATION: SchemaExplorationOutput(
                     domain_hypothesis="movie rental support workflows",
                     candidate_categories=[CategoryTaxonomy.ASSIGNMENT],
+                    sample_observations=["tool=count_customer -> observed customer rows"],
                     memory_summary="schema exploration completed",
                 )
             },
@@ -2580,6 +3280,7 @@ async def test_openai_agents_synthesis_backend_retries_without_structured_output
                 final_output=(
                     '{"domain_hypothesis":"customer_support",'
                     '"candidate_categories":["assignment"],'
+                    '"sample_observations":["tool=count_customer -> observed customers"],'
                     '"memory_summary":"schema exploration complete"}'
                 ),
                 _current_turn=1,

@@ -8,6 +8,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import MaterializedFactsSchema
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
@@ -341,9 +342,11 @@ async def run_registration_bundle(
     bundle: GeneratedArtifactBundle,
     tool_source: str | None = None,
     atomic_tool_set_ref: str | None = None,
+    database_execution_config: dict[str, object] | None = None,
     tool_self_test_source: str | None = None,
     pool: RegistrationSubprocessPool | None = None,
     verifier_probe_specs: dict[RegistrationArtifactName, VerifierProbeSpec] | None = None,
+    answer_field_names: set[str] | None = None,
 ) -> RegistrationBundleReport:
     """Run Milestone 2 registration checks for a generated artifact bundle.
 
@@ -352,6 +355,10 @@ async def run_registration_bundle(
     """
 
     policy = config.synthesis.registration_policy
+    tool_definitions = _load_atomic_tool_definitions(
+        config=config,
+        atomic_tool_set_ref=atomic_tool_set_ref,
+    )
     tool = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.TOOL,
         artifact_kind=ArtifactKind.TOOL_MODULE,
@@ -385,22 +392,38 @@ async def run_registration_bundle(
     solution = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.SOLUTION,
         artifact_kind=ArtifactKind.SOLUTION_MODULE,
-        static_errors=validate_generated_module(
-            bundle.solution_source,
-            kind=ArtifactKind.SOLUTION_MODULE,
-            policy=policy,
-        ),
+        static_errors=[
+            *validate_generated_module(
+                bundle.solution_source,
+                kind=ArtifactKind.SOLUTION_MODULE,
+                policy=policy,
+            ),
+            *_validate_tool_contract_usage(
+                bundle.solution_source,
+                tool_definitions=tool_definitions,
+            ),
+        ],
     )
     verifier = ArtifactRegistrationResult(
         artifact_name=RegistrationArtifactName.VERIFIER,
         artifact_kind=ArtifactKind.VERIFIER_MODULE,
         probe_required=verifier_probe_specs is not None
         and RegistrationArtifactName.VERIFIER in verifier_probe_specs,
-        static_errors=validate_generated_module(
-            bundle.verifier_source,
-            kind=ArtifactKind.VERIFIER_MODULE,
-            policy=policy,
-        ),
+        static_errors=[
+            *validate_generated_module(
+                bundle.verifier_source,
+                kind=ArtifactKind.VERIFIER_MODULE,
+                policy=policy,
+            ),
+            *_validate_tool_contract_usage(
+                bundle.verifier_source,
+                tool_definitions=tool_definitions,
+            ),
+            *_validate_answer_contract_usage(
+                bundle.verifier_source,
+                answer_field_names=answer_field_names,
+            ),
+        ],
         verifier_hybrid_analysis=analyze_verifier_module(
             bundle.verifier_source,
             kind=ArtifactKind.VERIFIER_MODULE,
@@ -417,6 +440,14 @@ async def run_registration_bundle(
                 kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
                 policy=policy,
             ),
+            *_validate_tool_contract_usage(
+                bundle.shadow_verifier_source,
+                tool_definitions=tool_definitions,
+            ),
+            *_validate_answer_contract_usage(
+                bundle.shadow_verifier_source,
+                answer_field_names=answer_field_names,
+            ),
             *_shadow_independence_errors(bundle),
         ],
         verifier_hybrid_analysis=analyze_verifier_module(
@@ -431,6 +462,7 @@ async def run_registration_bundle(
         execution_result = await pool.run_tool_self_test(
             tool_source=tool_source,
             atomic_tool_set_ref=atomic_tool_set_ref,
+            database_execution_config=database_execution_config,
             self_test_source=tool_self_test_source,
         )
         tool_self_test.executed = True
@@ -464,6 +496,7 @@ async def run_registration_bundle(
             probe_result = await pool.probe_verifier_module(
                 tool_source=tool_source,
                 atomic_tool_set_ref=atomic_tool_set_ref,
+                database_execution_config=database_execution_config,
                 verifier_source=verifier_source,
                 artifact_kind=artifact_kind,
                 answer_sample=probe_spec.answer_sample,
@@ -492,3 +525,270 @@ async def run_registration_bundle(
         verifier=verifier,
         shadow_verifier=shadow_verifier,
     )
+
+
+def _load_atomic_tool_definitions(
+    *,
+    config: AppConfig,
+    atomic_tool_set_ref: str | None,
+) -> dict[str, dict[str, object]]:
+    if not isinstance(atomic_tool_set_ref, str) or not atomic_tool_set_ref.startswith("db://"):
+        return {}
+    db_id = atomic_tool_set_ref.removeprefix("db://")
+    payload = AtomicToolMaterializer.for_config(config).read_actor_tool_definitions(db_id=db_id)
+    tool_definitions: dict[str, dict[str, object]] = {}
+    for item in payload:
+        name = item.get("name")
+        if isinstance(name, str):
+            tool_definitions[name] = item
+    return tool_definitions
+
+
+def _validate_tool_contract_usage(
+    source: str,
+    *,
+    tool_definitions: dict[str, dict[str, object]],
+) -> list[RegistrationError]:
+    if not tool_definitions:
+        return []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    visitor = _ToolContractVisitor(tool_definitions)
+    visitor.visit(tree)
+    return visitor.errors
+
+
+def _validate_answer_contract_usage(
+    source: str,
+    *,
+    answer_field_names: set[str] | None,
+) -> list[RegistrationError]:
+    if not answer_field_names:
+        return []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    visitor = _AnswerContractVisitor(answer_field_names)
+    visitor.visit(tree)
+    return visitor.errors
+
+
+class _ToolContractVisitor(ast.NodeVisitor):
+    def __init__(self, tool_definitions: dict[str, dict[str, object]]) -> None:
+        self.tool_definitions = tool_definitions
+        self.errors: list[RegistrationError] = []
+        self._bindings: dict[str, tuple[str, dict[str, object]]] = {}
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target_name = node.targets[0].id
+            binding = self._binding_for_expr(node.value)
+            if binding is None:
+                self._bindings.pop(target_name, None)
+            else:
+                self._bindings[target_name] = binding
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if isinstance(node.target, ast.Name):
+            target_name = node.target.id
+            binding = self._binding_for_expr(node.value) if node.value is not None else None
+            if binding is None:
+                self._bindings.pop(target_name, None)
+            else:
+                self._bindings[target_name] = binding
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            binding = self._binding_for_expr(node.func.value)
+            if binding is not None:
+                tool_name, tool_definition = binding
+                self._validate_key_access(
+                    node,
+                    key=node.args[0].value,
+                    tool_name=tool_name,
+                    tool_definition=tool_definition,
+                    via_method="get",
+                )
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            binding = self._binding_for_expr(node.value)
+            if binding is not None:
+                tool_name, tool_definition = binding
+                self._validate_key_access(
+                    node,
+                    key=node.slice.value,
+                    tool_name=tool_name,
+                    tool_definition=tool_definition,
+                    via_method="subscript",
+                )
+        self.generic_visit(node)
+
+    def _binding_for_expr(self, expr: ast.AST | None) -> tuple[str, dict[str, object]] | None:
+        if expr is None:
+            return None
+        if isinstance(expr, ast.Name):
+            return self._bindings.get(expr.id)
+        if isinstance(expr, ast.Call):
+            tool_name = _tools_attribute_name(expr.func)
+            if tool_name is None:
+                return None
+            tool_definition = self.tool_definitions.get(tool_name)
+            if tool_definition is None:
+                return None
+            return tool_name, tool_definition
+        if (
+            isinstance(expr, ast.Subscript)
+            and isinstance(expr.slice, ast.Constant)
+            and isinstance(expr.slice.value, int)
+        ):
+            binding = self._binding_for_expr(expr.value)
+            if binding is None:
+                return None
+            tool_name, tool_definition = binding
+            if _returns_row_objects(tool_definition.get("returns_schema")):
+                return tool_name, tool_definition
+        return None
+
+    def _validate_key_access(
+        self,
+        node: ast.AST,
+        *,
+        key: str,
+        tool_name: str,
+        tool_definition: dict[str, object],
+        via_method: str,
+    ) -> None:
+        allowed_keys = _allowed_return_keys(tool_definition.get("returns_schema"))
+        if allowed_keys is None:
+            self.errors.append(
+                RegistrationError(
+                    code="tool_return_key_access_forbidden",
+                    line=getattr(node, "lineno", None),
+                    col=getattr(node, "col_offset", None),
+                    node_type=type(node).__name__,
+                    detail=(
+                        f"{via_method} access to key '{key}' is invalid because tool "
+                        f"'{tool_name}' does not return an object schema with named fields."
+                    ),
+                    suggestion=(
+                        "Only index into object-valued tool results whose returns_schema "
+                        "declares that field explicitly."
+                    ),
+                )
+            )
+            return
+        if key in allowed_keys:
+            return
+        sorted_keys = ", ".join(sorted(allowed_keys)) or "<none>"
+        self.errors.append(
+            RegistrationError(
+                code="tool_return_key_not_in_returns_schema",
+                line=getattr(node, "lineno", None),
+                col=getattr(node, "col_offset", None),
+                node_type=type(node).__name__,
+                detail=(
+                    f"Tool '{tool_name}' does not declare return key '{key}'. "
+                    f"Allowed keys: {sorted_keys}."
+                ),
+                suggestion=(
+                    "Re-read available_atomic_tools and derive hidden attributes through "
+                    "other atomic tools instead of assuming undeclared return keys exist."
+                ),
+            )
+        )
+
+
+class _AnswerContractVisitor(ast.NodeVisitor):
+    def __init__(self, answer_field_names: set[str]) -> None:
+        self.answer_field_names = answer_field_names
+        self.errors: list[RegistrationError] = []
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "answer"
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            self._validate_answer_key(node, node.args[0].value)
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if (
+            isinstance(node.value, ast.Name)
+            and node.value.id == "answer"
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        ):
+            self._validate_answer_key(node, node.slice.value)
+        self.generic_visit(node)
+
+    def _validate_answer_key(self, node: ast.AST, key: str) -> None:
+        if key in self.answer_field_names:
+            return
+        allowed_keys = ", ".join(sorted(self.answer_field_names)) or "<none>"
+        self.errors.append(
+            RegistrationError(
+                code="answer_key_not_in_output_schema",
+                line=getattr(node, "lineno", None),
+                col=getattr(node, "col_offset", None),
+                node_type=type(node).__name__,
+                detail=(
+                    f"Generated verifier code reads answer key '{key}', but output_schema "
+                    f"declares only: {allowed_keys}."
+                ),
+                suggestion=(
+                    "Read only declared answer keys. Recompute hidden anchors or comparator "
+                    "entities through atomic tools instead of expecting them in the submitted answer."
+                ),
+            )
+        )
+
+
+def _tools_attribute_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "tools":
+        return node.attr
+    return None
+
+
+def _allowed_return_keys(returns_schema: object) -> set[str] | None:
+    if not isinstance(returns_schema, dict):
+        return None
+    schema_type = returns_schema.get("type")
+    if schema_type == "object":
+        properties = returns_schema.get("properties")
+        if isinstance(properties, dict):
+            return {key for key in properties if isinstance(key, str)}
+    if schema_type == "array":
+        items = returns_schema.get("items")
+        if isinstance(items, dict):
+            return _allowed_return_keys(items)
+    any_of = returns_schema.get("anyOf")
+    if isinstance(any_of, list):
+        for option in any_of:
+            allowed = _allowed_return_keys(option)
+            if allowed is not None:
+                return allowed
+    return None
+
+
+def _returns_row_objects(returns_schema: object) -> bool:
+    if not isinstance(returns_schema, dict):
+        return False
+    return returns_schema.get("type") == "array" and _allowed_return_keys(returns_schema) is not None

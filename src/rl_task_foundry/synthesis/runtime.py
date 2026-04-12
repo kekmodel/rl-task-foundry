@@ -13,6 +13,7 @@ from typing import Protocol
 from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.infra.db import DatabasePools
 from rl_task_foundry.pipeline.provider_resilience import (
     ProviderCircuitBreaker,
     ProviderCircuitSnapshot,
@@ -21,8 +22,11 @@ from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
+    ConstraintSummaryItem,
     CrossInstanceSet,
+    DIFFICULTY_CRANK_ORDER,
     DifficultyAxis,
+    DifficultyVectorContract,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
@@ -30,12 +34,15 @@ from rl_task_foundry.synthesis.contracts import (
     InstanceSpaceContract,
     OutputFieldContract,
     OutputFieldType,
+    OutputSchemaContract,
     RolloutConstraintsContract,
     ShadowVerifierContract,
     SolutionContract,
     StrictModel,
     TaskContract,
     VerifierContract,
+    difficulty_vector_json,
+    flatten_difficulty_vector,
 )
 from rl_task_foundry.synthesis.canonicalize import (
     CanonicalizationError,
@@ -44,6 +51,11 @@ from rl_task_foundry.synthesis.canonicalize import (
 )
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
+from rl_task_foundry.synthesis.phase_monitor import (
+    PipelinePhaseMonitorLogger,
+    default_phase_monitor_log_path,
+)
+from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.registration_runner import (
     GeneratedArtifactBundle,
     RegistrationArtifactName,
@@ -57,6 +69,11 @@ from rl_task_foundry.synthesis.registration_runner import (
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSubprocessPool
 from rl_task_foundry.synthesis.subprocess_pool import RegistrationSelfConsistencyResult
+from rl_task_foundry.synthesis.tool_runtime import (
+    ToolExecutor,
+    bind_atomic_tool_executor,
+    load_atomic_tool_module,
+)
 
 CURRENT_SYNTHESIS_GENERATOR_VERSION = "milestone-3-runtime-v1"
 RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
@@ -82,6 +99,8 @@ RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
 class SynthesisPhase(StrEnum):
     SCHEMA_EXPLORATION = "schema_exploration"
     CATEGORY_INFERENCE = "category_inference"
+    LABEL_CONSTRUCTION = "label_construction"
+    TASK_SYNTHESIS = "task_synthesis"
     ARTIFACT_GENERATION = "artifact_generation"
 
 
@@ -137,6 +156,7 @@ class SynthesisToolTraceEntry(StrictModel):
 class SchemaExplorationOutput(StrictModel):
     domain_hypothesis: str
     candidate_categories: list[CategoryTaxonomy] = Field(min_length=1)
+    sample_observations: list[str] = Field(default_factory=list, min_length=1)
     memory_summary: str = "schema exploration completed"
 
 
@@ -144,6 +164,22 @@ class CategoryInferenceOutput(StrictModel):
     selected_category: CategoryTaxonomy
     rationale: str
     memory_summary: str = "category inference completed"
+
+
+class LabelConstructionOutput(StrictModel):
+    canonical_answer_json: str = Field(min_length=1)
+    output_schema: OutputSchemaContract
+    difficulty_vector: DifficultyVectorContract = Field(default_factory=DifficultyVectorContract)
+    instance_parameters: dict[str, object] = Field(default_factory=dict)
+    label_summary: str
+    memory_summary: str = "label construction completed"
+
+
+class TaskSynthesisOutput(StrictModel):
+    question: str
+    constraint_summary: list[ConstraintSummaryItem] = Field(default_factory=list)
+    instance_space: InstanceSpaceContract
+    memory_summary: str = "task synthesis completed"
 
 
 class ProposedEnvironmentDraft(StrictModel):
@@ -162,7 +198,11 @@ class ArtifactGenerationOutput(StrictModel):
 
 
 SynthesisPhaseOutput = (
-    SchemaExplorationOutput | CategoryInferenceOutput | ArtifactGenerationOutput
+    SchemaExplorationOutput
+    | CategoryInferenceOutput
+    | LabelConstructionOutput
+    | TaskSynthesisOutput
+    | ArtifactGenerationOutput
 )
 
 
@@ -172,8 +212,9 @@ class SynthesisStageRequest(StrictModel):
     atomic_tool_set_ref: str | None = None
     available_atomic_tools: list[dict[str, object]] = Field(default_factory=list)
     domain_name: str
-    user_role: str
-    agent_role: str
+    task_language: str = "ko"
+    user_role: str | None = None
+    agent_role: str | None = None
     scenario_description: str
     requested_category: CategoryTaxonomy | None = None
     attempt_index: int = 1
@@ -182,9 +223,17 @@ class SynthesisStageRequest(StrictModel):
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
     latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
     latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
-    strongest_difficulty_vector: dict[DifficultyAxis, float] = Field(default_factory=dict)
+    strongest_difficulty_vector: DifficultyVectorContract = Field(
+        default_factory=DifficultyVectorContract
+    )
     difficulty_crank_index: int = Field(default=0, ge=0)
     difficulty_crank_history: list[DifficultyAxis] = Field(default_factory=list)
+    next_crank_axis: DifficultyAxis | None = None
+    current_diversity: int | None = Field(default=None, ge=0)
+    max_diversity: int | None = Field(default=None, ge=0)
+    current_scale: int | None = Field(default=None, ge=0)
+    crank_hint: str | None = None
+    latest_quality_gate_feedback: SynthesisQualityGateFeedback | None = None
 
 
 class SynthesisStageResult(StrictModel):
@@ -195,6 +244,44 @@ class SynthesisStageResult(StrictModel):
     payload_repair_codes: list[str] = Field(default_factory=list)
     memory_entry: SynthesisMemoryEntry
     tool_traces: list[SynthesisToolTraceEntry] = Field(default_factory=list)
+
+
+class SynthesisQualityGateFeedback(StrictModel):
+    status: str
+    pass_rate: float = Field(ge=0.0, le=1.0)
+    ci_lower: float = Field(ge=0.0, le=1.0)
+    ci_upper: float = Field(ge=0.0, le=1.0)
+    matched_solver_runs: int = Field(ge=0)
+    total_solver_runs: int = Field(ge=0)
+    previous_env_id: str | None = None
+    previous_question: str | None = None
+    previous_rendered_user_prompt: str | None = None
+    previous_semantic_dedup_text: str | None = None
+    previous_difficulty_vector: DifficultyVectorContract | None = None
+    previous_canonical_answers: list[str] = Field(default_factory=list)
+    previous_solution_fingerprints: list[str] = Field(default_factory=list)
+
+
+class SynthesisDifficultyRetrySeed(StrictModel):
+    strongest_difficulty_vector: DifficultyVectorContract = Field(
+        default_factory=DifficultyVectorContract
+    )
+    difficulty_crank_index: int = Field(default=0, ge=0)
+    difficulty_crank_history: list[DifficultyAxis] = Field(default_factory=list)
+    retry_requires_harder: bool = False
+    latest_quality_gate_feedback: SynthesisQualityGateFeedback | None = None
+
+    def requested_axis(self) -> DifficultyAxis:
+        return _next_difficulty_crank_axis(history=self.difficulty_crank_history)
+
+    def consume_requested_crank(self) -> SynthesisDifficultyRetrySeed:
+        requested_axis = self.requested_axis()
+        return self.model_copy(
+            update={
+                "difficulty_crank_index": self.difficulty_crank_index + 1,
+                "difficulty_crank_history": [*self.difficulty_crank_history, requested_axis],
+            }
+        )
 
 
 class MaterializedInstanceRecord(StrictModel):
@@ -463,14 +550,16 @@ def _sample_output_value(field: OutputFieldContract) -> object:
 
 def _weakened_difficulty_axes(
     *,
-    previous: dict[DifficultyAxis, float] | None,
-    current: dict[DifficultyAxis, float],
+    previous: DifficultyVectorContract | None,
+    current: DifficultyVectorContract,
 ) -> list[str]:
     if previous is None:
         return []
     weakened: list[str] = []
-    for axis, previous_value in previous.items():
-        current_value = current.get(axis)
+    previous_flat = flatten_difficulty_vector(previous)
+    current_flat = flatten_difficulty_vector(current)
+    for axis, previous_value in previous_flat.items():
+        current_value = current_flat.get(axis, 0.0)
         if current_value is None or current_value < previous_value:
             weakened.append(axis.value)
     return weakened
@@ -478,18 +567,266 @@ def _weakened_difficulty_axes(
 
 def _strengthened_difficulty_axes(
     *,
-    previous: dict[DifficultyAxis, float] | None,
-    current: dict[DifficultyAxis, float],
+    previous: DifficultyVectorContract | None,
+    current: DifficultyVectorContract,
 ) -> list[DifficultyAxis]:
     if previous is None:
         return []
+    previous_flat = flatten_difficulty_vector(previous)
+    current_flat = flatten_difficulty_vector(current)
     strengthened: list[DifficultyAxis] = []
-    for axis in set(previous) | set(current):
-        previous_value = previous.get(axis, 0.0)
-        current_value = current.get(axis, 0.0)
+    for axis in set(previous_flat) | set(current_flat):
+        previous_value = previous_flat.get(axis, 0.0)
+        current_value = current_flat.get(axis, 0.0)
         if current_value > previous_value:
             strengthened.append(axis)
-    return sorted(strengthened, key=lambda axis: axis.value)
+    return sorted(
+        strengthened,
+        key=lambda axis: DIFFICULTY_CRANK_ORDER.index(axis),
+    )
+
+
+def _is_valid_difficulty_crank_step(
+    *,
+    history: list[DifficultyAxis],
+    strengthened_axes: list[DifficultyAxis],
+) -> bool:
+    if len(strengthened_axes) != 1:
+        return False
+    if not history:
+        return True
+    last_axis = history[-1]
+    last_index = DIFFICULTY_CRANK_ORDER.index(last_axis)
+    allowed = {last_axis}
+    if last_index + 1 < len(DIFFICULTY_CRANK_ORDER):
+        allowed.add(DIFFICULTY_CRANK_ORDER[last_index + 1])
+    return strengthened_axes[0] in allowed
+
+
+def _output_slot_count(field: OutputFieldContract) -> int:
+    if field.type == OutputFieldType.OBJECT:
+        return sum(_output_slot_count(child) for child in field.fields) or 1
+    if field.type == OutputFieldType.LIST and field.items is not None:
+        return _output_slot_count(field.items)
+    return 1
+
+
+def _search_cost_diversity(
+    *,
+    graph: SchemaGraph,
+    bundle: GeneratedArtifactBundle | None,
+    available_atomic_tools: list[dict[str, object]],
+) -> int:
+    if bundle is None:
+        return 0
+    tool_names = [
+        str(tool["name"])
+        for tool in available_atomic_tools
+        if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+    ]
+    source = "\n".join(
+        [
+            bundle.solution_source,
+            bundle.verifier_source,
+            bundle.shadow_verifier_source,
+        ]
+    )
+    referenced_tool_names = [name for name in tool_names if f"tools.{name}(" in source]
+    referenced_tables: set[str] = set()
+    for name in referenced_tool_names:
+        for table in graph.tables:
+            table_slug = table.table_name.lower()
+            if table_slug in name:
+                referenced_tables.add(table.qualified_name)
+    if referenced_tables:
+        return len(referenced_tables)
+    return len(referenced_tool_names)
+
+
+def _search_cost_max_diversity(graph: SchemaGraph) -> int:
+    return max(1, len(graph.tables))
+
+
+def _search_cost_scale(
+    *,
+    bundle: GeneratedArtifactBundle | None,
+    available_atomic_tools: list[dict[str, object]],
+) -> int:
+    if bundle is None:
+        return 0
+    tool_names = [
+        str(tool["name"])
+        for tool in available_atomic_tools
+        if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+    ]
+    source = "\n".join(
+        [
+            bundle.solution_source,
+            bundle.verifier_source,
+            bundle.shadow_verifier_source,
+        ]
+    )
+    total_calls = 0
+    for name in tool_names:
+        total_calls += source.count(f"tools.{name}(")
+    return total_calls
+
+
+def _solution_space_diversity(task: TaskContract | None) -> int:
+    if task is None:
+        return 0
+    return _output_slot_count(task.output_schema.root)
+
+
+def _solution_space_max_diversity(graph: SchemaGraph) -> int:
+    return max(1, len(graph.tables))
+
+
+def _solution_space_scale(task: TaskContract | None) -> int:
+    if task is None:
+        return 0
+    return max(1, len(task.instance_parameters) or _output_slot_count(task.output_schema.root))
+
+
+def _constraint_density_diversity(task: TaskContract | None) -> int:
+    if task is None:
+        return 0
+    return len({item.kind for item in task.constraint_summary})
+
+
+def _constraint_density_max_diversity() -> int:
+    return 3
+
+
+def _constraint_density_scale(task: TaskContract | None) -> int:
+    if task is None:
+        return 0
+    return len(task.constraint_summary)
+
+
+def _top_level_answer_field_names(task: TaskContract) -> set[str]:
+    root = task.output_schema.root
+    if root.type is not OutputFieldType.OBJECT:
+        return set()
+    return {field.name for field in root.fields}
+
+
+def _project_retry_difficulty_vector(
+    *,
+    previous: DifficultyVectorContract | None,
+    current: DifficultyVectorContract,
+    requested_axis: DifficultyAxis | None,
+) -> DifficultyVectorContract | None:
+    if previous is None or requested_axis is None:
+        return None
+    strengthened_axes = _strengthened_difficulty_axes(previous=previous, current=current)
+    if requested_axis not in strengthened_axes or len(strengthened_axes) <= 1:
+        return None
+    projected_payload = difficulty_vector_json(previous)
+    projected_payload[requested_axis.value] = float(
+        max(
+            getattr(previous, requested_axis.value),
+            getattr(current, requested_axis.value),
+        )
+    )
+    return DifficultyVectorContract.model_validate(projected_payload)
+
+
+def _next_difficulty_crank_axis(*, history: list[DifficultyAxis]) -> DifficultyAxis:
+    if not history:
+        return DifficultyAxis.SEARCH_COST
+    last_axis = history[-1]
+    repeat_count = history.count(last_axis)
+    if repeat_count < 2:
+        return last_axis
+    last_index = DIFFICULTY_CRANK_ORDER.index(last_axis)
+    if last_index + 1 < len(DIFFICULTY_CRANK_ORDER):
+        return DIFFICULTY_CRANK_ORDER[last_index + 1]
+    return last_axis
+
+
+def _consume_difficulty_crank_attempt(
+    *,
+    count: int,
+    history: list[DifficultyAxis],
+) -> tuple[int, list[DifficultyAxis]]:
+    requested_axis = _next_difficulty_crank_axis(history=history)
+    return count + 1, [*history, requested_axis]
+
+
+def _difficulty_guidance(
+    *,
+    graph: SchemaGraph,
+    task: TaskContract | None,
+    bundle: GeneratedArtifactBundle | None,
+    available_atomic_tools: list[dict[str, object]],
+    history: list[DifficultyAxis],
+) -> tuple[DifficultyAxis, int, int, int, str]:
+    axis = _next_difficulty_crank_axis(history=history)
+    if axis is DifficultyAxis.SEARCH_COST:
+        current_diversity = _search_cost_diversity(
+            graph=graph,
+            bundle=bundle,
+            available_atomic_tools=available_atomic_tools,
+        )
+        max_diversity = _search_cost_max_diversity(graph)
+        current_scale = _search_cost_scale(
+            bundle=bundle,
+            available_atomic_tools=available_atomic_tools,
+        )
+        if current_diversity < max_diversity:
+            hint = (
+                "Increase search_cost by adding a new table join or traversal step that "
+                "forces a longer evidence chain."
+            )
+        else:
+            hint = (
+                "Search-cost diversity is saturated. Increase scale by widening the candidate "
+                "fanout or comparator set so the chain must inspect more evidence."
+            )
+        return axis, current_diversity, max_diversity, current_scale, hint
+    if axis is DifficultyAxis.SOLUTION_SPACE:
+        current_diversity = _solution_space_diversity(task)
+        max_diversity = _solution_space_max_diversity(graph)
+        current_scale = _solution_space_scale(task)
+        if current_diversity < max_diversity:
+            hint = (
+                "Increase solution_space by adding a new output slot or restructuring the "
+                "answer so the valid combination has more moving parts."
+            )
+        else:
+            hint = (
+                "Solution-space diversity is saturated. Increase scale by broadening the "
+                "candidate combination width for each answer slot."
+            )
+        return axis, current_diversity, max_diversity, current_scale, hint
+    current_diversity = _constraint_density_diversity(task)
+    max_diversity = _constraint_density_max_diversity()
+    current_scale = _constraint_density_scale(task)
+    if current_diversity < max_diversity:
+        hint = (
+            "Increase constraint_density by adding a new interacting constraint type or "
+            "branching condition."
+        )
+    else:
+        hint = (
+            "Constraint-density diversity is saturated. Increase scale by making existing "
+            "constraints interact more tightly so valid answers become rarer."
+        )
+    return axis, current_diversity, max_diversity, current_scale, hint
+
+
+def merge_strongest_difficulty_vector(
+    previous: DifficultyVectorContract | None,
+    current: DifficultyVectorContract,
+) -> DifficultyVectorContract:
+    if previous is None:
+        return current
+    return DifficultyVectorContract(
+        search_cost=max(previous.search_cost, current.search_cost),
+        solution_space=max(previous.solution_space, current.solution_space),
+        constraint_density=max(previous.constraint_density, current.constraint_density),
+    )
 
 
 @dataclass(slots=True)
@@ -506,6 +843,10 @@ class SynthesisAgentRuntime:
     _atomic_tool_bundles: dict[str, AtomicToolBundle] = field(
         default_factory=dict, init=False, repr=False
     )
+    _tool_executor_cache: dict[str, dict[str, ToolExecutor]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
     _bound_db_id: str | None = field(default=None, init=False, repr=False)
     _category_failures: dict[tuple[str, CategoryTaxonomy], _CategoryFailureState] = field(
         default_factory=dict, init=False, repr=False
@@ -522,6 +863,7 @@ class SynthesisAgentRuntime:
     _category_state_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
+    phase_monitor: PipelinePhaseMonitorLogger | None = None
 
     def __post_init__(self) -> None:
         if self.phase_backends is None:
@@ -541,6 +883,8 @@ class SynthesisAgentRuntime:
                 for phase in (
                     SynthesisPhase.SCHEMA_EXPLORATION,
                     SynthesisPhase.CATEGORY_INFERENCE,
+                    SynthesisPhase.LABEL_CONSTRUCTION,
+                    SynthesisPhase.TASK_SYNTHESIS,
                     SynthesisPhase.ARTIFACT_GENERATION,
                 )
             }
@@ -554,6 +898,14 @@ class SynthesisAgentRuntime:
             for provider_name in self.config.providers
         }
         self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
+        if self.phase_monitor is None:
+            self.phase_monitor = PipelinePhaseMonitorLogger(
+                phase_monitor_log_path=default_phase_monitor_log_path(
+                    self.config.output.traces_dir
+                ),
+                flow_kind="synthesis_runtime",
+                flow_id=build_flow_id("synthesis_runtime"),
+            )
 
     async def synthesize_environment_draft(
         self,
@@ -561,6 +913,7 @@ class SynthesisAgentRuntime:
         db_id: str,
         requested_category: CategoryTaxonomy,
         graph: SchemaGraph | None = None,
+        retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> SynthesisEnvironmentDraft:
         await self._bind_db_id(db_id)
         await self._ensure_category_available(db_id, requested_category)
@@ -572,6 +925,10 @@ class SynthesisAgentRuntime:
         atomic_tool_set_ref = f"db://{db_id}"
         available_atomic_tools = atomic_tool_bundle.actor_tool_definitions()
         schema_summary = summarize_schema_graph(resolved_graph)
+        await self._prime_phase_backends_with_atomic_tools(
+            db_id=db_id,
+            bundle=atomic_tool_bundle,
+        )
         try:
             stage_results: list[SynthesisStageResult] = []
             memory: list[SynthesisMemoryEntry] = []
@@ -588,8 +945,6 @@ class SynthesisAgentRuntime:
                     atomic_tool_set_ref=atomic_tool_set_ref,
                     available_atomic_tools=available_atomic_tools,
                     domain_name=self.config.domain.name,
-                    user_role=self.config.domain.user_role,
-                    agent_role=self.config.domain.agent_role,
                     scenario_description=self.config.domain.scenario_description,
                     requested_category=requested_category,
                     attempt_index=1,
@@ -598,6 +953,8 @@ class SynthesisAgentRuntime:
                     memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
                 )
                 result = await self._run_phase(request)
+                if phase is SynthesisPhase.SCHEMA_EXPLORATION:
+                    self._ensure_grounded_schema_exploration(request, result)
                 stage_results.append(result)
                 memory.append(result.memory_entry)
                 tool_traces.extend(result.tool_traces)
@@ -612,7 +969,8 @@ class SynthesisAgentRuntime:
                 )
 
             (
-                artifact_payload,
+                proposed_environment,
+                artifacts,
                 registration_report,
                 registration_diagnostics,
                 self_consistency_diagnostics,
@@ -620,9 +978,10 @@ class SynthesisAgentRuntime:
                 canonical_answers,
                 materialized_cross_instance_set,
                 self_consistency_attempts,
-            ) = await self._run_artifact_generation_with_self_consistency(
+            ) = await self._run_label_first_generation_with_self_consistency(
                 db_id=db_id,
                 requested_category=requested_category,
+                graph=resolved_graph,
                 schema_summary=schema_summary,
                 previous_outputs=previous_outputs,
                 stage_results=stage_results,
@@ -630,13 +989,14 @@ class SynthesisAgentRuntime:
                 tool_traces=tool_traces,
                 atomic_tool_set_ref=atomic_tool_set_ref,
                 available_atomic_tools=available_atomic_tools,
+                retry_seed=retry_seed,
             )
 
             materialized_at = datetime.now(timezone.utc)
             environment = self._materialize_environment(
-                proposed_environment=artifact_payload.proposed_environment,
+                proposed_environment=proposed_environment,
                 atomic_tool_bundle=atomic_tool_bundle,
-                artifacts=artifact_payload.artifacts,
+                artifacts=artifacts,
                 db_id=db_id,
                 requested_category=requested_category,
                 created_at=materialized_at,
@@ -653,7 +1013,7 @@ class SynthesisAgentRuntime:
                 selected_category=selected_category,
                 environment=environment,
                 atomic_tool_bundle=atomic_tool_bundle,
-                artifacts=artifact_payload.artifacts,
+                artifacts=artifacts,
                 registration_report=registration_report,
                 registration_diagnostics=registration_diagnostics,
                 self_consistency_diagnostics=self_consistency_diagnostics,
@@ -692,7 +1052,321 @@ class SynthesisAgentRuntime:
         if self._registration_pool is not None:
             await self._registration_pool.close()
             self._registration_pool = None
+        if self._database_pools is not None:
+            await self._database_pools.close()
+            self._database_pools = None
         self._atomic_tool_bundles.clear()
+        self._tool_executor_cache.clear()
+
+    def _emit_phase_monitor(
+        self,
+        *,
+        phase: str,
+        status: str,
+        expected_contract: dict[str, object] | None = None,
+        actual_data: dict[str, object] | None = None,
+        checks: dict[str, object] | None = None,
+        diagnostics: dict[str, object] | None = None,
+    ) -> None:
+        if self.phase_monitor is None:
+            return
+        self.phase_monitor.emit(
+            phase=phase,
+            status=status,
+            expected_contract=expected_contract,
+            actual_data=actual_data,
+            checks=checks,
+            diagnostics=diagnostics,
+        )
+
+    @staticmethod
+    def _artifact_present_fields(bundle: GeneratedArtifactBundle) -> list[str]:
+        payload = bundle.model_dump(mode="python")
+        return sorted(
+            key
+            for key, value in payload.items()
+            if isinstance(value, str) and value.strip()
+        )
+
+    @staticmethod
+    def _fact_keys(contract: VerifierContract | ShadowVerifierContract) -> list[str]:
+        return [fact.key for fact in contract.facts_schema.facts]
+
+    def _expected_contract_for_request(
+        self,
+        request: SynthesisStageRequest,
+    ) -> dict[str, object]:
+        base = {
+            "db_id": request.db_id,
+            "phase": request.phase.value,
+            "attempt_index": request.attempt_index,
+            "requested_category": (
+                request.requested_category.value
+                if request.requested_category is not None
+                else None
+            ),
+            "atomic_tool_count": len(request.available_atomic_tools),
+            "memory_window_size": len(request.memory),
+        }
+        if request.phase == SynthesisPhase.SCHEMA_EXPLORATION:
+            base.update(
+                {
+                    "required_fields": [
+                        "domain_hypothesis",
+                        "candidate_categories",
+                        "sample_observations",
+                        "memory_summary",
+                    ],
+                    "candidate_categories_min_length": 1,
+                    "sample_observations_min_length": 1,
+                    "must_use_live_atomic_tools": True,
+                }
+            )
+            return base
+        if request.phase == SynthesisPhase.CATEGORY_INFERENCE:
+            base.update(
+                {
+                    "required_fields": [
+                        "selected_category",
+                        "rationale",
+                        "memory_summary",
+                    ],
+                    "must_match_requested_category": request.requested_category is not None,
+                }
+            )
+            return base
+        if request.phase == SynthesisPhase.LABEL_CONSTRUCTION:
+            base.update(
+                {
+                    "required_fields": [
+                        "canonical_answer_json",
+                        "output_schema",
+                        "difficulty_vector",
+                        "label_summary",
+                        "memory_summary",
+                    ],
+                    "label_first": True,
+                }
+            )
+            return base
+        if request.phase == SynthesisPhase.TASK_SYNTHESIS:
+            base.update(
+                {
+                    "required_fields": [
+                        "question",
+                        "constraint_summary",
+                        "instance_space",
+                        "memory_summary",
+                    ],
+                    "must_surface_label_semantics": True,
+                }
+            )
+            return base
+        base.update(
+            {
+                "required_fields": [
+                    "proposed_environment",
+                    "artifacts",
+                    "memory_summary",
+                ],
+                "required_proposed_environment_sections": [
+                    "task",
+                    "solution",
+                    "verifier",
+                    "shadow_verifier",
+                    "instance_space",
+                ],
+                "required_artifact_fields": [
+                    "solution_source",
+                    "verifier_source",
+                    "shadow_verifier_source",
+                ],
+                "must_match_requested_category": True,
+                "difficulty_crank_index": request.difficulty_crank_index,
+                "difficulty_crank_history": [axis.value for axis in request.difficulty_crank_history],
+                "strongest_difficulty_vector": difficulty_vector_json(
+                    request.strongest_difficulty_vector
+                ),
+                "next_crank_axis": (
+                    request.next_crank_axis.value if request.next_crank_axis is not None else None
+                ),
+                "current_diversity": request.current_diversity,
+                "max_diversity": request.max_diversity,
+                "current_scale": request.current_scale,
+                "crank_hint": request.crank_hint,
+                "latest_quality_gate_feedback": (
+                    request.latest_quality_gate_feedback.model_dump(mode="json")
+                    if request.latest_quality_gate_feedback is not None
+                    else None
+                ),
+            }
+        )
+        return base
+
+    def _actual_data_for_stage_result(
+        self,
+        result: SynthesisStageResult,
+    ) -> dict[str, object]:
+        payload = result.payload
+        if isinstance(payload, SchemaExplorationOutput):
+            return {
+                "domain_hypothesis": payload.domain_hypothesis,
+                "candidate_categories": [category.value for category in payload.candidate_categories],
+                "sample_observations": list(payload.sample_observations),
+                "memory_summary": payload.memory_summary,
+            }
+        if isinstance(payload, CategoryInferenceOutput):
+            return {
+                "selected_category": payload.selected_category.value,
+                "rationale": payload.rationale,
+                "memory_summary": payload.memory_summary,
+            }
+        if isinstance(payload, LabelConstructionOutput):
+            return {
+                "canonical_answer_json": payload.canonical_answer_json,
+                "difficulty_vector": difficulty_vector_json(payload.difficulty_vector),
+                "instance_parameter_keys": sorted(payload.instance_parameters.keys()),
+                "label_summary": payload.label_summary,
+                "output_schema_root_type": payload.output_schema.root.type.value,
+                "memory_summary": payload.memory_summary,
+            }
+        if isinstance(payload, TaskSynthesisOutput):
+            return {
+                "question": payload.question,
+                "constraint_count": len(payload.constraint_summary),
+                "instance_space_anchor_sql": payload.instance_space.anchor_query.sql,
+                "instance_space_anchor_outputs": list(payload.instance_space.anchor_query.outputs),
+                "memory_summary": payload.memory_summary,
+            }
+        proposed_environment = payload.proposed_environment
+        task = proposed_environment.task
+        return {
+            "task_category": task.category.value,
+            "question": task.question,
+            "difficulty_vector": difficulty_vector_json(task.difficulty_vector),
+            "user_prompt_preview": build_rendered_user_prompt(task),
+            "output_schema_root_type": task.output_schema.root.type.value,
+            "constraint_count": len(task.constraint_summary),
+            "instance_parameter_keys": sorted(task.instance_parameters.keys()),
+            "verifier_fact_keys": self._fact_keys(proposed_environment.verifier),
+            "shadow_verifier_fact_keys": self._fact_keys(
+                proposed_environment.shadow_verifier
+            ),
+            "artifact_fields_present": self._artifact_present_fields(payload.artifacts),
+            "memory_summary": payload.memory_summary,
+        }
+
+    def _checks_for_stage_result(
+        self,
+        request: SynthesisStageRequest,
+        result: SynthesisStageResult,
+    ) -> dict[str, object]:
+        payload = result.payload
+        if isinstance(payload, SchemaExplorationOutput):
+            return {
+                "domain_hypothesis_present": bool(payload.domain_hypothesis.strip()),
+                "candidate_categories_non_empty": len(payload.candidate_categories) > 0,
+                "sample_observations_non_empty": len(payload.sample_observations) > 0,
+                "tool_traces_present": len(result.tool_traces) > 0,
+                "requested_category_in_candidates": (
+                    request.requested_category.value
+                    in [category.value for category in payload.candidate_categories]
+                    if request.requested_category is not None
+                    else None
+                ),
+            }
+        if isinstance(payload, CategoryInferenceOutput):
+            return {
+                "selected_category_present": bool(payload.selected_category.value),
+                "selected_category_matches_requested": (
+                    payload.selected_category == request.requested_category
+                    if request.requested_category is not None
+                    else None
+                ),
+                "rationale_present": bool(payload.rationale.strip()),
+            }
+        if isinstance(payload, LabelConstructionOutput):
+            return {
+                "canonical_answer_json_present": bool(payload.canonical_answer_json.strip()),
+                "label_summary_present": bool(payload.label_summary.strip()),
+                "difficulty_vector_present": payload.difficulty_vector.total_score() >= 0.0,
+            }
+        if isinstance(payload, TaskSynthesisOutput):
+            return {
+                "question_present": bool(payload.question.strip()),
+                "anchor_outputs_present": bool(payload.instance_space.anchor_query.outputs),
+                "constraint_summary_present": len(payload.constraint_summary) > 0,
+            }
+        proposed_environment = payload.proposed_environment
+        return {
+            "task_category_matches_requested": (
+                proposed_environment.task.category == request.requested_category
+                if request.requested_category is not None
+                else None
+            ),
+            "solution_source_present": bool(payload.artifacts.solution_source.strip()),
+            "verifier_source_present": bool(payload.artifacts.verifier_source.strip()),
+            "shadow_verifier_source_present": bool(
+                payload.artifacts.shadow_verifier_source.strip()
+            ),
+            "verifier_fact_keys_match_shadow": self._fact_keys(
+                proposed_environment.verifier
+            )
+            == self._fact_keys(proposed_environment.shadow_verifier),
+            "difficulty_vector_present": bool(
+                proposed_environment.task.difficulty_vector.nonzero_axes()
+            ),
+        }
+
+    def _log_stage_result(
+        self,
+        request: SynthesisStageRequest,
+        result: SynthesisStageResult,
+    ) -> None:
+        self._emit_phase_monitor(
+            phase=request.phase.value,
+            status="completed",
+            expected_contract=self._expected_contract_for_request(request),
+            actual_data=self._actual_data_for_stage_result(result),
+            checks=self._checks_for_stage_result(request, result),
+            diagnostics={
+                "provider": result.provider,
+                "model": result.model,
+                "payload_repair_codes": list(result.payload_repair_codes),
+                "tool_trace_count": len(result.tool_traces),
+                "turn_count": result.memory_entry.turn_count,
+                "token_usage": dict(result.memory_entry.token_usage),
+                "transcript_ref": result.memory_entry.transcript_ref,
+                "tool_trace_ref": result.memory_entry.tool_trace_ref,
+            },
+        )
+
+    def _log_stage_failure(
+        self,
+        request: SynthesisStageRequest,
+        *,
+        status: str,
+        error_message: str,
+        backend_failures: list[SynthesisBackendFailure] | None = None,
+    ) -> None:
+        self._emit_phase_monitor(
+            phase=request.phase.value,
+            status=status,
+            expected_contract=self._expected_contract_for_request(request),
+            actual_data={},
+            checks={},
+            diagnostics={
+                "error_message": error_message,
+                "backend_failures": [
+                    {
+                        "provider": failure.provider,
+                        "model": failure.model,
+                        "error_type": failure.error_type,
+                    }
+                    for failure in (backend_failures or [])
+                ],
+            },
+        )
 
     def provider_status(self) -> dict[str, SynthesisProviderStatus]:
         return {
@@ -827,25 +1501,43 @@ class SynthesisAgentRuntime:
                 )
                 continue
             breaker.record_success()
+            self._log_stage_result(request, result)
             return result
 
         if errors:
+            self._log_stage_failure(
+                request,
+                status="failed",
+                error_message=(
+                    f"synthesis phase {request.phase.value} failed across candidate providers: "
+                    + ", ".join(errors)
+                ),
+                backend_failures=backend_failures,
+            )
             raise SynthesisPhaseExecutionError(
                 f"synthesis phase {request.phase.value} failed across candidate providers: "
                 + ", ".join(errors),
                 phase=request.phase,
                 backend_failures=backend_failures,
             )
+        self._log_stage_failure(
+            request,
+            status="unavailable",
+            error_message=(
+                f"all providers are in cooldown for synthesis phase {request.phase.value}"
+            ),
+        )
         raise SynthesisProviderUnavailableError(
             f"all providers are in cooldown for synthesis phase {request.phase.value}",
             phase=request.phase,
         )
 
-    async def _run_artifact_generation_with_self_consistency(
+    async def _run_label_first_generation_with_self_consistency(
         self,
         *,
         db_id: str,
         requested_category: CategoryTaxonomy,
+        graph: SchemaGraph,
         schema_summary: dict[str, object],
         previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput],
         stage_results: list[SynthesisStageResult],
@@ -853,6 +1545,711 @@ class SynthesisAgentRuntime:
         tool_traces: list[SynthesisToolTraceEntry],
         atomic_tool_set_ref: str,
         available_atomic_tools: list[dict[str, object]],
+        retry_seed: SynthesisDifficultyRetrySeed | None = None,
+    ) -> tuple[
+        ProposedEnvironmentDraft,
+        GeneratedArtifactBundle,
+        RegistrationBundleReport,
+        RegistrationBundleDiagnostics,
+        SynthesisSelfConsistencyDiagnostics,
+        list[MaterializedInstanceRecord],
+        list[MaterializedCanonicalAnswerRecord],
+        CrossInstanceSet,
+        list[SynthesisSelfConsistencyAttempt],
+    ]:
+        attempts: list[SynthesisSelfConsistencyAttempt] = []
+        latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
+        latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
+        latest_artifact_payload: ArtifactGenerationOutput | None = None
+        latest_authoritative_task: TaskContract | None = None
+        base_previous_outputs = dict(previous_outputs)
+        strongest_difficulty_vector: DifficultyVectorContract | None = (
+            retry_seed.strongest_difficulty_vector if retry_seed is not None else None
+        )
+        difficulty_crank_count = (
+            retry_seed.difficulty_crank_index if retry_seed is not None else 0
+        )
+        difficulty_crank_history: list[DifficultyAxis] = list(
+            retry_seed.difficulty_crank_history if retry_seed is not None else []
+        )
+        retry_requires_harder = (
+            retry_seed.retry_requires_harder if retry_seed is not None else False
+        )
+        max_iterations = self.config.synthesis.runtime.max_self_consistency_iterations
+
+        for attempt_index in range(1, max_iterations + 1):
+            if (
+                retry_requires_harder
+                and difficulty_crank_count >= self.config.synthesis.runtime.max_difficulty_cranks
+            ):
+                next_limit_axis = _next_difficulty_crank_axis(history=difficulty_crank_history)
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_crank_limit_exceeded",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "max_difficulty_cranks": (
+                            self.config.synthesis.runtime.max_difficulty_cranks
+                        ),
+                    },
+                    actual_data={
+                        "difficulty_crank_index": difficulty_crank_count,
+                        "difficulty_crank_history": [axis.value for axis in difficulty_crank_history],
+                        "next_crank_axis": next_limit_axis.value,
+                    },
+                    checks={"retry_requires_harder": True},
+                    diagnostics={},
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_LIMIT_EXCEEDED,
+                    provider="runtime",
+                    model="runtime",
+                    memory_summary="difficulty crank budget exhausted before next retry",
+                    error_message=(
+                        "difficulty crank limit exceeded: "
+                        f"max={self.config.synthesis.runtime.max_difficulty_cranks}"
+                    ),
+                )
+                attempts.append(attempt)
+                raise SynthesisSelfConsistencyError(
+                    "label-first synthesis exhausted self-consistency budget after exceeding the difficulty crank limit",
+                    attempts=attempts,
+                    last_registration_diagnostics=latest_registration_diagnostics,
+                    last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                )
+
+            (
+                next_crank_axis,
+                current_diversity,
+                max_diversity,
+                current_scale,
+                crank_hint,
+            ) = _difficulty_guidance(
+                graph=graph,
+                task=latest_authoritative_task,
+                bundle=latest_artifact_payload.artifacts if latest_artifact_payload is not None else None,
+                available_atomic_tools=available_atomic_tools,
+                history=difficulty_crank_history,
+            )
+
+            attempt_previous_outputs = dict(base_previous_outputs)
+            request_kwargs = {
+                "db_id": db_id,
+                "atomic_tool_set_ref": atomic_tool_set_ref,
+                "available_atomic_tools": available_atomic_tools,
+                "domain_name": self.config.domain.name,
+                "task_language": self.config.domain.language,
+                "scenario_description": self.config.domain.scenario_description,
+                "requested_category": requested_category,
+                "attempt_index": attempt_index,
+                "schema_summary": schema_summary,
+                "memory": memory[-self.config.synthesis.runtime.explicit_memory_window :],
+                "latest_registration_diagnostics": latest_registration_diagnostics,
+                "latest_self_consistency_diagnostics": latest_self_consistency_diagnostics,
+                "strongest_difficulty_vector": (
+                    strongest_difficulty_vector or DifficultyVectorContract()
+                ),
+                "difficulty_crank_index": difficulty_crank_count,
+                "difficulty_crank_history": list(difficulty_crank_history),
+                "next_crank_axis": next_crank_axis,
+                "current_diversity": current_diversity,
+                "max_diversity": max_diversity,
+                "current_scale": current_scale,
+                "crank_hint": crank_hint,
+                "latest_quality_gate_feedback": (
+                    retry_seed.latest_quality_gate_feedback if retry_seed is not None else None
+                ),
+            }
+
+            label_request = SynthesisStageRequest(
+                phase=SynthesisPhase.LABEL_CONSTRUCTION,
+                previous_outputs=attempt_previous_outputs,
+                **request_kwargs,
+            )
+            label_result = await self._run_phase(label_request)
+            assert isinstance(label_result.payload, LabelConstructionOutput)
+            stage_results.append(label_result)
+            memory.append(label_result.memory_entry)
+            tool_traces.extend(label_result.tool_traces)
+            attempt_previous_outputs[SynthesisPhase.LABEL_CONSTRUCTION] = label_result.payload
+
+            task_request = SynthesisStageRequest(
+                phase=SynthesisPhase.TASK_SYNTHESIS,
+                previous_outputs=attempt_previous_outputs,
+                **request_kwargs,
+            )
+            task_result = await self._run_phase(task_request)
+            assert isinstance(task_result.payload, TaskSynthesisOutput)
+            stage_results.append(task_result)
+            memory.append(task_result.memory_entry)
+            tool_traces.extend(task_result.tool_traces)
+            attempt_previous_outputs[SynthesisPhase.TASK_SYNTHESIS] = task_result.payload
+
+            authoritative_task = self._build_authoritative_task(
+                requested_category=requested_category,
+                label_output=label_result.payload,
+                task_output=task_result.payload,
+            )
+            latest_authoritative_task = authoritative_task
+            crank_request_active = retry_requires_harder
+            current_difficulty_vector = authoritative_task.difficulty_vector
+            weakened_axes = _weakened_difficulty_axes(
+                previous=strongest_difficulty_vector,
+                current=current_difficulty_vector,
+            )
+            strengthened_axes = _strengthened_difficulty_axes(
+                previous=strongest_difficulty_vector,
+                current=current_difficulty_vector,
+            )
+            original_strengthened_axes = list(strengthened_axes)
+            projected_difficulty_vector = _project_retry_difficulty_vector(
+                previous=strongest_difficulty_vector,
+                current=current_difficulty_vector,
+                requested_axis=label_request.next_crank_axis if crank_request_active else None,
+            )
+            if projected_difficulty_vector is not None:
+                authoritative_task = authoritative_task.model_copy(
+                    update={"difficulty_vector": projected_difficulty_vector}
+                )
+                latest_authoritative_task = authoritative_task
+                label_result = label_result.model_copy(
+                    update={
+                        "payload": label_result.payload.model_copy(
+                            update={"difficulty_vector": projected_difficulty_vector}
+                        ),
+                        "payload_repair_codes": [
+                            *label_result.payload_repair_codes,
+                            "difficulty_vector_projected_to_requested_axis",
+                        ],
+                    }
+                )
+                attempt_previous_outputs[SynthesisPhase.LABEL_CONSTRUCTION] = label_result.payload
+                current_difficulty_vector = projected_difficulty_vector
+                strengthened_axes = _strengthened_difficulty_axes(
+                    previous=strongest_difficulty_vector,
+                    current=current_difficulty_vector,
+                )
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_vector_projected",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "requested_axis": (
+                            label_request.next_crank_axis.value
+                            if label_request.next_crank_axis is not None
+                            else None
+                        ),
+                    },
+                    actual_data=self._actual_data_for_stage_result(label_result),
+                    checks={
+                        "original_strengthened_axes": [
+                            axis.value for axis in original_strengthened_axes
+                        ],
+                        "projected_strengthened_axes": [axis.value for axis in strengthened_axes],
+                    },
+                    diagnostics={
+                        "provider": label_result.provider,
+                        "model": label_result.model,
+                        "payload_repair_codes": list(label_result.payload_repair_codes),
+                    },
+                )
+            if weakened_axes:
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_weakened",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "monotonic_difficulty": True,
+                        "strongest_difficulty_vector": difficulty_vector_json(
+                            strongest_difficulty_vector or DifficultyVectorContract()
+                        ),
+                    },
+                    actual_data=self._actual_data_for_stage_result(label_result),
+                    checks={
+                        "weakened_axes": list(weakened_axes),
+                        "strengthened_axes": [axis.value for axis in strengthened_axes],
+                    },
+                    diagnostics={
+                        "provider": label_result.provider,
+                        "model": label_result.model,
+                    },
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_WEAKENED,
+                    provider=label_result.provider,
+                    model=label_result.model,
+                    memory_summary=label_result.memory_entry.summary,
+                    error_message=(
+                        "label construction reduced difficulty on axes: "
+                        + ",".join(weakened_axes)
+                    ),
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "label-first synthesis exhausted self-consistency budget after difficulty weakening",
+                        attempts=attempts,
+                        last_registration_diagnostics=latest_registration_diagnostics,
+                        last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                    )
+                continue
+            if len(strengthened_axes) > 1 or (
+                crank_request_active
+                and len(strengthened_axes) == 1
+                and label_request.next_crank_axis is not None
+                and strengthened_axes[0] != label_request.next_crank_axis
+            ) or (
+                len(strengthened_axes) == 1
+                and not _is_valid_difficulty_crank_step(
+                    history=difficulty_crank_history,
+                    strengthened_axes=strengthened_axes,
+                )
+            ):
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_crank_invalid",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "max_strengthened_axes_per_attempt": 1,
+                        "difficulty_crank_order": [axis.value for axis in DIFFICULTY_CRANK_ORDER],
+                    },
+                    actual_data=self._actual_data_for_stage_result(label_result),
+                    checks={
+                        "strengthened_axes": [axis.value for axis in strengthened_axes],
+                        "strengthened_axis_count": len(strengthened_axes),
+                        "difficulty_crank_history": [axis.value for axis in difficulty_crank_history],
+                    },
+                    diagnostics={
+                        "provider": label_result.provider,
+                        "model": label_result.model,
+                    },
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_INVALID,
+                    provider=label_result.provider,
+                    model=label_result.model,
+                    memory_summary=label_result.memory_entry.summary,
+                    error_message=(
+                        "difficulty crank violated axis order: "
+                        + ",".join(axis.value for axis in strengthened_axes)
+                    ),
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "label-first synthesis exhausted self-consistency budget after invalid difficulty crank changes",
+                        attempts=attempts,
+                        last_registration_diagnostics=latest_registration_diagnostics,
+                        last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                    )
+                continue
+            strongest_difficulty_vector = current_difficulty_vector
+
+            artifact_request = SynthesisStageRequest(
+                phase=SynthesisPhase.ARTIFACT_GENERATION,
+                previous_outputs=attempt_previous_outputs,
+                **request_kwargs,
+            )
+            artifact_result = await self._run_phase(artifact_request)
+            assert isinstance(artifact_result.payload, ArtifactGenerationOutput)
+            stage_results.append(artifact_result)
+            memory.append(artifact_result.memory_entry)
+            tool_traces.extend(artifact_result.tool_traces)
+
+            artifact_payload, artifact_repair_codes = self._synchronize_artifact_payload_with_label(
+                artifact_result.payload,
+                authoritative_task=authoritative_task,
+                instance_space=task_result.payload.instance_space,
+            )
+            latest_artifact_payload = artifact_payload
+            if artifact_repair_codes:
+                artifact_result = artifact_result.model_copy(
+                    update={
+                        "payload": artifact_payload,
+                        "payload_repair_codes": [
+                            *artifact_result.payload_repair_codes,
+                            *artifact_repair_codes,
+                        ],
+                    }
+                )
+
+            try:
+                registration_report, registration_diagnostics = await self._execute_registration_gate(
+                    artifact_payload.artifacts,
+                    proposed_environment=artifact_payload.proposed_environment,
+                )
+            except SynthesisRegistrationError as exc:
+                self._emit_phase_monitor(
+                    phase="registration_gate",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "required_artifacts": [
+                            "solution",
+                            "verifier",
+                            "shadow_verifier",
+                        ],
+                    },
+                    actual_data={
+                        "status": (
+                            exc.diagnostics.status.value
+                            if exc.diagnostics is not None
+                            else "failed"
+                        ),
+                        "failing_artifacts": (
+                            [
+                                artifact.value
+                                for artifact in exc.diagnostics.failing_artifacts
+                            ]
+                            if exc.diagnostics is not None
+                            else []
+                        ),
+                        "error_codes": (
+                            list(exc.diagnostics.error_codes)
+                            if exc.diagnostics is not None
+                            else []
+                        ),
+                    },
+                    checks={"passed": False},
+                    diagnostics={
+                        "provider": artifact_result.provider,
+                        "model": artifact_result.model,
+                    },
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.REGISTRATION_FAILED,
+                    provider=artifact_result.provider,
+                    model=artifact_result.model,
+                    memory_summary=artifact_result.memory_entry.summary,
+                    error_message=str(exc),
+                    registration_diagnostics=exc.diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                latest_registration_diagnostics = exc.diagnostics
+                latest_self_consistency_diagnostics = None
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "label-first synthesis exhausted self-consistency budget after registration failures",
+                        attempts=attempts,
+                        last_registration_diagnostics=exc.diagnostics,
+                    ) from exc
+                continue
+
+            self._emit_phase_monitor(
+                phase="registration_gate",
+                status="passed",
+                expected_contract={
+                    "attempt_index": attempt_index,
+                    "required_artifacts": [
+                        "solution",
+                        "verifier",
+                        "shadow_verifier",
+                    ],
+                },
+                actual_data={
+                    "status": registration_diagnostics.status.value,
+                    "failing_artifacts": [
+                        artifact.value for artifact in registration_diagnostics.failing_artifacts
+                    ],
+                    "error_codes": list(registration_diagnostics.error_codes),
+                    "weak_signal_codes": list(registration_diagnostics.weak_signal_codes),
+                },
+                checks={
+                    "passed": registration_diagnostics.status
+                    is RegistrationBundleStatus.PASSED,
+                },
+                diagnostics={
+                    "provider": artifact_result.provider,
+                    "model": artifact_result.model,
+                },
+            )
+
+            self_consistency_diagnostics = await self._execute_self_consistency_check(
+                bundle=artifact_payload.artifacts,
+                proposed_environment=artifact_payload.proposed_environment,
+            )
+            if artifact_result.payload_repair_codes:
+                self_consistency_diagnostics = self_consistency_diagnostics.model_copy(
+                    update={
+                        "payload_repair_codes": list(
+                            dict.fromkeys(
+                                [
+                                    *self_consistency_diagnostics.payload_repair_codes,
+                                    *artifact_result.payload_repair_codes,
+                                ]
+                            )
+                        )
+                    }
+                )
+            self_consistency_diagnostics = self._reconcile_label_against_self_consistency(
+                task=authoritative_task,
+                label_output=label_result.payload,
+                diagnostics=self_consistency_diagnostics,
+            )
+            if not self_consistency_diagnostics.passed:
+                self._emit_phase_monitor(
+                    phase="self_consistency",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "expected_fact_keys": list(
+                            self_consistency_diagnostics.expected_fact_keys
+                        ),
+                    },
+                    actual_data={
+                        "answer_preview": self_consistency_diagnostics.answer,
+                        "error_codes": list(self_consistency_diagnostics.error_codes),
+                        "payload_repair_codes": list(
+                            self_consistency_diagnostics.payload_repair_codes
+                        ),
+                        "solution_tool_calls": self_consistency_diagnostics.solution_tool_calls,
+                        "verifier_tool_calls": self_consistency_diagnostics.verifier_tool_calls,
+                        "shadow_verifier_tool_calls": (
+                            self_consistency_diagnostics.shadow_verifier_tool_calls
+                        ),
+                        "verify_result": self_consistency_diagnostics.verify_result,
+                        "shadow_verify_result": (
+                            self_consistency_diagnostics.shadow_verify_result
+                        ),
+                    },
+                    checks={
+                        "passed": False,
+                        "fact_keys_match": not (
+                            self_consistency_diagnostics.missing_fact_keys
+                            or self_consistency_diagnostics.extra_fact_keys
+                        ),
+                    },
+                    diagnostics={
+                        "provider": artifact_result.provider,
+                        "model": artifact_result.model,
+                    },
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+                    provider=artifact_result.provider,
+                    model=artifact_result.model,
+                    memory_summary=artifact_result.memory_entry.summary,
+                    error_message="solution output did not satisfy the primary verifier or planned label",
+                    registration_diagnostics=registration_diagnostics,
+                    self_consistency_diagnostics=self_consistency_diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                latest_registration_diagnostics = registration_diagnostics
+                latest_self_consistency_diagnostics = self_consistency_diagnostics
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "label-first synthesis exhausted self-consistency budget after verifier failures",
+                        attempts=attempts,
+                        last_registration_diagnostics=registration_diagnostics,
+                        last_self_consistency_diagnostics=self_consistency_diagnostics,
+                    )
+                continue
+
+            self._emit_phase_monitor(
+                phase="self_consistency",
+                status="passed",
+                expected_contract={
+                    "attempt_index": attempt_index,
+                    "expected_fact_keys": list(self_consistency_diagnostics.expected_fact_keys),
+                },
+                actual_data={
+                    "answer_preview": self_consistency_diagnostics.answer,
+                    "payload_repair_codes": list(
+                        self_consistency_diagnostics.payload_repair_codes
+                    ),
+                    "solution_tool_calls": self_consistency_diagnostics.solution_tool_calls,
+                    "verifier_tool_calls": self_consistency_diagnostics.verifier_tool_calls,
+                    "shadow_verifier_tool_calls": (
+                        self_consistency_diagnostics.shadow_verifier_tool_calls
+                    ),
+                    "verify_result": self_consistency_diagnostics.verify_result,
+                    "shadow_verify_result": self_consistency_diagnostics.shadow_verify_result,
+                },
+                checks={
+                    "passed": True,
+                    "fact_keys_match": not (
+                        self_consistency_diagnostics.missing_fact_keys
+                        or self_consistency_diagnostics.extra_fact_keys
+                    ),
+                },
+                diagnostics={
+                    "provider": artifact_result.provider,
+                    "model": artifact_result.model,
+                },
+            )
+
+            try:
+                (
+                    instances,
+                    canonical_answers,
+                    materialized_cross_instance_set,
+                ) = self._materialize_instances_and_canonical_answers(
+                    proposed_environment=artifact_payload.proposed_environment,
+                    canonical_answer_json=label_result.payload.canonical_answer_json,
+                )
+            except CanonicalizationError:
+                self._emit_phase_monitor(
+                    phase="canonical_materialization",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "minimum_instances": 1,
+                    },
+                    actual_data={},
+                    checks={"canonicalization_passed": False},
+                    diagnostics={
+                        "provider": artifact_result.provider,
+                        "model": artifact_result.model,
+                        "error_code": "canonical_answer_schema_mismatch",
+                    },
+                )
+                materialization_diagnostics = self_consistency_diagnostics.model_copy(
+                    update={
+                        "passed": False,
+                        "error_codes": [
+                            *self_consistency_diagnostics.error_codes,
+                            "canonical_answer_schema_mismatch",
+                        ],
+                    }
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+                    provider=artifact_result.provider,
+                    model=artifact_result.model,
+                    memory_summary=artifact_result.memory_entry.summary,
+                    error_message="planned canonical answer could not be canonicalized against the output schema",
+                    registration_diagnostics=registration_diagnostics,
+                    self_consistency_diagnostics=materialization_diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                latest_registration_diagnostics = registration_diagnostics
+                latest_self_consistency_diagnostics = materialization_diagnostics
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "label-first synthesis exhausted self-consistency budget after canonical answer materialization failures",
+                        attempts=attempts,
+                        last_registration_diagnostics=registration_diagnostics,
+                        last_self_consistency_diagnostics=materialization_diagnostics,
+                    )
+                continue
+
+            self._emit_phase_monitor(
+                phase="canonical_materialization",
+                status="passed",
+                expected_contract={
+                    "attempt_index": attempt_index,
+                    "minimum_instances": 1,
+                },
+                actual_data={
+                    "instance_count": len(instances),
+                    "canonical_answer_count": len(canonical_answers),
+                    "rendered_user_prompts": [
+                        instance.rendered_user_prompt for instance in instances
+                    ],
+                    "canonical_answer_jsons": [
+                        answer.canonical_answer_json for answer in canonical_answers
+                    ],
+                    "solution_fingerprints": [
+                        answer.solution_fingerprint for answer in canonical_answers
+                    ],
+                },
+                checks={
+                    "instance_count_matches_canonical_answers": len(instances)
+                    == len(canonical_answers),
+                    "minimum_instances_satisfied": len(instances)
+                    >= materialized_cross_instance_set.minimum_required,
+                },
+                diagnostics={
+                    "provider": artifact_result.provider,
+                    "model": artifact_result.model,
+                },
+            )
+
+            passed_attempt = SynthesisSelfConsistencyAttempt(
+                attempt_index=attempt_index,
+                outcome=SynthesisSelfConsistencyOutcome.PASSED,
+                provider=artifact_result.provider,
+                model=artifact_result.model,
+                memory_summary=artifact_result.memory_entry.summary,
+                registration_diagnostics=registration_diagnostics,
+                self_consistency_diagnostics=self_consistency_diagnostics,
+            )
+            attempts.append(passed_attempt)
+            retry_requires_harder = False
+            return (
+                artifact_payload.proposed_environment,
+                artifact_payload.artifacts,
+                registration_report,
+                registration_diagnostics,
+                self_consistency_diagnostics,
+                instances,
+                canonical_answers,
+                materialized_cross_instance_set,
+                attempts,
+            )
+
+        raise SynthesisSelfConsistencyError(
+            "label-first synthesis exhausted self-consistency budget",
+            attempts=attempts,
+            last_registration_diagnostics=latest_registration_diagnostics,
+            last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+        )
+
+    async def _run_artifact_generation_with_self_consistency(
+        self,
+        *,
+        db_id: str,
+        requested_category: CategoryTaxonomy,
+        graph: SchemaGraph,
+        schema_summary: dict[str, object],
+        previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput],
+        stage_results: list[SynthesisStageResult],
+        memory: list[SynthesisMemoryEntry],
+        tool_traces: list[SynthesisToolTraceEntry],
+        atomic_tool_set_ref: str,
+        available_atomic_tools: list[dict[str, object]],
+        retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> tuple[
         ArtifactGenerationOutput,
         RegistrationBundleReport,
@@ -866,20 +2263,85 @@ class SynthesisAgentRuntime:
         attempts: list[SynthesisSelfConsistencyAttempt] = []
         latest_registration_diagnostics: RegistrationBundleDiagnostics | None = None
         latest_self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics | None = None
-        strongest_difficulty_vector: dict[DifficultyAxis, float] | None = None
-        difficulty_crank_count = 0
-        difficulty_crank_history: list[DifficultyAxis] = []
+        latest_artifact_payload: ArtifactGenerationOutput | None = None
+        strongest_difficulty_vector: DifficultyVectorContract | None = (
+            retry_seed.strongest_difficulty_vector if retry_seed is not None else None
+        )
+        difficulty_crank_count = (
+            retry_seed.difficulty_crank_index if retry_seed is not None else 0
+        )
+        difficulty_crank_history: list[DifficultyAxis] = list(
+            retry_seed.difficulty_crank_history if retry_seed is not None else []
+        )
+        retry_requires_harder = (
+            retry_seed.retry_requires_harder if retry_seed is not None else False
+        )
         max_iterations = self.config.synthesis.runtime.max_self_consistency_iterations
 
         for attempt_index in range(1, max_iterations + 1):
+            if (
+                retry_requires_harder
+                and difficulty_crank_count >= self.config.synthesis.runtime.max_difficulty_cranks
+            ):
+                next_limit_axis = _next_difficulty_crank_axis(history=difficulty_crank_history)
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_crank_limit_exceeded",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "max_difficulty_cranks": (
+                            self.config.synthesis.runtime.max_difficulty_cranks
+                        ),
+                    },
+                    actual_data={
+                        "difficulty_crank_index": difficulty_crank_count,
+                        "difficulty_crank_history": [axis.value for axis in difficulty_crank_history],
+                        "next_crank_axis": next_limit_axis.value,
+                    },
+                    checks={"retry_requires_harder": True},
+                    diagnostics={},
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_LIMIT_EXCEEDED,
+                    provider="runtime",
+                    model="runtime",
+                    memory_summary="difficulty crank budget exhausted before next retry",
+                    error_message=(
+                        "difficulty crank limit exceeded: "
+                        f"max={self.config.synthesis.runtime.max_difficulty_cranks}"
+                    ),
+                )
+                attempts.append(attempt)
+                raise SynthesisSelfConsistencyError(
+                    "artifact generation exhausted self-consistency budget after exceeding the difficulty crank limit",
+                    attempts=attempts,
+                    last_registration_diagnostics=latest_registration_diagnostics,
+                    last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+                )
+            (
+                next_crank_axis,
+                current_diversity,
+                max_diversity,
+                current_scale,
+                crank_hint,
+            ) = _difficulty_guidance(
+                graph=graph,
+                task=(
+                    latest_artifact_payload.proposed_environment.task
+                    if latest_artifact_payload is not None
+                    else None
+                ),
+                bundle=latest_artifact_payload.artifacts if latest_artifact_payload is not None else None,
+                available_atomic_tools=available_atomic_tools,
+                history=difficulty_crank_history,
+            )
             request = SynthesisStageRequest(
                 phase=SynthesisPhase.ARTIFACT_GENERATION,
                 db_id=db_id,
                 atomic_tool_set_ref=atomic_tool_set_ref,
                 available_atomic_tools=available_atomic_tools,
                 domain_name=self.config.domain.name,
-                user_role=self.config.domain.user_role,
-                agent_role=self.config.domain.agent_role,
                 scenario_description=self.config.domain.scenario_description,
                 requested_category=requested_category,
                 attempt_index=attempt_index,
@@ -888,9 +2350,19 @@ class SynthesisAgentRuntime:
                 memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
                 latest_registration_diagnostics=latest_registration_diagnostics,
                 latest_self_consistency_diagnostics=latest_self_consistency_diagnostics,
-                strongest_difficulty_vector=strongest_difficulty_vector or {},
+                strongest_difficulty_vector=(
+                    strongest_difficulty_vector or DifficultyVectorContract()
+                ),
                 difficulty_crank_index=difficulty_crank_count,
                 difficulty_crank_history=list(difficulty_crank_history),
+                next_crank_axis=next_crank_axis,
+                current_diversity=current_diversity,
+                max_diversity=max_diversity,
+                current_scale=current_scale,
+                crank_hint=crank_hint,
+                latest_quality_gate_feedback=(
+                    retry_seed.latest_quality_gate_feedback if retry_seed is not None else None
+                ),
             )
             result = await self._run_phase(request)
             assert isinstance(result.payload, ArtifactGenerationOutput)
@@ -899,9 +2371,9 @@ class SynthesisAgentRuntime:
             tool_traces.extend(result.tool_traces)
 
             artifact_payload = result.payload
-            current_difficulty_vector = dict(
-                artifact_payload.proposed_environment.task.difficulty_vector
-            )
+            latest_artifact_payload = artifact_payload
+            crank_request_active = retry_requires_harder
+            current_difficulty_vector = artifact_payload.proposed_environment.task.difficulty_vector
             weakened_axes = _weakened_difficulty_axes(
                 previous=strongest_difficulty_vector,
                 current=current_difficulty_vector,
@@ -910,7 +2382,82 @@ class SynthesisAgentRuntime:
                 previous=strongest_difficulty_vector,
                 current=current_difficulty_vector,
             )
+            original_strengthened_axes = list(strengthened_axes)
+            projected_difficulty_vector = _project_retry_difficulty_vector(
+                previous=strongest_difficulty_vector,
+                current=current_difficulty_vector,
+                requested_axis=request.next_crank_axis if crank_request_active else None,
+            )
+            if projected_difficulty_vector is not None:
+                projected_task = artifact_payload.proposed_environment.task.model_copy(
+                    update={"difficulty_vector": projected_difficulty_vector}
+                )
+                projected_environment = artifact_payload.proposed_environment.model_copy(
+                    update={"task": projected_task}
+                )
+                artifact_payload = artifact_payload.model_copy(
+                    update={"proposed_environment": projected_environment}
+                )
+                latest_artifact_payload = artifact_payload
+                result = result.model_copy(
+                    update={
+                        "payload": artifact_payload,
+                        "payload_repair_codes": [
+                            *result.payload_repair_codes,
+                            "difficulty_vector_projected_to_requested_axis",
+                        ],
+                    }
+                )
+                current_difficulty_vector = projected_difficulty_vector
+                strengthened_axes = _strengthened_difficulty_axes(
+                    previous=strongest_difficulty_vector,
+                    current=current_difficulty_vector,
+                )
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_vector_projected",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "requested_axis": (
+                            request.next_crank_axis.value
+                            if request.next_crank_axis is not None
+                            else None
+                        ),
+                    },
+                    actual_data=self._actual_data_for_stage_result(result),
+                    checks={
+                        "original_strengthened_axes": [
+                            axis.value for axis in original_strengthened_axes
+                        ],
+                        "projected_strengthened_axes": [axis.value for axis in strengthened_axes],
+                    },
+                    diagnostics={
+                        "provider": result.provider,
+                        "model": result.model,
+                        "payload_repair_codes": list(result.payload_repair_codes),
+                    },
+                )
             if weakened_axes:
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_weakened",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "monotonic_difficulty": True,
+                        "strongest_difficulty_vector": difficulty_vector_json(
+                            strongest_difficulty_vector or DifficultyVectorContract()
+                        ),
+                    },
+                    actual_data=self._actual_data_for_stage_result(result),
+                    checks={
+                        "weakened_axes": list(weakened_axes),
+                        "strengthened_axes": [axis.value for axis in strengthened_axes],
+                    },
+                    diagnostics={
+                        "provider": result.provider,
+                        "model": result.model,
+                    },
+                )
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
                     outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_WEAKENED,
@@ -924,6 +2471,12 @@ class SynthesisAgentRuntime:
                 )
                 attempts.append(attempt)
                 memory.append(self._attempt_feedback_entry(attempt))
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget after difficulty weakening",
@@ -932,7 +2485,37 @@ class SynthesisAgentRuntime:
                         last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
                     )
                 continue
-            if len(strengthened_axes) > 1:
+            if len(strengthened_axes) > 1 or (
+                crank_request_active
+                and len(strengthened_axes) == 1
+                and request.next_crank_axis is not None
+                and strengthened_axes[0] != request.next_crank_axis
+            ) or (
+                len(strengthened_axes) == 1
+                and not _is_valid_difficulty_crank_step(
+                    history=difficulty_crank_history,
+                    strengthened_axes=strengthened_axes,
+                )
+            ):
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="difficulty_crank_invalid",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "max_strengthened_axes_per_attempt": 1,
+                        "difficulty_crank_order": [axis.value for axis in DIFFICULTY_CRANK_ORDER],
+                    },
+                    actual_data=self._actual_data_for_stage_result(result),
+                    checks={
+                        "strengthened_axes": [axis.value for axis in strengthened_axes],
+                        "strengthened_axis_count": len(strengthened_axes),
+                        "difficulty_crank_history": [axis.value for axis in difficulty_crank_history],
+                    },
+                    diagnostics={
+                        "provider": result.provider,
+                        "model": result.model,
+                    },
+                )
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
                     outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_INVALID,
@@ -940,12 +2523,18 @@ class SynthesisAgentRuntime:
                     model=result.model,
                     memory_summary=result.memory_entry.summary,
                     error_message=(
-                        "difficulty crank changed multiple axes: "
+                        "difficulty crank violated axis order: "
                         + ",".join(axis.value for axis in strengthened_axes)
                     ),
                 )
                 attempts.append(attempt)
                 memory.append(self._attempt_feedback_entry(attempt))
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget after invalid difficulty crank changes",
@@ -954,33 +2543,23 @@ class SynthesisAgentRuntime:
                         last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
                     )
                 continue
-            if len(strengthened_axes) == 1:
-                next_crank_count = difficulty_crank_count + 1
-                if next_crank_count > self.config.synthesis.runtime.max_difficulty_cranks:
-                    attempt = SynthesisSelfConsistencyAttempt(
-                        attempt_index=attempt_index,
-                        outcome=SynthesisSelfConsistencyOutcome.DIFFICULTY_CRANK_LIMIT_EXCEEDED,
-                        provider=result.provider,
-                        model=result.model,
-                        memory_summary=result.memory_entry.summary,
-                        error_message=(
-                            "difficulty crank limit exceeded: "
-                            f"max={self.config.synthesis.runtime.max_difficulty_cranks}"
-                        ),
-                    )
-                    attempts.append(attempt)
-                    memory.append(self._attempt_feedback_entry(attempt))
-                    if attempt_index >= max_iterations:
-                        raise SynthesisSelfConsistencyError(
-                            "artifact generation exhausted self-consistency budget after exceeding the difficulty crank limit",
-                            attempts=attempts,
-                            last_registration_diagnostics=latest_registration_diagnostics,
-                            last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
-                        )
-                    continue
-                difficulty_crank_count = next_crank_count
-                difficulty_crank_history.append(strengthened_axes[0])
             if artifact_payload.proposed_environment.task.category != requested_category:
+                self._emit_phase_monitor(
+                    phase="artifact_policy",
+                    status="category_mismatch",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "requested_category": requested_category.value,
+                    },
+                    actual_data=self._actual_data_for_stage_result(result),
+                    checks={
+                        "task_category_matches_requested": False,
+                    },
+                    diagnostics={
+                        "provider": result.provider,
+                        "model": result.model,
+                    },
+                )
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
                     outcome=SynthesisSelfConsistencyOutcome.CATEGORY_MISMATCH,
@@ -993,6 +2572,12 @@ class SynthesisAgentRuntime:
                 memory.append(self._attempt_feedback_entry(attempt))
                 latest_registration_diagnostics = None
                 latest_self_consistency_diagnostics = None
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget on category mismatch",
@@ -1007,6 +2592,45 @@ class SynthesisAgentRuntime:
                     proposed_environment=artifact_payload.proposed_environment,
                 )
             except SynthesisRegistrationError as exc:
+                self._emit_phase_monitor(
+                    phase="registration_gate",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "required_artifacts": [
+                            "solution",
+                            "verifier",
+                            "shadow_verifier",
+                        ],
+                    },
+                    actual_data={
+                        "status": (
+                            exc.diagnostics.status.value
+                            if exc.diagnostics is not None
+                            else "failed"
+                        ),
+                        "failing_artifacts": (
+                            [
+                                artifact.value
+                                for artifact in exc.diagnostics.failing_artifacts
+                            ]
+                            if exc.diagnostics is not None
+                            else []
+                        ),
+                        "error_codes": (
+                            list(exc.diagnostics.error_codes)
+                            if exc.diagnostics is not None
+                            else []
+                        ),
+                    },
+                    checks={
+                        "passed": False,
+                    },
+                    diagnostics={
+                        "provider": result.provider,
+                        "model": result.model,
+                    },
+                )
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
                     outcome=SynthesisSelfConsistencyOutcome.REGISTRATION_FAILED,
@@ -1020,6 +2644,12 @@ class SynthesisAgentRuntime:
                 memory.append(self._attempt_feedback_entry(attempt))
                 latest_registration_diagnostics = exc.diagnostics
                 latest_self_consistency_diagnostics = None
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget after registration failures",
@@ -1027,6 +2657,34 @@ class SynthesisAgentRuntime:
                         last_registration_diagnostics=exc.diagnostics,
                     ) from exc
                 continue
+            self._emit_phase_monitor(
+                phase="registration_gate",
+                status="passed",
+                expected_contract={
+                    "attempt_index": attempt_index,
+                    "required_artifacts": [
+                        "solution",
+                        "verifier",
+                        "shadow_verifier",
+                    ],
+                },
+                actual_data={
+                    "status": registration_diagnostics.status.value,
+                    "failing_artifacts": [
+                        artifact.value for artifact in registration_diagnostics.failing_artifacts
+                    ],
+                    "error_codes": list(registration_diagnostics.error_codes),
+                    "weak_signal_codes": list(registration_diagnostics.weak_signal_codes),
+                },
+                checks={
+                    "passed": registration_diagnostics.status
+                    is RegistrationBundleStatus.PASSED,
+                },
+                diagnostics={
+                    "provider": result.provider,
+                    "model": result.model,
+                },
+            )
 
             self_consistency_diagnostics = await self._execute_self_consistency_check(
                 bundle=artifact_payload.artifacts,
@@ -1046,6 +2704,43 @@ class SynthesisAgentRuntime:
                     }
                 )
             if not self_consistency_diagnostics.passed:
+                self._emit_phase_monitor(
+                    phase="self_consistency",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "expected_fact_keys": list(
+                            self_consistency_diagnostics.expected_fact_keys
+                        ),
+                    },
+                    actual_data={
+                        "answer_preview": self_consistency_diagnostics.answer,
+                        "error_codes": list(self_consistency_diagnostics.error_codes),
+                        "payload_repair_codes": list(
+                            self_consistency_diagnostics.payload_repair_codes
+                        ),
+                        "solution_tool_calls": self_consistency_diagnostics.solution_tool_calls,
+                        "verifier_tool_calls": self_consistency_diagnostics.verifier_tool_calls,
+                        "shadow_verifier_tool_calls": (
+                            self_consistency_diagnostics.shadow_verifier_tool_calls
+                        ),
+                        "verify_result": self_consistency_diagnostics.verify_result,
+                        "shadow_verify_result": (
+                            self_consistency_diagnostics.shadow_verify_result
+                        ),
+                    },
+                    checks={
+                        "passed": False,
+                        "fact_keys_match": not (
+                            self_consistency_diagnostics.missing_fact_keys
+                            or self_consistency_diagnostics.extra_fact_keys
+                        ),
+                    },
+                    diagnostics={
+                        "provider": result.provider,
+                        "model": result.model,
+                    },
+                )
                 attempt = SynthesisSelfConsistencyAttempt(
                     attempt_index=attempt_index,
                     outcome=SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
@@ -1060,6 +2755,12 @@ class SynthesisAgentRuntime:
                 memory.append(self._attempt_feedback_entry(attempt))
                 latest_registration_diagnostics = registration_diagnostics
                 latest_self_consistency_diagnostics = self_consistency_diagnostics
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget after verifier failures",
@@ -1068,6 +2769,38 @@ class SynthesisAgentRuntime:
                         last_self_consistency_diagnostics=self_consistency_diagnostics,
                     )
                 continue
+            self._emit_phase_monitor(
+                phase="self_consistency",
+                status="passed",
+                expected_contract={
+                    "attempt_index": attempt_index,
+                    "expected_fact_keys": list(self_consistency_diagnostics.expected_fact_keys),
+                },
+                actual_data={
+                    "answer_preview": self_consistency_diagnostics.answer,
+                    "payload_repair_codes": list(
+                        self_consistency_diagnostics.payload_repair_codes
+                    ),
+                    "solution_tool_calls": self_consistency_diagnostics.solution_tool_calls,
+                    "verifier_tool_calls": self_consistency_diagnostics.verifier_tool_calls,
+                    "shadow_verifier_tool_calls": (
+                        self_consistency_diagnostics.shadow_verifier_tool_calls
+                    ),
+                    "verify_result": self_consistency_diagnostics.verify_result,
+                    "shadow_verify_result": self_consistency_diagnostics.shadow_verify_result,
+                },
+                checks={
+                    "passed": True,
+                    "fact_keys_match": not (
+                        self_consistency_diagnostics.missing_fact_keys
+                        or self_consistency_diagnostics.extra_fact_keys
+                    ),
+                },
+                diagnostics={
+                    "provider": result.provider,
+                    "model": result.model,
+                },
+            )
 
             try:
                 (
@@ -1079,6 +2812,23 @@ class SynthesisAgentRuntime:
                     self_consistency_diagnostics=self_consistency_diagnostics,
                 )
             except CanonicalizationError:
+                self._emit_phase_monitor(
+                    phase="canonical_materialization",
+                    status="failed",
+                    expected_contract={
+                        "attempt_index": attempt_index,
+                        "minimum_instances": 1,
+                    },
+                    actual_data={},
+                    checks={
+                        "canonicalization_passed": False,
+                    },
+                    diagnostics={
+                        "provider": result.provider,
+                        "model": result.model,
+                        "error_code": "canonical_answer_schema_mismatch",
+                    },
+                )
                 materialization_diagnostics = self_consistency_diagnostics.model_copy(
                     update={
                         "passed": False,
@@ -1102,6 +2852,12 @@ class SynthesisAgentRuntime:
                 memory.append(self._attempt_feedback_entry(attempt))
                 latest_registration_diagnostics = registration_diagnostics
                 latest_self_consistency_diagnostics = materialization_diagnostics
+                if crank_request_active:
+                    difficulty_crank_count, difficulty_crank_history = _consume_difficulty_crank_attempt(
+                        count=difficulty_crank_count,
+                        history=difficulty_crank_history,
+                    )
+                retry_requires_harder = True
                 if attempt_index >= max_iterations:
                     raise SynthesisSelfConsistencyError(
                         "artifact generation exhausted self-consistency budget after canonical answer materialization failures",
@@ -1110,6 +2866,37 @@ class SynthesisAgentRuntime:
                         last_self_consistency_diagnostics=materialization_diagnostics,
                     )
                 continue
+            self._emit_phase_monitor(
+                phase="canonical_materialization",
+                status="passed",
+                expected_contract={
+                    "attempt_index": attempt_index,
+                    "minimum_instances": 1,
+                },
+                actual_data={
+                    "instance_count": len(instances),
+                    "canonical_answer_count": len(canonical_answers),
+                    "rendered_user_prompts": [
+                        instance.rendered_user_prompt for instance in instances
+                    ],
+                    "canonical_answer_jsons": [
+                        answer.canonical_answer_json for answer in canonical_answers
+                    ],
+                    "solution_fingerprints": [
+                        answer.solution_fingerprint for answer in canonical_answers
+                    ],
+                },
+                checks={
+                    "instance_count_matches_canonical_answers": len(instances)
+                    == len(canonical_answers),
+                    "minimum_instances_satisfied": len(instances)
+                    >= materialized_cross_instance_set.minimum_required,
+                },
+                diagnostics={
+                    "provider": result.provider,
+                    "model": result.model,
+                },
+            )
 
             passed_attempt = SynthesisSelfConsistencyAttempt(
                 attempt_index=attempt_index,
@@ -1121,6 +2908,7 @@ class SynthesisAgentRuntime:
                 self_consistency_diagnostics=self_consistency_diagnostics,
             )
             attempts.append(passed_attempt)
+            retry_requires_harder = False
             return (
                 artifact_payload,
                 registration_report,
@@ -1137,6 +2925,82 @@ class SynthesisAgentRuntime:
             attempts=attempts,
             last_registration_diagnostics=latest_registration_diagnostics,
             last_self_consistency_diagnostics=latest_self_consistency_diagnostics,
+        )
+
+    @staticmethod
+    def _build_authoritative_task(
+        *,
+        requested_category: CategoryTaxonomy,
+        label_output: LabelConstructionOutput,
+        task_output: TaskSynthesisOutput,
+    ) -> TaskContract:
+        return TaskContract(
+            question=task_output.question,
+            category=requested_category,
+            output_schema=label_output.output_schema,
+            constraint_summary=task_output.constraint_summary,
+            difficulty_vector=label_output.difficulty_vector,
+            instance_parameters=label_output.instance_parameters,
+        )
+
+    @staticmethod
+    def _synchronize_artifact_payload_with_label(
+        payload: ArtifactGenerationOutput,
+        *,
+        authoritative_task: TaskContract,
+        instance_space: InstanceSpaceContract,
+    ) -> tuple[ArtifactGenerationOutput, list[str]]:
+        repair_codes: list[str] = []
+        proposed_environment = payload.proposed_environment
+        if proposed_environment.task != authoritative_task:
+            proposed_environment = proposed_environment.model_copy(
+                update={"task": authoritative_task}
+            )
+            repair_codes.append("artifact_task_overridden_from_task_synthesis")
+        if proposed_environment.instance_space != instance_space:
+            proposed_environment = proposed_environment.model_copy(
+                update={"instance_space": instance_space}
+            )
+            repair_codes.append("artifact_instance_space_overridden_from_task_synthesis")
+        if not repair_codes:
+            return payload, repair_codes
+        return payload.model_copy(update={"proposed_environment": proposed_environment}), repair_codes
+
+    @staticmethod
+    def _reconcile_label_against_self_consistency(
+        *,
+        task: TaskContract,
+        label_output: LabelConstructionOutput,
+        diagnostics: SynthesisSelfConsistencyDiagnostics,
+    ) -> SynthesisSelfConsistencyDiagnostics:
+        try:
+            expected_answer = json.loads(label_output.canonical_answer_json)
+            expected_canonical = canonicalize_output(task.output_schema, expected_answer)
+            actual_input = SynthesisAgentRuntime._normalize_solution_answer(
+                task.output_schema,
+                diagnostics.answer,
+            )
+            actual_canonical = canonicalize_output(task.output_schema, actual_input)
+        except (json.JSONDecodeError, CanonicalizationError):
+            return diagnostics.model_copy(
+                update={
+                    "passed": False,
+                    "error_codes": [
+                        *diagnostics.error_codes,
+                        "label_canonical_answer_mismatch",
+                    ],
+                }
+            )
+        if actual_canonical == expected_canonical:
+            return diagnostics
+        return diagnostics.model_copy(
+            update={
+                "passed": False,
+                "error_codes": [
+                    *diagnostics.error_codes,
+                    "label_canonical_answer_mismatch",
+                ],
+            }
         )
 
     @staticmethod
@@ -1198,6 +3062,35 @@ class SynthesisAgentRuntime:
             turn_count=0,
         )
 
+    def _ensure_grounded_schema_exploration(
+        self,
+        request: SynthesisStageRequest,
+        result: SynthesisStageResult,
+    ) -> None:
+        if not isinstance(result.payload, SchemaExplorationOutput):
+            return
+        grounded = bool(result.tool_traces) and bool(result.payload.sample_observations)
+        if grounded:
+            return
+        self._emit_phase_monitor(
+            phase=request.phase.value,
+            status="ungrounded",
+            expected_contract=self._expected_contract_for_request(request),
+            actual_data=self._actual_data_for_stage_result(result),
+            checks={
+                "tool_traces_present": bool(result.tool_traces),
+                "sample_observations_present": bool(result.payload.sample_observations),
+            },
+            diagnostics={
+                "provider": result.provider,
+                "model": result.model,
+            },
+        )
+        raise SynthesisPhaseExecutionError(
+            "schema exploration must inspect real DB rows through atomic tool calls before proceeding",
+            phase=request.phase,
+        )
+
     async def _introspect_graph(self) -> SchemaGraph:
         if self._graph_cache is not None:
             return self._graph_cache
@@ -1241,6 +3134,55 @@ class SynthesisAgentRuntime:
         if bundle is None:
             raise RuntimeError("atomic tool bundle requested before generation")
         return bundle
+
+    async def _database_pools_for_tools(self) -> DatabasePools:
+        if self._database_pools is None:
+            self._database_pools = await DatabasePools.create(self.config.database)
+        return self._database_pools
+
+    async def _tool_executors_for_bundle(
+        self,
+        *,
+        db_id: str,
+        bundle: AtomicToolBundle,
+    ) -> dict[str, ToolExecutor]:
+        cached = self._tool_executor_cache.get(db_id)
+        if cached is not None:
+            return cached
+        pools = await self._database_pools_for_tools()
+        assert self._atomic_tool_materializer is not None
+        materialization = self._atomic_tool_materializer.materialize_bundle(bundle)
+        module = load_atomic_tool_module(
+            materialization.source_path,
+            module_name=f"rl_task_foundry_synthesis_atomic_tools_{db_id}",
+        )
+        resolved = {
+            tool.name: bind_atomic_tool_executor(
+                module=module,
+                tool_name=tool.name,
+                pools=pools,
+            )
+            for tool in bundle.tools
+        }
+        self._tool_executor_cache[db_id] = resolved
+        return resolved
+
+    async def _prime_phase_backends_with_atomic_tools(
+        self,
+        *,
+        db_id: str,
+        bundle: AtomicToolBundle,
+    ) -> None:
+        tool_definitions = bundle.actor_tool_definitions()
+        tool_executors = await self._tool_executors_for_bundle(db_id=db_id, bundle=bundle)
+        for backends in (self.phase_backends or {}).values():
+            for backend in backends:
+                binder = getattr(backend, "bind_atomic_tools", None)
+                if callable(binder):
+                    binder(
+                        tool_definitions=tool_definitions,
+                        tool_executors=tool_executors,
+                    )
 
     async def _execute_registration_gate(
         self,
@@ -1290,6 +3232,7 @@ class SynthesisAgentRuntime:
                     )
         return await self._registration_pool.run_self_consistency_check(
             atomic_tool_set_ref=f"db://{self._bound_db_id}",
+            database_execution_config=self.config.database.model_dump(mode="json"),
             solution_source=bundle.solution_source,
             verifier_source=bundle.verifier_source,
             shadow_verifier_source=bundle.shadow_verifier_source,
@@ -1359,8 +3302,10 @@ class SynthesisAgentRuntime:
             config=self.config,
             bundle=bundle,
             atomic_tool_set_ref=f"db://{self._bound_db_id}",
+            database_execution_config=self.config.database.model_dump(mode="json"),
             pool=self._registration_pool,
             verifier_probe_specs=self._build_verifier_probe_specs(proposed_environment),
+            answer_field_names=_top_level_answer_field_names(proposed_environment.task),
         )
 
     def _materialize_environment(
@@ -1430,16 +3375,13 @@ class SynthesisAgentRuntime:
         self,
         *,
         proposed_environment: ProposedEnvironmentDraft,
-        self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics,
+        canonical_answer_json: str,
     ) -> tuple[
         list[MaterializedInstanceRecord],
         list[MaterializedCanonicalAnswerRecord],
         CrossInstanceSet,
     ]:
-        canonical_input = self._normalize_solution_answer(
-            proposed_environment.task.output_schema,
-            self_consistency_diagnostics.answer,
-        )
+        canonical_input = json.loads(canonical_answer_json)
         canonical_answer = canonicalize_output(
             proposed_environment.task.output_schema,
             canonical_input,

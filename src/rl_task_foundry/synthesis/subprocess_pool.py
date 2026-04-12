@@ -123,6 +123,7 @@ class RegistrationWorkerHandle:
         *,
         tool_source: str | None = None,
         atomic_tool_set_ref: str | None = None,
+        database_execution_config: dict[str, object] | None = None,
     ) -> dict[str, object]:
         if tool_source is None and atomic_tool_set_ref is None:
             raise ValueError("either tool_source or atomic_tool_set_ref is required")
@@ -134,6 +135,8 @@ class RegistrationWorkerHandle:
             payload["atomic_tools_root_dir"] = str(
                 AtomicToolMaterializer.for_config(self.config).root_dir
             )
+        if database_execution_config is not None:
+            payload["database_execution_config"] = database_execution_config
         return payload
 
     async def validate_module(
@@ -182,6 +185,7 @@ class RegistrationWorkerHandle:
         *,
         tool_source: str | None = None,
         atomic_tool_set_ref: str | None = None,
+        database_execution_config: dict[str, object] | None = None,
         self_test_source: str,
     ) -> RegistrationExecutionResult:
         response = await self._perform_request(
@@ -190,6 +194,7 @@ class RegistrationWorkerHandle:
                 **self._tool_reference_payload(
                     tool_source=tool_source,
                     atomic_tool_set_ref=atomic_tool_set_ref,
+                    database_execution_config=database_execution_config,
                 ),
                 "self_test_source": self_test_source,
                 "policy": self.config.synthesis.registration_policy.model_dump(mode="json"),
@@ -204,6 +209,7 @@ class RegistrationWorkerHandle:
         *,
         tool_source: str | None = None,
         atomic_tool_set_ref: str | None = None,
+        database_execution_config: dict[str, object] | None = None,
         verifier_source: str,
         artifact_kind: ArtifactKind,
         answer_sample: object,
@@ -215,6 +221,7 @@ class RegistrationWorkerHandle:
                 **self._tool_reference_payload(
                     tool_source=tool_source,
                     atomic_tool_set_ref=atomic_tool_set_ref,
+                    database_execution_config=database_execution_config,
                 ),
                 "verifier_source": verifier_source,
                 "artifact_kind": artifact_kind.value,
@@ -232,6 +239,7 @@ class RegistrationWorkerHandle:
         *,
         tool_source: str | None = None,
         atomic_tool_set_ref: str | None = None,
+        database_execution_config: dict[str, object] | None = None,
         solution_source: str,
         verifier_source: str,
         shadow_verifier_source: str | None = None,
@@ -243,6 +251,7 @@ class RegistrationWorkerHandle:
                 **self._tool_reference_payload(
                     tool_source=tool_source,
                     atomic_tool_set_ref=atomic_tool_set_ref,
+                    database_execution_config=database_execution_config,
                 ),
                 "solution_source": solution_source,
                 "verifier_source": verifier_source,
@@ -406,12 +415,14 @@ class RegistrationSubprocessPool:
         *,
         tool_source: str | None = None,
         atomic_tool_set_ref: str | None = None,
+        database_execution_config: dict[str, object] | None = None,
         self_test_source: str,
     ) -> RegistrationExecutionResult:
         return await self._dispatch(
             "run_tool_self_test",
             tool_source=tool_source,
             atomic_tool_set_ref=atomic_tool_set_ref,
+            database_execution_config=database_execution_config,
             self_test_source=self_test_source,
         )
 
@@ -420,6 +431,7 @@ class RegistrationSubprocessPool:
         *,
         tool_source: str | None = None,
         atomic_tool_set_ref: str | None = None,
+        database_execution_config: dict[str, object] | None = None,
         verifier_source: str,
         artifact_kind: ArtifactKind,
         answer_sample: object,
@@ -429,6 +441,7 @@ class RegistrationSubprocessPool:
             "probe_verifier_module",
             tool_source=tool_source,
             atomic_tool_set_ref=atomic_tool_set_ref,
+            database_execution_config=database_execution_config,
             verifier_source=verifier_source,
             artifact_kind=artifact_kind,
             answer_sample=answer_sample,
@@ -440,6 +453,7 @@ class RegistrationSubprocessPool:
         *,
         tool_source: str | None = None,
         atomic_tool_set_ref: str | None = None,
+        database_execution_config: dict[str, object] | None = None,
         solution_source: str,
         verifier_source: str,
         shadow_verifier_source: str | None = None,
@@ -449,6 +463,7 @@ class RegistrationSubprocessPool:
             "run_self_consistency_check",
             tool_source=tool_source,
             atomic_tool_set_ref=atomic_tool_set_ref,
+            database_execution_config=database_execution_config,
             solution_source=solution_source,
             verifier_source=verifier_source,
             shadow_verifier_source=shadow_verifier_source,

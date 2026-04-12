@@ -14,8 +14,11 @@ from types import CodeType
 from typing import Any
 from types import SimpleNamespace
 
+import asyncpg
 from pydantic import ValidationError
 
+from rl_task_foundry.config.models import DatabaseConfig
+from rl_task_foundry.infra.db import _apply_session_settings, solver_session_settings
 from rl_task_foundry.config.models import RegistrationPolicyConfig
 from rl_task_foundry.synthesis.registration_policy import (
     ArtifactKind,
@@ -402,6 +405,7 @@ def _build_tool_facade(
     tool_source: str,
     *,
     call_counter: _ToolCallCounter | None = None,
+    database_config: DatabaseConfig | None = None,
 ) -> SimpleNamespace:
     namespace = _load_namespace(
         source=tool_source,
@@ -415,7 +419,15 @@ def _build_tool_facade(
 
     facade = SimpleNamespace()
     for name, function in public_functions.items():
-        setattr(facade, name, _bind_tool_function(function, call_counter=call_counter))
+        setattr(
+            facade,
+            name,
+            _bind_tool_function(
+                function,
+                call_counter=call_counter,
+                database_config=database_config,
+            ),
+        )
     return facade
 
 
@@ -435,6 +447,7 @@ def _build_sync_tool_facade(
     tool_source: str,
     *,
     call_counter: _ToolCallCounter | None = None,
+    database_config: DatabaseConfig | None = None,
 ) -> SimpleNamespace:
     namespace = _load_namespace(
         source=tool_source,
@@ -448,7 +461,15 @@ def _build_sync_tool_facade(
 
     facade = SimpleNamespace()
     for name, function in public_functions.items():
-        setattr(facade, name, _bind_sync_tool_function(function, call_counter=call_counter))
+        setattr(
+            facade,
+            name,
+            _bind_sync_tool_function(
+                function,
+                call_counter=call_counter,
+                database_config=database_config,
+            ),
+        )
     return facade
 
 
@@ -456,16 +477,22 @@ def _bind_tool_function(
     function: Callable[..., Any],
     *,
     call_counter: _ToolCallCounter | None = None,
+    database_config: DatabaseConfig | None = None,
 ) -> Callable[..., Any]:
     async def _bound(*args: Any, **kwargs: Any) -> Any:
-        # Milestone 2 self-tests validate tool logic against a lightweight facade only.
-        # DB-backed tool execution is wired in later milestones.
         if call_counter is not None:
             call_counter.count += 1
-        result = function(None, *args, **kwargs)
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
+        previous_profiler = sys.getprofile()
+        sys.setprofile(None)
+        try:
+            return await _invoke_tool_function_async(
+                function,
+                database_config=database_config,
+                args=args,
+                kwargs=kwargs,
+            )
+        finally:
+            sys.setprofile(previous_profiler)
 
     return _bound
 
@@ -493,18 +520,64 @@ def _resolve_tool_source(payload: dict[str, Any]) -> str:
     return source_path.read_text(encoding="utf-8")
 
 
+def _should_validate_tool_source(payload: dict[str, Any]) -> bool:
+    tool_source = payload.get("tool_source")
+    return isinstance(tool_source, str) and bool(tool_source)
+
+
+def _database_execution_config(payload: dict[str, Any]) -> DatabaseConfig | None:
+    raw = payload.get("database_execution_config")
+    if not isinstance(raw, dict):
+        return None
+    return DatabaseConfig.model_validate(raw)
+
+
+async def _invoke_tool_function_async(
+    function: Callable[..., Any],
+    *,
+    database_config: DatabaseConfig | None,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    if database_config is None:
+        result = function(None, *args, **kwargs)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
+
+    conn = await asyncpg.connect(dsn=database_config.dsn)
+    try:
+        await _apply_session_settings(conn, solver_session_settings(database_config))
+        result = function(conn, *args, **kwargs)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
+    finally:
+        await conn.close()
+
+
 def _bind_sync_tool_function(
     function: Callable[..., Any],
     *,
     call_counter: _ToolCallCounter | None = None,
+    database_config: DatabaseConfig | None = None,
 ) -> Callable[..., Any]:
     def _bound(*args: Any, **kwargs: Any) -> Any:
         if call_counter is not None:
             call_counter.count += 1
-        result = function(None, *args, **kwargs)
-        if asyncio.iscoroutine(result):
-            return asyncio.run(result)
-        return result
+        previous_profiler = sys.getprofile()
+        sys.setprofile(None)
+        try:
+            return asyncio.run(
+                _invoke_tool_function_async(
+                    function,
+                    database_config=database_config,
+                    args=args,
+                    kwargs=kwargs,
+                )
+            )
+        finally:
+            sys.setprofile(previous_profiler)
 
     return _bound
 
@@ -529,6 +602,10 @@ def _synthetic_tool_value(
     kwargs: dict[str, Any],
 ) -> Any:
     scalar = _first_scalar(args, kwargs)
+    if name.startswith("count_"):
+        return 1
+    if name.startswith("list_") and name.endswith("_ids"):
+        return [1]
     row = {
         "tool": name,
         "id": 1,
@@ -550,13 +627,21 @@ def _synthetic_tool_value(
 
 
 def _looks_plural(name: str) -> bool:
-    return name.endswith("s") or name.startswith(("list_", "get_all_", "lookup_all_"))
+    return (
+        name.endswith("s")
+        or name.endswith("_batch")
+        or name.startswith(("list_", "get_all_", "lookup_all_"))
+    )
 
 
 def _first_scalar(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     for value in list(args) + list(kwargs.values()):
         if isinstance(value, (str, int, float, bool)):
             return value
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, (str, int, float, bool)):
+                    return item
     return None
 
 
@@ -645,6 +730,7 @@ def _handle_tool_self_test(payload: dict[str, Any]) -> dict[str, Any]:
         self_test_source = payload["self_test_source"]
         call_count_limit = int(payload["call_count_limit"])
         memory_limit_mb = payload.get("memory_limit_mb")
+        database_config = _database_execution_config(payload)
     except (KeyError, TypeError, ValueError, ValidationError) as exc:
         return _execution_error_payload(
             request_id=request_id,
@@ -654,10 +740,14 @@ def _handle_tool_self_test(payload: dict[str, Any]) -> dict[str, Any]:
 
     _set_memory_limit(memory_limit_mb)
     errors = [
-        *validate_generated_module(
-            tool_source,
-            kind=ArtifactKind.TOOL_MODULE,
-            policy=policy,
+        *(
+            validate_generated_module(
+                tool_source,
+                kind=ArtifactKind.TOOL_MODULE,
+                policy=policy,
+            )
+            if _should_validate_tool_source(payload)
+            else []
         ),
         *validate_generated_module(
             self_test_source,
@@ -675,7 +765,7 @@ def _handle_tool_self_test(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     try:
-        tools = _build_tool_facade(tool_source)
+        tools = _build_tool_facade(tool_source, database_config=database_config)
         function = _load_entrypoint(
             source=self_test_source,
             artifact_kind=ArtifactKind.TOOL_SELF_TEST_MODULE,
@@ -730,6 +820,7 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
         expected_fact_keys = list(payload.get("expected_fact_keys", []))
         call_count_limit = int(payload["call_count_limit"])
         memory_limit_mb = payload.get("memory_limit_mb")
+        database_config = _database_execution_config(payload)
     except (KeyError, TypeError, ValueError, ValidationError) as exc:
         return _verifier_probe_error_payload(
             request_id=request_id,
@@ -739,10 +830,14 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
 
     _set_memory_limit(memory_limit_mb)
     errors = [
-        *validate_generated_module(
-            tool_source,
-            kind=ArtifactKind.TOOL_MODULE,
-            policy=policy,
+        *(
+            validate_generated_module(
+                tool_source,
+                kind=ArtifactKind.TOOL_MODULE,
+                policy=policy,
+            )
+            if _should_validate_tool_source(payload)
+            else []
         ),
         *validate_generated_module(
             verifier_source,
@@ -781,15 +876,22 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
         verify = namespace["verify"]
         tool_names = _public_tool_names(tool_source)
 
-        fetch_tools = _VerifierProbeTools(tool_names)
-        fetch_answer_reads = _ValueReadCounter()
-        facts, _ = asyncio.run(
-            _invoke_entrypoint(
-                function=fetch_facts,
-                args=[_track_runtime_value(answer_sample, fetch_answer_reads), fetch_tools],
-                kwargs={},
-                call_count_limit=call_count_limit,
+        fetch_tools_counter = _ToolCallCounter()
+        fetch_tools = (
+            _build_sync_tool_facade(
+                tool_source,
+                call_counter=fetch_tools_counter,
+                database_config=database_config,
             )
+            if database_config is not None
+            else _VerifierProbeTools(tool_names)
+        )
+        fetch_answer_reads = _ValueReadCounter()
+        facts, _ = _invoke_entrypoint_sync(
+            function=fetch_facts,
+            args=[_track_runtime_value(answer_sample, fetch_answer_reads), fetch_tools],
+            kwargs={},
+            call_count_limit=call_count_limit,
         )
         if not isinstance(facts, dict):
             return _verifier_probe_error_payload(
@@ -797,7 +899,9 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
                 code="fetch_facts_result_not_object",
                 detail="fetch_facts() must return a dict of materialized facts.",
                 expected_fact_keys=expected_fact_keys,
-                fetch_facts_tool_calls=fetch_tools.call_count,
+                fetch_facts_tool_calls=(
+                    fetch_tools_counter.count if database_config is not None else fetch_tools.call_count
+                ),
                 fetch_facts_answer_reads=fetch_answer_reads.count,
             )
 
@@ -808,37 +912,40 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
 
         facts_match_answer_reads = _ValueReadCounter()
         facts_match_facts_reads = _ValueReadCounter()
-        facts_match_result, _ = asyncio.run(
-            _invoke_entrypoint(
-                function=facts_match,
-                args=[
-                    _track_runtime_value(answer_sample, facts_match_answer_reads),
-                    _track_runtime_value(facts, facts_match_facts_reads),
-                ],
-                kwargs={},
-                call_count_limit=call_count_limit,
-            )
+        facts_match_result, _ = _invoke_entrypoint_sync(
+            function=facts_match,
+            args=[
+                _track_runtime_value(answer_sample, facts_match_answer_reads),
+                _track_runtime_value(facts, facts_match_facts_reads),
+            ],
+            kwargs={},
+            call_count_limit=call_count_limit,
         )
         check_constraints_facts_reads = _ValueReadCounter()
-        check_constraints_result, _ = asyncio.run(
-            _invoke_entrypoint(
-                function=check_constraints,
-                args=[
-                    answer_sample,
-                    _track_runtime_value(facts, check_constraints_facts_reads),
-                ],
-                kwargs={},
-                call_count_limit=call_count_limit,
-            )
+        check_constraints_result, _ = _invoke_entrypoint_sync(
+            function=check_constraints,
+            args=[
+                answer_sample,
+                _track_runtime_value(facts, check_constraints_facts_reads),
+            ],
+            kwargs={},
+            call_count_limit=call_count_limit,
         )
-        verify_tools = _VerifierProbeTools(tool_names)
-        verify_result, _ = asyncio.run(
-            _invoke_entrypoint(
-                function=verify,
-                args=[answer_sample, verify_tools],
-                kwargs={},
-                call_count_limit=call_count_limit,
+        verify_tools_counter = _ToolCallCounter()
+        verify_tools = (
+            _build_sync_tool_facade(
+                tool_source,
+                call_counter=verify_tools_counter,
+                database_config=database_config,
             )
+            if database_config is not None
+            else _VerifierProbeTools(tool_names)
+        )
+        verify_result, _ = _invoke_entrypoint_sync(
+            function=verify,
+            args=[answer_sample, verify_tools],
+            kwargs={},
+            call_count_limit=call_count_limit,
         )
     except RuntimeError as exc:
         detail = str(exc)
@@ -872,12 +979,16 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             fetch_facts_return_keys=actual_fact_keys,
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
-            fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_tool_calls=(
+                fetch_tools_counter.count if database_config is not None else fetch_tools.call_count
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
             check_constraints_facts_reads=check_constraints_facts_reads.count,
-            verify_tool_calls=verify_tools.call_count,
+            verify_tool_calls=(
+                verify_tools_counter.count if database_config is not None else verify_tools.call_count
+            ),
             check_constraints_result=check_constraints_result
             if isinstance(check_constraints_result, bool)
             else None,
@@ -892,12 +1003,16 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             fetch_facts_return_keys=actual_fact_keys,
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
-            fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_tool_calls=(
+                fetch_tools_counter.count if database_config is not None else fetch_tools.call_count
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
             check_constraints_facts_reads=check_constraints_facts_reads.count,
-            verify_tool_calls=verify_tools.call_count,
+            verify_tool_calls=(
+                verify_tools_counter.count if database_config is not None else verify_tools.call_count
+            ),
             facts_match_result=facts_match_result,
             verify_result=verify_result if isinstance(verify_result, bool) else None,
         )
@@ -910,12 +1025,16 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             fetch_facts_return_keys=actual_fact_keys,
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
-            fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_tool_calls=(
+                fetch_tools_counter.count if database_config is not None else fetch_tools.call_count
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
             check_constraints_facts_reads=check_constraints_facts_reads.count,
-            verify_tool_calls=verify_tools.call_count,
+            verify_tool_calls=(
+                verify_tools_counter.count if database_config is not None else verify_tools.call_count
+            ),
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
         )
@@ -928,12 +1047,16 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
             fetch_facts_return_keys=actual_fact_keys,
             missing_fact_keys=missing_keys,
             extra_fact_keys=extra_keys,
-            fetch_facts_tool_calls=fetch_tools.call_count,
+            fetch_facts_tool_calls=(
+                fetch_tools_counter.count if database_config is not None else fetch_tools.call_count
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
             check_constraints_facts_reads=check_constraints_facts_reads.count,
-            verify_tool_calls=verify_tools.call_count,
+            verify_tool_calls=(
+                verify_tools_counter.count if database_config is not None else verify_tools.call_count
+            ),
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
             verify_result=verify_result,
@@ -966,12 +1089,16 @@ def _handle_probe_verifier(payload: dict[str, Any]) -> dict[str, Any]:
         "expected_fact_keys": expected_keys,
         "missing_fact_keys": [],
         "extra_fact_keys": [],
-        "fetch_facts_tool_calls": fetch_tools.call_count,
+        "fetch_facts_tool_calls": (
+            fetch_tools_counter.count if database_config is not None else fetch_tools.call_count
+        ),
         "fetch_facts_answer_reads": fetch_answer_reads.count,
         "facts_match_answer_reads": facts_match_answer_reads.count,
         "facts_match_facts_reads": facts_match_facts_reads.count,
         "check_constraints_facts_reads": check_constraints_facts_reads.count,
-        "verify_tool_calls": verify_tools.call_count,
+        "verify_tool_calls": (
+            verify_tools_counter.count if database_config is not None else verify_tools.call_count
+        ),
         "facts_match_result": facts_match_result,
         "check_constraints_result": check_constraints_result,
         "verify_result": verify_result,
@@ -990,6 +1117,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
         expected_fact_keys = list(payload.get("expected_fact_keys", []))
         call_count_limit = int(payload["call_count_limit"])
         memory_limit_mb = payload.get("memory_limit_mb")
+        database_config = _database_execution_config(payload)
     except (KeyError, TypeError, ValueError, ValidationError) as exc:
         return _self_consistency_error_payload(
             request_id=request_id,
@@ -999,10 +1127,14 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
 
     _set_memory_limit(memory_limit_mb)
     errors = [
-        *validate_generated_module(
-            tool_source,
-            kind=ArtifactKind.TOOL_MODULE,
-            policy=policy,
+        *(
+            validate_generated_module(
+                tool_source,
+                kind=ArtifactKind.TOOL_MODULE,
+                policy=policy,
+            )
+            if _should_validate_tool_source(payload)
+            else []
         ),
         *validate_generated_module(
             solution_source,
@@ -1049,7 +1181,11 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
 
     try:
         solution_tools_counter = _ToolCallCounter()
-        solution_tools = _build_sync_tool_facade(tool_source, call_counter=solution_tools_counter)
+        solution_tools = _build_sync_tool_facade(
+            tool_source,
+            call_counter=solution_tools_counter,
+            database_config=database_config,
+        )
         solve = _load_entrypoint(
             source=solution_source,
             artifact_kind=ArtifactKind.SOLUTION_MODULE,
@@ -1072,7 +1208,11 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
         verify = namespace["verify"]
 
         verifier_tools_counter = _ToolCallCounter()
-        verifier_tools = _build_sync_tool_facade(tool_source, call_counter=verifier_tools_counter)
+        verifier_tools = _build_sync_tool_facade(
+            tool_source,
+            call_counter=verifier_tools_counter,
+            database_config=database_config,
+        )
         fetch_answer_reads = _ValueReadCounter()
         facts, _ = _invoke_entrypoint_sync(
             function=fetch_facts,
@@ -1134,6 +1274,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             shadow_verifier_tools = _build_sync_tool_facade(
                 tool_source,
                 call_counter=shadow_verifier_tools_counter,
+                database_config=database_config,
             )
             shadow_verify_result, _ = _invoke_entrypoint_sync(
                 function=shadow_verify,

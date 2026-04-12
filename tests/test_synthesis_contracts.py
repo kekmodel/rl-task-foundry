@@ -12,6 +12,7 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintSummaryItem,
     CrossInstanceSet,
     DifficultyAxis,
+    DIFFICULTY_CRANK_ORDER,
     DIFFICULTY_AXIS_SPECS,
     EnvironmentContract,
     EnvironmentQualityMetrics,
@@ -42,6 +43,7 @@ from rl_task_foundry.synthesis.contracts import (
     ToolSelfTestContract,
     ToolTimeoutBehavior,
     VerifierContract,
+    build_difficulty_vector,
 )
 
 
@@ -174,11 +176,11 @@ def test_float_range_parameter_space_rejects_invalid_bounds() -> None:
 
 def test_environment_contract_round_trips_with_core_artifacts() -> None:
     output_schema = _build_output_schema()
-    difficulty_vector = {
-        DifficultyAxis.SLOT_COUNT: 3.0,
-        DifficultyAxis.CONSTRAINT_COUNT: 7.0,
-        DifficultyAxis.CONDITIONAL_DEPTH: 1.0,
-    }
+    difficulty_vector = build_difficulty_vector(
+        search_cost=2.0,
+        solution_space=3.0,
+        constraint_density=4.0,
+    )
     task = TaskContract(
         question="3일 일정표를 만들어 주세요.",
         category=CategoryTaxonomy.ITINERARY,
@@ -245,18 +247,14 @@ def test_environment_contract_round_trips_with_core_artifacts() -> None:
     assert round_tripped.quality_metrics.shadow_disagreement_rate is None
 
 
-def test_task_contract_rejects_fractional_integral_difficulty_axis() -> None:
+def test_difficulty_vector_rejects_negative_axis_values() -> None:
     with pytest.raises(ValidationError):
-        TaskContract(
-            question="일정표를 만들어 주세요.",
-            category=CategoryTaxonomy.ITINERARY,
-            output_schema=_build_output_schema(),
-            difficulty_vector={DifficultyAxis.SLOT_COUNT: 2.5},
-        )
+        build_difficulty_vector(search_cost=-1.0)
 
 
-def test_difficulty_axis_specs_cover_every_axis() -> None:
+def test_difficulty_axis_specs_cover_every_axis_in_crank_order() -> None:
     assert set(DIFFICULTY_AXIS_SPECS) == set(DifficultyAxis)
+    assert tuple(DIFFICULTY_AXIS_SPECS) == DIFFICULTY_CRANK_ORDER
 
 
 def test_environment_contract_rejects_task_category_mismatch() -> None:
@@ -265,7 +263,7 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
         question="일정표를 만들어 주세요.",
         category=CategoryTaxonomy.ASSIGNMENT,
         output_schema=output_schema,
-        difficulty_vector={DifficultyAxis.SLOT_COUNT: 3.0},
+        difficulty_vector=build_difficulty_vector(solution_space=3.0),
     )
 
     with pytest.raises(ValidationError):
@@ -275,7 +273,7 @@ def test_environment_contract_rejects_task_category_mismatch() -> None:
             domain="travel",
             category=CategoryTaxonomy.ITINERARY,
             atomic_tool_set_ref="db://proof_trip_fixture",
-            difficulty_vector={DifficultyAxis.SLOT_COUNT: 3.0},
+            difficulty_vector=build_difficulty_vector(solution_space=3.0),
             created_at=datetime(2026, 4, 11, 13, 40, 0),
             generator_version="rewrite-v1",
             tool_signature="toolhash",

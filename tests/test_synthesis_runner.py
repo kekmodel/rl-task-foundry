@@ -202,22 +202,17 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     assert summary.registry_root_dir == fake_registry.root_dir
     assert summary.registry_index_db_path == fake_registry.index_db_path
     assert summary.flow_id is not None
-    assert summary.event_log_path == tmp_path / "events.jsonl"
+    assert summary.phase_monitor_log_path == tmp_path / "phase_monitors.jsonl"
     assert summary.steps[0].draft_env_id is not None
     assert summary.steps[0].registry_status == EnvironmentRegistryCommitStatus.COMMITTED
     assert not hasattr(summary.steps[0], "draft")
-    event_lines = [
+    phase_monitor_lines = [
         json.loads(line)
-        for line in summary.event_log_path.read_text(encoding="utf-8").splitlines()
+        for line in summary.phase_monitor_log_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert event_lines[0]["stage"] == "registry_run"
-    assert event_lines[0]["status"] == "started"
-    assert event_lines[-1]["stage"] == "registry_run"
-    assert event_lines[-1]["status"] == "completed"
-    assert any(event["stage"] == "quality_gate" for event in event_lines)
-    assert any(event["stage"] == "registry_commit" for event in event_lines)
-    assert any(event["stage"] == "checkpoint" for event in event_lines)
-    assert all(event["flow_id"] == summary.flow_id for event in event_lines)
+    assert any(line["phase"] == "cross_instance" for line in phase_monitor_lines)
+    assert any(line["phase"] == "quality_gate" for line in phase_monitor_lines)
+    assert any(line["phase"] == "registry_commit" for line in phase_monitor_lines)
     assert created["sakila"].synthesize_calls == [
         ("sakila", CategoryTaxonomy.ASSIGNMENT, None),
         ("sakila", CategoryTaxonomy.ITINERARY, None),

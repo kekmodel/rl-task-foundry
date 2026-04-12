@@ -138,8 +138,12 @@ deprecated 이유:
 
 작업:
 
-- schema exploration phase
+- schema exploration + sample row inspection
 - category inference phase
+- label-first phase split
+  - label construction
+  - task synthesis
+  - code generation
 - structured output contract
 - explicit memory / tool trace contract
 - provider resilience reuse
@@ -169,7 +173,8 @@ Acceptance:
 - acceptance criteria 충족
 - Phase 1~4 구현 완료
 - C13은 구현 후 spec/plan을 코드 기준으로 동기화하는 문서 마감 단계다
-- 측정 참고값: 현재 `sakila` + `public` visibility profile에서는 atomic tool 108개(`T1=28`, `T2=36`, `T4=44`)가 materialize된다
+- authoritative atomic tool family surface는 `T1~T8`이다
+- exact tool count는 schema snapshot의 함수이며 stale fixed count를 source of truth로 두지 않는다
 
 Acceptance criteria:
 
@@ -294,6 +299,8 @@ Acceptance:
 
 작업:
 
+- grounded sample-row exploration
+- label construction first, task synthesis second
 - proof task의 constraint 구조 먼저 고정
 - 그 task를 지원하는 최소 synthetic schema 설계
 - synthetic fixture DB 구축
@@ -396,6 +403,11 @@ Acceptance:
 목표:
 
 - synthetic proof 뒤에 real DB 적응성 공백을 없앤다
+
+현재 메모:
+
+- pre-label-first runtime flow에서는 real DB trial이 12회 연속 실패했고, 2026-04-12 기준 trial taxonomy 수집 결과가 prompt/runtime redesign 입력이 되었다
+- authoritative follow-up은 grounded exploration + label-first pipeline으로 real DB single-environment acceptance를 재시도하는 것이다
 
 작업:
 

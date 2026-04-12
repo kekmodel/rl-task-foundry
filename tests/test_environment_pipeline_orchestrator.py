@@ -41,6 +41,7 @@ from rl_task_foundry.synthesis.contracts import (
     TaskContract,
     VerifierContract,
     AnchorQueryContract,
+    build_difficulty_vector,
 )
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
 from rl_task_foundry.synthesis.registration_runner import (
@@ -130,7 +131,7 @@ def _sample_environment() -> EnvironmentContract:
         domain="customer_support",
         category=CategoryTaxonomy.ASSIGNMENT,
         atomic_tool_set_ref="db://sakila",
-        difficulty_vector={},
+        difficulty_vector=build_difficulty_vector(),
         created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
         generator_version="test-version",
         tool_signature="sha256:tool",
@@ -499,6 +500,35 @@ async def test_environment_orchestrator_stops_mid_batch_when_post_canary_batch_s
     assert summary.early_stop_decision == expected_decision
     assert call_count == 5
     assert {run.reward_result.status for run in summary.runs} == {expected_reward_status}
+
+
+@pytest.mark.asyncio
+async def test_environment_orchestrator_converts_solver_exception_into_failed_run(tmp_path):
+    config = _config(tmp_path)
+    bundle = _sample_bundle()
+    call_count = 0
+
+    class _FakeRuntime:
+        async def run(self, episode, *, replica_index: int):
+            del episode, replica_index
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("solver timeout")
+
+    orchestrator = EnvironmentOrchestrator(
+        config,
+        runtime_factory=lambda *_args: _FakeRuntime(),
+        tool_executor_factory=lambda _bundle: {"count_customer": lambda _kwargs: 7},
+    )
+
+    summary = await orchestrator.run_bundle(bundle)
+
+    assert call_count == summary.total_solver_runs
+    assert summary.total_solver_runs > 0
+    assert summary.early_stop_decision == "reject_too_hard"
+    assert {run.reward_result.status for run in summary.runs} == {"json_decode_failed"}
+    assert {run.solver_result.status for run in summary.runs} == {"failed"}
+    assert {run.solver_result.termination_reason for run in summary.runs} == {"RuntimeError"}
 
 
 @pytest.mark.asyncio

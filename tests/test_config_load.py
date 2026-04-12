@@ -15,6 +15,7 @@ def test_load_config_uses_solver_replicas_source_of_truth():
     assert config.atomic_tools.max_tool_count == 256
     assert config.atomic_tools.bounded_result_limit == 100
     assert config.atomic_tools.max_batch_values == 128
+    assert config.atomic_tools.float_precision == 2
     assert config.verification.shadow_sample_rate == 0.1
     assert config.synthesis.runtime.max_turns == 8
     assert config.synthesis.runtime.explicit_memory_window == 8

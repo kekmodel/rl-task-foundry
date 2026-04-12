@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from ast import literal_eval
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,6 +53,11 @@ def _raw_output_text(final_output: Any, submitted_answer_text: str | None) -> st
     if isinstance(final_output, dict):
         return json.dumps(final_output, ensure_ascii=False, sort_keys=True)
     return str(final_output)
+
+
+def _failure_raw_output_text(error: Exception) -> str:
+    del error
+    return ""
 
 
 def _extract_token_usage(run_result: Any) -> dict[str, int]:
@@ -135,6 +141,10 @@ def _is_failed_submission(output: Any) -> bool:
 def _extract_submission_output(
     final_output: Any,
     ) -> tuple[str | None, dict[str, object] | None, str, str | None, dict[str, object]]:
+    if isinstance(final_output, str):
+        normalized_output = _parse_submission_output_string(final_output)
+        if normalized_output is not None:
+            final_output = normalized_output
     if _is_successful_submission(final_output):
         answer_text = final_output["answer_text"]
         structured_output: dict[str, object] | None = None
@@ -153,6 +163,21 @@ def _extract_submission_output(
         }
         return None, None, "invalid_submit", "invalid_submit_schema", metadata
     return None, None, "completed", None, {}
+
+
+def _parse_submission_output_string(final_output: str) -> dict[str, Any] | None:
+    text = final_output.strip()
+    if not text.startswith("{"):
+        return None
+    parsed: Any
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            parsed = literal_eval(text)
+        except (ValueError, SyntaxError):
+            return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
@@ -228,8 +253,7 @@ def _make_submit_result_tool() -> object:
     return FunctionTool(
         name="submit_result",
         description=(
-            "Submit the final answer as a JSON string once you have enough evidence. "
-            "Call this exactly once when you are ready to finish."
+            "Submit your final answer as a JSON string matching the rendered prompt schema."
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
@@ -368,17 +392,75 @@ class OpenAIAgentsSolverBackend:
             tools=tools,
             output_type=None,
             tool_use_behavior=self._build_tool_use_behavior(sdk),
-            model_settings=sdk.ModelSettings(parallel_tool_calls=False),
+            model_settings=sdk.ModelSettings(
+                parallel_tool_calls=False,
+                tool_choice="required",
+            ),
+            reset_tool_choice=False,
         )
         session = self._build_session(sdk, task_id, replica_index)
 
         started_at = perf_counter()
-        run_result = await sdk.Runner.run(
-            agent,
-            rendered_user_prompt,
-            max_turns=self.runtime_config.max_turns,
-            session=session,
-        )
+        try:
+            run_result = await sdk.Runner.run(
+                agent,
+                rendered_user_prompt,
+                max_turns=self.runtime_config.max_turns,
+                session=session,
+            )
+        except Exception as exc:
+            latency_ms = int((perf_counter() - started_at) * 1000)
+            raw_output_text = _failure_raw_output_text(exc)
+            transcript_ref = self._write_artifact(
+                "transcripts",
+                task_id,
+                replica_index,
+                {
+                    "task_id": task_id,
+                    "solver_id": self.solver_config.solver_id,
+                    "replica_index": replica_index,
+                    "input_items": [{"role": "user", "content": rendered_user_prompt}],
+                    "final_output": raw_output_text,
+                    "error": {
+                        "type": exc.__class__.__name__,
+                        "detail": str(exc),
+                    },
+                },
+            )
+            tool_trace_ref = self._write_artifact(
+                "tool_traces",
+                task_id,
+                replica_index,
+                {
+                    "task_id": task_id,
+                    "solver_id": self.solver_config.solver_id,
+                    "replica_index": replica_index,
+                    "run_items": [],
+                    "tool_calls": [],
+                    "error": {
+                        "type": exc.__class__.__name__,
+                        "detail": str(exc),
+                    },
+                },
+            )
+            return SolverResult(
+                task_id=task_id,
+                solver_id=self.solver_config.solver_id,
+                provider=self.solver_config.provider,
+                model=self.solver_config.model,
+                replica_index=replica_index,
+                transcript_ref=transcript_ref,
+                tool_trace_ref=tool_trace_ref,
+                raw_output_text=raw_output_text,
+                structured_output=None,
+                explicit_memory_events=[],
+                token_usage={},
+                latency_ms=latency_ms,
+                turn_count=0,
+                status="failed",
+                termination_reason=exc.__class__.__name__,
+                termination_metadata={"detail": str(exc)},
+            )
         latency_ms = int((perf_counter() - started_at) * 1000)
 
         (
@@ -390,8 +472,6 @@ class OpenAIAgentsSolverBackend:
         ) = _extract_submission_output(
             run_result.final_output
         )
-        if submitted_answer_text is None and status == "completed":
-            raise RuntimeError("Solver run did not submit an answer via submit_result()")
         raw_output_text = _raw_output_text(run_result.final_output, submitted_answer_text)
         transcript_ref = self._write_artifact(
             "transcripts",
@@ -424,6 +504,8 @@ class OpenAIAgentsSolverBackend:
                 ),
             },
         )
+        if submitted_answer_text is None and status == "completed":
+            raise RuntimeError("Solver run did not submit an answer via submit_result()")
 
         return SolverResult(
             task_id=task_id,

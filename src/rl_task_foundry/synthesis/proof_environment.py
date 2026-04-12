@@ -33,7 +33,7 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
     CrossInstanceSet,
-    DifficultyAxis,
+    DifficultyVectorContract,
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
@@ -48,13 +48,17 @@ from rl_task_foundry.synthesis.contracts import (
     SolutionContract,
     TaskContract,
     VerifierContract,
+    difficulty_vector_json,
 )
 from rl_task_foundry.synthesis.cross_instance import evaluate_cross_instance_draft
 from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryWriter,
 )
-from rl_task_foundry.synthesis.pipeline_events import PipelineFlowLogger, build_flow_id
+from rl_task_foundry.synthesis.phase_monitor import (
+    PipelinePhaseMonitorLogger,
+)
+from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.registration_policy import ArtifactKind
@@ -160,7 +164,7 @@ class ProofEnvironmentRunSummary:
     fixture_sql_root: Path
     quality_gate_status: str
     flow_id: str | None = None
-    event_log_path: Path | None = None
+    phase_monitor_log_path: Path | None = None
     solver_pass_rate: float | None = None
     solver_ci_low: float | None = None
     solver_ci_high: float | None = None
@@ -191,101 +195,110 @@ class ProofEnvironmentRunner:
     async def run(self, output_root: Path) -> ProofEnvironmentRunSummary:
         output_root.mkdir(parents=True, exist_ok=True)
         flow_id = build_flow_id("proof_environment")
-        event_log_path = output_root / "debug" / "pipeline_events.jsonl"
-        event_logger = PipelineFlowLogger(
-            event_log_path=event_log_path,
-            mirror_event_log_path=self.config.output.events_jsonl_path,
+        phase_monitor_log_path = output_root / "debug" / "phase_monitors.jsonl"
+        phase_monitor = PipelinePhaseMonitorLogger(
+            phase_monitor_log_path=phase_monitor_log_path,
             flow_kind="proof_environment",
             flow_id=flow_id,
         )
-        event_logger.emit(
-            stage="proof_run",
-            status="started",
-            payload={"output_root": output_root},
-        )
         fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
-        event_logger.emit(
-            stage="fixture_sql",
-            status="written",
-            payload={"fixture_sql_root": fixture_files.root_dir},
-        )
         draft = build_proof_environment_draft()
-        event_logger.emit(
-            stage="draft",
-            status="built",
-            payload={"env_id": draft.environment.env_id, "db_id": draft.environment.db_id},
-        )
-        event_logger.emit(
-            stage="cross_instance",
-            status="started",
-            payload={"env_id": draft.environment.env_id},
+        phase_monitor.emit(
+            phase="draft_build",
+            status="completed",
+            expected_contract={
+                "db_id": PROOF_DB_ID,
+                "category": CategoryTaxonomy.ITINERARY.value,
+            },
+            actual_data={
+                "env_id": draft.environment.env_id,
+                "difficulty_vector": difficulty_vector_json(
+                    draft.environment.task.difficulty_vector
+                ),
+                "rendered_user_prompts": [
+                    instance.rendered_user_prompt for instance in draft.instances
+                ],
+                "canonical_answer_jsons": [
+                    answer.canonical_answer_json for answer in draft.canonical_answers
+                ],
+            },
+            checks={
+                "instance_count_matches_canonical_answers": len(draft.instances)
+                == len(draft.canonical_answers),
+            },
+            diagnostics={},
         )
         cross_instance_summary = evaluate_cross_instance_draft(draft)
+        phase_monitor.emit(
+            phase="cross_instance",
+            status="passed" if cross_instance_summary.passed else "failed",
+            expected_contract={
+                "minimum_required": draft.environment.cross_instance_set.minimum_required,
+            },
+            actual_data={
+                "instance_count": cross_instance_summary.instance_count,
+                "canonical_answer_count": cross_instance_summary.canonical_answer_count,
+                "error_codes": list(cross_instance_summary.error_codes),
+            },
+            checks={"passed": cross_instance_summary.passed},
+            diagnostics={"env_id": draft.environment.env_id},
+        )
         if not cross_instance_summary.passed:
-            event_logger.emit(
-                stage="cross_instance",
-                status="failed",
-                payload={"error_codes": list(cross_instance_summary.error_codes)},
-            )
-            event_logger.emit(
-                stage="proof_run",
-                status="completed",
-                payload={"quality_gate_status": "reject_cross_instance"},
-            )
             return ProofEnvironmentRunSummary(
                 db_id=draft.environment.db_id,
                 env_id=draft.environment.env_id,
                 fixture_sql_root=fixture_files.root_dir,
                 quality_gate_status="reject_cross_instance",
                 flow_id=flow_id,
-                event_log_path=event_log_path,
+                phase_monitor_log_path=phase_monitor_log_path,
                 cross_instance_error_codes=cross_instance_summary.error_codes,
             )
-        event_logger.emit(
-            stage="cross_instance",
-            status="passed",
-            payload={"env_id": draft.environment.env_id},
-        )
-        event_logger.emit(
-            stage="rollout",
-            status="started",
-            payload={"env_id": draft.environment.env_id},
-        )
         rollout_summary = await self.environment_orchestrator.run_draft(draft)
-        event_logger.emit(
-            stage="rollout",
+        phase_monitor.emit(
+            phase="rollout",
             status="completed",
-            payload={
+            expected_contract={
+                "planned_solver_runs_upper_bound": self.config.calibration.full_replica_limit,
+            },
+            actual_data={
                 "planned_solver_runs": rollout_summary.planned_solver_runs,
                 "total_solver_runs": rollout_summary.total_solver_runs,
                 "matched_solver_runs": rollout_summary.matched_solver_runs,
                 "early_stop_decision": rollout_summary.early_stop_decision,
             },
+            checks={
+                "executed_runs_within_plan": rollout_summary.total_solver_runs
+                <= rollout_summary.planned_solver_runs,
+            },
+            diagnostics={"env_id": draft.environment.env_id},
         )
         quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
-        event_logger.emit(
-            stage="quality_gate",
+        phase_monitor.emit(
+            phase="quality_gate",
             status=quality_gate_summary.status.value,
-            payload={
+            expected_contract={
+                "band_lower": quality_gate_summary.band_lower,
+                "band_upper": quality_gate_summary.band_upper,
+            },
+            actual_data={
                 "pass_rate": quality_gate_summary.pass_rate,
                 "ci_low": quality_gate_summary.ci_lower,
                 "ci_high": quality_gate_summary.ci_upper,
             },
+            checks={
+                "accepted": quality_gate_summary.status
+                is EnvironmentQualityGateStatus.ACCEPT,
+            },
+            diagnostics={"env_id": draft.environment.env_id},
         )
-
         if quality_gate_summary.status is not EnvironmentQualityGateStatus.ACCEPT:
-            event_logger.emit(
-                stage="proof_run",
-                status="completed",
-                payload={"quality_gate_status": quality_gate_summary.status.value},
-            )
             return ProofEnvironmentRunSummary(
                 db_id=draft.environment.db_id,
                 env_id=draft.environment.env_id,
                 fixture_sql_root=fixture_files.root_dir,
                 quality_gate_status=quality_gate_summary.status.value,
                 flow_id=flow_id,
-                event_log_path=event_log_path,
+                phase_monitor_log_path=phase_monitor_log_path,
                 solver_pass_rate=quality_gate_summary.pass_rate,
                 solver_ci_low=quality_gate_summary.ci_lower,
                 solver_ci_high=quality_gate_summary.ci_upper,
@@ -295,33 +308,27 @@ class ProofEnvironmentRunner:
             draft,
             quality_gate_summary=quality_gate_summary,
         )
-        event_logger.emit(
-            stage="registry_commit",
-            status="started",
-            payload={"env_id": accepted_draft.environment.env_id},
-        )
         commit_result = self.registry.commit_draft(accepted_draft)
-        event_logger.emit(
-            stage="registry_commit",
+        phase_monitor.emit(
+            phase="registry_commit",
             status=commit_result.status.value,
-            payload={"registry_env_id": commit_result.env_id},
+            expected_contract={},
+            actual_data={
+                "registry_env_id": commit_result.env_id,
+                "status": commit_result.status.value,
+            },
+            checks={},
+            diagnostics={"env_id": accepted_draft.environment.env_id},
         )
         bundle_root = output_root / "bundle"
-        event_logger.emit(
-            stage="bundle_export",
-            status="started",
-            payload={"bundle_root": bundle_root, "env_id": commit_result.env_id},
-        )
         self.exporter.export_bundle(bundle_root, env_id=commit_result.env_id)
-        event_logger.emit(
-            stage="bundle_export",
+        phase_monitor.emit(
+            phase="bundle_export",
             status="completed",
-            payload={"bundle_root": bundle_root, "env_id": commit_result.env_id},
-        )
-        event_logger.emit(
-            stage="proof_run",
-            status="completed",
-            payload={"quality_gate_status": quality_gate_summary.status.value},
+            expected_contract={"bundle_root": bundle_root},
+            actual_data={"bundle_root": bundle_root, "env_id": commit_result.env_id},
+            checks={"bundle_root_exists": bundle_root.exists()},
+            diagnostics={},
         )
         return ProofEnvironmentRunSummary(
             db_id=accepted_draft.environment.db_id,
@@ -329,7 +336,7 @@ class ProofEnvironmentRunner:
             fixture_sql_root=fixture_files.root_dir,
             quality_gate_status=quality_gate_summary.status.value,
             flow_id=flow_id,
-            event_log_path=event_log_path,
+            phase_monitor_log_path=phase_monitor_log_path,
             solver_pass_rate=quality_gate_summary.pass_rate,
             solver_ci_low=quality_gate_summary.ci_lower,
             solver_ci_high=quality_gate_summary.ci_upper,
@@ -439,14 +446,13 @@ def build_proof_environment_draft(
                 summary="연속된 day의 city는 proof_city_links 기준으로 인접해야 한다.",
             ),
         ],
-        difficulty_vector={
-            DifficultyAxis.SLOT_COUNT: 3.0,
-            DifficultyAxis.CONSTRAINT_COUNT: 4.0,
-            DifficultyAxis.TEMPORAL_SPAN: 3.0,
-            DifficultyAxis.UNIQUENESS_SCOPE: 3.0,
-            DifficultyAxis.THRESHOLD_TIGHTNESS: 0.8,
-            DifficultyAxis.CANDIDATE_WIDTH: 6.0,
-        },
+        difficulty_vector=DifficultyVectorContract.model_validate(
+            {
+                "search_cost": 3.0,
+                "solution_space": 3.0,
+                "constraint_density": 4.0,
+            }
+        ),
         instance_parameters={
             "anchor_id": 1,
             "season": "spring",
@@ -584,8 +590,11 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             description="List proof cities visible in one season.",
             params_schema={
                 "type": "object",
-                "properties": {"season": {"type": "string"}},
-                "required": ["season"],
+                "properties": {
+                    "season": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+                "required": ["season", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -603,7 +612,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             },
             sql=(
                 "SELECT city_id, city_name, region_name "
-                "FROM proof_cities WHERE season = $1 ORDER BY city_id LIMIT 20"
+                "FROM proof_cities WHERE season = $1 ORDER BY city_id LIMIT $2"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
             semantic_key="proof_cities:season_eq",
@@ -614,8 +623,11 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             description="List neighbor city ids for a proof city.",
             params_schema={
                 "type": "object",
-                "properties": {"city_id": {"type": "integer"}},
-                "required": ["city_id"],
+                "properties": {
+                    "city_id": {"type": "integer"},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+                "required": ["city_id", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -629,7 +641,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             },
             sql=(
                 "SELECT neighbor_city_id FROM proof_city_links "
-                "WHERE city_id = $1 ORDER BY neighbor_city_id LIMIT 20"
+                "WHERE city_id = $1 ORDER BY neighbor_city_id LIMIT $2"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
             semantic_key="proof_city_links:city_id_eq",
@@ -640,8 +652,11 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             description="One-hop traversal from proof city to proof lodgings.",
             params_schema={
                 "type": "object",
-                "properties": {"city_id": {"type": "integer"}},
-                "required": ["city_id"],
+                "properties": {
+                    "city_id": {"type": "integer"},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+                "required": ["city_id", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -659,7 +674,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             },
             sql=(
                 "SELECT lodging_id, lodging_name, nightly_cost FROM proof_lodgings "
-                "WHERE city_id = $1 ORDER BY lodging_id LIMIT 20"
+                "WHERE city_id = $1 ORDER BY lodging_id LIMIT $2"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
             semantic_key="proof_cities->proof_lodgings:city_id",
@@ -670,8 +685,11 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             description="One-hop traversal from proof city to proof activities.",
             params_schema={
                 "type": "object",
-                "properties": {"city_id": {"type": "integer"}},
-                "required": ["city_id"],
+                "properties": {
+                    "city_id": {"type": "integer"},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+                "required": ["city_id", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -689,7 +707,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             },
             sql=(
                 "SELECT activity_id, activity_name, ticket_cost FROM proof_activities "
-                "WHERE city_id = $1 ORDER BY activity_id LIMIT 20"
+                "WHERE city_id = $1 ORDER BY activity_id LIMIT $2"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
             semantic_key="proof_cities->proof_activities:city_id",
@@ -713,58 +731,66 @@ async def get_proof_anchor_by_id(conn, anchor_id):
     return None if row is None else dict(row)
 
 
-async def list_proof_city_by_season_eq(conn, season):
+async def list_proof_city_by_season_eq(conn, season, limit):
+    limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
         SELECT city_id, city_name, region_name
         FROM proof_cities
         WHERE season = $1
         ORDER BY city_id
-        LIMIT 20
+        LIMIT $2
         \"\"\",
         season,
+        limit,
     )
     return [dict(row) for row in rows]
 
 
-async def list_proof_city_link_by_city_id_eq(conn, city_id):
+async def list_proof_city_link_by_city_id_eq(conn, city_id, limit):
+    limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
         SELECT neighbor_city_id
         FROM proof_city_links
         WHERE city_id = $1
         ORDER BY neighbor_city_id
-        LIMIT 20
+        LIMIT $2
         \"\"\",
         city_id,
+        limit,
     )
     return [dict(row) for row in rows]
 
 
-async def traverse_proof_city_to_proof_lodging_via_city_id(conn, city_id):
+async def traverse_proof_city_to_proof_lodging_via_city_id(conn, city_id, limit):
+    limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
         SELECT lodging_id, lodging_name, nightly_cost
         FROM proof_lodgings
         WHERE city_id = $1
         ORDER BY lodging_id
-        LIMIT 20
+        LIMIT $2
         \"\"\",
         city_id,
+        limit,
     )
     return [dict(row) for row in rows]
 
 
-async def traverse_proof_city_to_proof_activity_via_city_id(conn, city_id):
+async def traverse_proof_city_to_proof_activity_via_city_id(conn, city_id, limit):
+    limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
         SELECT activity_id, activity_name, ticket_cost
         FROM proof_activities
         WHERE city_id = $1
         ORDER BY activity_id
-        LIMIT 20
+        LIMIT $2
         \"\"\",
         city_id,
+        limit,
     )
     return [dict(row) for row in rows]
 """.strip() + "\n"
@@ -775,14 +801,14 @@ def _proof_solution_source() -> str:
     return """
 def solve(tools):
     anchor = tools.get_proof_anchor_by_id({"anchor_id": 1})
-    cities = tools.list_proof_city_by_season_eq({"season": anchor["season"]})
+    cities = tools.list_proof_city_by_season_eq({"season": anchor["season"], "limit": 20})
     plans = []
     for city in cities:
         lodgings = tools.traverse_proof_city_to_proof_lodging_via_city_id(
-            {"city_id": city["city_id"]}
+            {"city_id": city["city_id"], "limit": 20}
         )
         activities = tools.traverse_proof_city_to_proof_activity_via_city_id(
-            {"city_id": city["city_id"]}
+            {"city_id": city["city_id"], "limit": 20}
         )
         if not lodgings or not activities:
             continue
@@ -796,7 +822,7 @@ def solve(tools):
                 "neighbors": [
                     row["neighbor_city_id"]
                     for row in tools.list_proof_city_link_by_city_id_eq(
-                        {"city_id": city["city_id"]}
+                        {"city_id": city["city_id"], "limit": 20}
                     )
                 ],
             }
@@ -810,7 +836,9 @@ def _proof_verifier_source() -> str:
 async def fetch_facts(answer, tools):
     facts = []
     for item in answer:
-        neighbors = tools.list_proof_city_link_by_city_id_eq({"city_id": item["city_id"]})
+        neighbors = tools.list_proof_city_link_by_city_id_eq(
+            {"city_id": item["city_id"], "limit": 20}
+        )
         facts.append({"city_id": item["city_id"], "neighbors": neighbors})
     return {"rows": facts}
 
@@ -842,7 +870,7 @@ async def fetch_facts(answer, tools):
             {
                 "city_id": item["city_id"],
                 "lodging_options": tools.traverse_proof_city_to_proof_lodging_via_city_id(
-                    {"city_id": item["city_id"]}
+                    {"city_id": item["city_id"], "limit": 20}
                 ),
             }
         )

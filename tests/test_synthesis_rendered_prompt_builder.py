@@ -83,9 +83,10 @@ def test_build_rendered_user_prompt_includes_constraints_and_instance_parameters
     assert "Instance Parameters:" in prompt
     assert '- season: "spring"' in prompt
     assert "- day_count: 3" in prompt
-    assert "Submit Result Format:" in prompt
+    assert "\n\n# Submit Result Format\n" in prompt
+    assert "# Submit Result Format" in prompt
     assert '"sort_key": [' in prompt
-    assert "Call submit_result with a JSON string" in prompt
+    assert "Submit your final answer via submit_result as a JSON string matching this schema." in prompt
 
 
 def test_synthesis_rendered_prompt_builder_module_has_zero_legacy_imports() -> None:

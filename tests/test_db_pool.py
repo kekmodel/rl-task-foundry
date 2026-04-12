@@ -10,11 +10,16 @@ from rl_task_foundry.infra.db import DatabasePools
 
 
 class _FakeConn:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_on_role: bool = False) -> None:
         self.statements: list[str] = []
+        self.fail_on_role = fail_on_role
 
     async def execute(self, statement: str) -> None:
         self.statements.append(statement)
+        if self.fail_on_role and statement.startswith("SET ROLE "):
+            raise db_module.asyncpg.InvalidParameterValueError(
+                'role "rlvr_reader" does not exist'
+            )
 
 
 class _FakePool:
@@ -74,3 +79,20 @@ async def test_database_pools_create_solver_and_control_lanes(monkeypatch):
     await pools_obj.close()
     assert pools[0].closed is True
     assert pools[1].closed is True
+
+
+@pytest.mark.asyncio
+async def test_apply_session_settings_ignores_missing_readonly_role() -> None:
+    conn = _FakeConn(fail_on_role=True)
+    settings = db_module.solver_session_settings(
+        DatabaseConfig(
+            dsn="postgresql://sakila:sakila@127.0.0.1:5433/sakila",
+            readonly_role="rlvr_reader",
+        )
+    )
+
+    await db_module._apply_session_settings(conn, settings)
+
+    assert "SET default_transaction_read_only = on" in conn.statements
+    assert "SET ROLE rlvr_reader" in conn.statements
+    assert "SET statement_timeout = 5000" in conn.statements

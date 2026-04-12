@@ -11,6 +11,7 @@ from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryStatus,
+    SynthesisDifficultyRetrySeed,
     SynthesisEnvironmentDraft,
 )
 from rl_task_foundry.synthesis.scheduler import (
@@ -34,6 +35,7 @@ class SynthesisRuntimeHandle(Protocol):
         db_id: str,
         requested_category: CategoryTaxonomy,
         graph: SchemaGraph | None = None,
+        retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> SynthesisEnvironmentDraft: ...
 
     async def close(self) -> None: ...

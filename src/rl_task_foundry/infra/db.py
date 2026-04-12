@@ -44,7 +44,24 @@ def solver_session_settings(config: DatabaseConfig) -> SessionSettings:
 
 async def _apply_session_settings(conn: Any, settings: SessionSettings) -> None:
     for statement in (*settings.readonly_sql, *settings.timeout_sql):
-        await conn.execute(statement)
+        try:
+            await conn.execute(statement)
+        except asyncpg.PostgresError as exc:
+            if _should_ignore_session_setting_error(statement, exc):
+                continue
+            raise
+
+
+def _should_ignore_session_setting_error(
+    statement: str,
+    exc: asyncpg.PostgresError,
+) -> bool:
+    if not statement.startswith("SET ROLE "):
+        return False
+    if isinstance(exc, (asyncpg.InvalidParameterValueError, asyncpg.UndefinedObjectError)):
+        return True
+    detail = str(exc).lower()
+    return "role" in detail and ("does not exist" in detail or "invalid" in detail)
 
 
 @dataclass(slots=True)

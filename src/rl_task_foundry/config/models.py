@@ -29,8 +29,6 @@ class DatabaseConfig(StrictModel):
 class DomainConfig(StrictModel):
     name: str
     language: str = Field(default="ko", min_length=2)
-    user_role: str = "end user"
-    agent_role: str = "organization AI assistant"
     scenario_description: str = (
         "an end user asking the organization that owns the database for help or information"
     )
@@ -74,6 +72,7 @@ class AtomicToolConfig(StrictModel):
     max_tool_count: int = Field(default=256, ge=8)
     bounded_result_limit: int = Field(default=100, ge=1)
     max_batch_values: int = Field(default=128, ge=1)
+    float_precision: int = Field(default=2, ge=0)
 
 
 class RegistrationWorkerConfig(StrictModel):

@@ -73,7 +73,8 @@ def validate_config(
         "atomic_tools="
         f"max_tool_count={config.atomic_tools.max_tool_count},"
         f"bounded_result_limit={config.atomic_tools.bounded_result_limit},"
-        f"max_batch_values={config.atomic_tools.max_batch_values}"
+        f"max_batch_values={config.atomic_tools.max_batch_values},"
+        f"float_precision={config.atomic_tools.float_precision}"
     )
     console.print(f"float_precision={config.verification.float_precision}")
     console.print(f"shadow_sample_rate={config.verification.shadow_sample_rate}")
@@ -182,8 +183,8 @@ def run_synthesis_registry(
         console.print(f"remaining_pairs={summary.remaining_pairs}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
-        if summary.event_log_path is not None:
-            console.print(f"event_log_path={summary.event_log_path}")
+        if summary.phase_monitor_log_path is not None:
+            console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
         if summary.registry_root_dir is not None:
             console.print(f"registry_root_dir={summary.registry_root_dir}")
         if summary.registry_index_db_path is not None:
@@ -354,8 +355,8 @@ def run_proof_environment(
         console.print(f"quality_gate_status={summary.quality_gate_status}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
-        if summary.event_log_path is not None:
-            console.print(f"event_log_path={summary.event_log_path}")
+        if summary.phase_monitor_log_path is not None:
+            console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
         if summary.cross_instance_error_codes:
             console.print(f"cross_instance_error_codes={list(summary.cross_instance_error_codes)}")
         if summary.solver_pass_rate is not None:
@@ -408,8 +409,8 @@ def run_real_db_trial(
         console.print(f"requested_category={summary.requested_category}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
-        if summary.event_log_path is not None:
-            console.print(f"event_log_path={summary.event_log_path}")
+        if summary.phase_monitor_log_path is not None:
+            console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
         if summary.env_id is not None:
             console.print(f"env_id={summary.env_id}")
         if summary.quality_gate_status is not None:
@@ -434,6 +435,9 @@ def run_real_db_trial(
             console.print(f"solver_ci_low={summary.solver_ci_low}")
         if summary.solver_ci_high is not None:
             console.print(f"solver_ci_high={summary.solver_ci_high}")
+        console.print(f"quality_retry_count={summary.quality_retry_count}")
+        if summary.quality_retry_history:
+            console.print(f"quality_retry_history={list(summary.quality_retry_history)}")
         if summary.registry_status is not None:
             console.print(f"registry_status={summary.registry_status}")
         if summary.registry_env_id is not None:
