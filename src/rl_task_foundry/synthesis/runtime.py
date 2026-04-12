@@ -26,6 +26,7 @@ from rl_task_foundry.synthesis.contracts import (
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
+    InstanceContract,
     InstanceSpaceContract,
     OutputFieldContract,
     OutputFieldType,
@@ -35,6 +36,11 @@ from rl_task_foundry.synthesis.contracts import (
     StrictModel,
     TaskContract,
     VerifierContract,
+)
+from rl_task_foundry.synthesis.canonicalize import (
+    CanonicalizationError,
+    canonical_json,
+    canonicalize_output,
 )
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
@@ -186,6 +192,20 @@ class SynthesisStageResult(StrictModel):
     tool_traces: list[SynthesisToolTraceEntry] = Field(default_factory=list)
 
 
+class MaterializedInstanceRecord(StrictModel):
+    instance_id: str
+    rendered_user_prompt: str
+    params: dict[str, object] = Field(default_factory=dict)
+    anchor_values: dict[str, object] = Field(default_factory=dict)
+
+
+class MaterializedCanonicalAnswerRecord(StrictModel):
+    instance_id: str
+    canonical_answer: object
+    canonical_answer_json: str
+    solution_fingerprint: str
+
+
 class SynthesisEnvironmentDraft(StrictModel):
     created_at: datetime
     db_id: str
@@ -198,6 +218,8 @@ class SynthesisEnvironmentDraft(StrictModel):
     registration_report: RegistrationBundleReport
     registration_diagnostics: RegistrationBundleDiagnostics
     self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics
+    instances: list[MaterializedInstanceRecord] = Field(default_factory=list)
+    canonical_answers: list[MaterializedCanonicalAnswerRecord] = Field(default_factory=list)
     self_consistency_attempts: list[SynthesisSelfConsistencyAttempt] = Field(default_factory=list)
     stage_results: list[SynthesisStageResult] = Field(default_factory=list)
     memory: list[SynthesisMemoryEntry] = Field(default_factory=list)
@@ -261,6 +283,7 @@ class SynthesisSelfConsistencyDiagnostics(StrictModel):
     answer: object | None = None
     solution_tool_calls: int | None = None
     verifier_tool_calls: int | None = None
+    shadow_verifier_tool_calls: int | None = None
     fetch_facts_return_keys: list[str] = Field(default_factory=list)
     expected_fact_keys: list[str] = Field(default_factory=list)
     missing_fact_keys: list[str] = Field(default_factory=list)
@@ -272,6 +295,7 @@ class SynthesisSelfConsistencyDiagnostics(StrictModel):
     facts_match_result: bool | None = None
     check_constraints_result: bool | None = None
     verify_result: bool | None = None
+    shadow_verify_result: bool | None = None
 
 
 class SynthesisSelfConsistencyAttempt(StrictModel):
@@ -546,6 +570,9 @@ class SynthesisAgentRuntime:
                 registration_report,
                 registration_diagnostics,
                 self_consistency_diagnostics,
+                instances,
+                canonical_answers,
+                materialized_cross_instance_set,
                 self_consistency_attempts,
             ) = await self._run_artifact_generation_with_self_consistency(
                 db_id=db_id,
@@ -568,6 +595,7 @@ class SynthesisAgentRuntime:
                 requested_category=requested_category,
                 created_at=materialized_at,
                 self_consistency_pass=self_consistency_diagnostics.passed,
+                materialized_cross_instance_set=materialized_cross_instance_set,
             )
             await self._reset_category_failure_state(db_id, requested_category)
 
@@ -583,6 +611,8 @@ class SynthesisAgentRuntime:
                 registration_report=registration_report,
                 registration_diagnostics=registration_diagnostics,
                 self_consistency_diagnostics=self_consistency_diagnostics,
+                instances=instances,
+                canonical_answers=canonical_answers,
                 self_consistency_attempts=self_consistency_attempts,
                 stage_results=stage_results,
                 memory=memory,
@@ -771,6 +801,9 @@ class SynthesisAgentRuntime:
         RegistrationBundleReport,
         RegistrationBundleDiagnostics,
         SynthesisSelfConsistencyDiagnostics,
+        list[MaterializedInstanceRecord],
+        list[MaterializedCanonicalAnswerRecord],
+        CrossInstanceSet,
         list[SynthesisSelfConsistencyAttempt],
     ]:
         attempts: list[SynthesisSelfConsistencyAttempt] = []
@@ -909,6 +942,48 @@ class SynthesisAgentRuntime:
                     )
                 continue
 
+            try:
+                (
+                    instances,
+                    canonical_answers,
+                    materialized_cross_instance_set,
+                ) = self._materialize_instances_and_canonical_answers(
+                    proposed_environment=artifact_payload.proposed_environment,
+                    self_consistency_diagnostics=self_consistency_diagnostics,
+                )
+            except CanonicalizationError:
+                materialization_diagnostics = self_consistency_diagnostics.model_copy(
+                    update={
+                        "passed": False,
+                        "error_codes": [
+                            *self_consistency_diagnostics.error_codes,
+                            "canonical_answer_schema_mismatch",
+                        ],
+                    }
+                )
+                attempt = SynthesisSelfConsistencyAttempt(
+                    attempt_index=attempt_index,
+                    outcome=SynthesisSelfConsistencyOutcome.SELF_CONSISTENCY_FAILED,
+                    provider=result.provider,
+                    model=result.model,
+                    memory_summary=result.memory_entry.summary,
+                    error_message="solution output could not be canonicalized against the output schema",
+                    registration_diagnostics=registration_diagnostics,
+                    self_consistency_diagnostics=materialization_diagnostics,
+                )
+                attempts.append(attempt)
+                memory.append(self._attempt_feedback_entry(attempt))
+                latest_registration_diagnostics = registration_diagnostics
+                latest_self_consistency_diagnostics = materialization_diagnostics
+                if attempt_index >= max_iterations:
+                    raise SynthesisSelfConsistencyError(
+                        "artifact generation exhausted self-consistency budget after canonical answer materialization failures",
+                        attempts=attempts,
+                        last_registration_diagnostics=registration_diagnostics,
+                        last_self_consistency_diagnostics=materialization_diagnostics,
+                    )
+                continue
+
             passed_attempt = SynthesisSelfConsistencyAttempt(
                 attempt_index=attempt_index,
                 outcome=SynthesisSelfConsistencyOutcome.PASSED,
@@ -924,6 +999,9 @@ class SynthesisAgentRuntime:
                 registration_report,
                 registration_diagnostics,
                 self_consistency_diagnostics,
+                instances,
+                canonical_answers,
+                materialized_cross_instance_set,
                 attempts,
             )
 
@@ -1082,6 +1160,7 @@ class SynthesisAgentRuntime:
             atomic_tool_set_ref=f"db://{self._bound_db_id}",
             solution_source=bundle.solution_source,
             verifier_source=bundle.verifier_source,
+            shadow_verifier_source=bundle.shadow_verifier_source,
             expected_fact_keys=[
                 fact.key for fact in proposed_environment.verifier.facts_schema.facts
             ],
@@ -1096,6 +1175,8 @@ class SynthesisAgentRuntime:
             weak_signal_codes.append("solution_missing_tool_usage")
         if result.verifier_tool_calls == 0:
             weak_signal_codes.append("verifier_missing_tool_usage")
+        if result.shadow_verifier_tool_calls == 0:
+            weak_signal_codes.append("shadow_verifier_missing_tool_usage")
         if result.fetch_facts_answer_reads == 0:
             weak_signal_codes.append("fetch_facts_missing_answer_usage_runtime")
         if result.facts_match_answer_reads == 0:
@@ -1105,12 +1186,17 @@ class SynthesisAgentRuntime:
         if result.check_constraints_facts_reads == 0:
             weak_signal_codes.append("check_constraints_missing_facts_usage_runtime")
         return SynthesisSelfConsistencyDiagnostics(
-            passed=not result.errors and bool(result.verify_result),
+            passed=(
+                not result.errors
+                and bool(result.verify_result)
+                and (result.shadow_verify_result is None or bool(result.shadow_verify_result))
+            ),
             error_codes=[error.code for error in result.errors],
             weak_signal_codes=weak_signal_codes,
             answer=result.answer,
             solution_tool_calls=result.solution_tool_calls,
             verifier_tool_calls=result.verifier_tool_calls,
+            shadow_verifier_tool_calls=result.shadow_verifier_tool_calls,
             fetch_facts_return_keys=list(result.fetch_facts_return_keys),
             expected_fact_keys=list(result.expected_fact_keys),
             missing_fact_keys=list(result.missing_fact_keys),
@@ -1122,6 +1208,7 @@ class SynthesisAgentRuntime:
             facts_match_result=result.facts_match_result,
             check_constraints_result=result.check_constraints_result,
             verify_result=result.verify_result,
+            shadow_verify_result=result.shadow_verify_result,
         )
 
     async def _run_registration_gate(
@@ -1154,6 +1241,7 @@ class SynthesisAgentRuntime:
         requested_category: CategoryTaxonomy,
         created_at: datetime,
         self_consistency_pass: bool,
+        materialized_cross_instance_set: CrossInstanceSet,
     ) -> EnvironmentContract:
         task_payload = proposed_environment.task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
@@ -1189,6 +1277,7 @@ class SynthesisAgentRuntime:
                 "rollout_constraints": self._build_rollout_constraints().model_dump(
                     mode="python"
                 ),
+                "cross_instance_set": materialized_cross_instance_set.model_dump(mode="python"),
                 "task": proposed_environment.task.model_copy(
                     update={"category": requested_category}
                 ).model_dump(mode="python"),
@@ -1204,6 +1293,125 @@ class SynthesisAgentRuntime:
             ),
             max_tool_rows=self.config.atomic_tools.bounded_result_limit,
         )
+
+    def _materialize_instances_and_canonical_answers(
+        self,
+        *,
+        proposed_environment: ProposedEnvironmentDraft,
+        self_consistency_diagnostics: SynthesisSelfConsistencyDiagnostics,
+    ) -> tuple[
+        list[MaterializedInstanceRecord],
+        list[MaterializedCanonicalAnswerRecord],
+        CrossInstanceSet,
+    ]:
+        canonical_input = self._normalize_solution_answer(
+            proposed_environment.task.output_schema,
+            self_consistency_diagnostics.answer,
+        )
+        canonical_answer = canonicalize_output(
+            proposed_environment.task.output_schema,
+            canonical_input,
+        )
+        canonical_answer_json = canonical_json(canonical_answer)
+        solution_fingerprint = self._signature_for_text(canonical_answer_json)
+        instance_id = "instance_0001"
+        params = dict(proposed_environment.task.instance_parameters)
+        instance = MaterializedInstanceRecord(
+            instance_id=instance_id,
+            rendered_user_prompt=self._rendered_user_prompt(proposed_environment.task),
+            params=params,
+            anchor_values={},
+        )
+        canonical_record = MaterializedCanonicalAnswerRecord(
+            instance_id=instance_id,
+            canonical_answer=canonical_answer,
+            canonical_answer_json=canonical_answer_json,
+            solution_fingerprint=solution_fingerprint,
+        )
+        cross_instance_set = CrossInstanceSet(
+            # C8 materializes a single bootstrap instance. Keep the persisted
+            # cross-instance contract aligned with the records we actually emit.
+            minimum_required=1,
+            require_distinct_solution_fingerprints=(
+                proposed_environment.cross_instance_set.require_distinct_solution_fingerprints
+            ),
+            instances=[
+                InstanceContract(
+                    instance_id=instance_id,
+                    anchor_values={},
+                    parameter_values=params,
+                    expected_solution_fingerprint=solution_fingerprint,
+                )
+            ],
+        )
+        return [instance], [canonical_record], cross_instance_set
+
+    @staticmethod
+    def _normalize_solution_answer(
+        output_schema: OutputSchemaContract,
+        answer: object,
+    ) -> object:
+        root = output_schema.root
+        if (
+            isinstance(answer, dict)
+            and set(answer) == {root.name}
+            and (
+                root.type is not OutputFieldType.OBJECT
+                or root.name not in {child.name for child in root.fields}
+            )
+        ):
+            return answer[root.name]
+        return answer
+
+    def _rendered_user_prompt(self, task: TaskContract) -> str:
+        output_schema_text = json.dumps(
+            self._output_schema_prompt_payload(task.output_schema.root),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        lines = [task.question.strip()]
+        if task.constraint_summary:
+            lines.extend(["", "Constraints:"])
+            lines.extend(f"- {item.summary}" for item in task.constraint_summary)
+        if task.instance_parameters:
+            lines.extend(["", "Instance Parameters:"])
+            lines.extend(
+                f"- {key}: {json.dumps(value, ensure_ascii=False)}"
+                for key, value in task.instance_parameters.items()
+            )
+        lines.extend(
+            [
+                "",
+                "Submit Result Format:",
+                output_schema_text,
+                "",
+                "Call submit_result with a JSON string that matches the format above.",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _output_schema_prompt_payload(self, field: OutputFieldContract) -> dict[str, object]:
+        payload: dict[str, object] = {"type": field.type.value}
+        if field.description:
+            payload["description"] = field.description
+        if field.nullable:
+            payload["nullable"] = True
+        if field.type == OutputFieldType.ENUM and field.enum_values:
+            payload["enum"] = list(field.enum_values)
+        if field.type == OutputFieldType.OBJECT:
+            payload["properties"] = {
+                child.name: self._output_schema_prompt_payload(child) for child in field.fields
+            }
+            payload["required"] = [child.name for child in field.fields if not child.nullable]
+        elif field.type == OutputFieldType.LIST and field.items is not None:
+            payload["ordered"] = field.ordered
+            if field.sort_key is not None:
+                payload["sort_key"] = list(field.sort_key)
+            if field.unique_elements:
+                payload["unique_elements"] = True
+            payload["items"] = self._output_schema_prompt_payload(field.items)
+        return payload
 
     def _build_verifier_probe_specs(
         self,

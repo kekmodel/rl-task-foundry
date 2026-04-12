@@ -66,6 +66,7 @@ class RegistrationSelfConsistencyResult(StrictModel):
     answer: object | None = None
     solution_tool_calls: int | None = None
     verifier_tool_calls: int | None = None
+    shadow_verifier_tool_calls: int | None = None
     fetch_facts_return_keys: list[str] = []
     expected_fact_keys: list[str] = []
     missing_fact_keys: list[str] = []
@@ -77,6 +78,7 @@ class RegistrationSelfConsistencyResult(StrictModel):
     facts_match_result: bool | None = None
     check_constraints_result: bool | None = None
     verify_result: bool | None = None
+    shadow_verify_result: bool | None = None
 
 
 @dataclass(slots=True)
@@ -232,6 +234,7 @@ class RegistrationWorkerHandle:
         atomic_tool_set_ref: str | None = None,
         solution_source: str,
         verifier_source: str,
+        shadow_verifier_source: str | None = None,
         expected_fact_keys: list[str],
     ) -> RegistrationSelfConsistencyResult:
         response = await self._perform_request(
@@ -243,6 +246,7 @@ class RegistrationWorkerHandle:
                 ),
                 "solution_source": solution_source,
                 "verifier_source": verifier_source,
+                "shadow_verifier_source": shadow_verifier_source,
                 "expected_fact_keys": expected_fact_keys,
                 "policy": self.config.synthesis.registration_policy.model_dump(mode="json"),
                 "memory_limit_mb": self.config.synthesis.registration_workers.memory_limit_mb,
@@ -438,6 +442,7 @@ class RegistrationSubprocessPool:
         atomic_tool_set_ref: str | None = None,
         solution_source: str,
         verifier_source: str,
+        shadow_verifier_source: str | None = None,
         expected_fact_keys: list[str],
     ) -> RegistrationSelfConsistencyResult:
         return await self._dispatch(
@@ -446,6 +451,7 @@ class RegistrationSubprocessPool:
             atomic_tool_set_ref=atomic_tool_set_ref,
             solution_source=solution_source,
             verifier_source=verifier_source,
+            shadow_verifier_source=shadow_verifier_source,
             expected_fact_keys=expected_fact_keys,
         )
 

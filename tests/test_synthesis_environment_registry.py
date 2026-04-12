@@ -15,6 +15,7 @@ from rl_task_foundry.synthesis.contracts import (
     EnvironmentContract,
     EnvironmentQualityMetrics,
     EnvironmentStatus,
+    InstanceContract,
     InstanceSpaceContract,
     MaterializedFactsSchema,
     OutputFieldContract,
@@ -28,6 +29,7 @@ from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
 )
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
+from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.environment_registry import (
     DifficultyBand,
     EnvironmentRegistryCoverageEntry,
@@ -50,6 +52,8 @@ from rl_task_foundry.synthesis.registration_runner import (
     build_registration_diagnostics,
 )
 from rl_task_foundry.synthesis.runtime import (
+    MaterializedCanonicalAnswerRecord,
+    MaterializedInstanceRecord,
     SynthesisEnvironmentDraft,
     SynthesisSelfConsistencyDiagnostics,
 )
@@ -124,7 +128,17 @@ def _sample_draft(
                 outputs=["customer_id"],
             )
         ),
-        cross_instance_set=CrossInstanceSet(),
+        cross_instance_set=CrossInstanceSet(
+            minimum_required=1,
+            instances=[
+                InstanceContract(
+                    instance_id="instance_0001",
+                    parameter_values={},
+                    anchor_values={},
+                    expected_solution_fingerprint="sha256:answer",
+                )
+            ],
+        ),
     )
     report = RegistrationBundleReport(
         status=RegistrationBundleStatus.PASSED,
@@ -182,7 +196,28 @@ def _sample_draft(
         ),
         registration_report=report,
         registration_diagnostics=build_registration_diagnostics(report),
-        self_consistency_diagnostics=SynthesisSelfConsistencyDiagnostics(passed=True),
+        self_consistency_diagnostics=SynthesisSelfConsistencyDiagnostics(
+            passed=True,
+            shadow_verify_result=True,
+        ),
+        instances=[
+            MaterializedInstanceRecord(
+                instance_id="instance_0001",
+                rendered_user_prompt="고객 배정 계획을 만들어 주세요.\n\nSubmit Result Format:\n{}",
+                params={},
+                anchor_values={},
+            )
+        ],
+        canonical_answers=[
+            MaterializedCanonicalAnswerRecord(
+                instance_id="instance_0001",
+                canonical_answer={"customer": "Alice", "day": "2026-04-12"},
+                canonical_answer_json=canonical_json(
+                    {"customer": "Alice", "day": "2026-04-12"}
+                ),
+                solution_fingerprint="sha256:answer",
+            )
+        ],
         provider_status={},
     )
 
@@ -210,6 +245,8 @@ def test_environment_registry_writer_commits_bundle_and_updates_index(tmp_path: 
     assert (env_dir / "task.json").exists()
     assert (env_dir / "instance_space.json").exists()
     assert (env_dir / "cross_instance_set.json").exists()
+    assert (env_dir / "instances.jsonl").exists()
+    assert (env_dir / "canonical_answers.jsonl").exists()
     assert (env_dir / "tools.py").exists()
     assert (env_dir / "tools.py").read_text(encoding="utf-8") == draft.atomic_tool_bundle.source
     assert not (env_dir / "tool_self_test.py").exists()
@@ -217,6 +254,12 @@ def test_environment_registry_writer_commits_bundle_and_updates_index(tmp_path: 
     assert (env_dir / "verifier.py").exists()
     assert (env_dir / "shadow_verifier.py").exists()
     assert (env_dir / "registry_metadata.json").exists()
+    assert '"instance_id": "instance_0001"' in (env_dir / "instances.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert '"canonical_answer"' in (env_dir / "canonical_answers.jsonl").read_text(
+        encoding="utf-8"
+    )
     assert (tmp_path / "databases" / "sakila" / "atomic_tools.py").exists()
     assert (tmp_path / "databases" / "sakila" / "atomic_tool_definitions.json").exists()
     assert writer.environment_count() == 1

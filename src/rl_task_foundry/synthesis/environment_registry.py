@@ -641,6 +641,16 @@ class EnvironmentRegistryWriter:
             draft.environment.cross_instance_set.model_dump_json(indent=2),
             encoding="utf-8",
         )
+        (directory / "instances.jsonl").write_text(
+            self._jsonl_content(record.model_dump(mode="json") for record in draft.instances),
+            encoding="utf-8",
+        )
+        (directory / "canonical_answers.jsonl").write_text(
+            self._jsonl_content(
+                record.model_dump(mode="json") for record in draft.canonical_answers
+            ),
+            encoding="utf-8",
+        )
         (directory / "tools.py").write_text(
             draft.atomic_tool_bundle.source,
             encoding="utf-8",
@@ -668,6 +678,8 @@ class EnvironmentRegistryWriter:
                     "registration_error_codes": draft.registration_diagnostics.error_codes,
                     "self_consistency_passed": draft.self_consistency_diagnostics.passed,
                     "self_consistency_error_codes": draft.self_consistency_diagnostics.error_codes,
+                    "instance_count": len(draft.instances),
+                    "canonical_answer_count": len(draft.canonical_answers),
                     "provider_status": {
                         name: status.model_dump(mode="json")
                         for name, status in draft.provider_status.items()
@@ -679,6 +691,16 @@ class EnvironmentRegistryWriter:
             ),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _jsonl_content(records: Any) -> str:
+        lines = [
+            json.dumps(record, ensure_ascii=False, sort_keys=True)
+            for record in records
+        ]
+        if not lines:
+            return ""
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _exact_signature(draft: SynthesisEnvironmentDraft) -> str:

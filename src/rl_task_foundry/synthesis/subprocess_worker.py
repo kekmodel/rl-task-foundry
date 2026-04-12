@@ -244,6 +244,7 @@ def _self_consistency_error_payload(
     extra_fact_keys: list[str] | None = None,
     solution_tool_calls: int | None = None,
     verifier_tool_calls: int | None = None,
+    shadow_verifier_tool_calls: int | None = None,
     fetch_facts_answer_reads: int | None = None,
     facts_match_answer_reads: int | None = None,
     facts_match_facts_reads: int | None = None,
@@ -251,6 +252,7 @@ def _self_consistency_error_payload(
     facts_match_result: bool | None = None,
     check_constraints_result: bool | None = None,
     verify_result: bool | None = None,
+    shadow_verify_result: bool | None = None,
 ) -> dict[str, Any]:
     error = RegistrationError(code=code, detail=detail)
     return {
@@ -259,6 +261,7 @@ def _self_consistency_error_payload(
         "answer": answer,
         "solution_tool_calls": solution_tool_calls,
         "verifier_tool_calls": verifier_tool_calls,
+        "shadow_verifier_tool_calls": shadow_verifier_tool_calls,
         "fetch_facts_return_keys": fetch_facts_return_keys or [],
         "expected_fact_keys": expected_fact_keys or [],
         "missing_fact_keys": missing_fact_keys or [],
@@ -266,6 +269,7 @@ def _self_consistency_error_payload(
         "facts_match_result": facts_match_result,
         "check_constraints_result": check_constraints_result,
         "verify_result": verify_result,
+        "shadow_verify_result": shadow_verify_result,
         "errors": [error.model_dump(mode="json")],
         "fetch_facts_answer_reads": fetch_facts_answer_reads,
         "facts_match_answer_reads": facts_match_answer_reads,
@@ -982,6 +986,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
         tool_source = _resolve_tool_source(payload)
         solution_source = payload["solution_source"]
         verifier_source = payload["verifier_source"]
+        shadow_verifier_source = payload.get("shadow_verifier_source")
         expected_fact_keys = list(payload.get("expected_fact_keys", []))
         call_count_limit = int(payload["call_count_limit"])
         memory_limit_mb = payload.get("memory_limit_mb")
@@ -1009,6 +1014,15 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             kind=ArtifactKind.VERIFIER_MODULE,
             policy=policy,
         ),
+        *(
+            validate_generated_module(
+                shadow_verifier_source,
+                kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
+                policy=policy,
+            )
+            if isinstance(shadow_verifier_source, str)
+            else []
+        ),
     ]
     if errors:
         return {
@@ -1017,6 +1031,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             "answer": None,
             "solution_tool_calls": None,
             "verifier_tool_calls": None,
+            "shadow_verifier_tool_calls": None,
             "fetch_facts_return_keys": [],
             "expected_fact_keys": expected_fact_keys,
             "missing_fact_keys": [],
@@ -1028,6 +1043,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             "facts_match_result": None,
             "check_constraints_result": None,
             "verify_result": None,
+            "shadow_verify_result": None,
             "errors": [error.model_dump(mode="json") for error in errors],
         }
 
@@ -1105,6 +1121,26 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             kwargs={},
             call_count_limit=call_count_limit,
         )
+
+        shadow_verifier_tools_counter: _ToolCallCounter | None = None
+        shadow_verify_result: bool | None = None
+        if isinstance(shadow_verifier_source, str):
+            shadow_namespace = _load_namespace(
+                source=shadow_verifier_source,
+                artifact_kind=ArtifactKind.SHADOW_VERIFIER_MODULE,
+            )
+            shadow_verify = shadow_namespace["verify"]
+            shadow_verifier_tools_counter = _ToolCallCounter()
+            shadow_verifier_tools = _build_sync_tool_facade(
+                tool_source,
+                call_counter=shadow_verifier_tools_counter,
+            )
+            shadow_verify_result, _ = _invoke_entrypoint_sync(
+                function=shadow_verify,
+                args=[answer, shadow_verifier_tools],
+                kwargs={},
+                call_count_limit=call_count_limit,
+            )
     except RuntimeError as exc:
         detail = str(exc)
         code = "execution_error"
@@ -1140,6 +1176,11 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            shadow_verifier_tool_calls=(
+                shadow_verifier_tools_counter.count
+                if shadow_verifier_tools_counter is not None
+                else None
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
@@ -1148,6 +1189,9 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             if isinstance(check_constraints_result, bool)
             else None,
             verify_result=verify_result if isinstance(verify_result, bool) else None,
+            shadow_verify_result=shadow_verify_result
+            if isinstance(shadow_verify_result, bool)
+            else None,
         )
     if not isinstance(check_constraints_result, bool):
         return _self_consistency_error_payload(
@@ -1161,12 +1205,20 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            shadow_verifier_tool_calls=(
+                shadow_verifier_tools_counter.count
+                if shadow_verifier_tools_counter is not None
+                else None
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
             check_constraints_facts_reads=check_constraints_facts_reads.count,
             facts_match_result=facts_match_result,
             verify_result=verify_result if isinstance(verify_result, bool) else None,
+            shadow_verify_result=shadow_verify_result
+            if isinstance(shadow_verify_result, bool)
+            else None,
         )
     if not isinstance(verify_result, bool):
         return _self_consistency_error_payload(
@@ -1180,12 +1232,45 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            shadow_verifier_tool_calls=(
+                shadow_verifier_tools_counter.count
+                if shadow_verifier_tools_counter is not None
+                else None
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
             check_constraints_facts_reads=check_constraints_facts_reads.count,
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
+            shadow_verify_result=shadow_verify_result
+            if isinstance(shadow_verify_result, bool)
+            else None,
+        )
+    if isinstance(shadow_verifier_source, str) and not isinstance(shadow_verify_result, bool):
+        return _self_consistency_error_payload(
+            request_id=request_id,
+            code="shadow_verify_result_not_bool",
+            detail="shadow verify() must return a bool.",
+            answer=answer,
+            expected_fact_keys=expected_keys,
+            fetch_facts_return_keys=actual_fact_keys,
+            missing_fact_keys=missing_keys,
+            extra_fact_keys=extra_keys,
+            solution_tool_calls=solution_tools_counter.count,
+            verifier_tool_calls=verifier_tools_counter.count,
+            shadow_verifier_tool_calls=(
+                shadow_verifier_tools_counter.count
+                if shadow_verifier_tools_counter is not None
+                else None
+            ),
+            fetch_facts_answer_reads=fetch_answer_reads.count,
+            facts_match_answer_reads=facts_match_answer_reads.count,
+            facts_match_facts_reads=facts_match_facts_reads.count,
+            check_constraints_facts_reads=check_constraints_facts_reads.count,
+            facts_match_result=facts_match_result,
+            check_constraints_result=check_constraints_result,
+            verify_result=verify_result,
         )
     if missing_keys or extra_keys:
         return _self_consistency_error_payload(
@@ -1199,6 +1284,11 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            shadow_verifier_tool_calls=(
+                shadow_verifier_tools_counter.count
+                if shadow_verifier_tools_counter is not None
+                else None
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
@@ -1206,6 +1296,9 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
             verify_result=verify_result,
+            shadow_verify_result=shadow_verify_result
+            if isinstance(shadow_verify_result, bool)
+            else None,
         )
     expected_verify_result = check_constraints_result if facts_match_result else False
     if verify_result != expected_verify_result:
@@ -1220,6 +1313,11 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             extra_fact_keys=extra_keys,
             solution_tool_calls=solution_tools_counter.count,
             verifier_tool_calls=verifier_tools_counter.count,
+            shadow_verifier_tool_calls=(
+                shadow_verifier_tools_counter.count
+                if shadow_verifier_tools_counter is not None
+                else None
+            ),
             fetch_facts_answer_reads=fetch_answer_reads.count,
             facts_match_answer_reads=facts_match_answer_reads.count,
             facts_match_facts_reads=facts_match_facts_reads.count,
@@ -1227,6 +1325,9 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
             facts_match_result=facts_match_result,
             check_constraints_result=check_constraints_result,
             verify_result=verify_result,
+            shadow_verify_result=shadow_verify_result
+            if isinstance(shadow_verify_result, bool)
+            else None,
         )
 
     return {
@@ -1235,6 +1336,11 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
         "answer": answer,
         "solution_tool_calls": solution_tools_counter.count,
         "verifier_tool_calls": verifier_tools_counter.count,
+        "shadow_verifier_tool_calls": (
+            shadow_verifier_tools_counter.count
+            if shadow_verifier_tools_counter is not None
+            else None
+        ),
         "fetch_facts_return_keys": actual_fact_keys,
         "expected_fact_keys": expected_keys,
         "missing_fact_keys": [],
@@ -1246,6 +1352,7 @@ def _handle_run_self_consistency_check(payload: dict[str, Any]) -> dict[str, Any
         "facts_match_result": facts_match_result,
         "check_constraints_result": check_constraints_result,
         "verify_result": verify_result,
+        "shadow_verify_result": shadow_verify_result,
         "errors": [],
     }
 

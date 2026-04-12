@@ -13,6 +13,7 @@ from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGr
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
 from rl_task_foundry.synthesis import backend_openai_agents as backend_module
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
+from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     CategoryTaxonomy,
     ConstraintKind,
@@ -334,6 +335,7 @@ def _passing_self_consistency_result() -> RegistrationSelfConsistencyResult:
         answer={"assignments": []},
         solution_tool_calls=1,
         verifier_tool_calls=1,
+        shadow_verifier_tool_calls=1,
         fetch_facts_return_keys=[],
         expected_fact_keys=[],
         fetch_facts_answer_reads=1,
@@ -343,6 +345,7 @@ def _passing_self_consistency_result() -> RegistrationSelfConsistencyResult:
         facts_match_result=True,
         check_constraints_result=True,
         verify_result=True,
+        shadow_verify_result=True,
     )
 
 
@@ -351,6 +354,7 @@ def _failing_self_consistency_result(
     error_codes: list[str] | None = None,
     solution_tool_calls: int | None = 1,
     verifier_tool_calls: int | None = 1,
+    shadow_verifier_tool_calls: int | None = 1,
     fetch_facts_answer_reads: int | None = 1,
     facts_match_answer_reads: int | None = 1,
     facts_match_facts_reads: int | None = 1,
@@ -358,6 +362,8 @@ def _failing_self_consistency_result(
     facts_match_result: bool | None = True,
     check_constraints_result: bool | None = False,
     verify_result: bool | None = False,
+    shadow_verify_result: bool | None = False,
+    answer: object | None = None,
 ) -> RegistrationSelfConsistencyResult:
     return RegistrationSelfConsistencyResult(
         request_id="self-check-1",
@@ -366,9 +372,10 @@ def _failing_self_consistency_result(
             RegistrationError(code=code, detail=f"self-consistency error: {code}")
             for code in (error_codes or [])
         ],
-        answer={"assignments": []},
+        answer={"assignments": []} if answer is None else answer,
         solution_tool_calls=solution_tool_calls,
         verifier_tool_calls=verifier_tool_calls,
+        shadow_verifier_tool_calls=shadow_verifier_tool_calls,
         fetch_facts_return_keys=["city"],
         expected_fact_keys=["city"],
         fetch_facts_answer_reads=fetch_facts_answer_reads,
@@ -378,6 +385,7 @@ def _failing_self_consistency_result(
         facts_match_result=facts_match_result,
         check_constraints_result=check_constraints_result,
         verify_result=verify_result,
+        shadow_verify_result=shadow_verify_result,
     )
 
 
@@ -521,15 +529,111 @@ async def test_synthesis_agent_runtime_builds_environment_draft_and_rewrites_tru
     assert draft.registration_report.status == RegistrationBundleStatus.PASSED
     assert draft.registration_diagnostics.status == RegistrationBundleStatus.PASSED
     assert draft.self_consistency_diagnostics.passed is True
+    assert draft.self_consistency_diagnostics.shadow_verify_result is True
     assert draft.registration_diagnostics.error_codes == []
     assert draft.registration_diagnostics.verifier.fetch_facts_tool_calls == 1
     assert draft.registration_diagnostics.verifier.probe_fetch_facts_return_keys == ["city"]
+    assert len(draft.instances) == 1
+    assert len(draft.canonical_answers) == 1
+    assert draft.instances[0].instance_id == "instance_0001"
+    assert "Submit Result Format:" in draft.instances[0].rendered_user_prompt
+    assert draft.canonical_answers[0].canonical_answer == []
+    assert draft.canonical_answers[0].canonical_answer_json == canonical_json([])
+    assert draft.environment.cross_instance_set.minimum_required == 1
+    assert (
+        draft.environment.cross_instance_set.instances[0].expected_solution_fingerprint
+        == draft.canonical_answers[0].solution_fingerprint
+    )
     assert [entry.phase for entry in draft.memory] == list(SynthesisPhase)
     assert draft.provider_status["codex_oauth"].observed_at.tzinfo is not None
     for request in backend.requests:
         assert request.atomic_tool_set_ref == "db://sakila"
         assert request.available_atomic_tools
         assert all("name" in tool for tool in request.available_atomic_tools)
+
+
+@pytest.mark.asyncio
+async def test_synthesis_agent_runtime_canonicalizes_materialized_answers(monkeypatch):
+    config = load_config("rl_task_foundry.yaml")
+    proposed_environment = ProposedEnvironmentDraft(
+        task=TaskContract(
+            question="일정을 시간순으로 정리해 주세요.",
+            category=CategoryTaxonomy.ITINERARY,
+            output_schema=OutputSchemaContract(
+                root=OutputFieldContract(
+                    name="itinerary",
+                    type=OutputFieldType.LIST,
+                    ordered=False,
+                    sort_key=("time",),
+                    items=OutputFieldContract(
+                        name="entry",
+                        type=OutputFieldType.OBJECT,
+                        fields=[
+                            OutputFieldContract(name="time", type=OutputFieldType.DATE),
+                            OutputFieldContract(name="city", type=OutputFieldType.STRING),
+                        ],
+                    ),
+                ),
+                primary_output_format="json_array",
+            ),
+            difficulty_vector={},
+        ),
+        solution=SolutionContract(),
+        verifier=VerifierContract(facts_schema=MaterializedFactsSchema()),
+        shadow_verifier=ShadowVerifierContract(facts_schema=MaterializedFactsSchema()),
+        instance_space={
+            "anchor_query": {
+                "sql": "SELECT city FROM itinerary ORDER BY day",
+                "outputs": ["city"],
+            }
+        },
+    )
+    payloads = _payloads(category=CategoryTaxonomy.ITINERARY)
+    payloads[SynthesisPhase.ARTIFACT_GENERATION] = ArtifactGenerationOutput(
+        proposed_environment=proposed_environment,
+        artifacts=_sample_artifacts(),
+        memory_summary="artifacts generated",
+    )
+    backend = _FakeBackend(
+        provider_name="codex_oauth",
+        model_name="gpt-5.4-mini",
+        payloads=payloads,
+    )
+    runtime = SynthesisAgentRuntime(
+        config,
+        phase_backends={phase: [backend] for phase in SynthesisPhase},
+    )
+
+    async def _fake_registration_gate(self, *, bundle, proposed_environment):
+        return _passing_registration_report()
+
+    async def _fake_self_consistency(self, *, bundle, proposed_environment):
+        return _failing_self_consistency_result(
+            error_codes=[],
+            verify_result=True,
+            check_constraints_result=True,
+            shadow_verify_result=True,
+            answer=[
+                {"time": "2026-10-03", "city": "Busan"},
+                {"time": "2026-10-01", "city": "Seoul"},
+                {"time": "2026-10-02", "city": "Jeju"},
+            ],
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_registration_gate", _fake_registration_gate)
+    monkeypatch.setattr(SynthesisAgentRuntime, "_run_self_consistency_check", _fake_self_consistency)
+
+    draft = await runtime.synthesize_environment_draft(
+        db_id="sakila",
+        requested_category=CategoryTaxonomy.ITINERARY,
+        graph=_sample_graph(),
+    )
+
+    assert draft.canonical_answers[0].canonical_answer == [
+        {"time": "2026-10-01", "city": "Seoul"},
+        {"time": "2026-10-02", "city": "Jeju"},
+        {"time": "2026-10-03", "city": "Busan"},
+    ]
 
 
 @pytest.mark.asyncio
