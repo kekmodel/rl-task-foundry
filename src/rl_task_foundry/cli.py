@@ -168,6 +168,8 @@ def run_synthesis_registry(
         console.print(f"initially_processed_pairs={summary.initially_processed_pairs}")
         console.print(f"processed_pairs_after_run={summary.processed_pairs_after_run}")
         console.print(f"generated_drafts={summary.generated_drafts}")
+        console.print(f"quality_accepted_envs={summary.quality_accepted_envs}")
+        console.print(f"quality_rejected_envs={summary.quality_rejected_envs}")
         console.print(f"registry_committed_envs={summary.registry_committed_envs}")
         console.print(f"registry_duplicate_envs={summary.registry_duplicate_envs}")
         console.print(f"remaining_pairs={summary.remaining_pairs}")
@@ -181,6 +183,8 @@ def run_synthesis_registry(
             console.print(f"committed_env_ids={summary.committed_env_ids}")
         if summary.duplicate_env_ids:
             console.print(f"duplicate_env_ids={summary.duplicate_env_ids}")
+        if summary.quality_rejected_env_ids:
+            console.print(f"quality_rejected_env_ids={summary.quality_rejected_env_ids}")
         if summary.last_decision is not None:
             console.print(f"last_status={summary.last_decision.status}")
             console.print(f"last_db_id={summary.last_decision.db_id}")

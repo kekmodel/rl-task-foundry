@@ -14,7 +14,12 @@ from pydantic import Field
 
 from rl_task_foundry.config.models import AppConfig, DatabaseConfig, DomainConfig
 from rl_task_foundry.infra.checkpoint import CheckpointStore, ensure_checkpoint
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, StrictModel
+from rl_task_foundry.synthesis.contracts import (
+    CategoryTaxonomy,
+    EnvironmentContract,
+    EnvironmentStatus,
+    StrictModel,
+)
 from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitResult,
     EnvironmentRegistryCommitStatus,
@@ -25,7 +30,7 @@ from rl_task_foundry.synthesis.orchestrator import (
     SynthesisOrchestrator,
     SynthesisRuntimeHandle,
 )
-from rl_task_foundry.synthesis.runtime import SynthesisAgentRuntime
+from rl_task_foundry.synthesis.runtime import SynthesisAgentRuntime, SynthesisEnvironmentDraft
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
     SynthesisSelectionStatus,
@@ -59,6 +64,10 @@ class SynthesisRegistryStepSummary:
     decision: SynthesisSchedulerDecision
     draft_env_id: str | None = None
     draft_created_at: datetime | None = None
+    quality_gate_status: str | None = None
+    quality_gate_pass_rate: float | None = None
+    quality_gate_ci_low: float | None = None
+    quality_gate_ci_high: float | None = None
     registry_status: EnvironmentRegistryCommitStatus | None = None
     registry_env_id: str | None = None
 
@@ -76,9 +85,12 @@ class SynthesisRegistryRunSummary:
     registry_committed_envs: int
     registry_duplicate_envs: int
     remaining_pairs: int
+    quality_accepted_envs: int = 0
+    quality_rejected_envs: int = 0
     generated_env_ids: list[str] = field(default_factory=list)
     committed_env_ids: list[str] = field(default_factory=list)
     duplicate_env_ids: list[str] = field(default_factory=list)
+    quality_rejected_env_ids: list[str] = field(default_factory=list)
     registry_root_dir: Path | None = None
     registry_index_db_path: Path | None = None
     steps: list[SynthesisRegistryStepSummary] = field(default_factory=list)
@@ -94,8 +106,10 @@ class SynthesisRegistryRunSummary:
 class SynthesisRegistryRunner:
     """Drive the synthesis orchestrator over a registry with checkpoint resume.
 
-    The registry must contain unique `db_id` values. Successful `(db_id, category)`
-    pairs are flushed to checkpoint immediately for crash-safe resume semantics.
+    The registry must contain unique `db_id` values. Only pairs whose generated
+    draft passes the solver pass-rate quality gate are flushed to checkpoint,
+    which keeps quality-rejected categories eligible for regeneration on the
+    next bounded run.
     """
 
     base_config: AppConfig
@@ -103,6 +117,7 @@ class SynthesisRegistryRunner:
     environment_registry: EnvironmentRegistryWriter | None = None
     checkpoint: CheckpointStore | None = None
     orchestrator: SynthesisOrchestrator | None = None
+    environment_orchestrator: Any | None = None
 
     def __post_init__(self) -> None:
         if self.checkpoint is None:
@@ -113,6 +128,10 @@ class SynthesisRegistryRunner:
             self.orchestrator = SynthesisOrchestrator(
                 runtime_factory=self.runtime_factory or self._build_runtime
             )
+        if self.environment_orchestrator is None:
+            from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentOrchestrator
+
+            self.environment_orchestrator = EnvironmentOrchestrator(self.base_config)
 
     async def run_steps(
         self,
@@ -137,6 +156,8 @@ class SynthesisRegistryRunner:
                 registry_committed_envs=0,
                 registry_duplicate_envs=0,
                 remaining_pairs=0,
+                quality_accepted_envs=0,
+                quality_rejected_envs=0,
                 registry_root_dir=self.environment_registry.root_dir,
                 registry_index_db_path=self.environment_registry.index_db_path,
             )
@@ -150,12 +171,16 @@ class SynthesisRegistryRunner:
         generated_env_ids: list[str] = []
         committed_env_ids: list[str] = []
         duplicate_env_ids: list[str] = []
+        quality_rejected_env_ids: list[str] = []
         executed_steps = 0
         generated_drafts = 0
         registry_committed_envs = 0
         registry_duplicate_envs = 0
+        quality_accepted_envs = 0
+        quality_rejected_envs = 0
         processed_pairs_after_run = initially_processed_pairs
         orchestrator = self.orchestrator
+        environment_orchestrator = self.environment_orchestrator
         checkpoint = self.checkpoint
         environment_registry = self.environment_registry
         outcome: SynthesisRegistryRunOutcome | None = None
@@ -181,12 +206,45 @@ class SynthesisRegistryRunner:
 
             assert step.decision.db_id is not None
             assert step.decision.category is not None
-            commit_result = environment_registry.commit_draft(step.draft)
+            from rl_task_foundry.pipeline.environment_orchestrator import (
+                evaluate_rollout_summary,
+            )
+
+            rollout_summary = await environment_orchestrator.run_draft(step.draft)
+            quality_gate_summary = evaluate_rollout_summary(self.base_config, rollout_summary)
+            generated_drafts += 1
+            generated_env_ids.append(step.draft.environment.env_id)
+            if quality_gate_summary.status.value != "accept":
+                quality_rejected_envs += 1
+                quality_rejected_env_ids.append(step.draft.environment.env_id)
+                steps.append(
+                    SynthesisRegistryStepSummary(
+                        decision=step.decision,
+                        draft_env_id=step.draft.environment.env_id,
+                        draft_created_at=step.draft.created_at,
+                        quality_gate_status=quality_gate_summary.status.value,
+                        quality_gate_pass_rate=quality_gate_summary.pass_rate,
+                        quality_gate_ci_low=quality_gate_summary.ci_lower,
+                        quality_gate_ci_high=quality_gate_summary.ci_upper,
+                    )
+                )
+                continue
+
+            quality_accepted_envs += 1
+            accepted_draft = _accepted_draft_with_quality_metrics(
+                step.draft,
+                quality_gate_summary=quality_gate_summary,
+            )
+            commit_result = environment_registry.commit_draft(accepted_draft)
             steps.append(
                 SynthesisRegistryStepSummary(
                     decision=step.decision,
-                    draft_env_id=step.draft.environment.env_id,
-                    draft_created_at=step.draft.created_at,
+                    draft_env_id=accepted_draft.environment.env_id,
+                    draft_created_at=accepted_draft.created_at,
+                    quality_gate_status=quality_gate_summary.status.value,
+                    quality_gate_pass_rate=quality_gate_summary.pass_rate,
+                    quality_gate_ci_low=quality_gate_summary.ci_lower,
+                    quality_gate_ci_high=quality_gate_summary.ci_upper,
                     registry_status=commit_result.status,
                     registry_env_id=commit_result.env_id,
                 )
@@ -198,14 +256,16 @@ class SynthesisRegistryRunner:
                     "db_id": step.decision.db_id,
                     "category": step.decision.category.value,
                     "env_id": commit_result.env_id,
-                    "created_at": step.draft.created_at.isoformat(),
+                    "created_at": accepted_draft.created_at.isoformat(),
                     "registry_status": commit_result.status.value,
+                    "quality_gate_status": quality_gate_summary.status.value,
+                    "solver_pass_rate": quality_gate_summary.pass_rate,
+                    "solver_ci_low": quality_gate_summary.ci_lower,
+                    "solver_ci_high": quality_gate_summary.ci_upper,
                 },
             )
             checkpoint.flush()
-            generated_drafts += 1
             processed_pairs_after_run += 1
-            generated_env_ids.append(step.draft.environment.env_id)
             if commit_result.status == EnvironmentRegistryCommitStatus.COMMITTED:
                 registry_committed_envs += 1
                 committed_env_ids.append(commit_result.env_id)
@@ -225,7 +285,8 @@ class SynthesisRegistryRunner:
                 if remaining_pairs == 0
                 else SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
             )
-        assert processed_pairs_after_run == initially_processed_pairs + generated_drafts
+        assert generated_drafts == quality_accepted_envs + quality_rejected_envs
+        assert processed_pairs_after_run == initially_processed_pairs + quality_accepted_envs
         assert remaining_pairs == total_pairs - processed_pairs_after_run
 
         return SynthesisRegistryRunSummary(
@@ -240,9 +301,12 @@ class SynthesisRegistryRunner:
             registry_committed_envs=registry_committed_envs,
             registry_duplicate_envs=registry_duplicate_envs,
             remaining_pairs=remaining_pairs,
+            quality_accepted_envs=quality_accepted_envs,
+            quality_rejected_envs=quality_rejected_envs,
             generated_env_ids=generated_env_ids,
             committed_env_ids=committed_env_ids,
             duplicate_env_ids=duplicate_env_ids,
+            quality_rejected_env_ids=quality_rejected_env_ids,
             registry_root_dir=environment_registry.root_dir,
             registry_index_db_path=environment_registry.index_db_path,
             steps=steps,
@@ -250,6 +314,7 @@ class SynthesisRegistryRunner:
 
     async def close(self) -> None:
         await self.orchestrator.close()
+        await self.environment_orchestrator.close()
 
     def _build_runtime(self, entry: SynthesisDbRegistryEntry) -> SynthesisRuntimeHandle:
         config = self.base_config
@@ -337,3 +402,27 @@ def _validate_unique_db_ids(registry: list[SynthesisDbRegistryEntry]) -> None:
             "synthesis registry must not contain duplicate db_id values: "
             + ", ".join(sorted(duplicates))
         )
+
+
+def _accepted_draft_with_quality_metrics(
+    draft: SynthesisEnvironmentDraft,
+    *,
+    quality_gate_summary: Any,
+) -> SynthesisEnvironmentDraft:
+    quality_metrics_payload = draft.environment.quality_metrics.model_dump(mode="python")
+    quality_metrics_payload.update(
+        {
+            "solver_pass_rate": quality_gate_summary.pass_rate,
+            "solver_ci_low": quality_gate_summary.ci_lower,
+            "solver_ci_high": quality_gate_summary.ci_upper,
+        }
+    )
+    environment_payload = draft.environment.model_dump(mode="python")
+    environment_payload.update(
+        {
+            "status": EnvironmentStatus.ACCEPTED,
+            "quality_metrics": quality_metrics_payload,
+        }
+    )
+    accepted_environment = EnvironmentContract.model_validate(environment_payload)
+    return draft.model_copy(update={"environment": accepted_environment})

@@ -94,6 +94,8 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                 initially_processed_pairs=0,
                 processed_pairs_after_run=1,
                 generated_drafts=1,
+                quality_accepted_envs=1,
+                quality_rejected_envs=0,
                 registry_committed_envs=1,
                 registry_duplicate_envs=0,
                 remaining_pairs=0,
@@ -140,6 +142,8 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert "outcome=completed_all" in result.stdout
     assert "checkpoint_namespace=cli_registry_test" in result.stdout
     assert "generated_drafts=1" in result.stdout
+    assert "quality_accepted_envs=1" in result.stdout
+    assert "quality_rejected_envs=0" in result.stdout
     assert "registry_committed_envs=1" in result.stdout
     assert "registry_duplicate_envs=0" in result.stdout
     assert "remaining_pairs=0" in result.stdout

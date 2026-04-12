@@ -12,7 +12,10 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig, SolverModelConfig
 from rl_task_foundry.pipeline.environment_orchestrator import (
     EnvironmentOrchestrator,
+    EnvironmentQualityGateStatus,
+    EnvironmentRolloutSummary,
     EnvironmentRolloutBundle,
+    evaluate_rollout_summary,
 )
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.synthesis.atomic_tools import (
@@ -154,6 +157,25 @@ def _sample_environment() -> EnvironmentContract:
     )
 
 
+def _rollout_summary(*, matched: int, total: int) -> EnvironmentRolloutSummary:
+    runs = tuple(
+        SimpleNamespace(
+            reward_result=SimpleNamespace(
+                status="matched" if index < matched else "em_mismatch"
+            )
+        )
+        for index in range(total)
+    )
+    return EnvironmentRolloutSummary(
+        env_id="env_assignment_registrytest",
+        db_id="sakila",
+        total_instances=1,
+        total_solver_runs=total,
+        matched_solver_runs=matched,
+        runs=runs,
+    )
+
+
 def _sample_bundle() -> EnvironmentRolloutBundle:
     return EnvironmentRolloutBundle(
         environment=_sample_environment(),
@@ -291,6 +313,41 @@ async def test_environment_orchestrator_runs_draft_and_scores_reward(tmp_path):
     assert runtime_inputs["environment"] == draft.environment
     assert runtime_inputs["tool_definitions"] == draft.atomic_tool_bundle.actor_tool_definitions()
     assert runtime_inputs["tool_executor_names"] == ["count_customer"]
+
+
+def test_evaluate_rollout_summary_accepts_pass_rate_inside_band(tmp_path) -> None:
+    config = _config(tmp_path)
+    summary = _rollout_summary(matched=1, total=2)
+
+    gate = evaluate_rollout_summary(config, summary)
+
+    assert gate.status == EnvironmentQualityGateStatus.ACCEPT
+    assert gate.pass_rate == 0.5
+    assert gate.matched_solver_runs == 1
+    assert gate.total_solver_runs == 2
+    assert gate.band_lower == config.calibration.lower_pass_rate
+    assert gate.band_upper == config.calibration.upper_pass_rate
+    assert 0.0 <= gate.ci_lower <= gate.ci_upper <= 1.0
+
+
+def test_evaluate_rollout_summary_rejects_pass_rate_below_band(tmp_path) -> None:
+    config = _config(tmp_path)
+    summary = _rollout_summary(matched=0, total=2)
+
+    gate = evaluate_rollout_summary(config, summary)
+
+    assert gate.status == EnvironmentQualityGateStatus.REJECT_TOO_HARD
+    assert gate.pass_rate == 0.0
+
+
+def test_evaluate_rollout_summary_rejects_pass_rate_above_band(tmp_path) -> None:
+    config = _config(tmp_path)
+    summary = _rollout_summary(matched=2, total=2)
+
+    gate = evaluate_rollout_summary(config, summary)
+
+    assert gate.status == EnvironmentQualityGateStatus.REJECT_TOO_EASY
+    assert gate.pass_rate == 1.0
 
 
 @pytest.mark.asyncio

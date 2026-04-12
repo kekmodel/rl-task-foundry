@@ -11,11 +11,14 @@ import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
+from rl_task_foundry.calibration.runner import calibration_decision
 from rl_task_foundry.config.models import AppConfig, ProviderConfig, SolverModelConfig
 from rl_task_foundry.infra.db import DatabasePools
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
@@ -89,6 +92,24 @@ class EnvironmentRolloutSummary:
         if self.total_solver_runs == 0:
             return 0.0
         return self.matched_solver_runs / self.total_solver_runs
+
+
+class EnvironmentQualityGateStatus(StrEnum):
+    ACCEPT = "accept"
+    REJECT_TOO_HARD = "reject_too_hard"
+    REJECT_TOO_EASY = "reject_too_easy"
+
+
+@dataclass(frozen=True, slots=True)
+class EnvironmentQualityGateSummary:
+    status: EnvironmentQualityGateStatus
+    pass_rate: float
+    matched_solver_runs: int
+    total_solver_runs: int
+    ci_lower: float
+    ci_upper: float
+    band_lower: float
+    band_upper: float
 
 
 @dataclass(slots=True)
@@ -292,6 +313,60 @@ def _canonical_answers_by_instance(
     if len(canonical_by_instance) != len(bundle.canonical_answers):
         raise ValueError("canonical answer records must not reuse instance_id values")
     return canonical_by_instance
+
+
+def evaluate_rollout_summary(
+    config: AppConfig,
+    summary: EnvironmentRolloutSummary,
+) -> EnvironmentQualityGateSummary:
+    if summary.total_solver_runs <= 0:
+        raise ValueError("environment rollout summary must include at least one solver run")
+
+    band = PassRateBand(
+        lower=config.calibration.lower_pass_rate,
+        upper=config.calibration.upper_pass_rate,
+    )
+    interval = clopper_pearson_interval(
+        successes=summary.matched_solver_runs,
+        trials=summary.total_solver_runs,
+        alpha=config.calibration.ci_alpha,
+    )
+    if config.calibration.safe_early_termination:
+        decision = calibration_decision(
+            total_replicas=summary.total_solver_runs,
+            results=[run.reward_result.status == "matched" for run in summary.runs],
+            band=band,
+            ci_alpha=config.calibration.ci_alpha,
+        )
+    else:
+        decision = "continue"
+
+    if decision == "continue":
+        if band.contains(summary.pass_rate):
+            status = EnvironmentQualityGateStatus.ACCEPT
+        elif summary.pass_rate < band.lower:
+            status = EnvironmentQualityGateStatus.REJECT_TOO_HARD
+        else:
+            status = EnvironmentQualityGateStatus.REJECT_TOO_EASY
+    elif decision == "accept":
+        status = EnvironmentQualityGateStatus.ACCEPT
+    elif decision == "reject_too_hard":
+        status = EnvironmentQualityGateStatus.REJECT_TOO_HARD
+    elif decision == "reject_too_easy":
+        status = EnvironmentQualityGateStatus.REJECT_TOO_EASY
+    else:  # pragma: no cover - defensive against future calibration enum changes
+        raise ValueError(f"unsupported calibration decision: {decision}")
+
+    return EnvironmentQualityGateSummary(
+        status=status,
+        pass_rate=summary.pass_rate,
+        matched_solver_runs=summary.matched_solver_runs,
+        total_solver_runs=summary.total_solver_runs,
+        ci_lower=interval.lower,
+        ci_upper=interval.upper,
+        band_lower=band.lower,
+        band_upper=band.upper,
+    )
 
 
 def _load_atomic_tool_module(source_path: Path, *, module_name: str) -> ModuleType:

@@ -10,7 +10,9 @@ import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
+from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentRolloutSummary
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
+from rl_task_foundry.synthesis.contracts import EnvironmentStatus
 from rl_task_foundry.synthesis.environment_registry import (
     DifficultyBand,
     EnvironmentRegistryCommitResult,
@@ -25,6 +27,7 @@ from rl_task_foundry.synthesis.runner import (
 )
 from rl_task_foundry.synthesis.runtime import SynthesisCategoryStatus
 from rl_task_foundry.synthesis.scheduler import SynthesisSelectionStatus
+from tests.test_synthesis_environment_registry import _sample_draft
 
 
 @dataclass(slots=True)
@@ -54,12 +57,29 @@ class _FakeRuntime:
         graph: object | None = None,
     ) -> object:
         self.synthesize_calls.append((db_id, requested_category, graph))
-        return SimpleNamespace(
-            environment=SimpleNamespace(
-                env_id=f"env_{db_id}_{requested_category.value}_{len(self.synthesize_calls)}"
-            ),
+        return _sample_draft(
+            tmp_env_id=f"env_{db_id}_{requested_category.value}_{len(self.synthesize_calls)}",
+            db_id=db_id,
+            category=requested_category,
             created_at=datetime.now(timezone.utc),
         )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@dataclass(slots=True)
+class _FakeEnvironmentOrchestrator:
+    summaries: list[EnvironmentRolloutSummary] = field(default_factory=list)
+    run_calls: list[object] = field(default_factory=list)
+    closed: bool = False
+
+    async def run_draft(self, draft: object) -> EnvironmentRolloutSummary:
+        self.run_calls.append(draft)
+        if self.summaries:
+            return self.summaries.pop(0)
+        env_id = draft.environment.env_id
+        return _rollout_summary(env_id=env_id, matched=1, total=2)
 
     async def close(self) -> None:
         self.closed = True
@@ -84,6 +104,25 @@ class _FakeRegistry:
             difficulty_band=DifficultyBand.UNSET,
             filesystem_path=self.root_dir / env_id,
         )
+
+
+def _rollout_summary(*, env_id: str, matched: int, total: int) -> EnvironmentRolloutSummary:
+    runs = tuple(
+        SimpleNamespace(
+            reward_result=SimpleNamespace(
+                status="matched" if index < matched else "em_mismatch"
+            )
+        )
+        for index in range(total)
+    )
+    return EnvironmentRolloutSummary(
+        env_id=env_id,
+        db_id="sakila",
+        total_instances=1,
+        total_solver_runs=total,
+        matched_solver_runs=matched,
+        runs=runs,
+    )
 
 
 def _config_with_run_db(tmp_path: Path):
@@ -138,6 +177,7 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
         config,
         runtime_factory=_factory,
         environment_registry=fake_registry,
+        environment_orchestrator=_FakeEnvironmentOrchestrator(),
     )
     try:
         summary = await runner.run_steps(
@@ -174,6 +214,7 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
             root_dir=tmp_path / "environments",
             index_db_path=tmp_path / "environment_registry.db",
         ),
+        environment_orchestrator=_FakeEnvironmentOrchestrator(),
     )
     try:
         resumed = await runner2.run_steps(
@@ -213,6 +254,7 @@ async def test_synthesis_registry_runner_stops_on_backoff_decision(tmp_path: Pat
         config,
         runtime_factory=lambda _entry: runtime,
         environment_registry=fake_registry,
+        environment_orchestrator=_FakeEnvironmentOrchestrator(),
     )
     runner.orchestrator._runtimes["sakila"] = runtime
 
@@ -250,6 +292,7 @@ async def test_synthesis_registry_runner_reports_max_steps_reached(tmp_path: Pat
         config,
         runtime_factory=lambda _entry: _FakeRuntime(),
         environment_registry=fake_registry,
+        environment_orchestrator=_FakeEnvironmentOrchestrator(),
     )
 
     try:
@@ -295,6 +338,7 @@ async def test_synthesis_registry_runner_tracks_registry_duplicates(tmp_path: Pa
         config,
         runtime_factory=lambda _entry: _FakeRuntime(),
         environment_registry=fake_registry,
+        environment_orchestrator=_FakeEnvironmentOrchestrator(),
     )
 
     try:
@@ -320,6 +364,96 @@ async def test_synthesis_registry_runner_tracks_registry_duplicates(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_synthesis_registry_runner_rejects_quality_gate_before_registry_commit(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_run_db(tmp_path)
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    quality_orchestrator = _FakeEnvironmentOrchestrator(
+        summaries=[_rollout_summary(env_id="env_sakila_assignment_1", matched=0, total=2)]
+    )
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=lambda _entry: _FakeRuntime(),
+        environment_registry=fake_registry,
+        environment_orchestrator=quality_orchestrator,
+    )
+
+    try:
+        summary = await runner.run_steps(
+            [
+                SynthesisDbRegistryEntry(
+                    db_id="sakila",
+                    categories=[CategoryTaxonomy.ASSIGNMENT],
+                )
+            ],
+            max_steps=1,
+            checkpoint_namespace="synthesis_quality_reject",
+        )
+    finally:
+        await runner.close()
+
+    assert summary.outcome == SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
+    assert summary.generated_drafts == 1
+    assert summary.quality_accepted_envs == 0
+    assert summary.quality_rejected_envs == 1
+    assert summary.registry_committed_envs == 0
+    assert summary.registry_duplicate_envs == 0
+    assert summary.processed_pairs_after_run == 0
+    assert summary.remaining_pairs == 1
+    assert summary.quality_rejected_env_ids == ["env_sakila_assignment_1"]
+    assert summary.steps[0].quality_gate_status == "reject_too_hard"
+    assert summary.steps[0].registry_status is None
+    assert fake_registry.committed_drafts == []
+
+
+@pytest.mark.asyncio
+async def test_synthesis_registry_runner_records_quality_metrics_on_accepted_draft(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_run_db(tmp_path)
+    fake_registry = _FakeRegistry(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    quality_orchestrator = _FakeEnvironmentOrchestrator(
+        summaries=[_rollout_summary(env_id="env_sakila_assignment_1", matched=1, total=2)]
+    )
+    runner = SynthesisRegistryRunner(
+        config,
+        runtime_factory=lambda _entry: _FakeRuntime(),
+        environment_registry=fake_registry,
+        environment_orchestrator=quality_orchestrator,
+    )
+
+    try:
+        summary = await runner.run_steps(
+            [
+                SynthesisDbRegistryEntry(
+                    db_id="sakila",
+                    categories=[CategoryTaxonomy.ASSIGNMENT],
+                )
+            ],
+            max_steps=1,
+            checkpoint_namespace="synthesis_quality_accept",
+        )
+    finally:
+        await runner.close()
+
+    assert summary.quality_accepted_envs == 1
+    assert summary.quality_rejected_envs == 0
+    assert summary.registry_committed_envs == 1
+    committed = fake_registry.committed_drafts[0]
+    assert committed.environment.status == EnvironmentStatus.ACCEPTED
+    assert committed.environment.quality_metrics.solver_pass_rate == 0.5
+    assert committed.environment.quality_metrics.solver_ci_low is not None
+    assert committed.environment.quality_metrics.solver_ci_high is not None
+
+
+@pytest.mark.asyncio
 async def test_synthesis_registry_runner_preserves_category_order_across_checkpoint_shrinks(
     tmp_path: Path,
 ) -> None:
@@ -339,6 +473,7 @@ async def test_synthesis_registry_runner_preserves_category_order_across_checkpo
         config,
         runtime_factory=_factory,
         environment_registry=fake_registry,
+        environment_orchestrator=_FakeEnvironmentOrchestrator(),
     )
     try:
         summary = await runner.run_steps(
@@ -450,6 +585,7 @@ async def test_synthesis_registry_runner_rejects_duplicate_db_ids(tmp_path: Path
             root_dir=tmp_path / "environments",
             index_db_path=tmp_path / "environment_registry.db",
         ),
+        environment_orchestrator=_FakeEnvironmentOrchestrator(),
     )
 
     try:
