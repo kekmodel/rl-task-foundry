@@ -19,6 +19,7 @@ from rl_task_foundry.synthesis.environment_registry import (
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
+    _config_with_trial_traces_dir,
 )
 from rl_task_foundry.synthesis.runtime import (
     SynthesisBackendFailure,
@@ -182,6 +183,12 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert summary.quality_gate_status == "accept"
     assert summary.registry_status is EnvironmentRegistryCommitStatus.COMMITTED
     assert summary.registry_env_id == draft.environment.env_id
+    assert summary.debug_root == output_root / "debug"
+    assert summary.debug_traces_dir == output_root / "debug" / "traces"
+    assert summary.synthesis_traces_dir == output_root / "debug" / "traces" / "synthesis"
+    assert summary.solver_traces_dir == output_root / "debug" / "traces"
+    assert summary.synthesis_session_db_path == output_root / "debug" / "traces" / "synthesis_sessions.sqlite"
+    assert summary.solver_session_db_path == output_root / "debug" / "traces" / "sessions.sqlite"
     assert summary.bundle_root == output_root / "bundle"
     assert summary.summary_path.exists()
     assert exporter.calls == [(output_root / "bundle", draft.environment.env_id)]
@@ -190,6 +197,8 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert payload["trial_status"] == "accepted"
     assert payload["env_id"] == "env_real_trial"
     assert payload["quality_gate_status"] == "accept"
+    assert payload["debug_root"] == str(output_root / "debug")
+    assert payload["debug_traces_dir"] == str(output_root / "debug" / "traces")
 
 
 @pytest.mark.asyncio
@@ -246,6 +255,78 @@ async def test_real_db_trial_runner_captures_phase_execution_taxonomy(
     assert not registry.committed_drafts
     assert not exporter.calls
     assert not orchestrator.calls
+
+
+def test_config_with_trial_traces_dir_rebinds_only_trace_root(tmp_path: Path) -> None:
+    config = _config_with_tmp_traces(tmp_path)
+    trial_traces_dir = tmp_path / "real_trial" / "debug" / "traces"
+
+    updated = _config_with_trial_traces_dir(config, trial_traces_dir)
+
+    assert updated.output.traces_dir == trial_traces_dir
+    assert updated.output.run_db_path == config.output.run_db_path
+
+
+@pytest.mark.asyncio
+async def test_real_db_trial_runner_builds_default_runtime_with_run_scoped_debug_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured_synthesis_traces: list[Path] = []
+    captured_solver_traces: list[Path] = []
+
+    draft = _sample_draft(tmp_env_id="env_real_trial_debug")
+
+    class FakeConstructedRuntime(_FakeSynthesisRuntime):
+        def __init__(self, config):
+            captured_synthesis_traces.append(config.output.traces_dir)
+            super().__init__(draft=draft)
+
+    class FakeConstructedOrchestrator(_FakeEnvironmentOrchestrator):
+        def __init__(self, config):
+            captured_solver_traces.append(config.output.traces_dir)
+            super().__init__(
+                summary=_rollout_summary(env_id=draft.environment.env_id, matched=1, total=2)
+            )
+
+    from rl_task_foundry.synthesis import real_db_trial as real_db_trial_module
+
+    monkeypatch.setattr(real_db_trial_module, "SynthesisAgentRuntime", FakeConstructedRuntime)
+    monkeypatch.setattr(
+        real_db_trial_module,
+        "EnvironmentOrchestrator",
+        FakeConstructedOrchestrator,
+    )
+
+    registry = _FakeRegistry(
+        result=EnvironmentRegistryCommitResult(
+            status=EnvironmentRegistryCommitStatus.COMMITTED,
+            env_id=draft.environment.env_id,
+            exact_signature="sha256:trial",
+            difficulty_band=DifficultyBand.UNSET,
+            filesystem_path=tmp_path / "environments" / draft.environment.env_id,
+        )
+    )
+    exporter = _FakeExporter()
+    runner = RealDbTrialRunner(
+        _config_with_tmp_traces(tmp_path),
+        registry=registry,
+        exporter=exporter,
+    )
+    output_root = tmp_path / "real_trial_debug"
+
+    try:
+        summary = await runner.run(
+            output_root,
+            db_id="sakila",
+            category=CategoryTaxonomy.ASSIGNMENT,
+        )
+    finally:
+        await runner.close()
+
+    assert summary.trial_status is RealDbTrialStatus.ACCEPTED
+    assert captured_synthesis_traces == [output_root / "debug" / "traces"]
+    assert captured_solver_traces == [output_root / "debug" / "traces"]
 
 
 @pytest.mark.asyncio

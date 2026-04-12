@@ -428,6 +428,14 @@ def run_real_db_trial(
             console.print(f"registry_env_id={summary.registry_env_id}")
         if summary.bundle_root is not None:
             console.print(f"bundle_root={summary.bundle_root}")
+        if summary.debug_root is not None:
+            console.print(f"debug_root={summary.debug_root}")
+        if summary.debug_traces_dir is not None:
+            console.print(f"debug_traces_dir={summary.debug_traces_dir}")
+        if summary.synthesis_traces_dir is not None:
+            console.print(f"synthesis_traces_dir={summary.synthesis_traces_dir}")
+        if summary.solver_traces_dir is not None:
+            console.print(f"solver_traces_dir={summary.solver_traces_dir}")
         console.print(f"summary_path={summary.summary_path}")
         if summary.trial_status not in (
             RealDbTrialStatus.ACCEPTED,

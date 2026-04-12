@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.pipeline.environment_orchestrator import (
@@ -46,6 +47,12 @@ class RealDbTrialSummary:
     requested_category: CategoryTaxonomy
     trial_status: RealDbTrialStatus
     summary_path: Path
+    debug_root: Path | None = None
+    debug_traces_dir: Path | None = None
+    synthesis_traces_dir: Path | None = None
+    solver_traces_dir: Path | None = None
+    synthesis_session_db_path: Path | None = None
+    solver_session_db_path: Path | None = None
     env_id: str | None = None
     quality_gate_status: str | None = None
     synthesis_error_type: str | None = None
@@ -72,10 +79,6 @@ class RealDbTrialRunner:
     exporter: EnvironmentBundleExporter | None = None
 
     def __post_init__(self) -> None:
-        if self.synthesis_runtime is None:
-            self.synthesis_runtime = SynthesisAgentRuntime(self.config)
-        if self.environment_orchestrator is None:
-            self.environment_orchestrator = EnvironmentOrchestrator(self.config)
         if self.registry is None:
             self.registry = EnvironmentRegistryWriter.for_config(self.config)
         if self.exporter is None:
@@ -93,8 +96,16 @@ class RealDbTrialRunner:
     ) -> RealDbTrialSummary:
         output_root.mkdir(parents=True, exist_ok=True)
         summary_path = output_root / "trial_summary.json"
+        debug_root = output_root / "debug"
+        debug_traces_dir = debug_root / "traces"
+        synthesis_traces_dir = debug_traces_dir / "synthesis"
+        solver_traces_dir = debug_traces_dir
+        synthesis_session_db_path = debug_traces_dir / "synthesis_sessions.sqlite"
+        solver_session_db_path = debug_traces_dir / "sessions.sqlite"
+        synthesis_traces_dir.mkdir(parents=True, exist_ok=True)
         try:
-            draft = await self.synthesis_runtime.synthesize_environment_draft(
+            runtime = self._synthesis_runtime_for_trial(debug_traces_dir)
+            draft = await runtime.synthesize_environment_draft(
                 db_id=db_id,
                 requested_category=category,
             )
@@ -105,6 +116,12 @@ class RealDbTrialRunner:
                     db_id=db_id,
                     category=category,
                     exc=exc,
+                    debug_root=debug_root,
+                    debug_traces_dir=debug_traces_dir,
+                    synthesis_traces_dir=synthesis_traces_dir,
+                    solver_traces_dir=solver_traces_dir,
+                    synthesis_session_db_path=synthesis_session_db_path,
+                    solver_session_db_path=solver_session_db_path,
                 )
             )
         except SynthesisPhaseExecutionError as exc:
@@ -114,6 +131,12 @@ class RealDbTrialRunner:
                     requested_category=category,
                     trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                     summary_path=summary_path,
+                    debug_root=debug_root,
+                    debug_traces_dir=debug_traces_dir,
+                    synthesis_traces_dir=synthesis_traces_dir,
+                    solver_traces_dir=solver_traces_dir,
+                    synthesis_session_db_path=synthesis_session_db_path,
+                    solver_session_db_path=solver_session_db_path,
                     synthesis_error_type=type(exc).__name__,
                     synthesis_error_message=str(exc),
                     synthesis_phase=exc.phase.value if exc.phase is not None else None,
@@ -127,6 +150,12 @@ class RealDbTrialRunner:
                     requested_category=category,
                     trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                     summary_path=summary_path,
+                    debug_root=debug_root,
+                    debug_traces_dir=debug_traces_dir,
+                    synthesis_traces_dir=synthesis_traces_dir,
+                    solver_traces_dir=solver_traces_dir,
+                    synthesis_session_db_path=synthesis_session_db_path,
+                    solver_session_db_path=solver_session_db_path,
                     synthesis_error_type=type(exc).__name__,
                     synthesis_error_message=str(exc),
                     synthesis_phase=exc.phase.value if exc.phase is not None else None,
@@ -139,6 +168,12 @@ class RealDbTrialRunner:
                     requested_category=category,
                     trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                     summary_path=summary_path,
+                    debug_root=debug_root,
+                    debug_traces_dir=debug_traces_dir,
+                    synthesis_traces_dir=synthesis_traces_dir,
+                    solver_traces_dir=solver_traces_dir,
+                    synthesis_session_db_path=synthesis_session_db_path,
+                    solver_session_db_path=solver_session_db_path,
                     synthesis_error_type=type(exc).__name__,
                     synthesis_error_message=str(exc),
                 )
@@ -152,12 +187,19 @@ class RealDbTrialRunner:
                     requested_category=category,
                     trial_status=RealDbTrialStatus.REJECT_CROSS_INSTANCE,
                     summary_path=summary_path,
+                    debug_root=debug_root,
+                    debug_traces_dir=debug_traces_dir,
+                    synthesis_traces_dir=synthesis_traces_dir,
+                    solver_traces_dir=solver_traces_dir,
+                    synthesis_session_db_path=synthesis_session_db_path,
+                    solver_session_db_path=solver_session_db_path,
                     env_id=draft.environment.env_id,
                     cross_instance_error_codes=cross_instance_summary.error_codes,
                 )
             )
 
-        rollout_summary = await self.environment_orchestrator.run_draft(draft)
+        environment_orchestrator = self._environment_orchestrator_for_trial(debug_traces_dir)
+        rollout_summary = await environment_orchestrator.run_draft(draft)
         quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
         if quality_gate_summary.status is not EnvironmentQualityGateStatus.ACCEPT:
             return self._write_summary(
@@ -166,6 +208,12 @@ class RealDbTrialRunner:
                     requested_category=category,
                     trial_status=_quality_gate_trial_status(quality_gate_summary.status),
                     summary_path=summary_path,
+                    debug_root=debug_root,
+                    debug_traces_dir=debug_traces_dir,
+                    synthesis_traces_dir=synthesis_traces_dir,
+                    solver_traces_dir=solver_traces_dir,
+                    synthesis_session_db_path=synthesis_session_db_path,
+                    solver_session_db_path=solver_session_db_path,
                     env_id=draft.environment.env_id,
                     quality_gate_status=quality_gate_summary.status.value,
                     solver_pass_rate=quality_gate_summary.pass_rate,
@@ -191,6 +239,12 @@ class RealDbTrialRunner:
                     else RealDbTrialStatus.REGISTRY_DUPLICATE
                 ),
                 summary_path=summary_path,
+                debug_root=debug_root,
+                debug_traces_dir=debug_traces_dir,
+                synthesis_traces_dir=synthesis_traces_dir,
+                solver_traces_dir=solver_traces_dir,
+                synthesis_session_db_path=synthesis_session_db_path,
+                solver_session_db_path=solver_session_db_path,
                 env_id=accepted_draft.environment.env_id,
                 quality_gate_status=quality_gate_summary.status.value,
                 solver_pass_rate=quality_gate_summary.pass_rate,
@@ -215,6 +269,12 @@ class RealDbTrialRunner:
         db_id: str,
         category: CategoryTaxonomy,
         exc: SynthesisSelfConsistencyError,
+        debug_root: Path,
+        debug_traces_dir: Path,
+        synthesis_traces_dir: Path,
+        solver_traces_dir: Path,
+        synthesis_session_db_path: Path,
+        solver_session_db_path: Path,
     ) -> RealDbTrialSummary:
         error_codes: list[str] = []
         if exc.last_registration_diagnostics is not None:
@@ -226,6 +286,12 @@ class RealDbTrialRunner:
             requested_category=category,
             trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
             summary_path=summary_path,
+            debug_root=debug_root,
+            debug_traces_dir=debug_traces_dir,
+            synthesis_traces_dir=synthesis_traces_dir,
+            solver_traces_dir=solver_traces_dir,
+            synthesis_session_db_path=synthesis_session_db_path,
+            solver_session_db_path=solver_session_db_path,
             synthesis_error_type=type(exc).__name__,
             synthesis_error_message=str(exc),
             attempt_outcomes=tuple(attempt.outcome.value for attempt in exc.attempts),
@@ -238,6 +304,16 @@ class RealDbTrialRunner:
         payload["requested_category"] = summary.requested_category.value
         payload["trial_status"] = summary.trial_status.value
         payload["summary_path"] = str(summary.summary_path)
+        for key in (
+            "debug_root",
+            "debug_traces_dir",
+            "synthesis_traces_dir",
+            "solver_traces_dir",
+            "synthesis_session_db_path",
+            "solver_session_db_path",
+        ):
+            value = payload[key]
+            payload[key] = str(value) if value is not None else None
         payload["registry_status"] = (
             summary.registry_status.value if summary.registry_status is not None else None
         )
@@ -256,6 +332,21 @@ class RealDbTrialRunner:
             encoding="utf-8",
         )
         return summary
+
+    def _synthesis_runtime_for_trial(self, debug_traces_dir: Path) -> SynthesisAgentRuntime:
+        if self.synthesis_runtime is None:
+            trial_config = _config_with_trial_traces_dir(self.config, debug_traces_dir)
+            self.synthesis_runtime = SynthesisAgentRuntime(trial_config)
+        return cast(SynthesisAgentRuntime, self.synthesis_runtime)
+
+    def _environment_orchestrator_for_trial(
+        self,
+        debug_traces_dir: Path,
+    ) -> EnvironmentOrchestrator:
+        if self.environment_orchestrator is None:
+            trial_config = _config_with_trial_traces_dir(self.config, debug_traces_dir)
+            self.environment_orchestrator = EnvironmentOrchestrator(trial_config)
+        return cast(EnvironmentOrchestrator, self.environment_orchestrator)
 
 
 def _quality_gate_trial_status(
@@ -277,6 +368,16 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
         deduped.append(value)
         seen.add(value)
     return deduped
+
+
+def _config_with_trial_traces_dir(config: AppConfig, traces_dir: Path) -> AppConfig:
+    output = config.output.model_copy(
+        update={
+            "traces_dir": traces_dir,
+        },
+        deep=True,
+    )
+    return config.model_copy(update={"output": output}, deep=True)
 
 
 def _encode_backend_failures(
