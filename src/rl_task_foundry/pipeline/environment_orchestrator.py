@@ -12,6 +12,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import partial
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType
@@ -49,6 +50,7 @@ EnvironmentToolExecutorFactory = Callable[
     [AtomicToolBundle],
     dict[str, ToolExecutor] | Awaitable[dict[str, ToolExecutor]],
 ]
+EnvironmentSolverRunFactory = Callable[[], Awaitable["EnvironmentSolverRun"]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,9 +84,11 @@ class EnvironmentSolverRun:
 class EnvironmentRolloutSummary:
     env_id: str
     db_id: str
+    planned_solver_runs: int
     total_instances: int
     total_solver_runs: int
     matched_solver_runs: int
+    early_stop_decision: str | None = None
     runs: tuple[EnvironmentSolverRun, ...] = ()
 
     @property
@@ -142,7 +146,7 @@ class EnvironmentOrchestrator:
         tool_definitions = bundle.atomic_tool_bundle.actor_tool_definitions()
         tool_executors = await self._tool_executors(bundle.atomic_tool_bundle)
         runs: list[EnvironmentSolverRun] = []
-        calls = []
+        calls: list[EnvironmentSolverRunFactory] = []
         for instance in bundle.instances:
             canonical_record = canonical_by_instance.get(instance.instance_id)
             if canonical_record is None:
@@ -160,7 +164,8 @@ class EnvironmentOrchestrator:
                         tool_executors,
                     )
                     calls.append(
-                        self._run_solver(
+                        partial(
+                            self._run_solver,
                             runtime=runtime,
                             solver_config=solver_config,
                             instance=instance,
@@ -169,17 +174,22 @@ class EnvironmentOrchestrator:
                             replica_index=replica_index,
                         )
                     )
-        if calls:
-            runs = list(await asyncio.gather(*calls))
+        planned_solver_runs = min(len(calls), self.config.calibration.full_replica_limit)
+        scheduled_calls = calls[:planned_solver_runs]
+        early_stop_decision: str | None = None
+        if scheduled_calls:
+            runs, early_stop_decision = await self._execute_solver_batches(scheduled_calls)
         matched_solver_runs = sum(
             1 for run in runs if run.reward_result.status == "matched"
         )
         return EnvironmentRolloutSummary(
             env_id=bundle.environment.env_id,
             db_id=bundle.environment.db_id,
+            planned_solver_runs=planned_solver_runs,
             total_instances=len(bundle.instances),
             total_solver_runs=len(runs),
             matched_solver_runs=matched_solver_runs,
+            early_stop_decision=early_stop_decision,
             runs=tuple(runs),
         )
 
@@ -292,6 +302,46 @@ class EnvironmentOrchestrator:
         self._tool_executor_cache[bundle.db_id] = resolved
         return resolved
 
+    async def _execute_solver_batches(
+        self,
+        calls: list[EnvironmentSolverRunFactory],
+    ) -> tuple[list[EnvironmentSolverRun], str | None]:
+        runs: list[EnvironmentSolverRun] = []
+        total_replicas = len(calls)
+        if total_replicas == 0:
+            return runs, None
+
+        canary_size = min(self.config.calibration.canary_replica_count, total_replicas)
+        batch_size = max(1, self.config.calibration.post_canary_batch_size)
+        cursor = 0
+        early_stop_decision: str | None = None
+        band = PassRateBand(
+            lower=self.config.calibration.lower_pass_rate,
+            upper=self.config.calibration.upper_pass_rate,
+        )
+
+        while cursor < total_replicas:
+            current_batch_size = canary_size if cursor == 0 else batch_size
+            batch = calls[cursor : cursor + current_batch_size]
+            cursor += len(batch)
+            runs.extend(await asyncio.gather(*(call() for call in batch)))
+            if not self.config.calibration.safe_early_termination:
+                continue
+            if len(runs) < canary_size:
+                continue
+            early_stop_decision = calibration_decision(
+                total_replicas=total_replicas,
+                results=[run.reward_result.status == "matched" for run in runs],
+                band=band,
+                ci_alpha=self.config.calibration.ci_alpha,
+            )
+            if early_stop_decision != "continue":
+                break
+
+        if early_stop_decision == "continue":
+            early_stop_decision = None
+        return runs, early_stop_decision
+
     async def _database_pools_for_tools(self) -> DatabasePools:
         if self._database_pools is None:
             self._database_pools = await DatabasePools.create(self.config.database)
@@ -331,9 +381,11 @@ def evaluate_rollout_summary(
         trials=summary.total_solver_runs,
         alpha=config.calibration.ci_alpha,
     )
-    if config.calibration.safe_early_termination:
+    if summary.early_stop_decision is not None:
+        decision = summary.early_stop_decision
+    elif config.calibration.safe_early_termination:
         decision = calibration_decision(
-            total_replicas=summary.total_solver_runs,
+            total_replicas=summary.planned_solver_runs,
             results=[run.reward_result.status == "matched" for run in summary.runs],
             band=band,
             ci_alpha=config.calibration.ci_alpha,

@@ -169,6 +169,7 @@ def _rollout_summary(*, matched: int, total: int) -> EnvironmentRolloutSummary:
     return EnvironmentRolloutSummary(
         env_id="env_assignment_registrytest",
         db_id="sakila",
+        planned_solver_runs=total,
         total_instances=1,
         total_solver_runs=total,
         matched_solver_runs=matched,
@@ -348,6 +349,156 @@ def test_evaluate_rollout_summary_rejects_pass_rate_above_band(tmp_path) -> None
 
     assert gate.status == EnvironmentQualityGateStatus.REJECT_TOO_EASY
     assert gate.pass_rate == 1.0
+
+
+@pytest.mark.asyncio
+async def test_environment_orchestrator_batches_until_boundary_decision_when_task_is_too_hard(
+    tmp_path,
+):
+    config = _config(tmp_path)
+    solver = config.models.solvers[0].model_copy(update={"replicas": 6})
+    config = config.model_copy(
+        update={"models": config.models.model_copy(update={"solvers": [solver]})},
+        deep=True,
+    )
+    bundle = _sample_bundle()
+    call_count = 0
+
+    class _FakeRuntime:
+        async def run(self, episode, *, replica_index: int):
+            nonlocal call_count
+            call_count += 1
+            return SolverResult(
+                task_id=episode.task_id,
+                solver_id="solver_a",
+                provider="codex_oauth",
+                model="gpt-5.4-mini",
+                replica_index=replica_index,
+                transcript_ref="memory://transcript",
+                tool_trace_ref="memory://tools",
+                raw_output_text='{"city":"Busan"}',
+                structured_output={"city": "Busan"},
+                status="completed",
+                termination_reason="submitted",
+            )
+
+    orchestrator = EnvironmentOrchestrator(
+        config,
+        runtime_factory=lambda *_args: _FakeRuntime(),
+        tool_executor_factory=lambda _bundle: {"count_customer": lambda _kwargs: 7},
+    )
+
+    summary = await orchestrator.run_bundle(bundle)
+
+    assert summary.planned_solver_runs == 6
+    assert summary.total_solver_runs == 6
+    assert summary.early_stop_decision == "reject_too_hard"
+    assert call_count == 6
+
+
+@pytest.mark.asyncio
+async def test_environment_orchestrator_batches_until_boundary_decision_when_task_is_too_easy(
+    tmp_path,
+):
+    config = _config(tmp_path)
+    solver = config.models.solvers[0].model_copy(update={"replicas": 6})
+    config = config.model_copy(
+        update={"models": config.models.model_copy(update={"solvers": [solver]})},
+        deep=True,
+    )
+    bundle = _sample_bundle()
+    call_count = 0
+
+    class _FakeRuntime:
+        async def run(self, episode, *, replica_index: int):
+            nonlocal call_count
+            call_count += 1
+            return SolverResult(
+                task_id=episode.task_id,
+                solver_id="solver_a",
+                provider="codex_oauth",
+                model="gpt-5.4-mini",
+                replica_index=replica_index,
+                transcript_ref="memory://transcript",
+                tool_trace_ref="memory://tools",
+                raw_output_text='{"city":"Seoul"}',
+                structured_output={"city": "Seoul"},
+                status="completed",
+                termination_reason="submitted",
+            )
+
+    orchestrator = EnvironmentOrchestrator(
+        config,
+        runtime_factory=lambda *_args: _FakeRuntime(),
+        tool_executor_factory=lambda _bundle: {"count_customer": lambda _kwargs: 7},
+    )
+
+    summary = await orchestrator.run_bundle(bundle)
+
+    assert summary.planned_solver_runs == 6
+    assert summary.total_solver_runs == 6
+    assert summary.early_stop_decision == "reject_too_easy"
+    assert call_count == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_output_text", "expected_reward_status", "expected_decision"),
+    [
+        ('{"city":"Busan"}', "em_mismatch", "reject_too_hard"),
+        ('{"city":"Seoul"}', "matched", "reject_too_easy"),
+    ],
+)
+async def test_environment_orchestrator_stops_mid_batch_when_post_canary_batch_size_is_one(
+    tmp_path,
+    raw_output_text: str,
+    expected_reward_status: str,
+    expected_decision: str,
+):
+    config = _config(tmp_path)
+    solver = config.models.solvers[0].model_copy(update={"replicas": 6})
+    calibration = config.calibration.model_copy(update={"post_canary_batch_size": 1})
+    config = config.model_copy(
+        update={
+            "models": config.models.model_copy(update={"solvers": [solver]}),
+            "calibration": calibration,
+        },
+        deep=True,
+    )
+    bundle = _sample_bundle()
+    call_count = 0
+
+    class _FakeRuntime:
+        async def run(self, episode, *, replica_index: int):
+            nonlocal call_count
+            call_count += 1
+            return SolverResult(
+                task_id=episode.task_id,
+                solver_id="solver_a",
+                provider="codex_oauth",
+                model="gpt-5.4-mini",
+                replica_index=replica_index,
+                transcript_ref="memory://transcript",
+                tool_trace_ref="memory://tools",
+                raw_output_text=raw_output_text,
+                structured_output=json.loads(raw_output_text),
+                status="completed",
+                termination_reason="submitted",
+            )
+
+    orchestrator = EnvironmentOrchestrator(
+        config,
+        runtime_factory=lambda *_args: _FakeRuntime(),
+        tool_executor_factory=lambda _bundle: {"count_customer": lambda _kwargs: 7},
+    )
+
+    summary = await orchestrator.run_bundle(bundle)
+
+    assert summary.planned_solver_runs == 6
+    assert summary.total_solver_runs == 5
+    assert summary.early_stop_decision == expected_decision
+    assert call_count == 5
+    assert {run.reward_result.status for run in summary.runs} == {expected_reward_status}
 
 
 @pytest.mark.asyncio

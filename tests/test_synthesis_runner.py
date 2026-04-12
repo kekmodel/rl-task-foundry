@@ -118,6 +118,7 @@ def _rollout_summary(*, env_id: str, matched: int, total: int) -> EnvironmentRol
     return EnvironmentRolloutSummary(
         env_id=env_id,
         db_id="sakila",
+        planned_solver_runs=total,
         total_instances=1,
         total_solver_runs=total,
         matched_solver_runs=matched,
