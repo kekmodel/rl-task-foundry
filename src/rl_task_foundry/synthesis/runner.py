@@ -214,7 +214,6 @@ class SynthesisRegistryRunner:
         quality_rejected_envs = 0
         processed_pairs_after_run = initially_processed_pairs
         orchestrator = self.orchestrator
-        environment_orchestrator = self.environment_orchestrator
         checkpoint = self.checkpoint
         environment_registry = self.environment_registry
         outcome: SynthesisRegistryRunOutcome | None = None
@@ -239,81 +238,34 @@ class SynthesisRegistryRunner:
 
             assert step.decision.db_id is not None
             assert step.decision.topic is not None
-            from rl_task_foundry.pipeline.environment_orchestrator import (
-                evaluate_rollout_summary,
-            )
-
-            rollout_summary = await environment_orchestrator.run_draft(step.draft)
-            phase_monitor.emit(
-                phase="rollout",
-                status="completed",
-                expected_contract={
-                    "step_index": executed_steps,
-                    "planned_solver_runs_upper_bound": self.base_config.calibration.full_replica_limit,
-                },
-                actual_data={
-                    "env_id": step.draft.environment.env_id,
-                    "planned_solver_runs": rollout_summary.planned_solver_runs,
-                    "total_solver_runs": rollout_summary.total_solver_runs,
-                    "matched_solver_runs": rollout_summary.matched_solver_runs,
-                    "early_stop_decision": rollout_summary.early_stop_decision,
-                },
-                checks={
-                    "executed_runs_within_plan": rollout_summary.total_solver_runs
-                    <= rollout_summary.planned_solver_runs,
-                },
-                diagnostics={"step_index": executed_steps},
-            )
-            quality_gate_summary = evaluate_rollout_summary(self.base_config, rollout_summary)
             phase_monitor.emit(
                 phase="quality_gate",
-                status=quality_gate_summary.status.value,
+                status="accept",
                 expected_contract={
                     "step_index": executed_steps,
-                    "band_lower": quality_gate_summary.band_lower,
-                    "band_upper": quality_gate_summary.band_upper,
+                    "internal_submit_draft_acceptance": True,
                 },
                 actual_data={
                     "env_id": step.draft.environment.env_id,
-                    "pass_rate": quality_gate_summary.pass_rate,
-                    "ci_low": quality_gate_summary.ci_lower,
-                    "ci_high": quality_gate_summary.ci_upper,
+                    "pass_rate": step.draft.environment.quality_metrics.solver_pass_rate,
+                    "ci_low": step.draft.environment.quality_metrics.solver_ci_low,
+                    "ci_high": step.draft.environment.quality_metrics.solver_ci_high,
                 },
                 checks={
-                    "accepted": quality_gate_summary.status.value == "accept",
+                    "accepted": step.draft.environment.status is EnvironmentStatus.ACCEPTED,
                 },
                 diagnostics={"step_index": executed_steps},
             )
             generated_drafts += 1
             generated_env_ids.append(step.draft.environment.env_id)
-            if quality_gate_summary.status.value != "accept":
-                quality_rejected_envs += 1
-                quality_rejected_env_ids.append(step.draft.environment.env_id)
-                steps.append(
-                    SynthesisRegistryStepSummary(
-                        decision=step.decision,
-                        draft_env_id=step.draft.environment.env_id,
-                        draft_created_at=step.draft.created_at,
-                        quality_gate_status=quality_gate_summary.status.value,
-                        quality_gate_pass_rate=quality_gate_summary.pass_rate,
-                        quality_gate_ci_low=quality_gate_summary.ci_lower,
-                        quality_gate_ci_high=quality_gate_summary.ci_upper,
-                    )
-                )
-                continue
-
             quality_accepted_envs += 1
-            accepted_draft = accepted_draft_with_quality_metrics(
-                step.draft,
-                quality_gate_summary=quality_gate_summary,
-            )
-            commit_result = environment_registry.commit_draft(accepted_draft)
+            commit_result = environment_registry.commit_draft(step.draft)
             phase_monitor.emit(
                 phase="registry_commit",
                 status=commit_result.status.value,
                 expected_contract={"step_index": executed_steps},
                 actual_data={
-                    "env_id": accepted_draft.environment.env_id,
+                    "env_id": step.draft.environment.env_id,
                     "registry_env_id": commit_result.env_id,
                     "status": commit_result.status.value,
                 },
@@ -323,12 +275,12 @@ class SynthesisRegistryRunner:
             steps.append(
                 SynthesisRegistryStepSummary(
                     decision=step.decision,
-                    draft_env_id=accepted_draft.environment.env_id,
-                    draft_created_at=accepted_draft.created_at,
-                    quality_gate_status=quality_gate_summary.status.value,
-                    quality_gate_pass_rate=quality_gate_summary.pass_rate,
-                    quality_gate_ci_low=quality_gate_summary.ci_lower,
-                    quality_gate_ci_high=quality_gate_summary.ci_upper,
+                    draft_env_id=step.draft.environment.env_id,
+                    draft_created_at=step.draft.created_at,
+                    quality_gate_status="accept",
+                    quality_gate_pass_rate=step.draft.environment.quality_metrics.solver_pass_rate,
+                    quality_gate_ci_low=step.draft.environment.quality_metrics.solver_ci_low,
+                    quality_gate_ci_high=step.draft.environment.quality_metrics.solver_ci_high,
                     registry_status=commit_result.status,
                     registry_env_id=commit_result.env_id,
                 )
@@ -340,12 +292,12 @@ class SynthesisRegistryRunner:
                     "db_id": step.decision.db_id,
                     "topic": step.decision.topic,
                     "env_id": commit_result.env_id,
-                    "created_at": accepted_draft.created_at.isoformat(),
+                    "created_at": step.draft.created_at.isoformat(),
                     "registry_status": commit_result.status.value,
-                    "quality_gate_status": quality_gate_summary.status.value,
-                    "solver_pass_rate": quality_gate_summary.pass_rate,
-                    "solver_ci_low": quality_gate_summary.ci_lower,
-                    "solver_ci_high": quality_gate_summary.ci_upper,
+                    "quality_gate_status": "accept",
+                    "solver_pass_rate": step.draft.environment.quality_metrics.solver_pass_rate,
+                    "solver_ci_low": step.draft.environment.quality_metrics.solver_ci_low,
+                    "solver_ci_high": step.draft.environment.quality_metrics.solver_ci_high,
                 },
             )
             checkpoint.flush()

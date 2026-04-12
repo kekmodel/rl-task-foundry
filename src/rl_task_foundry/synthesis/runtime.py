@@ -21,6 +21,7 @@ from rl_task_foundry.pipeline.provider_resilience import (
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.synthesis.contracts import (
+    ConstraintKind,
     ConstraintSummaryItem,
     CrossInstanceSet,
     DIFFICULTY_CRANK_ORDER,
@@ -56,6 +57,10 @@ from rl_task_foundry.synthesis.phase_monitor import (
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.schema_inference import extract_output_schema_from_canonical
+from rl_task_foundry.synthesis.submit_draft_tool import (
+    SubmitDraftController,
+    SubmitDraftPayload,
+)
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
     bind_atomic_tool_executor,
@@ -802,6 +807,7 @@ class SynthesisAgentRuntime:
 
     config: AppConfig
     phase_backends: dict[SynthesisPhase, list[SynthesisStageBackend]] | None = None
+    synthesis_backends: list[object] | None = None
     _breakers: dict[str, ProviderCircuitBreaker] = field(default_factory=dict, init=False, repr=False)
     _graph_cache: SchemaGraph | None = field(default=None, init=False, repr=False)
     _atomic_tool_bundles: dict[str, AtomicToolBundle] = field(
@@ -821,13 +827,14 @@ class SynthesisAgentRuntime:
     _atomic_tool_materializer: AtomicToolMaterializer | None = field(
         default=None, init=False, repr=False
     )
+    _environment_orchestrator: object | None = field(default=None, init=False, repr=False)
     _category_state_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
     phase_monitor: PipelinePhaseMonitorLogger | None = None
 
     def __post_init__(self) -> None:
-        if self.phase_backends is None:
+        if self.synthesis_backends is None:
             from rl_task_foundry.synthesis.backend_openai_agents import (
                 OpenAIAgentsSynthesisBackend,
             )
@@ -836,18 +843,9 @@ class SynthesisAgentRuntime:
                 model_ref=self.config.models.composer,
                 provider_config=self.config.providers[self.config.models.composer.provider],
                 runtime_config=self.config.synthesis.runtime,
-                session_db_path=self.config.output.traces_dir / "synthesis_sessions.sqlite",
                 traces_dir=self.config.output.traces_dir / "synthesis",
             )
-            self.phase_backends = {
-                phase: [backend]
-                for phase in (
-                    SynthesisPhase.SCHEMA_EXPLORATION,
-                    SynthesisPhase.CATEGORY_INFERENCE,
-                    SynthesisPhase.LABEL_CONSTRUCTION,
-                    SynthesisPhase.TASK_SYNTHESIS,
-                )
-            }
+            self.synthesis_backends = [backend]
         self._breakers = {
             provider_name: ProviderCircuitBreaker(
                 provider_name=provider_name,
@@ -858,6 +856,10 @@ class SynthesisAgentRuntime:
             for provider_name in self.config.providers
         }
         self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
+        if self._environment_orchestrator is None:
+            from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentOrchestrator
+
+            self._environment_orchestrator = EnvironmentOrchestrator(self.config)
         if self.phase_monitor is None:
             self.phase_monitor = PipelinePhaseMonitorLogger(
                 phase_monitor_log_path=default_phase_monitor_log_path(
@@ -875,6 +877,7 @@ class SynthesisAgentRuntime:
         graph: SchemaGraph | None = None,
         retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> SynthesisEnvironmentDraft:
+        del retry_seed
         requested_topic = normalize_topic(requested_topic)
         await self._bind_db_id(db_id)
         await self._ensure_category_available(db_id, requested_topic)
@@ -883,123 +886,94 @@ class SynthesisAgentRuntime:
             db_id=db_id,
             graph=resolved_graph,
         )
-        atomic_tool_set_ref = f"db://{db_id}"
-        available_atomic_tools = atomic_tool_bundle.actor_tool_definitions()
         schema_summary = summarize_schema_graph(resolved_graph)
-        await self._prime_phase_backends_with_atomic_tools(
+        controller = SubmitDraftController(
+            config=self.config,
+            requested_topic=requested_topic,
+            environment_orchestrator=self._environment_orchestrator,
+            build_draft=lambda payload: self._build_draft_from_submission(
+                db_id=db_id,
+                requested_topic=requested_topic,
+                atomic_tool_bundle=atomic_tool_bundle,
+                submission=payload,
+                schema_summary=schema_summary,
+            ),
+            phase_monitor=self.phase_monitor,
+            max_submissions=self.config.synthesis.runtime.max_generation_attempts,
+        )
+        await self._prime_synthesis_backends_with_context(
             db_id=db_id,
             bundle=atomic_tool_bundle,
+            controller=controller,
         )
-        try:
-            stage_results: list[SynthesisStageResult] = []
-            memory: list[SynthesisMemoryEntry] = []
-            tool_traces: list[SynthesisToolTraceEntry] = []
-            previous_outputs: dict[SynthesisPhase, SynthesisPhaseOutput] = {}
-
-            for phase in (
-                SynthesisPhase.SCHEMA_EXPLORATION,
-                SynthesisPhase.CATEGORY_INFERENCE,
-            ):
-                request = SynthesisStageRequest(
-                    phase=phase,
-                    db_id=db_id,
-                    atomic_tool_set_ref=atomic_tool_set_ref,
-                    available_atomic_tools=available_atomic_tools,
-                    domain_name=self.config.domain.name,
-                    task_language=self.config.domain.language,
-                    scenario_description=self.config.domain.scenario_description,
-                    requested_topic=requested_topic,
-                    attempt_index=1,
-                    schema_summary=schema_summary,
-                    previous_outputs=previous_outputs,
-                    memory=memory[-self.config.synthesis.runtime.explicit_memory_window :],
-                )
-                result = await self._run_phase(request)
-                if phase is SynthesisPhase.SCHEMA_EXPLORATION:
-                    self._ensure_grounded_schema_exploration(request, result)
-                stage_results.append(result)
-                memory.append(result.memory_entry)
-                tool_traces.extend(result.tool_traces)
-                previous_outputs[phase] = result.payload
-
-            category_payload = previous_outputs[SynthesisPhase.CATEGORY_INFERENCE]
-            assert isinstance(category_payload, CategoryInferenceOutput)
-            selected_topic = category_payload.selected_topic
-            if selected_topic != requested_topic:
-                raise SynthesisCategoryMismatchError(
-                    "category inference result did not match the requested topic"
-                )
-
-            (
-                task,
-                instance_space,
-                instances,
-                canonical_answers,
-                materialized_cross_instance_set,
-                generation_attempts,
-            ) = await self._run_label_first_generation_loop(
-                db_id=db_id,
-                requested_topic=requested_topic,
-                graph=resolved_graph,
-                schema_summary=schema_summary,
-                previous_outputs=previous_outputs,
-                stage_results=stage_results,
-                memory=memory,
-                tool_traces=tool_traces,
-                atomic_tool_set_ref=atomic_tool_set_ref,
-                available_atomic_tools=available_atomic_tools,
-                retry_seed=retry_seed,
+        conversation_result = await self._run_synthesis_conversation(
+            db_id=db_id,
+            requested_topic=requested_topic,
+            schema_summary=schema_summary,
+        )
+        if controller.accepted_draft is None:
+            attempts = self._generation_attempts_from_submit_records(
+                controller=controller,
+                provider=conversation_result.provider,
+                model=conversation_result.model,
             )
-
-            materialized_at = datetime.now(timezone.utc)
-            environment = self._materialize_environment(
-                atomic_tool_bundle=atomic_tool_bundle,
-                db_id=db_id,
-                requested_topic=requested_topic,
-                created_at=materialized_at,
-                materialized_cross_instance_set=materialized_cross_instance_set,
-                task=task,
-                instance_space=instance_space,
+            last_attempt = attempts[-1] if attempts else None
+            diagnostics = SynthesisArtifactDiagnostics(
+                error_codes=list(last_attempt.artifact_diagnostics.error_codes)
+                if last_attempt is not None and last_attempt.artifact_diagnostics is not None
+                else [],
             )
-            await self._reset_category_failure_state(db_id, requested_topic)
-
-            return SynthesisEnvironmentDraft(
-                created_at=materialized_at,
-                db_id=db_id,
-                requested_topic=requested_topic,
-                schema_summary=schema_summary,
-                selected_topic=selected_topic,
-                environment=environment,
-                atomic_tool_bundle=atomic_tool_bundle,
-                instances=instances,
-                canonical_answers=canonical_answers,
-                generation_attempts=generation_attempts,
-                stage_results=stage_results,
-                memory=memory,
-                tool_traces=tool_traces,
-                provider_status=self.provider_status(),
-            )
-        except SynthesisCategoryMismatchError:
-            await self._record_category_discard(
-                db_id,
-                requested_topic,
-                outcome=SynthesisGenerationOutcome.CATEGORY_MISMATCH,
-                error_codes=["category_mismatch"],
-            )
-            raise
-        except SynthesisArtifactGenerationError as exc:
-            last_attempt = exc.attempts[-1] if exc.attempts else None
             await self._record_category_discard(
                 db_id,
                 requested_topic,
                 outcome=last_attempt.outcome if last_attempt is not None else None,
-                error_codes=(
-                    list(exc.last_artifact_diagnostics.error_codes)
-                    if exc.last_artifact_diagnostics is not None
-                    else []
-                ),
+                error_codes=list(diagnostics.error_codes),
             )
-            raise
+            raise SynthesisArtifactGenerationError(
+                "single-agent synthesis did not produce an accepted draft before budget or turn exhaustion",
+                attempts=attempts,
+                last_artifact_diagnostics=diagnostics,
+            )
+
+        accepted_draft = controller.accepted_draft.model_copy(
+            update={
+                "schema_summary": schema_summary,
+                "selected_topic": requested_topic,
+                "generation_attempts": self._generation_attempts_from_submit_records(
+                    controller=controller,
+                    provider=conversation_result.provider,
+                    model=conversation_result.model,
+                ),
+                "provider_status": self.provider_status(),
+            }
+        )
+        self._emit_phase_monitor(
+            phase="synthesis_conversation",
+            status="accepted",
+            expected_contract={
+                "requested_topic": requested_topic,
+                "max_turns": 50,
+            },
+            actual_data={
+                "env_id": accepted_draft.environment.env_id,
+                "final_output_text": conversation_result.final_output_text,
+                "turn_count": conversation_result.turn_count,
+                "tool_call_count": len(conversation_result.tool_calls),
+            },
+            checks={
+                "accepted_draft_present": True,
+                "submit_draft_called": "submit_draft" in conversation_result.tool_calls,
+            },
+            diagnostics={
+                "provider": conversation_result.provider,
+                "model": conversation_result.model,
+                "token_usage": conversation_result.token_usage,
+                "transcript_ref": conversation_result.transcript_ref,
+                "tool_trace_ref": conversation_result.tool_trace_ref,
+            },
+        )
+        await self._reset_category_failure_state(db_id, requested_topic)
+        return accepted_draft
 
     async def close(self) -> None:
         if self._database_pools is not None:
@@ -1332,6 +1306,183 @@ class SynthesisAgentRuntime:
     ) -> None:
         async with self._category_state_lock:
             self._category_failures.pop((db_id, topic), None)
+
+    async def _run_synthesis_conversation(
+        self,
+        *,
+        db_id: str,
+        requested_topic: str,
+        schema_summary: dict[str, object],
+    ) -> object:
+        candidate_backends = self.synthesis_backends or []
+        if not candidate_backends:
+            raise SynthesisPhaseExecutionError(
+                "no synthesis backends configured for single-agent synthesis"
+            )
+
+        errors: list[str] = []
+        backend_failures: list[SynthesisBackendFailure] = []
+        for backend in candidate_backends:
+            breaker = self._breakers[backend.provider_name]
+            if not breaker.is_available():
+                continue
+            try:
+                result = await backend.run_synthesis(
+                    db_id=db_id,
+                    requested_topic=requested_topic,
+                    domain_name=self.config.domain.name,
+                    task_language=self.config.domain.language,
+                    scenario_description=self.config.domain.scenario_description,
+                    schema_summary=schema_summary,
+                    max_turns=50,
+                )
+            except Exception as exc:  # pragma: no cover
+                breaker.record_failure()
+                errors.append(f"{backend.provider_name}/{backend.model_name}: {type(exc).__name__}")
+                backend_failures.append(
+                    SynthesisBackendFailure(
+                        provider=backend.provider_name,
+                        model=backend.model_name,
+                        error_type=type(exc).__name__,
+                    )
+                )
+                continue
+            breaker.record_success()
+            return result
+
+        if errors:
+            raise SynthesisPhaseExecutionError(
+                "single-agent synthesis failed across candidate providers: " + ", ".join(errors),
+                phase=None,
+                backend_failures=backend_failures,
+            )
+        raise SynthesisProviderUnavailableError(
+            "all providers are in cooldown for single-agent synthesis",
+            phase=None,
+        )
+
+    async def _prime_synthesis_backends_with_context(
+        self,
+        *,
+        db_id: str,
+        bundle: AtomicToolBundle,
+        controller: SubmitDraftController,
+    ) -> None:
+        tool_definitions = bundle.actor_tool_definitions()
+        tool_executors = await self._tool_executors_for_bundle(db_id=db_id, bundle=bundle)
+        for backend in self.synthesis_backends or []:
+            bind_atomic_tools = getattr(backend, "bind_atomic_tools", None)
+            if callable(bind_atomic_tools):
+                bind_atomic_tools(
+                    tool_definitions=tool_definitions,
+                    tool_executors=tool_executors,
+                )
+            bind_submit_draft_controller = getattr(backend, "bind_submit_draft_controller", None)
+            if callable(bind_submit_draft_controller):
+                bind_submit_draft_controller(controller)
+
+    def _build_draft_from_submission(
+        self,
+        *,
+        db_id: str,
+        requested_topic: str,
+        atomic_tool_bundle: AtomicToolBundle,
+        submission: SubmitDraftPayload,
+        schema_summary: dict[str, object],
+    ) -> SynthesisEnvironmentDraft:
+        canonical_input = json.loads(submission.canonical_answer_json)
+        output_schema = extract_output_schema_from_canonical(canonical_input)
+        normalized_constraints = [
+            ConstraintSummaryItem(
+                key=item.key,
+                kind=(
+                    ConstraintKind(item.kind)
+                    if item.kind in {kind.value for kind in ConstraintKind}
+                    else ConstraintKind.OTHER
+                ),
+                summary=item.summary,
+                hard=item.hard,
+            )
+            for item in submission.constraint_summary
+        ]
+        task = TaskContract(
+            question=submission.question,
+            topic=requested_topic,
+            output_schema=output_schema,
+            constraint_summary=normalized_constraints,
+            difficulty_vector=submission.difficulty_vector,
+            instance_parameters=dict(submission.anchor_entity),
+        )
+        (
+            instances,
+            canonical_answers,
+            materialized_cross_instance_set,
+        ) = self._materialize_instances_and_canonical_answers(
+            task=task,
+            instance_space=submission.instance_space,
+            canonical_answer_json=submission.canonical_answer_json,
+            anchor_entity=submission.anchor_entity,
+        )
+        materialized_at = datetime.now(timezone.utc)
+        environment = self._materialize_environment(
+            atomic_tool_bundle=atomic_tool_bundle,
+            db_id=db_id,
+            requested_topic=requested_topic,
+            created_at=materialized_at,
+            materialized_cross_instance_set=materialized_cross_instance_set,
+            task=task,
+            instance_space=submission.instance_space,
+        )
+        return SynthesisEnvironmentDraft(
+            created_at=materialized_at,
+            db_id=db_id,
+            requested_topic=requested_topic,
+            schema_summary=schema_summary,
+            selected_topic=requested_topic,
+            environment=environment,
+            atomic_tool_bundle=atomic_tool_bundle,
+            instances=instances,
+            canonical_answers=canonical_answers,
+            generation_attempts=[],
+            stage_results=[],
+            memory=[],
+            tool_traces=[],
+            provider_status={},
+        )
+
+    @staticmethod
+    def _generation_attempts_from_submit_records(
+        *,
+        controller: SubmitDraftController,
+        provider: str,
+        model: str,
+    ) -> list[SynthesisGenerationAttempt]:
+        attempts: list[SynthesisGenerationAttempt] = []
+        for record in controller.attempts:
+            error_codes = list(record.error_codes)
+            outcome = SynthesisGenerationOutcome.ARTIFACT_INVALID
+            if record.outcome == "accepted":
+                outcome = SynthesisGenerationOutcome.PASSED
+            elif "reject_too_easy" in error_codes:
+                outcome = SynthesisGenerationOutcome.DIFFICULTY_CRANK_INVALID
+            elif "reject_too_hard" in error_codes:
+                outcome = SynthesisGenerationOutcome.DIFFICULTY_WEAKENED
+            attempts.append(
+                SynthesisGenerationAttempt(
+                    attempt_index=record.index,
+                    outcome=outcome,
+                    provider=provider,
+                    model=model,
+                    memory_summary=record.message,
+                    error_message=None if record.outcome == "accepted" else record.message,
+                    artifact_diagnostics=(
+                        SynthesisArtifactDiagnostics(error_codes=error_codes)
+                        if error_codes
+                        else None
+                    ),
+                )
+            )
+        return attempts
 
     async def _run_phase(self, request: SynthesisStageRequest) -> SynthesisStageResult:
         candidate_backends = self.phase_backends.get(request.phase, []) if self.phase_backends else []

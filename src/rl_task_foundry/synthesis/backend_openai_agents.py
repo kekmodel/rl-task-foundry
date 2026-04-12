@@ -1,4 +1,4 @@
-"""OpenAI Agents SDK-backed synthesis runtime backend."""
+"""OpenAI Agents SDK-backed backend for the single synthesis agent."""
 
 from __future__ import annotations
 
@@ -10,32 +10,33 @@ from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
 
-from pydantic import BaseModel
-
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
-from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.prompts import (
-    build_synthesis_phase_input,
-    build_synthesis_phase_instructions,
+    build_synthesis_agent_instructions,
+    build_synthesis_input,
 )
-from rl_task_foundry.synthesis.runtime import (
-    CategoryInferenceOutput,
-    LabelConstructionOutput,
-    SchemaExplorationOutput,
-    SynthesisMemoryEntry,
-    SynthesisPhase,
-    SynthesisStageRequest,
-    SynthesisStageResult,
-    SynthesisToolTraceEntry,
-    TaskSynthesisOutput,
+from rl_task_foundry.synthesis.submit_draft_tool import (
+    SubmitDraftController,
+    build_submit_draft_sdk_tool,
 )
 from rl_task_foundry.synthesis.tool_runtime import ToolExecutor
+
+
+@dataclass(frozen=True, slots=True)
+class SynthesisConversationResult:
+    provider: str
+    model: str
+    final_output_text: str
+    turn_count: int
+    token_usage: dict[str, int]
+    transcript_ref: str
+    tool_trace_ref: str
+    tool_calls: tuple[str, ...] = ()
 
 
 def _load_sdk_components() -> SimpleNamespace:
     from agents import (
         Agent,
-        AgentOutputSchema,
         ModelSettings,
         OpenAIChatCompletionsModel,
         Runner,
@@ -45,7 +46,6 @@ def _load_sdk_components() -> SimpleNamespace:
 
     return SimpleNamespace(
         Agent=Agent,
-        AgentOutputSchema=AgentOutputSchema,
         AsyncOpenAI=AsyncOpenAI,
         ModelSettings=ModelSettings,
         OpenAIChatCompletionsModel=OpenAIChatCompletionsModel,
@@ -54,8 +54,8 @@ def _load_sdk_components() -> SimpleNamespace:
     )
 
 
-def _trace_stub(kind: str, request: SynthesisStageRequest, provider: str, model: str) -> str:
-    return f"memory://{kind}/{request.db_id}/{request.phase.value}/{provider}/{model}"
+def _trace_stub(kind: str, db_id: str, provider: str, model: str) -> str:
+    return f"memory://{kind}/{db_id}/synthesis/{provider}/{model}"
 
 
 def _extract_token_usage(run_result: Any) -> dict[str, int]:
@@ -99,57 +99,6 @@ def _extract_tool_call_name(item: Any) -> str | None:
     return None
 
 
-def _extract_tool_traces(
-    run_result: Any,
-    *,
-    request: SynthesisStageRequest,
-    provider: str,
-    model: str,
-) -> list[SynthesisToolTraceEntry]:
-    traces: list[SynthesisToolTraceEntry] = []
-    for item in getattr(run_result, "new_items", []) or []:
-        tool_name = _extract_tool_call_name(item)
-        if tool_name is None:
-            continue
-        traces.append(
-            SynthesisToolTraceEntry(
-                phase=request.phase,
-                provider=provider,
-                model=model,
-                tool_name=tool_name,
-                raw_repr=repr(item),
-            )
-        )
-    return traces
-
-
-def _extract_json_object_text(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].strip() == "```":
-            stripped = "\n".join(lines[1:-1]).strip()
-            if stripped.startswith("json"):
-                stripped = stripped[4:].strip()
-    if stripped.startswith("{") and stripped.endswith("}"):
-        return stripped
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return stripped[start : end + 1]
-    return stripped
-
-
-def _phase_output_type(phase: SynthesisPhase) -> type[BaseModel]:
-    if phase == SynthesisPhase.SCHEMA_EXPLORATION:
-        return SchemaExplorationOutput
-    if phase == SynthesisPhase.CATEGORY_INFERENCE:
-        return CategoryInferenceOutput
-    if phase == SynthesisPhase.LABEL_CONSTRUCTION:
-        return LabelConstructionOutput
-    return TaskSynthesisOutput
-
-
 def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(definition, dict):
         raise TypeError("tool definitions must be dict-like payloads")
@@ -160,7 +109,25 @@ def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object:
+def _preview_payload(value: object) -> object:
+    if isinstance(value, str):
+        return value[:400]
+    if isinstance(value, list):
+        return [_preview_payload(item) for item in value[:3]]
+    if isinstance(value, dict):
+        preview: dict[str, object] = {}
+        for key, item in list(value.items())[:6]:
+            preview[str(key)] = _preview_payload(item)
+        return preview
+    return value
+
+
+def _make_sdk_tool(
+    definition: dict[str, Any],
+    executor: ToolExecutor,
+    *,
+    controller: SubmitDraftController,
+) -> object:
     from agents import FunctionTool
     from agents.strict_schema import ensure_strict_json_schema
 
@@ -172,7 +139,12 @@ def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object
             raise ValueError("Tool input must be a JSON object")
         result = executor(payload)
         if hasattr(result, "__await__"):
-            return await result
+            result = await result
+        controller.record_atomic_tool_call(
+            tool_name=str(definition["name"]),
+            params={str(key): value for key, value in payload.items()},
+            result=result,
+        )
         return result
 
     return FunctionTool(
@@ -187,165 +159,17 @@ def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object
 def _build_agent(
     sdk: SimpleNamespace,
     *,
-    request: SynthesisStageRequest,
     model: Any,
-    structured_output: bool,
-    tools: list[object] | None = None,
-) -> Any:
-    output_type: Any | None = None
-    if structured_output:
-        output_type = _phase_output_type(request.phase)
-        output_schema_factory = getattr(sdk, "AgentOutputSchema", None)
-        if output_schema_factory is not None:
-            output_type = output_schema_factory(output_type, strict_json_schema=False)
-    model_settings_kwargs: dict[str, Any] = {"parallel_tool_calls": False}
-    if request.phase == SynthesisPhase.SCHEMA_EXPLORATION and tools:
-        model_settings_kwargs["tool_choice"] = "required"
-    return sdk.Agent(
-        name=f"synthesis-{request.phase.value}",
-        instructions=build_synthesis_phase_instructions(request.phase),
-        model=model,
-        tools=tools or [],
-        output_type=output_type,
-        model_settings=sdk.ModelSettings(**model_settings_kwargs),
-    )
-
-
-def _phase_max_turns(
-    request: SynthesisStageRequest,
-    *,
-    runtime_max_turns: int,
     tools: list[object],
-) -> int:
-    if request.phase == SynthesisPhase.SCHEMA_EXPLORATION and tools:
-        return max(len(tools) * 2, runtime_max_turns)
-    return runtime_max_turns
-
-
-def _normalize_phase_payload(
-    request: SynthesisStageRequest,
-    final_output: Any,
-) -> tuple[BaseModel, list[str]]:
-    output_type = _phase_output_type(request.phase)
-    if isinstance(final_output, output_type):
-        return final_output, []
-    if isinstance(final_output, BaseModel):
-        return output_type.model_validate(final_output.model_dump(mode="python")), []
-    if isinstance(final_output, str):
-        parsed = json.loads(_extract_json_object_text(final_output))
-    elif isinstance(final_output, dict):
-        parsed = final_output
-    else:
-        raise RuntimeError("synthesis backend returned an unsupported final_output type")
-    if not isinstance(parsed, dict):
-        raise RuntimeError("synthesis backend expected a JSON object payload")
-    normalized_payload, repair_codes = _coerce_phase_payload_dict(request, parsed)
-    return output_type.model_validate(normalized_payload), repair_codes
-
-
-def _coerce_phase_payload_dict(
-    request: SynthesisStageRequest,
-    payload: dict[str, Any],
-) -> tuple[dict[str, Any], list[str]]:
-    repair_codes: list[str] = []
-    if request.phase == SynthesisPhase.SCHEMA_EXPLORATION:
-        if {"domain_hypothesis", "candidate_topics", "sample_observations"} <= set(payload):
-            return payload, []
-        candidate_topics: list[str] = []
-        for key in ("candidate_topics", "candidate_categories", "categories"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                for item in value:
-                    if isinstance(item, str) and item.strip():
-                        topic = normalize_topic(item)
-                        if topic not in candidate_topics:
-                            candidate_topics.append(topic)
-        explicit_topic = payload.get("topic") or payload.get("category")
-        if isinstance(explicit_topic, str) and explicit_topic.strip():
-            topic = normalize_topic(explicit_topic)
-            if topic not in candidate_topics:
-                candidate_topics.append(topic)
-        sample_observations = payload.get("sample_observations") or payload.get("observations") or []
-        if not isinstance(sample_observations, list):
-            sample_observations = []
-        normalized = {
-            "domain_hypothesis": payload.get("domain_hypothesis")
-            or payload.get("domain_fit")
-            or "schema exploration completed",
-            "candidate_topics": candidate_topics,
-            "sample_observations": [
-                item.strip() for item in sample_observations if isinstance(item, str) and item.strip()
-            ],
-            "memory_summary": payload.get("memory_summary", "schema exploration completed"),
-        }
-        repair_codes.append("schema_exploration_remapped")
-        return normalized, repair_codes
-
-    if request.phase == SynthesisPhase.CATEGORY_INFERENCE:
-        if {"selected_topic", "rationale"} <= set(payload):
-            return payload, []
-        selected_topic = payload.get("selected_topic") or payload.get("selected_category") or payload.get("topic") or payload.get("category")
-        normalized = {
-            "selected_topic": normalize_topic(selected_topic),
-            "rationale": payload.get("rationale") or "topic inference completed",
-            "memory_summary": payload.get("memory_summary", "topic inference completed"),
-        }
-        repair_codes.append("category_inference_remapped")
-        return normalized, repair_codes
-
-    if request.phase == SynthesisPhase.LABEL_CONSTRUCTION:
-        if {
-            "canonical_answer_json",
-            "anchor_entity",
-            "difficulty_vector",
-            "label_summary",
-        } <= set(payload):
-            return payload, []
-        canonical_answer_json: str | None = None
-        for key in ("canonical_answer_json", "answer_json"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                canonical_answer_json = value.strip()
-                break
-        if canonical_answer_json is None and "canonical_answer" in payload:
-            canonical_answer_json = json.dumps(
-                payload["canonical_answer"],
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-            repair_codes.append("label_construction_answer_jsonized")
-        normalized = {
-            "canonical_answer_json": canonical_answer_json,
-            "anchor_entity": payload.get("anchor_entity") or payload.get("anchor") or {},
-            "difficulty_vector": payload.get("difficulty_vector") or payload.get("difficulty") or {},
-            "instance_parameters": payload.get("instance_parameters") or payload.get("params") or {},
-            "label_summary": payload.get("label_summary")
-            or payload.get("rationale")
-            or "label construction completed",
-            "memory_summary": payload.get("memory_summary", "label construction completed"),
-        }
-        repair_codes.append("label_construction_remapped")
-        return normalized, repair_codes
-
-    if {"question", "constraint_summary", "instance_space"} <= set(payload):
-        return payload, []
-    instance_space = payload.get("instance_space")
-    if instance_space is None and "anchor_query" in payload:
-        instance_space = {
-            "anchor_query": payload.get("anchor_query"),
-            "parameters": payload.get("parameters") or {},
-            "sampling": payload.get("sampling") or {"strategy": "deterministic_hash", "seed": 0},
-            "instance_count": payload.get("instance_count"),
-        }
-        repair_codes.append("task_synthesis_instance_space_nested")
-    normalized = {
-        "question": payload.get("question") or payload.get("user_request") or "",
-        "constraint_summary": payload.get("constraint_summary") or payload.get("constraints") or [],
-        "instance_space": instance_space,
-        "memory_summary": payload.get("memory_summary", "task synthesis completed"),
-    }
-    repair_codes.append("task_synthesis_remapped")
-    return normalized, repair_codes
+) -> Any:
+    return sdk.Agent(
+        name="synthesis",
+        instructions=build_synthesis_agent_instructions(),
+        model=model,
+        tools=tools,
+        output_type=None,
+        model_settings=sdk.ModelSettings(parallel_tool_calls=False),
+    )
 
 
 @dataclass(slots=True)
@@ -353,10 +177,10 @@ class OpenAIAgentsSynthesisBackend:
     model_ref: ModelRef
     provider_config: ProviderConfig
     runtime_config: SynthesisRuntimeConfig
-    session_db_path: Path | None = None
     traces_dir: Path | None = None
     tool_definitions: list[dict[str, Any]] = field(default_factory=list)
     tool_executors: dict[str, ToolExecutor] = field(default_factory=dict)
+    submit_draft_controller: SubmitDraftController | None = None
 
     @property
     def provider_name(self) -> str:
@@ -399,36 +223,45 @@ class OpenAIAgentsSynthesisBackend:
         self.tool_definitions = [dict(definition) for definition in tool_definitions]
         self.tool_executors = dict(tool_executors)
 
+    def bind_submit_draft_controller(self, controller: SubmitDraftController) -> None:
+        self.submit_draft_controller = controller
+
     def _normalized_tool_definitions(self) -> list[dict[str, Any]]:
         return [_normalize_tool_definition(definition) for definition in self.tool_definitions]
 
     def _build_tools(self) -> list[object]:
+        if self.submit_draft_controller is None:
+            raise RuntimeError("submit_draft controller must be bound before run_synthesis")
         sdk_tools: list[object] = []
         for definition in self._normalized_tool_definitions():
             tool_name = str(definition["name"])
             executor = self.tool_executors.get(tool_name)
             if executor is None:
                 continue
-            sdk_tools.append(_make_sdk_tool(definition, executor))
+            sdk_tools.append(
+                _make_sdk_tool(
+                    definition,
+                    executor,
+                    controller=self.submit_draft_controller,
+                )
+            )
+        sdk_tools.append(build_submit_draft_sdk_tool(self.submit_draft_controller))
         return sdk_tools
-
-    def _build_session(self, sdk: SimpleNamespace, request: SynthesisStageRequest) -> Any | None:
-        del sdk, request
-        return None
 
     def _write_artifact(
         self,
         *,
         kind: str,
-        request: SynthesisStageRequest,
+        db_id: str,
+        requested_topic: str,
         payload: dict[str, Any],
     ) -> str:
         if self.traces_dir is None:
-            return _trace_stub(kind, request, self.provider_name, self.model_name)
+            return _trace_stub(kind, db_id, self.provider_name, self.model_name)
         target_dir = self.traces_dir / kind
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / (
-            f"{request.db_id}__{request.phase.value}__{self.provider_name}__{self.model_name}.json"
+            f"{db_id}__{requested_topic}__synthesis__{self.provider_name}__{self.model_name}.json"
         )
         target_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -436,119 +269,81 @@ class OpenAIAgentsSynthesisBackend:
         )
         return str(target_path)
 
-    async def run_stage(self, request: SynthesisStageRequest) -> SynthesisStageResult:
+    async def run_synthesis(
+        self,
+        *,
+        db_id: str,
+        requested_topic: str,
+        domain_name: str,
+        task_language: str,
+        scenario_description: str,
+        schema_summary: dict[str, object],
+        max_turns: int = 50,
+    ) -> SynthesisConversationResult:
         sdk = _load_sdk_components()
         if hasattr(sdk, "set_tracing_disabled"):
             sdk.set_tracing_disabled(
                 disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"
             )
         model = self._build_model(sdk)
-        tools = self._build_tools() if request.phase == SynthesisPhase.SCHEMA_EXPLORATION else []
-        agent = _build_agent(
-            sdk,
-            request=request,
-            model=model,
-            structured_output=True,
-            tools=tools,
-        )
-        session = self._build_session(sdk, request)
-        request_input = build_synthesis_phase_input(request)
-        max_turns = _phase_max_turns(
-            request,
-            runtime_max_turns=self.runtime_config.max_turns,
-            tools=tools,
+        tools = self._build_tools()
+        agent = _build_agent(sdk, model=model, tools=tools)
+        request_input = build_synthesis_input(
+            domain_name=domain_name,
+            scenario_description=scenario_description,
+            requested_topic=requested_topic,
+            task_language=task_language,
+            schema_summary=schema_summary,
         )
         started_at = perf_counter()
-        try:
-            run_result = await sdk.Runner.run(
-                agent,
-                request_input,
-                max_turns=max_turns,
-                session=session,
-            )
-        except Exception as exc:
-            if type(exc).__name__ != "ModelBehaviorError":
-                raise
-            fallback_agent = _build_agent(
-                sdk,
-                request=request,
-                model=model,
-                structured_output=False,
-                tools=tools,
-            )
-            run_result = await sdk.Runner.run(
-                fallback_agent,
-                request_input,
-                max_turns=max_turns,
-                session=None,
-            )
-        latency_ms = int((perf_counter() - started_at) * 1000)
-
-        tool_traces = _extract_tool_traces(
-            run_result,
-            request=request,
-            provider=self.provider_name,
-            model=self.model_name,
+        run_result = await sdk.Runner.run(
+            agent,
+            request_input,
+            max_turns=max_turns,
+            session=None,
         )
-        try:
-            payload_model, payload_repair_codes = _normalize_phase_payload(
-                request, run_result.final_output
-            )
-        except Exception as exc:
-            self._write_artifact(
-                kind="normalize_failures",
-                request=request,
-                payload={
-                    "phase": request.phase.value,
-                    "input": request_input,
-                    "raw_final_output": run_result.final_output,
-                    "latency_ms": latency_ms,
-                    "turn_count": _extract_turn_count(run_result),
-                    "token_usage": _extract_token_usage(run_result),
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                },
-            )
-            raise
+        latency_ms = int((perf_counter() - started_at) * 1000)
+        tool_calls = tuple(
+            tool_name
+            for item in getattr(run_result, "new_items", []) or []
+            if (tool_name := _extract_tool_call_name(item)) is not None
+        )
+        final_output = run_result.final_output
+        final_output_text = final_output if isinstance(final_output, str) else str(final_output or "")
         transcript_ref = self._write_artifact(
             kind="transcripts",
-            request=request,
+            db_id=db_id,
+            requested_topic=requested_topic,
             payload={
-                "phase": request.phase.value,
                 "input": request_input,
-                "final_output": payload_model.model_dump(mode="json"),
-                "payload_repair_codes": payload_repair_codes,
+                "final_output_text": final_output_text,
                 "latency_ms": latency_ms,
                 "turn_count": _extract_turn_count(run_result),
                 "token_usage": _extract_token_usage(run_result),
+                "tool_calls": list(tool_calls),
             },
         )
         tool_trace_ref = self._write_artifact(
             kind="tool_traces",
-            request=request,
+            db_id=db_id,
+            requested_topic=requested_topic,
             payload={
-                "phase": request.phase.value,
-                "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
+                "tool_calls": list(tool_calls),
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", []) or []],
+                "recent_atomic_tool_calls": (
+                    self.submit_draft_controller._atomic_tool_calls[-20:]
+                    if self.submit_draft_controller is not None
+                    else []
+                ),
             },
         )
-        summary = getattr(payload_model, "memory_summary", f"{request.phase.value} completed")
-        memory_entry = SynthesisMemoryEntry(
-            phase=request.phase,
+        return SynthesisConversationResult(
             provider=self.provider_name,
             model=self.model_name,
-            summary=summary if isinstance(summary, str) else f"{request.phase.value} completed",
+            final_output_text=final_output_text,
             turn_count=_extract_turn_count(run_result),
             token_usage=_extract_token_usage(run_result),
             transcript_ref=transcript_ref,
             tool_trace_ref=tool_trace_ref,
-        )
-        return SynthesisStageResult(
-            phase=request.phase,
-            provider=self.provider_name,
-            model=self.model_name,
-            payload=payload_model,
-            payload_repair_codes=payload_repair_codes,
-            memory_entry=memory_entry,
-            tool_traces=tool_traces,
+            tool_calls=tool_calls,
         )

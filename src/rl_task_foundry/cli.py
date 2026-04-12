@@ -418,9 +418,6 @@ def run_real_db_trial(
             console.print(f"solver_ci_low={summary.solver_ci_low}")
         if summary.solver_ci_high is not None:
             console.print(f"solver_ci_high={summary.solver_ci_high}")
-        console.print(f"quality_retry_count={summary.quality_retry_count}")
-        if summary.quality_retry_history:
-            console.print(f"quality_retry_history={list(summary.quality_retry_history)}")
         if summary.registry_status is not None:
             console.print(f"registry_status={summary.registry_status}")
         if summary.registry_env_id is not None:
