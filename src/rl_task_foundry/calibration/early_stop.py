@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-
 EarlyStopDecision = Literal["continue", "accept", "reject_too_easy", "reject_too_hard"]
 
 

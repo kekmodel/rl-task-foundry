@@ -12,8 +12,8 @@ from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, TaskBundleStatus
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.runner import (
-    SynthesisRegistryRunOutcome,
     SynthesisRegistryRunner,
+    SynthesisRegistryRunOutcome,
     load_synthesis_registry,
 )
 from rl_task_foundry.synthesis.runtime import SynthesisCategoryStatus

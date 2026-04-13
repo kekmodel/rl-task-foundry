@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from hashlib import sha256
 
@@ -19,33 +19,26 @@ from rl_task_foundry.pipeline.provider_resilience import (
 )
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
-from rl_task_foundry.synthesis.contracts import (
-    ConstraintKind,
-    ConstraintSummaryItem,
-    DifficultyVectorContract,
-    TaskBundleContract,
-    TaskQualityMetrics,
-    TaskBundleStatus,
-    TopicName,
-    OutputFieldContract,
-    OutputFieldType,
-    OutputSchemaContract,
-    RolloutConstraintsContract,
-    StrictModel,
-    TaskContract,
-    normalize_topic,
-)
-from rl_task_foundry.synthesis.canonicalize import (
-    CanonicalizationError,
-    canonical_json,
-    canonicalize_output,
-)
+from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolBundle,
     AtomicToolFamily,
     AtomicToolGenerator,
 )
-from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
+from rl_task_foundry.synthesis.canonicalize import (
+    canonical_json,
+    canonicalize_output,
+)
+from rl_task_foundry.synthesis.contracts import (
+    RolloutConstraintsContract,
+    StrictModel,
+    TaskBundleContract,
+    TaskBundleStatus,
+    TaskContract,
+    TaskQualityMetrics,
+    TopicName,
+    normalize_topic,
+)
 from rl_task_foundry.synthesis.phase_monitor import (
     PipelinePhaseMonitorLogger,
     default_phase_monitor_log_path,
@@ -60,8 +53,8 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
 )
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
-    build_shuffle_seed,
     bind_atomic_tool_executor,
+    build_shuffle_seed,
     load_atomic_tool_module,
     with_tool_shuffle_seed,
 )

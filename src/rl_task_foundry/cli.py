@@ -12,17 +12,17 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.infra.checkpoint import ensure_checkpoint
 from rl_task_foundry.infra.db import smoke_test_connection
 from rl_task_foundry.infra.storage import summarize_run
-from rl_task_foundry.synthesis.runner import (
-    SynthesisRegistryRunner,
-    load_synthesis_registry,
-)
-from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
+from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
 from rl_task_foundry.synthesis.proof_environment import ProofTaskRunner
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
+)
+from rl_task_foundry.synthesis.runner import (
+    SynthesisRegistryRunner,
+    load_synthesis_registry,
 )
 from rl_task_foundry.synthesis.task_registry import TaskRegistryWriter
 

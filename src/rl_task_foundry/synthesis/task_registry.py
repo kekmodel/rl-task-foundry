@@ -15,23 +15,21 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from datasketch import MinHash, MinHashLSH
 import yaml
+from datasketch import MinHash, MinHashLSH
 
 from rl_task_foundry.config.models import AppConfig, TaskRegistryConfig
-from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
-    TaskBundleContract,
-    TaskBundleStatus,
     OutputFieldContract,
     OutputFieldType,
+    TaskBundleContract,
+    TaskBundleStatus,
     TopicName,
     difficulty_vector_json,
     flatten_difficulty_vector,
     normalize_topic,
 )
-from rl_task_foundry.synthesis.jsonl_logger import JsonlFileSink
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
 
 logger = logging.getLogger(__name__)

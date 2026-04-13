@@ -6,9 +6,9 @@ import pytest
 from pydantic import ValidationError
 
 from rl_task_foundry.synthesis.contracts import (
+    DIFFICULTY_CRANK_ORDER,
     ConstraintKind,
     ConstraintSummaryItem,
-    DIFFICULTY_CRANK_ORDER,
     DifficultyAxis,
     OutputFieldContract,
     OutputFieldType,

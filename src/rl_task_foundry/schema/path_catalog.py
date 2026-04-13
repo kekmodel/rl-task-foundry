@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 
 from rl_task_foundry.schema.graph import ForeignKeyEdge, SchemaGraph
 
-
 DifficultyValue = int | float | str | bool
 
 

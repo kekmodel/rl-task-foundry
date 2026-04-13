@@ -6,11 +6,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.task_registry import (
     DifficultyBand,
     TaskRegistryCoverageEntry,
 )
-from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 
 
 @dataclass(slots=True)

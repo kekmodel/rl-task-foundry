@@ -31,29 +31,29 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
     DifficultyVectorContract,
-    TaskBundleContract,
-    TaskQualityMetrics,
-    TaskBundleStatus,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
+    TaskBundleContract,
+    TaskBundleStatus,
     TaskContract,
+    TaskQualityMetrics,
     difficulty_vector_json,
-)
-from rl_task_foundry.synthesis.task_registry import (
-    TaskRegistryCommitStatus,
-    TaskRegistryWriter,
 )
 from rl_task_foundry.synthesis.phase_monitor import (
     PipelinePhaseMonitorLogger,
 )
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
-from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
+from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.runtime import (
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
     SynthesisTaskDraft,
+)
+from rl_task_foundry.synthesis.task_registry import (
+    TaskRegistryCommitStatus,
+    TaskRegistryWriter,
 )
 
 PROOF_DB_ID = "proof_trip_fixture"

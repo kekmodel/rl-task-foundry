@@ -1178,7 +1178,6 @@ class SubmitDraftController:
             and not _mentions_global_scope(question_body)
         ):
             error_codes.append(SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE)
-        constraint_count = 0
         label_signature = canonical_json(canonical_answer, default=str)
         label_slot_count = _answer_slot_count(canonical_answer)
         blank_paths = _blank_string_paths(canonical_answer)
@@ -1225,16 +1224,12 @@ class SubmitDraftController:
             question_lower = question_body.lower()
             if _contains_entity_placeholder_token(question_lower):
                 error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN)
-            has_raw_identifier_leak = False
-            has_anchor_entity_leak = False
             if _contains_raw_identifier_token(question_lower):
-                has_raw_identifier_leak = True
                 error_codes.append(SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK)
             if _question_repeats_anchor_entity(
                 question_body,
                 anchor_entity=payload.anchor_entity,
             ):
-                has_anchor_entity_leak = True
                 error_codes.append(SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK)
             if any(token in question_lower for token in self.forbidden_question_tokens):
                 error_codes.append(SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK)

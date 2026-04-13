@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-import inspect
 from typing import Protocol
 
-from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
+from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryStatus,
     SynthesisTaskDraft,

@@ -25,8 +25,8 @@ from rl_task_foundry.synthesis.contracts import TaskBundleContract
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
-    build_shuffle_seed,
     bind_atomic_tool_executor,
+    build_shuffle_seed,
     load_atomic_tool_module,
     with_tool_shuffle_seed,
 )

@@ -6,23 +6,18 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from pathlib import Path
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig, DatabaseConfig, DomainConfig
 from rl_task_foundry.infra.checkpoint import CheckpointStore, ensure_checkpoint
 from rl_task_foundry.synthesis.contracts import (
-    TaskBundleStatus,
     StrictModel,
+    TaskBundleStatus,
     normalize_topic,
-)
-from rl_task_foundry.synthesis.task_registry import (
-    TaskRegistryCommitResult,
-    TaskRegistryCommitStatus,
-    TaskRegistryWriter,
 )
 from rl_task_foundry.synthesis.orchestrator import (
     SynthesisDbRegistryEntry,
@@ -34,11 +29,16 @@ from rl_task_foundry.synthesis.phase_monitor import (
     default_phase_monitor_log_path,
 )
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
-from rl_task_foundry.synthesis.runtime import SynthesisAgentRuntime, SynthesisTaskDraft
+from rl_task_foundry.synthesis.runtime import SynthesisAgentRuntime
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
     SynthesisSelectionStatus,
 )
+from rl_task_foundry.synthesis.task_registry import (
+    TaskRegistryCommitStatus,
+    TaskRegistryWriter,
+)
+
 
 class SynthesisRegistryFileEntry(StrictModel):
     db_id: str

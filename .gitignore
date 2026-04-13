@@ -22,5 +22,8 @@ venv/
 output/
 review_packs/
 
+# Worktrees
+.worktrees/
+
 # Environment
 .env

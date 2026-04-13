@@ -32,8 +32,8 @@ from rl_task_foundry.synthesis.task_registry import (
     TaskRegistryDuplicateReason,
     TaskRegistryWriter,
     _SemanticScopeIndex,
-    build_semantic_dedup_text,
     bucketize_difficulty_vector,
+    build_semantic_dedup_text,
 )
 
 

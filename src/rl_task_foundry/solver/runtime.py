@@ -8,6 +8,7 @@ from rl_task_foundry.config.models import StrictModel
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.synthesis.contracts import TaskBundleContract
 
+
 class SolverEpisodeInput(StrictModel):
     task_bundle: TaskBundleContract
     rendered_user_prompt: str

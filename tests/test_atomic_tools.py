@@ -11,8 +11,8 @@ from rl_task_foundry.config.models import AtomicToolConfig
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
 from rl_task_foundry.synthesis import atomic_tools as atomic_tools_module
 from rl_task_foundry.synthesis.atomic_tools import (
-    AtomicToolFamily,
     AtomicToolDefinition,
+    AtomicToolFamily,
     AtomicToolGenerator,
 )
 

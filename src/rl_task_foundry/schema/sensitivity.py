@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from rl_task_foundry.infra.privacy import Visibility, infer_visibility
-
 
 _SAFE_INTERNAL_COLUMN_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
