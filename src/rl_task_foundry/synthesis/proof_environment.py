@@ -180,7 +180,7 @@ class ProofTaskRunner:
         )
         try:
             fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
-            draft = build_proof_task_draft()
+            draft = build_proof_task_draft(config=self.config)
             phase_monitor.emit(
                 phase="draft_build",
                 status="completed",
@@ -315,6 +315,7 @@ def write_proof_fixture_sql(root_dir: Path) -> ProofFixtureSqlFiles:
 
 def build_proof_task_draft(
     *,
+    config: AppConfig,
     created_at: datetime | None = None,
 ) -> SynthesisTaskDraft:
     created_at = created_at or datetime.now(timezone.utc)
@@ -424,9 +425,11 @@ def build_proof_task_draft(
         status=TaskBundleStatus.DRAFT,
         quality_metrics=TaskQualityMetrics(),
         rollout_constraints=RolloutConstraintsContract(
-            max_turns=12,
-            max_episode_duration_ms=90000,
-            max_tool_rows=50,
+            max_turns=config.solver_runtime.max_turns,
+            max_episode_duration_ms=(
+                config.database.statement_timeout_ms * config.solver_runtime.max_turns
+            ),
+            max_tool_rows=config.atomic_tools.bounded_result_limit,
         ),
         task=task,
         anchor_query=AnchorQueryContract(

@@ -1011,8 +1011,8 @@ class SubmitDraftController:
     requested_topic: str
     solver_orchestrator: SolverOrchestrator
     build_draft: Any
+    max_submissions: int
     phase_monitor: PipelinePhaseMonitorLogger | None = None
-    max_submissions: int = 5
     forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
     self_anchor_surface_names: tuple[str, ...] = ()
     accepted_draft: SynthesisTaskDraft | None = None

@@ -39,7 +39,9 @@ def _config(tmp_path: Path):
 
 
 def test_build_proof_task_draft_is_compositional() -> None:
+    config = load_config("rl_task_foundry.yaml")
     draft = build_proof_task_draft(
+        config=config,
         created_at=datetime(2026, 4, 12, tzinfo=timezone.utc)
     )
 
@@ -53,6 +55,18 @@ def test_build_proof_task_draft_is_compositional() -> None:
     assert root.unique_elements is True
     assert len(draft.task_bundle.task.constraint_summary) == 4
     assert len(draft.canonical_answer) == 3
+    assert (
+        draft.task_bundle.rollout_constraints.max_turns
+        == config.solver_runtime.max_turns
+    )
+    assert (
+        draft.task_bundle.rollout_constraints.max_episode_duration_ms
+        == config.database.statement_timeout_ms * config.solver_runtime.max_turns
+    )
+    assert (
+        draft.task_bundle.rollout_constraints.max_tool_rows
+        == config.atomic_tools.bounded_result_limit
+    )
     assert "# Submit Result Format" in draft.rendered_user_prompt
     assert "연속된 day의 city는 인접한 지역이어야 합니다." in draft.rendered_user_prompt
 
