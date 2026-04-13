@@ -588,9 +588,9 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             semantic_key="proof_city_links:city_id_eq",
         ),
         AtomicToolDefinition(
-            name="traverse_proof_city_to_proof_lodging_via_city_id",
+            name="traverse_proof_city_to_proof_lodging_by_city_id",
             family=AtomicToolFamily.T4_FK_TRAVERSAL,
-            description="One-hop traversal from proof city to proof lodgings.",
+            description="From a proof city, get all linked proof lodging rows.",
             params_schema={
                 "type": "object",
                 "properties": {
@@ -621,9 +621,9 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             semantic_key="proof_cities->proof_lodgings:city_id",
         ),
         AtomicToolDefinition(
-            name="traverse_proof_city_to_proof_activity_via_city_id",
+            name="traverse_proof_city_to_proof_activity_by_city_id",
             family=AtomicToolFamily.T4_FK_TRAVERSAL,
-            description="One-hop traversal from proof city to proof activities.",
+            description="From a proof city, get all linked proof activity rows.",
             params_schema={
                 "type": "object",
                 "properties": {
@@ -704,7 +704,7 @@ async def list_proof_city_link_by_city_id_eq(conn, city_id, limit):
     return [dict(row) for row in rows]
 
 
-async def traverse_proof_city_to_proof_lodging_via_city_id(conn, city_id, limit):
+async def traverse_proof_city_to_proof_lodging_by_city_id(conn, city_id, limit):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
@@ -720,7 +720,7 @@ async def traverse_proof_city_to_proof_lodging_via_city_id(conn, city_id, limit)
     return [dict(row) for row in rows]
 
 
-async def traverse_proof_city_to_proof_activity_via_city_id(conn, city_id, limit):
+async def traverse_proof_city_to_proof_activity_by_city_id(conn, city_id, limit):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"

@@ -253,26 +253,29 @@ def test_atomic_tool_generator_is_deterministic_and_covers_tool_families() -> No
     assert "filter_customer_by_tier_like" in names
     assert "filter_order_by_total_amount_range" in names
     assert "distinct_order_status" in names
-    assert "traverse_order_to_customer_via_customer_id" in names
-    assert "traverse_customer_to_order_via_customer_id" in names
+    assert "traverse_order_to_customer_by_customer_id" in names
+    assert "traverse_customer_to_order_by_customer_id" in names
     assert "count_order_by_status_eq" in names
     assert "sum_order_total_amount_by_status_eq" in names
     assert "top_k_order_by_total_amount_asc" in names
     assert "top_k_order_by_total_amount_asc_where_status_eq" in names
-    assert "top_k_order_grouped_by_customer_id_sum_total_amount_desc" in names
-    assert "top_k_order_grouped_by_customer_id_sum_total_amount_desc_where_status_eq" in names
-    assert tool_by_name["get_customer_by_id"].description == "Get customer for given primary key."
+    assert "top_customer_id_by_sum_order_total_amount_desc" in names
+    assert "top_customer_id_by_sum_order_total_amount_desc_where_status_eq" in names
+    assert (
+        tool_by_name["get_customer_by_id"].description
+        == "Look up a single customer by its primary key. Returns one row or nothing."
+    )
     assert (
         tool_by_name["top_k_order_by_total_amount_asc"].description
-        == "Get top order rows ordered by total amount ascending."
+        == "Get the top order rows, sorted by total amount ascending."
     )
     assert (
         tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].description
-        == "Get top order rows for given status, ordered by total amount ascending."
+        == "Get order rows for a specific status, sorted by total amount ascending."
     )
     assert (
-        tool_by_name["top_k_order_grouped_by_customer_id_sum_total_amount_desc"].description
-        == "Get top customer id groups for order, ordered by sum total amount descending."
+        tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].description
+        == "Rank customer id groups by their sum total amount in order, descending."
     )
 
 
@@ -298,7 +301,7 @@ def test_atomic_tool_generator_applies_deterministic_compression_priority() -> N
     assert len(bundle.tools) <= 26
     assert "get_customer_by_id" in names
     assert "filter_customer_by_tier_eq" in names
-    assert "traverse_order_to_customer_via_customer_id" in names
+    assert "traverse_order_to_customer_by_customer_id" in names
     assert all(tool.family != AtomicToolFamily.T6_FILTERED_AGGREGATE for tool in bundle.tools)
     assert all(tool.family != AtomicToolFamily.T8_GROUPED_AGGREGATE_TOP_K for tool in bundle.tools)
     assert all(tool.family != AtomicToolFamily.T7_SORTED_TOP_K for tool in bundle.tools)
@@ -340,7 +343,7 @@ def test_atomic_tool_generator_applies_seeded_row_shuffle_to_unordered_tools_onl
     assert "ORDER BY t.\"total_amount\" ASC," in tool_by_name["top_k_order_by_total_amount_asc"].sql
     assert "md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($2::text, ''))) ASC" in tool_by_name["top_k_order_by_total_amount_asc"].sql
     assert "md5(" not in tool_by_name["count_customer"].sql
-    assert "md5(" not in tool_by_name["top_k_order_grouped_by_customer_id_sum_total_amount_desc"].sql
+    assert "md5(" not in tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].sql
 
 
 def test_atomic_multi_row_tools_require_limit_param_with_runtime_cap() -> None:
@@ -351,14 +354,14 @@ def test_atomic_multi_row_tools_require_limit_param_with_runtime_cap() -> None:
     assert "limit" in tool_by_name["filter_customer_by_tier_eq"].params_schema["required"]
     assert "limit" in tool_by_name["filter_order_by_total_amount_range"].params_schema["required"]
     assert "limit" in tool_by_name["distinct_order_status"].params_schema["required"]
-    assert "limit" in tool_by_name["traverse_customer_to_order_via_customer_id"].params_schema["required"]
+    assert "limit" in tool_by_name["traverse_customer_to_order_by_customer_id"].params_schema["required"]
     assert tool_by_name["top_k_order_by_total_amount_asc"].params_schema["required"] == ["limit"]
     assert "limit" in tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].params_schema["required"]
-    assert tool_by_name["top_k_order_grouped_by_customer_id_sum_total_amount_desc"].params_schema["required"] == [
+    assert tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].params_schema["required"] == [
         "limit"
     ]
     assert "limit" in tool_by_name[
-        "top_k_order_grouped_by_customer_id_sum_total_amount_desc_where_status_eq"
+        "top_customer_id_by_sum_order_total_amount_desc_where_status_eq"
     ].params_schema["required"]
     assert tool_by_name["count_customer"].params_schema["required"] == []
     assert tool_by_name["count_order_by_status_eq"].params_schema["required"] == ["value"]
@@ -394,14 +397,14 @@ def test_grouped_aggregate_rounds_avg_and_float_sum_with_configured_precision() 
     )
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
-    avg_sql = tool_by_name["top_k_customer_grouped_by_tier_avg_score_desc"].sql
-    float_sum_sql = tool_by_name["top_k_order_grouped_by_customer_id_sum_total_amount_desc"].sql
-    count_sql = tool_by_name["top_k_order_grouped_by_customer_id_count_order_id_desc"].sql
+    avg_sql = tool_by_name["top_tier_by_avg_customer_score_desc"].sql
+    float_sum_sql = tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].sql
+    count_sql = tool_by_name["top_customer_id_by_count_order_desc"].sql
 
     assert "ROUND(AVG(t.\"score\")::numeric, 2) AS value" in avg_sql
     assert "ROUND(SUM(t.\"total_amount\")::numeric, 2) AS value" in float_sum_sql
     assert "COUNT(t.\"order_id\")::bigint AS value" in count_sql
-    assert tool_by_name["top_k_customer_grouped_by_tier_avg_score_desc"].returns_schema == {
+    assert tool_by_name["top_tier_by_avg_customer_score_desc"].returns_schema == {
         "type": "array",
         "items": {
             "type": "object",
@@ -414,7 +417,7 @@ def test_grouped_aggregate_rounds_avg_and_float_sum_with_configured_precision() 
         },
         "maxItems": 100,
     }
-    assert tool_by_name["top_k_order_grouped_by_customer_id_count_order_id_desc"].returns_schema == {
+    assert tool_by_name["top_customer_id_by_count_order_desc"].returns_schema == {
         "type": "array",
         "items": {
             "type": "object",

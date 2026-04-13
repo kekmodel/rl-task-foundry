@@ -82,7 +82,7 @@ def _sample_atomic_tool_bundle(db_id: str = "sakila") -> AtomicToolBundle:
             AtomicToolDefinition(
                 name="get_customer_by_id",
                 family=AtomicToolFamily.T1_POINT_LOOKUP,
-                description="Get customer for given primary key.",
+                description="Look up a single customer by its primary key. Returns one row or nothing.",
                 params_schema={"type": "object", "properties": {"customer_id": {"type": "integer"}}},
                 returns_schema={
                     "type": "object",
@@ -364,7 +364,7 @@ async def test_synthesize_environment_draft_rejects_assignment_topic_when_tool_s
                 AtomicToolDefinition(
                     name="get_staff_by_id",
                     family=AtomicToolFamily.T1_POINT_LOOKUP,
-                    description="Get staff for given primary key.",
+                    description="Look up a single staff by its primary key. Returns one row or nothing.",
                     params_schema={"type": "object", "properties": {"staff_id": {"type": "integer"}}},
                     returns_schema={"type": "object", "properties": {}},
                     sql="SELECT 1",
@@ -515,7 +515,7 @@ async def test_submit_draft_rejects_labels_derivable_from_single_tool_call(
         build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_store_to_customer_via_store_id",
+        tool_name="traverse_store_to_customer_by_store_id",
         params={"store_id": 1, "limit": 3},
         result=[
             {"customer_id": 1},
@@ -556,7 +556,7 @@ async def test_submit_draft_rejects_identifier_only_labels_even_when_multi_obser
         result={"store_id": 1},
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_store_to_address_via_address_id",
+        tool_name="traverse_store_to_address_by_address_id",
         params={"store_id": 1},
         result={"address_id": 1},
     )
@@ -593,7 +593,7 @@ async def test_submit_draft_rejects_questions_misaligned_with_assignment_topic(
         result={"payment_id": 10, "amount": "4.99"},
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_payment_to_rental_via_rental_id",
+        tool_name="traverse_payment_to_rental_by_rental_id",
         params={"payment_id": 10},
         result={"rental_id": 20},
     )
@@ -630,7 +630,7 @@ async def test_submit_draft_rejects_string_values_not_grounded_in_tool_results(
         result={"store_id": 1},
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_store_to_staff_via_manager_staff_id",
+        tool_name="traverse_store_to_staff_by_manager_staff_id",
         params={"store_id": 1},
         result={"staff_id": 1},
     )

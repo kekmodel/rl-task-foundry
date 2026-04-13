@@ -304,7 +304,7 @@ class AtomicToolGenerator:
         target_table = graph.get_table(edge.target_table, schema_name=edge.target_schema)
         source_slug = table_slugs[(source_table.schema_name, source_table.table_name)]
         target_slug = table_slugs[(target_table.schema_name, target_table.table_name)]
-        fk_slug = "_".join(edge.source_columns)
+        join_column_slug = "_".join(edge.source_columns)
         source_projection = _projection_columns(source_table)
         target_projection = _projection_columns(target_table)
         if not source_table.primary_key or not target_table.primary_key:
@@ -334,11 +334,11 @@ class AtomicToolGenerator:
         )
         return [
             AtomicToolDefinition(
-                name=f"traverse_{source_slug}_to_{target_slug}_via_{fk_slug}",
+                name=f"traverse_{source_slug}_to_{target_slug}_by_{join_column_slug}",
                 family=AtomicToolFamily.T4_FK_TRAVERSAL,
                 description=(
-                    f"Get {humanize_identifier(target_slug)} for given "
-                    f"{humanize_identifier(source_slug)}."
+                    f"From a {humanize_identifier(source_slug)}, get the linked "
+                    f"{humanize_identifier(target_slug)} record. Returns one row."
                 ),
                 params_schema=_pk_params_schema(source_table),
                 returns_schema=_nullable_object_schema(target_projection),
@@ -347,11 +347,11 @@ class AtomicToolGenerator:
                 semantic_key=f"{source_table.qualified_name}->{edge.constraint_name}->{target_table.qualified_name}:forward",
             ),
             AtomicToolDefinition(
-                name=f"traverse_{target_slug}_to_{source_slug}_via_{fk_slug}",
+                name=f"traverse_{target_slug}_to_{source_slug}_by_{join_column_slug}",
                 family=AtomicToolFamily.T4_FK_TRAVERSAL,
                 description=(
-                    f"Get {humanize_identifier(source_slug)} rows for given "
-                    f"{humanize_identifier(target_slug)}."
+                    f"From a {humanize_identifier(target_slug)}, get all linked "
+                    f"{humanize_identifier(source_slug)} rows."
                 ),
                 params_schema=_with_limit_param(
                     _pk_params_schema(target_table),
@@ -384,7 +384,10 @@ class AtomicToolGenerator:
         return AtomicToolDefinition(
             name=f"get_{table_slug}_by_id",
             family=AtomicToolFamily.T1_POINT_LOOKUP,
-            description=f"Get {humanize_identifier(table_slug)} for given primary key.",
+            description=(
+                f"Look up a single {humanize_identifier(table_slug)} by its primary key. "
+                "Returns one row or nothing."
+            ),
             params_schema=_pk_params_schema(table),
             returns_schema=_nullable_object_schema(projection_columns),
             sql=sql,
@@ -410,7 +413,9 @@ class AtomicToolGenerator:
         return AtomicToolDefinition(
             name=f"get_{table_slug}_by_ids_batch",
             family=AtomicToolFamily.T1_POINT_LOOKUP,
-            description=f"Get {humanize_identifier(table_slug)} rows for given primary key values.",
+            description=(
+                f"Look up multiple {humanize_identifier(table_slug)} rows by a list of primary keys."
+            ),
             params_schema=_array_params_schema(
                 "ids",
                 items_schema=_non_null_json_schema_for_column(pk_column),
@@ -436,7 +441,7 @@ class AtomicToolGenerator:
         return AtomicToolDefinition(
             name=f"count_{table_slug}",
             family=AtomicToolFamily.T2_BOUNDED_ENUMERATION,
-            description=f"Get row count for {humanize_identifier(table_slug)}.",
+            description=f"Count total number of {humanize_identifier(table_slug)} rows.",
             params_schema=_empty_params_schema(),
             returns_schema={"type": "integer"},
             sql=sql,
@@ -470,7 +475,9 @@ class AtomicToolGenerator:
         return AtomicToolDefinition(
             name=f"list_{table_slug}_ids",
             family=AtomicToolFamily.T2_BOUNDED_ENUMERATION,
-            description=f"Get primary key ids for {humanize_identifier(table_slug)}.",
+            description=(
+                f"List {humanize_identifier(table_slug)} primary keys, up to a given limit."
+            ),
             params_schema=_limit_only_params_schema(max_items=self.config.bounded_result_limit),
             returns_schema=returns_schema,
             sql=sql,
@@ -500,7 +507,7 @@ class AtomicToolGenerator:
             name=f"filter_{table_slug}_by_{column.column_name}_eq",
             family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
             description=(
-                f"Get {humanize_identifier(table_slug)} rows for given "
+                f"Find all {humanize_identifier(table_slug)} rows for a specific "
                 f"{humanize_identifier(column.column_name)}."
             ),
             params_schema=_with_limit_param(
@@ -541,7 +548,7 @@ class AtomicToolGenerator:
             name=f"filter_{table_slug}_by_{column.column_name}_in",
             family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
             description=(
-                f"Get {humanize_identifier(table_slug)} rows for given "
+                f"Find all {humanize_identifier(table_slug)} rows for a set of "
                 f"{humanize_identifier(column.column_name)} values."
             ),
             params_schema=_with_limit_param(
@@ -586,7 +593,7 @@ class AtomicToolGenerator:
             name=f"filter_{table_slug}_by_{column.column_name}_range",
             family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
             description=(
-                f"Get {humanize_identifier(table_slug)} rows for given "
+                f"Find {humanize_identifier(table_slug)} rows within a "
                 f"{humanize_identifier(column.column_name)} range."
             ),
             params_schema=_with_limit_param(
@@ -630,8 +637,8 @@ class AtomicToolGenerator:
             name=f"filter_{table_slug}_by_{column.column_name}_like",
             family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
             description=(
-                f"Get {humanize_identifier(table_slug)} rows for given "
-                f"{humanize_identifier(column.column_name)} pattern."
+                f"Search {humanize_identifier(table_slug)} rows by "
+                f"{humanize_identifier(column.column_name)} pattern (case-insensitive)."
             ),
             params_schema=_with_limit_param(
                 _single_value_params_schema(
@@ -673,7 +680,7 @@ class AtomicToolGenerator:
             name=f"distinct_{table_slug}_{column.column_name}",
             family=AtomicToolFamily.T5_DISTINCT_VALUES,
             description=(
-                f"Get distinct {humanize_identifier(column.column_name)} values for "
+                f"List all distinct {humanize_identifier(column.column_name)} values that appear in "
                 f"{humanize_identifier(table_slug)}."
             ),
             params_schema=_limit_only_params_schema(max_items=self.config.bounded_result_limit),
@@ -706,7 +713,7 @@ class AtomicToolGenerator:
             name=f"count_{table_slug}_by_{filter_column.column_name}_eq",
             family=AtomicToolFamily.T6_FILTERED_AGGREGATE,
             description=(
-                f"Get count of {humanize_identifier(table_slug)} rows for given "
+                f"Count how many {humanize_identifier(table_slug)} rows match a specific "
                 f"{humanize_identifier(filter_column.column_name)}."
             ),
             params_schema=_single_value_params_schema(
@@ -752,8 +759,8 @@ class AtomicToolGenerator:
                     ),
                     family=AtomicToolFamily.T6_FILTERED_AGGREGATE,
                     description=(
-                        f"Get {aggregate_name} {humanize_identifier(metric.column_name)} for "
-                        f"{humanize_identifier(table_slug)} rows with given "
+                        f"Get the {_aggregate_phrase(aggregate_name, metric.column_name)} for "
+                        f"{humanize_identifier(table_slug)} rows matching a specific "
                         f"{humanize_identifier(filter_column.column_name)}."
                     ),
                     params_schema=_single_value_params_schema(
@@ -808,9 +815,9 @@ class AtomicToolGenerator:
             if filter_column is None:
                 name = f"top_k_{table_slug}_by_{sort_column.column_name}_{direction_slug}"
                 description = (
-                    f"Get top {humanize_identifier(table_slug)} rows ordered by "
+                    f"Get the top {humanize_identifier(table_slug)} rows, sorted by "
                     f"{humanize_identifier(sort_column.column_name)} "
-                    f"{'ascending' if direction_slug == 'asc' else 'descending'}."
+                    f"{_direction_word(direction_slug)}."
                 )
                 params_schema = _limit_only_params_schema(max_items=self.config.bounded_result_limit)
                 semantic_key = (
@@ -822,10 +829,10 @@ class AtomicToolGenerator:
                     f"_where_{filter_column.column_name}_eq"
                 )
                 description = (
-                    f"Get top {humanize_identifier(table_slug)} rows for given "
-                    f"{humanize_identifier(filter_column.column_name)}, ordered by "
+                    f"Get {humanize_identifier(table_slug)} rows for a specific "
+                    f"{humanize_identifier(filter_column.column_name)}, sorted by "
                     f"{humanize_identifier(sort_column.column_name)} "
-                    f"{'ascending' if direction_slug == 'asc' else 'descending'}."
+                    f"{_direction_word(direction_slug)}."
                 )
                 params_schema = _with_limit_param(
                     _single_value_params_schema(
@@ -893,15 +900,18 @@ class AtomicToolGenerator:
                 """
             )
             if filter_column is None:
-                name = (
-                    f"top_k_{table_slug}_grouped_by_{group_column.column_name}_"
-                    f"{aggregate_name}_{metric.column_name}_{direction_slug}"
+                name = _grouped_aggregate_tool_name(
+                    group_column=group_column.column_name,
+                    aggregate_name=aggregate_name,
+                    table_slug=table_slug,
+                    metric_column=metric.column_name,
+                    direction_slug=direction_slug,
+                    filter_column=None,
                 )
                 description = (
-                    f"Get top {humanize_identifier(group_column.column_name)} groups for "
-                    f"{humanize_identifier(table_slug)}, ordered by "
-                    f"{aggregate_name} {humanize_identifier(metric.column_name)} "
-                    f"{'ascending' if direction_slug == 'asc' else 'descending'}."
+                    f"Rank {humanize_identifier(group_column.column_name)} groups by their "
+                    f"{_aggregate_phrase(aggregate_name, metric.column_name)} in "
+                    f"{humanize_identifier(table_slug)}, {_direction_word(direction_slug)}."
                 )
                 params_schema = _limit_only_params_schema(max_items=self.config.bounded_result_limit)
                 semantic_key = (
@@ -909,17 +919,19 @@ class AtomicToolGenerator:
                     f"group_by:{group_column.column_name}:{direction_slug}:all"
                 )
             else:
-                name = (
-                    f"top_k_{table_slug}_grouped_by_{group_column.column_name}_"
-                    f"{aggregate_name}_{metric.column_name}_{direction_slug}"
-                    f"_where_{filter_column.column_name}_eq"
+                name = _grouped_aggregate_tool_name(
+                    group_column=group_column.column_name,
+                    aggregate_name=aggregate_name,
+                    table_slug=table_slug,
+                    metric_column=metric.column_name,
+                    direction_slug=direction_slug,
+                    filter_column=filter_column.column_name,
                 )
                 description = (
-                    f"Get top {humanize_identifier(group_column.column_name)} groups for "
-                    f"{humanize_identifier(table_slug)} rows with given "
-                    f"{humanize_identifier(filter_column.column_name)}, ordered by "
-                    f"{aggregate_name} {humanize_identifier(metric.column_name)} "
-                    f"{'ascending' if direction_slug == 'asc' else 'descending'}."
+                    f"Rank {humanize_identifier(group_column.column_name)} groups for a specific "
+                    f"{humanize_identifier(filter_column.column_name)} by their "
+                    f"{_aggregate_phrase(aggregate_name, metric.column_name)} in "
+                    f"{humanize_identifier(table_slug)}, {_direction_word(direction_slug)}."
                 )
                 params_schema = _with_limit_param(
                     _single_value_params_schema(
@@ -1577,6 +1589,46 @@ def _signature_param_parts(params_schema: dict[str, Any]) -> list[str]:
     signature_parts = [name for name in properties if name in required]
     signature_parts.extend(f"{name}=None" for name in properties if name not in required)
     return signature_parts
+
+
+def _direction_word(direction_slug: str) -> str:
+    return "ascending" if direction_slug == "asc" else "descending"
+
+
+def _aggregate_word(aggregate_name: str) -> str:
+    return {
+        "avg": "average",
+        "min": "minimum",
+        "max": "maximum",
+    }.get(aggregate_name, aggregate_name)
+
+
+def _aggregate_phrase(aggregate_name: str, metric_column: str) -> str:
+    aggregate_word = _aggregate_word(aggregate_name)
+    if aggregate_name == "count":
+        return aggregate_word
+    return f"{aggregate_word} {humanize_identifier(metric_column)}"
+
+
+def _grouped_aggregate_tool_name(
+    *,
+    group_column: str,
+    aggregate_name: str,
+    table_slug: str,
+    metric_column: str,
+    direction_slug: str,
+    filter_column: str | None,
+) -> str:
+    if aggregate_name == "count":
+        name = f"top_{group_column}_by_count_{table_slug}_{direction_slug}"
+    else:
+        name = (
+            f"top_{group_column}_by_{aggregate_name}_{table_slug}_"
+            f"{metric_column}_{direction_slug}"
+        )
+    if filter_column is not None:
+        name += f"_where_{filter_column}_eq"
+    return name
 
 
 def readonly_query(sql: str) -> str:
