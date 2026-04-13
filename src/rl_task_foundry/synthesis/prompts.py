@@ -199,6 +199,23 @@ def build_synthesis_input(
 
     tool_surface_lines: list[str] = []
     self_anchor_lines: list[str] = []
+    family_counts = tool_surface_summary.get("family_counts")
+    tool_count = tool_surface_summary.get("tool_count")
+    if isinstance(tool_count, int):
+        tool_surface_lines.append(f"- Total atomic tools: {tool_count}")
+    if isinstance(family_counts, dict):
+        ordered_family_lines = [
+            ("get", "retrieve one entry by ID"),
+            ("find", "find entries that match a condition"),
+            ("calc", "compute one statistic over matching entries"),
+            ("rank", "rank groups by a statistic"),
+        ]
+        for family_name, meaning in ordered_family_lines:
+            count = family_counts.get(family_name)
+            if isinstance(count, int) and count > 0:
+                tool_surface_lines.append(
+                    f"- {family_name}: {count} tools available; use these to {meaning}."
+                )
     surfaces = tool_surface_summary.get("entity_surfaces")
     if isinstance(surfaces, list):
         for item in surfaces[: runtime_config.prompt_tool_surface_hint_limit]:

@@ -311,7 +311,9 @@ def summarize_atomic_tool_surface(
 ) -> dict[str, object]:
     entity_surfaces: list[dict[str, object]] = []
     self_anchor_surfaces: list[str] = []
+    family_counts: dict[str, int] = {}
     for tool in bundle.tools:
+        family_counts[tool.family.value] = family_counts.get(tool.family.value, 0) + 1
         if tool.family is not AtomicToolFamily.GET:
             continue
         properties = _tool_return_properties(tool.returns_schema)
@@ -338,6 +340,8 @@ def summarize_atomic_tool_surface(
         )
     )
     return {
+        "tool_count": len(bundle.tools),
+        "family_counts": family_counts,
         "entity_surfaces": entity_surfaces[:max_entity_surfaces],
         "self_anchor_surfaces": self_anchor_surfaces[:max_entity_surfaces],
     }

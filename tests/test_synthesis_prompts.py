@@ -30,21 +30,23 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
             ],
         },
         tool_surface_summary={
+            "tool_count": 4,
+            "family_counts": {"get": 2, "find": 1, "calc": 1},
             "entity_surfaces": [
                 {
-                    "tool_name": "get_customer_by_id",
+                    "tool_name": "get_customer",
                     "readable_fields": ["first_name", "last_name"],
                 },
                 {
-                    "tool_name": "get_staff_by_id",
+                    "tool_name": "get_staff",
                     "readable_fields": [],
                 },
                 {
-                    "tool_name": "traverse_customer_to_order_by_customer_id",
+                    "tool_name": "find_order_by_customer_id",
                     "readable_fields": ["status", "total_amount"],
                 },
             ],
-            "self_anchor_surfaces": ["get_customer_by_id", "get_staff_by_id"],
+            "self_anchor_surfaces": ["get_customer", "get_staff"],
         },
     )
 
@@ -57,10 +59,14 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "# User-Facing Language" in prompt
     assert "public.customer" in prompt
     assert "public.rental" in prompt
-    assert "get_customer_by_id: readable fields=['first_name', 'last_name']" in prompt
-    assert "get_staff_by_id: readable fields=[] (id-only surface)" in prompt
-    assert "traverse_customer_to_order_by_customer_id: readable fields=['status', 'total_amount']" in prompt
-    assert "Person-like self anchor surfaces are available: get_customer_by_id, get_staff_by_id." in prompt
+    assert "Total atomic tools: 4" in prompt
+    assert "get: 2 tools available; use these to retrieve one entry by ID." in prompt
+    assert "find: 1 tools available; use these to find entries that match a condition." in prompt
+    assert "calc: 1 tools available; use these to compute one statistic over matching entries." in prompt
+    assert "get_customer: readable fields=['first_name', 'last_name']" in prompt
+    assert "get_staff: readable fields=[] (id-only surface)" in prompt
+    assert "find_order_by_customer_id: readable fields=['status', 'total_amount']" in prompt
+    assert "Person-like self anchor surfaces are available: get_customer, get_staff." in prompt
     assert "Use text answer fields only from surfaces that already expose readable non-identifier fields" in prompt
     assert "Korean" in prompt
     assert "Coverage hint: record history" in prompt
@@ -165,7 +171,7 @@ def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules(
                 }
             ],
         },
-        tool_surface_summary={"entity_surfaces": []},
+        tool_surface_summary={"tool_count": 0, "family_counts": {}, "entity_surfaces": []},
     )
 
     assert "# Topic Semantics" in prompt
