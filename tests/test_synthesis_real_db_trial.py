@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -157,9 +155,9 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert summary.registry_status is TaskRegistryCommitStatus.COMMITTED
     assert summary.bundle_root == output_root / "bundle"
     assert exporter.calls == [(output_root / "bundle", accepted_draft.task_bundle.task_id)]
-    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
-    assert payload["trial_status"] == "accepted"
-    assert payload["task_id"] == "task_real_trial"
+    assert not (output_root / "trial_summary.json").exists()
+    assert summary.task_id == "task_real_trial"
+    assert summary.phase_monitor_log_path == output_root / "debug" / "phase_monitors.jsonl"
     assert registry.closed is True
 
 

@@ -835,24 +835,11 @@ class SynthesisAgentRuntime:
         selected_topic = normalize_topic(submission.topic)
         canonical_input = submission.canonical_answer
         output_schema = extract_output_schema_from_canonical(canonical_input)
-        normalized_constraints = [
-            ConstraintSummaryItem(
-                key=item.key,
-                kind=(
-                    ConstraintKind(item.kind)
-                    if item.kind in {kind.value for kind in ConstraintKind}
-                    else ConstraintKind.OTHER
-                ),
-                summary=item.summary,
-                hard=item.hard,
-            )
-            for item in submission.constraint_summary
-        ]
         task = TaskContract(
             question=submission.question,
             topic=selected_topic,
             output_schema=output_schema,
-            constraint_summary=normalized_constraints,
+            constraint_summary=[],
             difficulty_vector=submission.difficulty_vector,
             instance_parameters=dict(submission.anchor_entity),
         )

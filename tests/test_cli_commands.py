@@ -220,7 +220,6 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 db_id=db_id,
                 requested_topic=topic,
                 trial_status=RealDbTrialStatus.ACCEPTED,
-                summary_path=output_dir / "trial_summary.json",
                 flow_id="flow_trial_test",
                 phase_monitor_log_path=output_dir / "debug" / "phase_monitors.jsonl",
                 task_id="task_real_trial",
@@ -255,7 +254,6 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "flow_id=flow_trial_test" in result.stdout
     assert "task_id=task_real_trial" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
-    assert "summary_path=" in result.stdout
     assert captured["output_dir"] == output_dir
     assert captured["db_id"] == "sakila"
     assert captured["closed"] is True

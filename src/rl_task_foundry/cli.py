@@ -338,7 +338,7 @@ def run_real_db_trial(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
-    """Run a real-database single-task trial and persist a trial summary."""
+    """Run a real-database single-task trial."""
 
     async def _run() -> None:
         config = load_config(config_path)
@@ -398,7 +398,6 @@ def run_real_db_trial(
             console.print(f"synthesis_traces_dir={summary.synthesis_traces_dir}")
         if summary.solver_traces_dir is not None:
             console.print(f"solver_traces_dir={summary.solver_traces_dir}")
-        console.print(f"summary_path={summary.summary_path}")
         if summary.trial_status not in (
             RealDbTrialStatus.ACCEPTED,
             RealDbTrialStatus.REGISTRY_DUPLICATE,

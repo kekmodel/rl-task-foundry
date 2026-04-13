@@ -53,7 +53,6 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_ENTITY_BLOCK_INVALID_JSON = "question_entity_block_invalid_json"
     QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
     QUESTION_BODY_REQUIRED = "question_body_required"
-    CONSTRAINT_SUMMARY_REQUIRED = "constraint_summary_required"
     PLACEHOLDER_TOKENS_NOT_ALLOWED = "placeholder_tokens_not_allowed"
     QUESTION_INTERNAL_SCHEMA_LEAK = "question_internal_schema_leak"
     QUESTION_RAW_IDENTIFIER_LEAK = "question_raw_identifier_leak"
@@ -179,10 +178,6 @@ class SubmitDraftPayload(StrictModel):
             "The entity block must exactly match anchor_entity."
         ),
     )
-    constraint_summary: list["SubmitConstraintSummaryItem"] = Field(
-        min_length=1,
-        description="List of grounded hard constraints or tie-break rules expressed in plain language.",
-    )
 
     @field_validator("canonical_answer_json")
     @classmethod
@@ -215,24 +210,6 @@ class SubmitDraftPayload(StrictModel):
         if isinstance(value, _ParsedCanonicalAnswerJson):
             return value.parsed
         return json.loads(value)
-
-
-class SubmitConstraintSummaryItem(StrictModel):
-    key: str = Field(min_length=1, description="Stable identifier for this constraint.")
-    kind: str = Field(
-        min_length=1,
-        description="Constraint kind such as ordering, uniqueness, membership, or other.",
-    )
-    summary: str = Field(min_length=1, description="Natural-language summary of the constraint.")
-    hard: bool = Field(default=True, description="Whether this constraint is mandatory.")
-
-    @field_validator("key", "kind", "summary")
-    @classmethod
-    def _validate_non_blank_constraint_text(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("constraint fields must not be blank")
-        return normalized
 
 
 SubmitDraftPayload.model_rebuild()
@@ -307,12 +284,6 @@ def _placeholder_tokens(payload: object) -> list[str]:
     return sorted({token for token in _FORBIDDEN_PLACEHOLDER_TOKENS if token in serialized})
 
 
-def _constraint_summary_payload(
-    items: list[SubmitConstraintSummaryItem | dict[str, object]],
-) -> list[dict[str, object]]:
-    return [SubmitConstraintSummaryItem.model_validate(item).model_dump(mode="json") for item in items]
-
-
 def _preview_runtime_payload(value: object, *, config: AppConfig) -> object:
     return preview_payload(
         value,
@@ -378,21 +349,13 @@ def _monitor_label_data(
             "canonical_answer_root_type": None,
             "canonical_answer_slot_count": None,
             "canonical_answer_field_names": [],
-            "constraint_summary": [],
         }
 
     if isinstance(payload, SubmitDraftPayload):
         canonical_answer = payload.canonical_answer
-        constraint_summary = _constraint_summary_payload(payload.constraint_summary)
     else:
         canonical_answer = None
         raw_canonical = payload.get("canonical_answer_json")
-        raw_constraints = payload.get("constraint_summary")
-        constraint_summary = (
-            _preview_runtime_payload(raw_constraints, config=config)
-            if isinstance(raw_constraints, list)
-            else []
-        )
         if isinstance(raw_canonical, str):
             try:
                 canonical_answer = json.loads(raw_canonical)
@@ -419,7 +382,6 @@ def _monitor_label_data(
             if canonical_answer is not None
             else None
         ),
-        "constraint_summary": constraint_summary,
     }
 
 
@@ -430,10 +392,6 @@ def _label_change_summary(
 ) -> dict[str, object]:
     previous_field_names = list(previous.get("canonical_answer_field_names", [])) if previous else []
     current_field_names = list(current.get("canonical_answer_field_names", []))
-    previous_constraint_summary = (
-        list(previous.get("constraint_summary", [])) if previous else []
-    )
-    current_constraint_summary = list(current.get("constraint_summary", []))
     previous_slot_count = previous.get("canonical_answer_slot_count") if previous else None
     current_slot_count = current.get("canonical_answer_slot_count")
     return {
@@ -446,9 +404,6 @@ def _label_change_summary(
             previous.get("canonical_answer_preview") if previous is not None else None
         ),
         "previous_canonical_answer_slot_count": previous_slot_count,
-        "previous_constraint_count": (
-            len(previous_constraint_summary) if previous is not None else None
-        ),
         "added_field_names": [
             field_name
             for field_name in current_field_names
@@ -462,11 +417,6 @@ def _label_change_summary(
         "slot_count_delta": (
             current_slot_count - previous_slot_count
             if isinstance(current_slot_count, int) and isinstance(previous_slot_count, int)
-            else None
-        ),
-        "constraint_count_delta": (
-            len(current_constraint_summary) - len(previous_constraint_summary)
-            if previous is not None
             else None
         ),
     }
@@ -695,12 +645,9 @@ def _opaque_identifier_value_paths(
 
 def _ungrounded_answer_strings(
     answer: object,
-    tool_calls: list[dict[str, object]],
+    *,
+    observed_strings: set[str],
 ) -> list[str]:
-    observed_strings: set[str] = set()
-    for record in tool_calls:
-        _collect_observed_strings(record.get("result"), strings=observed_strings)
-
     answer_strings: list[str] = []
     _collect_answer_strings(answer, sink=answer_strings)
     ungrounded: list[str] = []
@@ -791,27 +738,10 @@ def _contains_entity_placeholder_token(text: str) -> bool:
     return "<entity>" in lowered or "&lt;entity&gt;" in lowered
 
 
-def _uses_temporal_ordering_language(constraint_summary: list[SubmitConstraintSummaryItem]) -> bool:
-    normalized_parts: list[str] = []
-    for item in constraint_summary:
-        if isinstance(item, SubmitConstraintSummaryItem):
-            key = item.key
-            kind = item.kind
-            summary = item.summary
-        elif isinstance(item, dict):
-            key = str(item.get("key", ""))
-            kind = str(item.get("kind", ""))
-            summary = str(item.get("summary", ""))
-        else:
-            continue
-        normalized_parts.extend(
-            [
-                normalize_words(key, lowercase=True),
-                normalize_words(kind, lowercase=True),
-                normalize_words(summary, lowercase=True),
-            ]
-        )
-    combined = " ".join(part for part in normalized_parts if part)
+def _uses_temporal_ordering_language(text: str | None) -> bool:
+    if not text:
+        return False
+    combined = normalize_words(text, lowercase=True)
     return any(token in combined for token in _TEMPORAL_CONSTRAINT_TOKENS)
 
 
@@ -846,65 +776,41 @@ def _uses_unanchored_global_ranking(
     return False
 
 
-def _mentions_global_scope(
-    question_body: str | None,
-    constraint_summary: list[SubmitConstraintSummaryItem],
-) -> bool:
-    text_parts: list[str] = []
-    if question_body:
-        text_parts.append(normalize_words(question_body, lowercase=True))
-    for item in constraint_summary:
-        if isinstance(item, SubmitConstraintSummaryItem):
-            text_parts.extend(
-                [
-                    normalize_words(item.key, lowercase=True),
-                    normalize_words(item.kind, lowercase=True),
-                    normalize_words(item.summary, lowercase=True),
-                ]
-            )
-        elif isinstance(item, dict):
-            text_parts.extend(
-                [
-                    normalize_words(str(item.get("key", "")), lowercase=True),
-                    normalize_words(str(item.get("kind", "")), lowercase=True),
-                    normalize_words(str(item.get("summary", "")), lowercase=True),
-                ]
-            )
-    combined = " ".join(part for part in text_parts if part)
+def _mentions_global_scope(question_body: str | None) -> bool:
+    combined = normalize_words(question_body or "", lowercase=True)
     return any(token in combined for token in _GLOBAL_SCOPE_TOKENS)
 
 
 def _count_semantics_present(
     answer: object,
-    constraint_summary: list[SubmitConstraintSummaryItem],
+    question_body: str | None,
 ) -> bool:
     if isinstance(answer, dict):
         count_keys = [key for key in answer if isinstance(key, str) and "count" in key.lower()]
         if count_keys:
             return True
-        return any(_count_semantics_present(item, constraint_summary) for item in answer.values())
+        return any(_count_semantics_present(item, question_body) for item in answer.values())
     if isinstance(answer, list):
-        return any(_count_semantics_present(item, constraint_summary) for item in answer)
+        return any(_count_semantics_present(item, question_body) for item in answer)
     if not isinstance(answer, (int, float)):
         return False
-    text_parts: list[str] = []
-    for item in constraint_summary:
-        if isinstance(item, SubmitConstraintSummaryItem):
-            text_parts.extend([item.key, item.kind, item.summary])
-        elif isinstance(item, dict):
-            text_parts.extend(
-                [
-                    str(item.get("key", "")),
-                    str(item.get("kind", "")),
-                    str(item.get("summary", "")),
-                ]
-            )
     combined_tokens: set[str] = set()
-    for part in text_parts:
-        if not part:
-            continue
-        combined_tokens.update(normalize_words(part, lowercase=True).split())
+    combined_tokens.update(normalize_words(question_body or "", lowercase=True).split())
     return not combined_tokens.isdisjoint(_COUNT_SEMANTIC_TOKENS)
+
+
+def _estimated_constraint_count(question_body: str | None) -> int:
+    if not question_body:
+        return 0
+    normalized = normalize_words(question_body, lowercase=True)
+    count = 0
+    if any(token in normalized for token in _TEMPORAL_CONSTRAINT_TOKENS):
+        count += 1
+    if any(token in normalized for token in ("only", "exactly", "must", "should", "tie", "unique")):
+        count += 1
+    if any(token in normalized for token in ("latest", "earliest", "highest", "lowest", "first", "last")):
+        count += 1
+    return count
 
 
 def _observed_count_evidence(tool_calls: list[dict[str, object]]) -> bool:
@@ -1232,6 +1138,7 @@ class SubmitDraftController:
     _last_primary_error_code: SubmitDraftErrorCode | None = field(default=None, init=False)
     _consecutive_primary_error_count: int = field(default=0, init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
+    _observed_response_strings: set[str] = field(default_factory=set, init=False)
 
     def submissions_left(self) -> int:
         return max(0, self.max_submissions - (len(self.attempts) + self._feedback_events))
@@ -1257,6 +1164,7 @@ class SubmitDraftController:
                 "result": _preview_runtime_payload(result, config=self.config),
             }
         )
+        _collect_observed_strings(result, strings=self._observed_response_strings)
 
     def reject_invalid_payload(self, *, parsed: dict[str, object], error: ValidationError) -> str:
         if self.accepted_draft is not None:
@@ -1277,8 +1185,6 @@ class SubmitDraftController:
                 error_codes.append(required_code)
             elif location == ("canonical_answer_json",):
                 error_codes.append(SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID)
-            elif location == ("constraint_summary",):
-                error_codes.append(SubmitDraftErrorCode.CONSTRAINT_SUMMARY_REQUIRED)
             elif location == ("anchor_entity",):
                 if error_type == "value_error":
                     error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED)
@@ -1355,6 +1261,9 @@ class SubmitDraftController:
         search_cost_observations = (
             len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
         )
+        prompt_anchor_entity, question_body, prompt_error = _split_entity_wrapped_prompt(
+            payload.question
+        )
 
         if len(self._raw_atomic_tool_calls) <= self._tool_call_count_at_last_submission:
             error_codes.append(SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION)
@@ -1374,9 +1283,8 @@ class SubmitDraftController:
             not self.self_anchor_surface_names or _anchor_entity_is_person_like(payload.anchor_entity)
         ):
             self._locked_anchor_entity = dict(payload.anchor_entity)
-        if (
-            _uses_temporal_ordering_language(payload.constraint_summary)
-            and not _observed_temporal_surface(self._raw_atomic_tool_calls)
+        if _uses_temporal_ordering_language(question_body) and not _observed_temporal_surface(
+            self._raw_atomic_tool_calls
         ):
             error_codes.append(SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED)
         if not self.attempts:
@@ -1404,15 +1312,11 @@ class SubmitDraftController:
                 "canonical_answer_json": payload.canonical_answer_json,
                 "anchor_entity": payload.anchor_entity,
                 "question": payload.question,
-                "constraint_summary": _constraint_summary_payload(payload.constraint_summary),
             }
         )
         if placeholder_tokens:
             error_codes.append(SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED)
         canonical_answer = payload.canonical_answer
-        prompt_anchor_entity, question_body, prompt_error = _split_entity_wrapped_prompt(
-            payload.question
-        )
         if prompt_error is not None:
             error_codes.append(prompt_error)
         elif prompt_anchor_entity != payload.anchor_entity:
@@ -1423,10 +1327,10 @@ class SubmitDraftController:
                 self._raw_atomic_tool_calls,
                 anchor_entity=payload.anchor_entity,
             )
-            and not _mentions_global_scope(question_body, payload.constraint_summary)
+            and not _mentions_global_scope(question_body)
         ):
             error_codes.append(SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE)
-        constraint_count = len(payload.constraint_summary)
+        constraint_count = _estimated_constraint_count(question_body)
         label_signature = canonical_json(canonical_answer, default=str)
         label_slot_count = _answer_slot_count(canonical_answer)
         blank_paths = _blank_string_paths(canonical_answer)
@@ -1465,7 +1369,7 @@ class SubmitDraftController:
             error_codes.append(SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY)
         ungrounded_strings = _ungrounded_answer_strings(
             canonical_answer,
-            self._raw_atomic_tool_calls,
+            observed_strings=self._observed_response_strings,
         )
         if ungrounded_strings:
             error_codes.append(SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED)
@@ -1512,16 +1416,15 @@ class SubmitDraftController:
                     anchor_entity=payload.anchor_entity,
                 )
             )
-        if (
-            _count_semantics_present(canonical_answer, payload.constraint_summary)
-            and not _observed_count_evidence(self._raw_atomic_tool_calls)
+        if _count_semantics_present(canonical_answer, question_body) and not _observed_count_evidence(
+            self._raw_atomic_tool_calls
         ):
             error_codes.append(SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE)
         if (
             question_body is not None
-            and _count_semantics_present(canonical_answer, payload.constraint_summary)
+            and _count_semantics_present(canonical_answer, question_body)
             and _observed_count_evidence(self._raw_atomic_tool_calls)
-            and not _mentions_global_scope(question_body, payload.constraint_summary)
+            and not _mentions_global_scope(question_body)
             and not _observed_anchor_scoped_count_evidence(
                 self._raw_atomic_tool_calls,
                 anchor_entity=payload.anchor_entity,
@@ -1777,9 +1680,6 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.QUESTION_BODY_REQUIRED: (
                 "Rejected. After the <entity> block, include a natural user request body."
-            ),
-            SubmitDraftErrorCode.CONSTRAINT_SUMMARY_REQUIRED: (
-                "Rejected. constraint_summary must include at least one grounded constraint or tie-break rule."
             ),
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. canonical_answer_json must be a valid JSON string."
@@ -2097,11 +1997,7 @@ class SubmitDraftController:
                     else len(self._raw_atomic_tool_calls)
                     - self._tool_call_count_at_last_submission,
                     "solution_space_slots": label_data["canonical_answer_slot_count"],
-                    "constraint_density_constraints": (
-                        len(label_data["constraint_summary"])
-                        if isinstance(label_data["constraint_summary"], list)
-                        else None
-                    ),
+                    "constraint_density_constraints": 0,
                 },
                 "label_change": label_change,
                 "pass_rate": pass_rate,
@@ -2153,7 +2049,7 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         description=(
             "Submit a grounded RLVR task draft after inspecting real database rows with tools. "
             "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
-            "natural user-facing question, and constraint summary. "
+            "and the natural user-facing question. "
             "Use only tool-observed evidence. Do not write SQL, do not invent hidden joins, and do not include SQL queries in the submission. "
             "Trace many relationships and interesting grounded paths with tools first, then choose one path and build a unique, verifiable label from that path. "
             "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "

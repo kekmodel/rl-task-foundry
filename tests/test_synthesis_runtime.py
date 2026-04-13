@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -284,13 +283,6 @@ def _accepted_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "내가 배정된 매장과 전체 고객 수를 알려 주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "single_store",
-                    "kind": "uniqueness",
-                    "summary": "배정 매장은 하나여야 한다.",
-                }
-            ],
         }
     )
 
@@ -324,23 +316,6 @@ def _too_easy_readable_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "내 계정 기준으로 담당 직원 이름과 이메일을 알려주고, 제가 지금까지 빌린 건수도 함께 알려주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "anchor_customer",
-                    "kind": "membership",
-                    "summary": "답변은 엔티티 블록에 표시된 고객 계정에 대해 grounded 되어야 한다.",
-                },
-                {
-                    "key": "staff_identity",
-                    "kind": "readable label",
-                    "summary": "담당 직원은 이름과 이메일처럼 읽을 수 있는 비식별 정보로 제시해야 한다.",
-                },
-                {
-                    "key": "rental_count",
-                    "kind": "aggregate",
-                    "summary": "제가 지금까지 빌린 건수는 해당 고객의 실제 대여 건수 집계로 제시해야 한다.",
-                },
-            ],
         }
     )
 
@@ -361,13 +336,6 @@ def _count_without_count_evidence_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제 기록을 기준으로 고객 수와 제 이름을 알려 주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "anchor_self",
-                    "kind": "membership",
-                    "summary": "Answer must be about the anchored customer.",
-                }
-            ],
         }
     )
 
@@ -388,13 +356,6 @@ def _ungrounded_text_payload(*, customer_id: int = 1) -> SubmitDraftPayload:
                 anchor_entity,
                 "내 기록과 관련된 영화 제목을 알려 주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "anchored_record",
-                    "kind": "membership",
-                    "summary": "Answer must stay within the anchored customer's own records.",
-                }
-            ],
         }
     )
 
@@ -421,18 +382,6 @@ def _partially_rewritten_string_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제가 최근에 대여한 기록의 처리 직원 이름과 대여 시각을 알려주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "anchor_self",
-                    "kind": "membership",
-                    "summary": "Answer must stay within the anchored customer.",
-                },
-                {
-                    "key": "latest_rental",
-                    "kind": "ordering",
-                    "summary": "Use the latest observed rental for the anchored customer.",
-                },
-            ],
         }
     )
 
@@ -453,13 +402,6 @@ def _global_count_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제 기록을 기준으로 제 이름과 관련 고객 수를 알려 주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "anchor_self",
-                    "kind": "membership",
-                    "summary": "Answer must stay within the anchored customer.",
-                }
-            ],
         }
     )
 
@@ -480,13 +422,6 @@ def _id_chain_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제 계정과 연결된 대여와 결제 한 건을 알려 주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "anchor_self",
-                    "kind": "membership",
-                    "summary": "Answer must stay within the anchored customer.",
-                }
-            ],
         }
     )
 
@@ -507,38 +442,50 @@ def _opaque_identifier_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제 기록과 연결된 추적 정보를 알려 주세요.",
             ),
-            "constraint_summary": [
-                {
-                    "key": "anchor_self",
-                    "kind": "membership",
-                    "summary": "Answer must stay within the anchored customer.",
-                }
-            ],
         }
     )
 
 
 def test_ungrounded_answer_strings_accepts_datetime_observations() -> None:
-    tool_calls = [
-        {
-            "tool_name": "get_rental",
-            "params": {"id": 1},
-            "result": {
-                "rental_date": datetime(2005, 8, 22, 20, 3, 46),
-                "return_date": datetime(2005, 8, 30, 1, 51, 46),
-            },
-        }
-    ]
-
     ungrounded = _ungrounded_answer_strings(
         {
             "latest_rental_date": "2005-08-22 20:03:46",
             "latest_rental_return_date": "2005-08-30 01:51:46",
         },
-        tool_calls,
+        observed_strings={
+            "2005-08-22 20:03:46",
+            "2005-08-30 01:51:46",
+        },
     )
 
     assert ungrounded == []
+
+
+def test_submit_draft_controller_caches_observed_tool_response_values(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+
+    controller.record_atomic_tool_call(
+        tool_name="get_staff",
+        params={"id": 1},
+        result={
+            "first_name": "Mike",
+            "last_name": "Hillyer",
+            "email": "Mike.Hillyer@sakilastaff.com",
+        },
+    )
+
+    assert "mike" in controller._observed_response_strings
+    assert "hillyer" in controller._observed_response_strings
+    assert "mike.hillyer@sakilastaff.com" in controller._observed_response_strings
 
 
 def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
@@ -561,6 +508,12 @@ def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
         SubmitDraftPayload.model_validate(payload)
 
 
+def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> None:
+    required_fields = set(SubmitDraftPayload.model_json_schema().get("required", []))
+
+    assert "constraint_summary" not in required_fields
+
+
 def test_next_difficulty_crank_axis_rotates_after_two_attempts() -> None:
     assert _next_difficulty_crank_axis([]) is DifficultyAxis.SEARCH_COST
     assert _next_difficulty_crank_axis([DifficultyAxis.SEARCH_COST]) is DifficultyAxis.SEARCH_COST
@@ -570,29 +523,11 @@ def test_next_difficulty_crank_axis_rotates_after_two_attempts() -> None:
 
 
 def test_count_semantics_present_does_not_match_account_substrings() -> None:
-    assert not _count_semantics_present(
-        {"customer_id": 360},
-        [
-            {
-                "key": "anchor_self",
-                "kind": "identity",
-                "summary": "Use the anchored customer's own account.",
-            }
-        ],
-    )
+    assert not _count_semantics_present({"customer_id": 360}, "제 계정 정보를 알려주세요.")
 
 
 def test_mentions_global_scope_does_not_treat_local_total_as_global() -> None:
-    assert not _mentions_global_scope(
-        "제 계정의 전체 결제 건수를 알려주세요.",
-        [
-            {
-                "key": "payment_total",
-                "kind": "count",
-                "summary": "Return the total number of payments for the anchored customer.",
-            }
-        ],
-    )
+    assert not _mentions_global_scope("제 계정의 전체 결제 건수를 알려주세요.")
 
 
 def test_unanchored_global_ranking_matches_rank_family() -> None:

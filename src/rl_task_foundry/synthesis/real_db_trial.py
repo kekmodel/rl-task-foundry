@@ -1,9 +1,13 @@
-"""Real-database single-task trial runner."""
+"""Real-database single-task trial runner.
+
+The on-disk source of truth for trial debugging is the phase monitor log plus
+debug traces and any exported bundle artifacts. The summary object returned by
+this module is in-memory only and is not persisted as a separate JSON file.
+"""
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
@@ -38,7 +42,6 @@ class RealDbTrialSummary:
     db_id: str
     requested_topic: str
     trial_status: RealDbTrialStatus
-    summary_path: Path
     flow_id: str | None = None
     phase_monitor_log_path: Path | None = None
     debug_root: Path | None = None
@@ -67,7 +70,6 @@ class RealDbTrialSummary:
         requested_topic: str | None = None,
         requested_category: object | None = None,
         trial_status: RealDbTrialStatus,
-        summary_path: Path,
         flow_id: str | None = None,
         phase_monitor_log_path: Path | None = None,
         debug_root: Path | None = None,
@@ -93,7 +95,6 @@ class RealDbTrialSummary:
         object.__setattr__(self, "db_id", db_id)
         object.__setattr__(self, "requested_topic", normalize_topic(resolved_topic))
         object.__setattr__(self, "trial_status", trial_status)
-        object.__setattr__(self, "summary_path", summary_path)
         object.__setattr__(self, "flow_id", flow_id)
         object.__setattr__(self, "phase_monitor_log_path", phase_monitor_log_path)
         object.__setattr__(self, "debug_root", debug_root)
@@ -141,7 +142,6 @@ class RealDbTrialRunner:
     ) -> RealDbTrialSummary:
         topic = normalize_topic(topic)
         output_root.mkdir(parents=True, exist_ok=True)
-        summary_path = output_root / "trial_summary.json"
         debug_root = output_root / "debug"
         debug_traces_dir = debug_root / "traces"
         phase_monitor_log_path = debug_root / "phase_monitors.jsonl"
@@ -186,27 +186,24 @@ class RealDbTrialRunner:
                     ),
                 },
             )
-            summary = self._write_summary(
-                RealDbTrialSummary(
-                    db_id=db_id,
-                    requested_topic=topic,
-                    trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
-                    summary_path=summary_path,
-                    flow_id=flow_id,
-                    phase_monitor_log_path=phase_monitor_log_path,
-                    debug_root=debug_root,
-                    debug_traces_dir=debug_traces_dir,
-                    synthesis_traces_dir=synthesis_traces_dir,
-                    solver_traces_dir=solver_traces_dir,
-                    synthesis_error_type=type(exc).__name__,
-                    synthesis_error_message=str(exc),
-                    attempt_outcomes=tuple(attempt.outcome.value for attempt in exc.attempts),
-                    error_codes=tuple(
-                        exc.last_artifact_diagnostics.error_codes
-                        if exc.last_artifact_diagnostics is not None
-                        else ()
-                    ),
-                )
+            summary = RealDbTrialSummary(
+                db_id=db_id,
+                requested_topic=topic,
+                trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+                flow_id=flow_id,
+                phase_monitor_log_path=phase_monitor_log_path,
+                debug_root=debug_root,
+                debug_traces_dir=debug_traces_dir,
+                synthesis_traces_dir=synthesis_traces_dir,
+                solver_traces_dir=solver_traces_dir,
+                synthesis_error_type=type(exc).__name__,
+                synthesis_error_message=str(exc),
+                attempt_outcomes=tuple(attempt.outcome.value for attempt in exc.attempts),
+                error_codes=tuple(
+                    exc.last_artifact_diagnostics.error_codes
+                    if exc.last_artifact_diagnostics is not None
+                    else ()
+                ),
             )
             phase_monitor.close()
             return summary
@@ -224,23 +221,20 @@ class RealDbTrialRunner:
                     "backend_failures": list(_encode_backend_failures(exc.backend_failures)),
                 },
             )
-            summary = self._write_summary(
-                RealDbTrialSummary(
-                    db_id=db_id,
-                    requested_topic=topic,
-                    trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
-                    summary_path=summary_path,
-                    flow_id=flow_id,
-                    phase_monitor_log_path=phase_monitor_log_path,
-                    debug_root=debug_root,
-                    debug_traces_dir=debug_traces_dir,
-                    synthesis_traces_dir=synthesis_traces_dir,
-                    solver_traces_dir=solver_traces_dir,
-                    synthesis_error_type=type(exc).__name__,
-                    synthesis_error_message=str(exc),
-                    synthesis_phase=exc.phase,
-                    backend_failures=_encode_backend_failures(exc.backend_failures),
-                )
+            summary = RealDbTrialSummary(
+                db_id=db_id,
+                requested_topic=topic,
+                trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+                flow_id=flow_id,
+                phase_monitor_log_path=phase_monitor_log_path,
+                debug_root=debug_root,
+                debug_traces_dir=debug_traces_dir,
+                synthesis_traces_dir=synthesis_traces_dir,
+                solver_traces_dir=solver_traces_dir,
+                synthesis_error_type=type(exc).__name__,
+                synthesis_error_message=str(exc),
+                synthesis_phase=exc.phase,
+                backend_failures=_encode_backend_failures(exc.backend_failures),
             )
             phase_monitor.close()
             return summary
@@ -257,22 +251,19 @@ class RealDbTrialRunner:
                     "phase": exc.phase,
                 },
             )
-            summary = self._write_summary(
-                RealDbTrialSummary(
-                    db_id=db_id,
-                    requested_topic=topic,
-                    trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
-                    summary_path=summary_path,
-                    flow_id=flow_id,
-                    phase_monitor_log_path=phase_monitor_log_path,
-                    debug_root=debug_root,
-                    debug_traces_dir=debug_traces_dir,
-                    synthesis_traces_dir=synthesis_traces_dir,
-                    solver_traces_dir=solver_traces_dir,
-                    synthesis_error_type=type(exc).__name__,
-                    synthesis_error_message=str(exc),
-                    synthesis_phase=exc.phase,
-                )
+            summary = RealDbTrialSummary(
+                db_id=db_id,
+                requested_topic=topic,
+                trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+                flow_id=flow_id,
+                phase_monitor_log_path=phase_monitor_log_path,
+                debug_root=debug_root,
+                debug_traces_dir=debug_traces_dir,
+                synthesis_traces_dir=synthesis_traces_dir,
+                solver_traces_dir=solver_traces_dir,
+                synthesis_error_type=type(exc).__name__,
+                synthesis_error_message=str(exc),
+                synthesis_phase=exc.phase,
             )
             phase_monitor.close()
             return summary
@@ -288,21 +279,18 @@ class RealDbTrialRunner:
                     "error_message": str(exc),
                 },
             )
-            summary = self._write_summary(
-                RealDbTrialSummary(
-                    db_id=db_id,
-                    requested_topic=topic,
-                    trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
-                    summary_path=summary_path,
-                    flow_id=flow_id,
-                    phase_monitor_log_path=phase_monitor_log_path,
-                    debug_root=debug_root,
-                    debug_traces_dir=debug_traces_dir,
-                    synthesis_traces_dir=synthesis_traces_dir,
-                    solver_traces_dir=solver_traces_dir,
-                    synthesis_error_type=type(exc).__name__,
-                    synthesis_error_message=str(exc),
-                )
+            summary = RealDbTrialSummary(
+                db_id=db_id,
+                requested_topic=topic,
+                trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+                flow_id=flow_id,
+                phase_monitor_log_path=phase_monitor_log_path,
+                debug_root=debug_root,
+                debug_traces_dir=debug_traces_dir,
+                synthesis_traces_dir=synthesis_traces_dir,
+                solver_traces_dir=solver_traces_dir,
+                synthesis_error_type=type(exc).__name__,
+                synthesis_error_message=str(exc),
             )
             phase_monitor.close()
             return summary
@@ -340,27 +328,24 @@ class RealDbTrialRunner:
             if commit_result.status is TaskRegistryCommitStatus.COMMITTED
             else RealDbTrialStatus.REGISTRY_DUPLICATE
         )
-        summary = self._write_summary(
-            RealDbTrialSummary(
-                db_id=db_id,
-                requested_topic=topic,
-                trial_status=final_status,
-                summary_path=summary_path,
-                flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
-                debug_root=debug_root,
-                debug_traces_dir=debug_traces_dir,
-                synthesis_traces_dir=synthesis_traces_dir,
-                solver_traces_dir=solver_traces_dir,
-                task_id=draft.task_bundle.task_id,
-                quality_gate_status="accept",
-                solver_pass_rate=draft.task_bundle.quality_metrics.solver_pass_rate,
-                solver_ci_low=draft.task_bundle.quality_metrics.solver_ci_low,
-                solver_ci_high=draft.task_bundle.quality_metrics.solver_ci_high,
-                registry_status=commit_result.status,
-                registry_task_id=commit_result.task_id,
-                bundle_root=bundle_root,
-            )
+        summary = RealDbTrialSummary(
+            db_id=db_id,
+            requested_topic=topic,
+            trial_status=final_status,
+            flow_id=flow_id,
+            phase_monitor_log_path=phase_monitor_log_path,
+            debug_root=debug_root,
+            debug_traces_dir=debug_traces_dir,
+            synthesis_traces_dir=synthesis_traces_dir,
+            solver_traces_dir=solver_traces_dir,
+            task_id=draft.task_bundle.task_id,
+            quality_gate_status="accept",
+            solver_pass_rate=draft.task_bundle.quality_metrics.solver_pass_rate,
+            solver_ci_low=draft.task_bundle.quality_metrics.solver_ci_low,
+            solver_ci_high=draft.task_bundle.quality_metrics.solver_ci_high,
+            registry_status=commit_result.status,
+            registry_task_id=commit_result.task_id,
+            bundle_root=bundle_root,
         )
         phase_monitor.close()
         return summary
@@ -371,39 +356,6 @@ class RealDbTrialRunner:
         close_registry = getattr(self.registry, "close", None)
         if callable(close_registry):
             close_registry()
-
-    @staticmethod
-    def _summary_payload(summary: RealDbTrialSummary) -> dict[str, object]:
-        payload = asdict(summary)
-        payload["requested_topic"] = summary.requested_topic
-        payload["trial_status"] = summary.trial_status.value
-        payload["summary_path"] = str(summary.summary_path)
-        for key in (
-            "phase_monitor_log_path",
-            "debug_root",
-            "debug_traces_dir",
-            "synthesis_traces_dir",
-            "solver_traces_dir",
-        ):
-            value = payload[key]
-            payload[key] = str(value) if value is not None else None
-        payload["registry_status"] = (
-            summary.registry_status.value if summary.registry_status is not None else None
-        )
-        payload["bundle_root"] = str(summary.bundle_root) if summary.bundle_root is not None else None
-        return payload
-
-    def _write_summary(self, summary: RealDbTrialSummary) -> RealDbTrialSummary:
-        summary.summary_path.write_text(
-            json.dumps(
-                self._summary_payload(summary),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
-        return summary
 
     def _synthesis_runtime_for_trial(
         self,
