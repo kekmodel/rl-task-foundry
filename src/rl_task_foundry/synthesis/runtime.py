@@ -43,7 +43,11 @@ from rl_task_foundry.synthesis.canonicalize import (
     canonical_json,
     canonicalize_output,
 )
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
+from rl_task_foundry.synthesis.atomic_tools import (
+    AtomicToolBundle,
+    AtomicToolFamily,
+    AtomicToolGenerator,
+)
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.phase_monitor import (
     PipelinePhaseMonitorLogger,
@@ -311,6 +315,49 @@ def summarize_schema_graph(graph: SchemaGraph, *, max_tables: int = 32) -> dict[
     }
 
 
+def summarize_atomic_tool_surface(
+    bundle: AtomicToolBundle,
+    *,
+    max_point_lookups: int = 16,
+) -> dict[str, object]:
+    point_lookups: list[dict[str, object]] = []
+    for tool in bundle.tools:
+        if tool.family is not AtomicToolFamily.T1_POINT_LOOKUP:
+            continue
+        if not tool.name.startswith("get_") or not tool.name.endswith("_by_id"):
+            continue
+        properties = tool.returns_schema.get("properties", {})
+        if not isinstance(properties, dict):
+            continue
+        field_names = [str(key) for key in properties.keys()]
+        readable_fields = [name for name in field_names if not name.endswith("_id")]
+        point_lookups.append(
+            {
+                "tool_name": tool.name,
+                "field_names": field_names,
+                "readable_fields": readable_fields,
+                "id_only": len(readable_fields) == 0,
+            }
+        )
+    return {"point_lookups": point_lookups[:max_point_lookups]}
+
+
+def topic_surface_infeasibility_code(
+    *,
+    requested_topic: str,
+    tool_surface_summary: dict[str, object],
+) -> str | None:
+    normalized_topic = requested_topic.strip().lower()
+    if normalized_topic != "assignment":
+        return None
+    point_lookups = tool_surface_summary.get("point_lookups")
+    if not isinstance(point_lookups, list) or not point_lookups:
+        return None
+    if all(bool(item.get("id_only")) for item in point_lookups if isinstance(item, dict)):
+        return "assignment_topic_requires_readable_surface"
+    return None
+
+
 def forbidden_question_tokens(schema_summary: dict[str, object]) -> frozenset[str]:
     tokens = {
         "select ",
@@ -436,6 +483,24 @@ class SynthesisAgentRuntime:
             graph=resolved_graph,
         )
         schema_summary = summarize_schema_graph(resolved_graph)
+        tool_surface_summary = summarize_atomic_tool_surface(atomic_tool_bundle)
+        infeasibility_code = topic_surface_infeasibility_code(
+            requested_topic=requested_topic,
+            tool_surface_summary=tool_surface_summary,
+        )
+        if infeasibility_code is not None:
+            diagnostics = SynthesisArtifactDiagnostics(error_codes=[infeasibility_code])
+            await self._record_category_discard(
+                db_id,
+                requested_topic,
+                outcome=SynthesisGenerationOutcome.ARTIFACT_INVALID,
+                error_codes=list(diagnostics.error_codes),
+            )
+            raise SynthesisArtifactGenerationError(
+                "requested topic is not feasible with the current visible tool surface",
+                attempts=[],
+                last_artifact_diagnostics=diagnostics,
+            )
         shuffle_seed = _build_shuffle_seed(
             "synthesis",
             db_id,
@@ -467,6 +532,7 @@ class SynthesisAgentRuntime:
             db_id=db_id,
             requested_topic=requested_topic,
             schema_summary=schema_summary,
+            tool_surface_summary=tool_surface_summary,
         )
         if controller.accepted_draft is None:
             attempts = self._generation_attempts_from_submit_records(
@@ -673,6 +739,7 @@ class SynthesisAgentRuntime:
         db_id: str,
         requested_topic: str,
         schema_summary: dict[str, object],
+        tool_surface_summary: dict[str, object],
     ) -> object:
         candidate_backends = self.synthesis_backends or []
         if not candidate_backends:
@@ -694,6 +761,7 @@ class SynthesisAgentRuntime:
                     task_language=self.config.domain.language,
                     scenario_description=self.config.domain.scenario_description,
                     schema_summary=schema_summary,
+                    tool_surface_summary=tool_surface_summary,
                     max_turns=50,
                 )
             except Exception as exc:  # pragma: no cover

@@ -278,6 +278,7 @@ class OpenAIAgentsSynthesisBackend:
         task_language: str,
         scenario_description: str,
         schema_summary: dict[str, object],
+        tool_surface_summary: dict[str, object],
         max_turns: int = 50,
     ) -> SynthesisConversationResult:
         sdk = _load_sdk_components()
@@ -294,6 +295,7 @@ class OpenAIAgentsSynthesisBackend:
             requested_topic=requested_topic,
             task_language=task_language,
             schema_summary=schema_summary,
+            tool_surface_summary=tool_surface_summary,
         )
         started_at = perf_counter()
         run_result = await sdk.Runner.run(

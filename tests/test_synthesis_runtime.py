@@ -10,7 +10,12 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
 from pydantic import ValidationError
 from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
+from rl_task_foundry.synthesis.atomic_tools import (
+    AtomicToolBundle,
+    AtomicToolDefinition,
+    AtomicToolFamily,
+    AtomicToolResultMode,
+)
 from rl_task_foundry.synthesis.contracts import DifficultyAxis
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
@@ -73,7 +78,23 @@ def _sample_graph() -> SchemaGraph:
 def _sample_atomic_tool_bundle(db_id: str = "sakila") -> AtomicToolBundle:
     return AtomicToolBundle(
         db_id=db_id,
-        tools=[],
+        tools=[
+            AtomicToolDefinition(
+                name="get_customer_by_id",
+                family=AtomicToolFamily.T1_POINT_LOOKUP,
+                description="Get customer for given primary key.",
+                params_schema={"type": "object", "properties": {"customer_id": {"type": "integer"}}},
+                returns_schema={
+                    "type": "object",
+                    "properties": {
+                        "customer_name": {"type": "string"},
+                    },
+                },
+                sql="SELECT 1",
+                result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
+                semantic_key="customer:get_by_id",
+            )
+        ],
         source="async def get_customer_by_id(conn, customer_id):\n    return {'store_id': 1}\n",
     )
 
@@ -126,9 +147,10 @@ class _FakeBackend:
         task_language: str,
         scenario_description: str,
         schema_summary: dict[str, object],
+        tool_surface_summary: dict[str, object],
         max_turns: int,
     ):
-        del db_id, requested_topic, domain_name, task_language, scenario_description, schema_summary, max_turns
+        del db_id, requested_topic, domain_name, task_language, scenario_description, schema_summary, tool_surface_summary, max_turns
         assert self.bound_controller is not None
         self.bound_controller.record_atomic_tool_call(
             tool_name="get_customer_by_id",
@@ -170,7 +192,7 @@ def _accepted_payload() -> SubmitDraftPayload:
                 "solution_space": 1.0,
                 "constraint_density": 1.0,
             },
-            "question": "내가 속한 매장의 ID와 전체 고객 수를 알려 주세요.",
+            "question": "내가 배정된 매장의 ID와 그 매장의 전체 고객 수를 알려 주세요.",
             "constraint_summary": [
                 {
                     "key": "store_and_count",
@@ -318,6 +340,67 @@ async def test_synthesize_environment_draft_raises_when_submit_budget_exhausts(
 
 
 @pytest.mark.asyncio
+async def test_synthesize_environment_draft_rejects_assignment_topic_when_tool_surface_is_id_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
+    runtime.synthesis_backends = [_FakeBackend(accept_payload=_accepted_payload())]
+
+    async def _fake_bind_db_id(self, db_id: str):
+        self._bound_db_id = db_id
+
+    async def _fake_ensure_category_available(self, db_id: str, topic: str):
+        return None
+
+    async def _fake_introspect_graph(self):
+        return _sample_graph()
+
+    async def _fake_ensure_atomic_tool_bundle(self, *, db_id: str, graph: SchemaGraph):
+        del db_id, graph
+        return AtomicToolBundle(
+            db_id="sakila",
+            tools=[
+                AtomicToolDefinition(
+                    name="get_staff_by_id",
+                    family=AtomicToolFamily.T1_POINT_LOOKUP,
+                    description="Get staff for given primary key.",
+                    params_schema={"type": "object", "properties": {"staff_id": {"type": "integer"}}},
+                    returns_schema={"type": "object", "properties": {}},
+                    sql="SELECT 1",
+                    result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
+                    semantic_key="staff:get_by_id",
+                )
+            ],
+            source="async def get_staff_by_id(conn, staff_id):\n    return {'staff_id': 1}\n",
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_bind_db_id", _fake_bind_db_id)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_category_available",
+        _fake_ensure_category_available,
+    )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_introspect_graph", _fake_introspect_graph)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_atomic_tool_bundle",
+        _fake_ensure_atomic_tool_bundle,
+    )
+
+    with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_topic="assignment",
+        )
+
+    assert exc_info.value.last_artifact_diagnostics is not None
+    assert exc_info.value.last_artifact_diagnostics.error_codes == [
+        "assignment_topic_requires_readable_surface"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_questions_that_leak_internal_schema_terms(
     tmp_path: Path,
 ) -> None:
@@ -346,7 +429,7 @@ async def test_submit_draft_rejects_questions_that_leak_internal_schema_terms(
     message = await controller.submit(payload)
 
     assert "raw table names" in message
-    assert controller.attempts[-1].error_codes == ("question_internal_schema_leak",)
+    assert controller.attempts[-1].error_codes[0] == "question_internal_schema_leak"
 
 
 @pytest.mark.asyncio
@@ -379,7 +462,43 @@ async def test_submit_draft_rejects_questions_that_repeat_raw_identifier_fields(
     message = await controller.submit(payload)
 
     assert "raw identifier field names" in message
-    assert controller.attempts[-1].error_codes == ("question_raw_identifier_leak",)
+    assert controller.attempts[-1].error_codes[0] == "question_raw_identifier_leak"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_questions_that_repeat_anchor_entity_literals(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_staff_by_id",
+        params={"staff_id": 1},
+        result={"first_name": "Mike", "last_name": "Hillyer"},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_store_by_id",
+        params={"store_id": 1},
+        result={"manager_staff_id": 1},
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"staff_id": 1},
+            "question": "1번 staff가 배정된 매장의 정보를 알려 주세요.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "raw anchor entity id" in message
+    assert controller.attempts[-1].error_codes[0] == "question_anchor_entity_leak"
 
 
 @pytest.mark.asyncio
@@ -452,7 +571,81 @@ async def test_submit_draft_rejects_identifier_only_labels_even_when_multi_obser
     message = await controller.submit(payload)
 
     assert "only a chain of internal identifier fields" in message
-    assert controller.attempts[-1].error_codes == ("label_identifier_chain_forbidden",)
+    assert controller.attempts[-1].error_codes[0] == "label_identifier_chain_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_questions_misaligned_with_assignment_topic(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_payment_by_id",
+        params={"payment_id": 10},
+        result={"payment_id": 10, "amount": "4.99"},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_payment_to_rental_via_rental_id",
+        params={"payment_id": 10},
+        result={"rental_id": 20},
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"payment_id": 10},
+            "canonical_answer_json": '{"payment_amount": "4.99", "rental_id": 20}',
+            "question": "결제 하나를 따라가서 연결된 대여 정보를 알려 주세요.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "drifted away from the requested topic" in message
+    assert controller.attempts[-1].error_codes == ("requested_topic_misaligned",)
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_string_values_not_grounded_in_tool_results(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_store_by_id",
+        params={"store_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_store_to_staff_via_manager_staff_id",
+        params={"store_id": 1},
+        result={"staff_id": 1},
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"store_id": 1},
+            "canonical_answer_json": '{"staff_name":"Staff #1","store_id":1}',
+            "question": "이 매장의 담당자와 매장 정보를 알려 주세요.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "not directly grounded in the observed tool results" in message
+    assert controller.attempts[-1].error_codes[0] == "label_values_not_grounded"
 
 
 def test_next_difficulty_crank_axis_wraps_back_to_first_axis() -> None:

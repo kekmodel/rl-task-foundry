@@ -233,6 +233,98 @@ def _answer_uses_only_identifier_fields(answer: object) -> bool:
     return False
 
 
+def _collect_observed_string_tokens(value: object, *, strings: set[str], tokens: set[str]) -> None:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized:
+            strings.add(normalized)
+            tokens.update(re.findall(r"[a-z0-9가-힣]+", normalized))
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_observed_string_tokens(item, strings=strings, tokens=tokens)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_observed_string_tokens(item, strings=strings, tokens=tokens)
+
+
+def _collect_answer_strings(value: object, *, sink: list[str]) -> None:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized:
+            sink.append(normalized)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_answer_strings(item, sink=sink)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_answer_strings(item, sink=sink)
+
+
+def _ungrounded_answer_strings(
+    answer: object,
+    tool_calls: list[dict[str, object]],
+) -> list[str]:
+    observed_strings: set[str] = set()
+    observed_tokens: set[str] = set()
+    for record in tool_calls:
+        _collect_observed_string_tokens(record.get("result"), strings=observed_strings, tokens=observed_tokens)
+
+    answer_strings: list[str] = []
+    _collect_answer_strings(answer, sink=answer_strings)
+    ungrounded: list[str] = []
+    for value in answer_strings:
+        if value in observed_strings:
+            continue
+        tokens = re.findall(r"[a-z0-9가-힣]+", value)
+        if tokens and all(token in observed_tokens for token in tokens):
+            continue
+        ungrounded.append(value)
+    return sorted(dict.fromkeys(ungrounded))
+
+
+_ASSIGNMENT_TOPIC_MARKERS = (
+    "assign",
+    "assigned",
+    "assignment",
+    "responsible",
+    "responsibility",
+    "owner",
+    "owned",
+    "managed",
+    "manager",
+    "allocated",
+    "allocation",
+    "배정",
+    "담당",
+    "소속",
+    "맡",
+    "할당",
+    "책임",
+)
+
+
+def _question_matches_requested_topic(*, requested_topic: str, question: str) -> bool:
+    normalized_topic = requested_topic.strip().lower()
+    if normalized_topic != "assignment":
+        return True
+    lowered = question.lower()
+    return any(marker in lowered for marker in _ASSIGNMENT_TOPIC_MARKERS)
+
+
+def _question_repeats_anchor_entity(question: str) -> bool:
+    lowered = question.lower()
+    patterns = (
+        r"\b(?:staff|customer|store|address|payment|rental|inventory|film|city|country)\s*\d+(?:\b|[가-힣])",
+        r"\b\d+\s*(?:번)?\s*(?:staff|customer|store|address|payment|rental|inventory|film|city|country)(?:\b|[가-힣])",
+        r"(?:매장|고객|직원|영화|주소|도시|국가)\s*\d+",
+    )
+    return any(re.search(pattern, lowered) for pattern in patterns)
+
+
 @dataclass(slots=True)
 class SubmitDraftController:
     config: AppConfig
@@ -362,13 +454,27 @@ class SubmitDraftController:
             if derivation_tool is not None:
                 error_codes.append("label_single_tool_derivable")
                 invalid_diagnostics["single_tool_name"] = derivation_tool
+            ungrounded_strings = _ungrounded_answer_strings(
+                canonical_answer,
+                self._raw_atomic_tool_calls,
+            )
+            if ungrounded_strings:
+                error_codes.append("label_values_not_grounded")
+                invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[:5]
         question_lower = payload.question.lower()
         if re.search(r"\b[a-z][a-z0-9_]*_id\b", question_lower):
             error_codes.append("question_raw_identifier_leak")
+        if _question_repeats_anchor_entity(payload.question):
+            error_codes.append("question_anchor_entity_leak")
         if any(token in question_lower for token in self.forbidden_question_tokens):
             error_codes.append("question_internal_schema_leak")
         if canonical_answer is not None and _answer_uses_only_identifier_fields(canonical_answer):
             error_codes.append("label_identifier_chain_forbidden")
+        if not _question_matches_requested_topic(
+            requested_topic=self.requested_topic,
+            question=payload.question,
+        ):
+            error_codes.append("requested_topic_misaligned")
 
         weakened_axes = _weakened_difficulty_axes(
             previous=self.strongest_difficulty_vector,
@@ -507,11 +613,20 @@ class SubmitDraftController:
             "question_raw_identifier_leak": (
                 "Rejected. Rewrite the user-facing question without raw identifier field names such as customer_id or store_id. Keep identifiers only inside anchor_entity."
             ),
+            "question_anchor_entity_leak": (
+                "Rejected. Rewrite the user-facing question without repeating the raw anchor entity id. Keep the raw anchor only inside the entity block and refer to it naturally in the question."
+            ),
             "label_single_tool_derivable": (
                 "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations."
             ),
             "label_identifier_chain_forbidden": (
                 "Rejected. The canonical answer is only a chain of internal identifier fields. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
+            ),
+            "label_values_not_grounded": (
+                "Rejected. Some label values were not directly grounded in the observed tool results. Only use business strings you actually observed."
+            ),
+            "requested_topic_misaligned": (
+                "Rejected. The user-facing question drifted away from the requested topic. For assignment, ask about who or what is assigned, handled, owned, responsible, attached, or linked to the anchor."
             ),
             "difficulty_weakened": (
                 "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."
@@ -656,7 +771,11 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "natural user-facing question, constraint summary, instance space, and label summary. "
             "anchor_entity is mandatory and must include at least one real primary-key value, "
             "for example {\"customer_id\": 148} or {\"store_id\": 1}. "
+            "Do not call submit_draft until anchor_entity is present and final for that draft. "
             "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "
+            "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "
+            "For assignment tasks, make the assignee relation explicit and use human-readable assignee attributes when possible. "
+            "If the candidate assignee surface only exposes opaque ids in tool results, choose a different assignment relation instead of centering the task on that entity. "
             "After any rejection, make at least one new atomic tool call before calling submit_draft again."
         ),
         params_json_schema=params_json_schema,
