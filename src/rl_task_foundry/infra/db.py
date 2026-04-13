@@ -115,6 +115,19 @@ async def ensure_database_pools(
     return await DatabasePools.create(config)
 
 
+async def ensure_attached_database_pools(
+    owner: Any,
+    *,
+    attr_name: str,
+    config: DatabaseConfig,
+) -> DatabasePools:
+    existing = getattr(owner, attr_name)
+    pools = await ensure_database_pools(existing, config)
+    if pools is not existing:
+        setattr(owner, attr_name, pools)
+    return pools
+
+
 async def smoke_test_connection(config: DatabaseConfig) -> dict[str, str]:
     """Open a single connection and return a tiny identity payload."""
 

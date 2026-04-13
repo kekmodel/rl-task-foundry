@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
@@ -20,6 +21,13 @@ class JsonlFileSink:
         handle = self._ensure_handle()
         handle.write(canonical_json(payload, default=str))
         handle.write("\n")
+        handle.flush()
+
+    def write_records(self, payloads: Iterable[dict[str, object]]) -> None:
+        handle = self._ensure_handle()
+        for payload in payloads:
+            handle.write(canonical_json(payload, default=str))
+            handle.write("\n")
         handle.flush()
 
     def close(self) -> None:

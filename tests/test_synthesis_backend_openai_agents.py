@@ -55,6 +55,67 @@ def test_synthesis_backend_write_artifact_creates_dir_once_per_kind(
     assert mkdir_calls.count(transcript_dir) == first_transcript_dir_calls
 
 
+def test_synthesis_backend_reuses_shared_model_client(monkeypatch) -> None:
+    class FakeAsyncOpenAI:
+        calls: list[dict[str, object]] = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.calls.append(kwargs)
+
+    class FakeChatModel:
+        calls: list[tuple[str, FakeAsyncOpenAI]] = []
+
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.__class__.calls.append((model, openai_client))
+            self.model = model
+            self.openai_client = openai_client
+
+    monkeypatch.setattr(
+        backend_module,
+        "_shared_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=object,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=object,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=object,
+            set_tracing_disabled=lambda **_kwargs: None,
+        ),
+    )
+    OpenAIAgentsSynthesisBackend.clear_model_cache()
+
+    backend_a = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SynthesisRuntimeConfig(),
+    )
+    backend_b = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SynthesisRuntimeConfig(),
+    )
+
+    model_a = backend_a._build_model(backend_a._sdk_components())
+    model_b = backend_b._build_model(backend_b._sdk_components())
+
+    assert model_a is model_b
+    assert len(FakeAsyncOpenAI.calls) == 1
+    assert len(FakeChatModel.calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_synthesis_backend_writes_artifacts_before_reraising_runner_error(
     tmp_path: Path,

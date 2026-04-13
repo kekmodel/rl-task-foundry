@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
@@ -19,6 +19,7 @@ from rl_task_foundry.infra.sdk_helpers import (
     make_sdk_tool as _shared_make_sdk_tool,
     normalize_tool_definition as _normalize_tool_definition,
     resolve_provider_api_key as _resolve_provider_api_key,
+    write_json_artifact as _write_json_artifact,
 )
 from rl_task_foundry.synthesis.prompts import (
     build_synthesis_agent_instructions,
@@ -73,6 +74,7 @@ class OpenAIAgentsSynthesisBackend:
     submit_draft_controller: SubmitDraftController | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
+    _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], Any]] = {}
     _created_artifact_dirs: set[Path] = field(default_factory=set, init=False, repr=False)
 
     @property
@@ -83,8 +85,9 @@ class OpenAIAgentsSynthesisBackend:
     def model_name(self) -> str:
         return self.model_ref.model
 
-    def _resolve_api_key(self) -> str:
-        return _resolve_provider_api_key(self.provider_config)
+    @classmethod
+    def clear_model_cache(cls) -> None:
+        cls._shared_models.clear()
 
     def _sdk_components(self) -> SimpleNamespace:
         if self._sdk is None:
@@ -98,8 +101,22 @@ class OpenAIAgentsSynthesisBackend:
             raise NotImplementedError(
                 "OpenAI Agents synthesis backend only supports openai/openai_compatible providers"
             )
+        api_key = _resolve_provider_api_key(self.provider_config)
+        cache_key = (
+            id(sdk.AsyncOpenAI),
+            id(sdk.OpenAIChatCompletionsModel),
+            self.provider_config.type,
+            self.provider_config.base_url,
+            api_key,
+            float(self.provider_config.timeout_s),
+            self.model_ref.model,
+        )
+        cached = self._shared_models.get(cache_key)
+        if cached is not None:
+            self._model = cached
+            return self._model
         client = sdk.AsyncOpenAI(
-            api_key=self._resolve_api_key(),
+            api_key=api_key,
             base_url=self.provider_config.base_url,
             timeout=float(self.provider_config.timeout_s),
         )
@@ -107,6 +124,7 @@ class OpenAIAgentsSynthesisBackend:
             model=self.model_ref.model,
             openai_client=client,
         )
+        self._shared_models[cache_key] = self._model
         return self._model
 
     def bind_atomic_tools(
@@ -157,18 +175,16 @@ class OpenAIAgentsSynthesisBackend:
     ) -> str:
         if self.traces_dir is None:
             return _trace_stub(kind, db_id, self.provider_name, self.model_name)
-        target_dir = self.traces_dir / kind
-        if target_dir not in self._created_artifact_dirs:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            self._created_artifact_dirs.add(target_dir)
-        target_path = target_dir / (
-            f"{db_id}__{requested_topic}__synthesis__{self.provider_name}__{self.model_name}.json"
+        return _write_json_artifact(
+            traces_dir=self.traces_dir,
+            created_dirs=self._created_artifact_dirs,
+            kind=kind,
+            filename=(
+                f"{db_id}__{requested_topic}__synthesis__"
+                f"{self.provider_name}__{self.model_name}.json"
+            ),
+            payload=payload,
         )
-        target_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-        return str(target_path)
 
     async def run_synthesis(
         self,
@@ -180,7 +196,7 @@ class OpenAIAgentsSynthesisBackend:
         scenario_description: str,
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
-        max_turns: int = 50,
+        max_turns: int,
     ) -> SynthesisConversationResult:
         sdk = self._sdk_components()
         if hasattr(sdk, "set_tracing_disabled"):

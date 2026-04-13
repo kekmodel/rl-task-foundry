@@ -19,7 +19,7 @@ from typing import Any
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
 from rl_task_foundry.calibration.runner import calibration_decision
 from rl_task_foundry.config.models import AppConfig, ProviderConfig, SolverModelConfig
-from rl_task_foundry.infra.db import DatabasePools, ensure_database_pools
+from rl_task_foundry.infra.db import DatabasePools, ensure_attached_database_pools
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import AgentRuntime, SolverEpisodeInput
@@ -211,6 +211,7 @@ class EnvironmentOrchestrator:
             await self._database_pools.close()
             self._database_pools = None
         self._tool_executor_cache.clear()
+        OpenAIAgentsSolverBackend.clear_model_cache()
 
     async def _run_solver(
         self,
@@ -377,12 +378,11 @@ class EnvironmentOrchestrator:
         return runs, early_stop_decision
 
     async def _database_pools_for_tools(self) -> DatabasePools:
-        if self._database_pools is None:
-            self._database_pools = await ensure_database_pools(
-                self._database_pools,
-                self.config.database,
-            )
-        return self._database_pools
+        return await ensure_attached_database_pools(
+            self,
+            attr_name="_database_pools",
+            config=self.config.database,
+        )
 
     def _tool_materializer(self) -> AtomicToolMaterializer:
         if self._atomic_tool_materializer is None:

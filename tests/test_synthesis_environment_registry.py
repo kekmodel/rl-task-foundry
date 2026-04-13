@@ -32,6 +32,7 @@ from rl_task_foundry.synthesis.environment_registry import (
     EnvironmentRegistryCommitStatus,
     EnvironmentRegistryDuplicateReason,
     EnvironmentRegistryWriter,
+    _SemanticScopeIndex,
     build_semantic_dedup_text,
     bucketize_difficulty_vector,
 )
@@ -211,6 +212,20 @@ def test_environment_registry_writer_reuses_cached_connection(tmp_path: Path) ->
 
     assert first is second
     assert first is not third
+
+
+def test_environment_registry_close_clears_semantic_scope_indexes(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    writer._semantic_scope_indexes[("sakila", "assignment")] = _SemanticScopeIndex(  # type: ignore[arg-type]
+        lsh=object(),
+    )
+
+    writer.close()
+
+    assert writer._semantic_scope_indexes == {}
 
 
 def test_environment_registry_commit_preserves_primary_error_when_cleanup_probe_fails(

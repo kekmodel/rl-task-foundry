@@ -13,6 +13,7 @@ from rl_task_foundry.pipeline.environment_orchestrator import (
     EnvironmentRolloutSummary,
     evaluate_rollout_summary,
 )
+from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
 from tests.test_synthesis_environment_registry import _sample_draft
 
@@ -177,6 +178,24 @@ async def test_environment_orchestrator_close_clears_cached_tool_executors(
     await orchestrator.close()
 
     assert orchestrator._tool_executor_cache == {}
+
+
+@pytest.mark.asyncio
+async def test_environment_orchestrator_close_clears_solver_model_cache(
+    tmp_path: Path,
+) -> None:
+    orchestrator = EnvironmentOrchestrator(
+        _config(tmp_path),
+        runtime_factory=lambda *_args: _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', []),
+        tool_executor_factory=lambda _bundle: {"noop": lambda _kwargs: {}},
+    )
+    OpenAIAgentsSolverBackend._shared_models[
+        (1, 2, "openai_compatible", None, "dummy", 30.0, "gpt-5.4-mini")
+    ] = object()
+
+    await orchestrator.close()
+
+    assert OpenAIAgentsSolverBackend._shared_models == {}
 
 
 def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> None:

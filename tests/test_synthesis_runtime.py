@@ -18,6 +18,7 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
     AtomicToolResultMode,
 )
+from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import DifficultyAxis, DifficultyVectorContract
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.runtime import (
@@ -440,6 +441,18 @@ async def test_synthesize_environment_draft_runs_single_agent_and_returns_accept
     assert draft.canonical_answers[0].label_signature.startswith("sha256:")
     assert draft.generation_attempts[-1].outcome.value == "passed"
     assert backend.seen_max_turns == [17]
+
+
+@pytest.mark.asyncio
+async def test_runtime_close_clears_synthesis_model_cache(tmp_path: Path) -> None:
+    runtime = SynthesisAgentRuntime(config=_config_with_synthesis_output(tmp_path))
+    OpenAIAgentsSynthesisBackend._shared_models[
+        (1, 2, "openai_compatible", None, "dummy", 30.0, "gpt-5.4-mini")
+    ] = object()
+
+    await runtime.close()
+
+    assert OpenAIAgentsSynthesisBackend._shared_models == {}
 
 
 @pytest.mark.asyncio

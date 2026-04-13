@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from functools import cache
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,7 @@ from rl_task_foundry.infra.sdk_helpers import (
     make_sdk_tool as _shared_make_sdk_tool,
     normalize_tool_definition as _shared_normalize_tool_definition,
     resolve_provider_api_key as _resolve_provider_api_key,
+    write_json_artifact as _write_json_artifact,
 )
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
@@ -128,6 +130,7 @@ def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object
     return _shared_make_sdk_tool(definition, executor)
 
 
+@cache
 def _make_submit_result_tool() -> object:
     from agents import FunctionTool
     from agents.strict_schema import ensure_strict_json_schema
@@ -188,11 +191,12 @@ class OpenAIAgentsSolverBackend:
     artifact_writer: ArtifactWriter | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
-    _shared_models: ClassVar[dict[tuple[str, str | None, str, float, str], Any]] = {}
+    _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], Any]] = {}
     _created_artifact_dirs: set[Path] = field(default_factory=set, init=False, repr=False)
 
-    def _resolve_api_key(self) -> str:
-        return _resolve_provider_api_key(self.provider_config)
+    @classmethod
+    def clear_model_cache(cls) -> None:
+        cls._shared_models.clear()
 
     def _sdk_components(self) -> SimpleNamespace:
         if self._sdk is None:
@@ -206,7 +210,7 @@ class OpenAIAgentsSolverBackend:
             raise NotImplementedError(
                 f"OpenAI Agents backend does not yet support provider type: {self.provider_config.type}"
             )
-        api_key = self._resolve_api_key()
+        api_key = _resolve_provider_api_key(self.provider_config)
         cache_key = (
             id(sdk.AsyncOpenAI),
             id(sdk.OpenAIChatCompletionsModel),
@@ -290,19 +294,13 @@ class OpenAIAgentsSolverBackend:
             return self.artifact_writer(kind, payload)
         if self.traces_dir is None:
             return _trace_stub(kind, task_id, self.solver_config.solver_id, replica_index)
-
-        target_dir = self.traces_dir / kind
-        if target_dir not in self._created_artifact_dirs:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            self._created_artifact_dirs.add(target_dir)
-        target_path = target_dir / (
-            f"{task_id}__{self.solver_config.solver_id}__replica_{replica_index}.json"
+        return _write_json_artifact(
+            traces_dir=self.traces_dir,
+            created_dirs=self._created_artifact_dirs,
+            kind=kind,
+            filename=f"{task_id}__{self.solver_config.solver_id}__replica_{replica_index}.json",
+            payload=payload,
         )
-        target_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-        return str(target_path)
 
     @staticmethod
     def _coerce_run_input(input_item: object) -> tuple[str, str]:

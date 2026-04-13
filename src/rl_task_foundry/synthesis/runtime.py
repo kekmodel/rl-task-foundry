@@ -12,7 +12,7 @@ from hashlib import sha256
 from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.infra.db import DatabasePools, ensure_database_pools
+from rl_task_foundry.infra.db import DatabasePools, ensure_attached_database_pools
 from rl_task_foundry.pipeline.provider_resilience import (
     ProviderCircuitBreaker,
     ProviderCircuitSnapshot,
@@ -589,6 +589,9 @@ class SynthesisAgentRuntime:
             self._database_pools = None
         self._atomic_tool_bundles.clear()
         self._tool_executor_cache.clear()
+        from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
+
+        OpenAIAgentsSynthesisBackend.clear_model_cache()
         if self._owns_phase_monitor and self.phase_monitor is not None:
             self.phase_monitor.close()
             self.phase_monitor = None
@@ -939,12 +942,11 @@ class SynthesisAgentRuntime:
             return bundle
 
     async def _database_pools_for_tools(self) -> DatabasePools:
-        if self._database_pools is None:
-            self._database_pools = await ensure_database_pools(
-                self._database_pools,
-                self.config.database,
-            )
-        return self._database_pools
+        return await ensure_attached_database_pools(
+            self,
+            attr_name="_database_pools",
+            config=self.config.database,
+        )
 
     async def _tool_executors_for_bundle(
         self,

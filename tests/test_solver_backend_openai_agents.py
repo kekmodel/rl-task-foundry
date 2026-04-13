@@ -447,7 +447,7 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_insta
             ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
         ),
     )
-    OpenAIAgentsSolverBackend._shared_models.clear()
+    OpenAIAgentsSolverBackend.clear_model_cache()
 
     backend_a = OpenAIAgentsSolverBackend(
         solver_config=SolverModelConfig(
@@ -505,6 +505,13 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_insta
 
     assert len(FakeAsyncOpenAI.calls) == 1
     assert len(FakeChatModel.calls) == 1
+
+
+def test_submit_result_tool_is_cached_singleton() -> None:
+    first = backend_module._make_submit_result_tool()
+    second = backend_module._make_submit_result_tool()
+
+    assert first is second
 
 
 def test_extract_turn_count_preserves_explicit_zero() -> None:

@@ -31,6 +31,7 @@ from rl_task_foundry.synthesis.contracts import (
     flatten_difficulty_vector,
     normalize_topic,
 )
+from rl_task_foundry.synthesis.jsonl_logger import JsonlFileSink
 from rl_task_foundry.synthesis.runtime import SynthesisEnvironmentDraft
 
 logger = logging.getLogger(__name__)
@@ -696,16 +697,18 @@ class EnvironmentRegistryWriter:
             draft.environment.cross_instance_set.model_dump_json(indent=2),
             encoding="utf-8",
         )
-        (directory / "instances.jsonl").write_text(
-            self._jsonl_content(record.model_dump(mode="json") for record in draft.instances),
-            encoding="utf-8",
-        )
-        (directory / "canonical_answers.jsonl").write_text(
-            self._jsonl_content(
+        instances_sink = JsonlFileSink(directory / "instances.jsonl")
+        canonical_sink = JsonlFileSink(directory / "canonical_answers.jsonl")
+        try:
+            instances_sink.write_records(
+                record.model_dump(mode="json") for record in draft.instances
+            )
+            canonical_sink.write_records(
                 record.model_dump(mode="json") for record in draft.canonical_answers
-            ),
-            encoding="utf-8",
-        )
+            )
+        finally:
+            instances_sink.close()
+            canonical_sink.close()
         (directory / "tools.py").write_text(
             draft.atomic_tool_bundle.source,
             encoding="utf-8",
@@ -734,13 +737,6 @@ class EnvironmentRegistryWriter:
             ),
             encoding="utf-8",
         )
-
-    @staticmethod
-    def _jsonl_content(records: Any) -> str:
-        lines = [canonical_json(record, default=str) for record in records]
-        if not lines:
-            return ""
-        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _exact_signature(draft: SynthesisEnvironmentDraft) -> str:
@@ -1067,6 +1063,7 @@ class EnvironmentRegistryWriter:
         return self._connection
 
     def close(self) -> None:
+        self._semantic_scope_indexes.clear()
         if self._connection is None:
             return
         self._connection.close()
