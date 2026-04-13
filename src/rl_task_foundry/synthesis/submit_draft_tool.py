@@ -16,12 +16,10 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
-    DIFFICULTY_CRANK_ORDER,
     DifficultyAxis,
     DifficultyVectorContract,
     StrictModel,
     flatten_difficulty_vector,
-    is_person_like_identifier,
     normalize_words,
 )
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
@@ -57,20 +55,16 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_RAW_IDENTIFIER_LEAK = "question_raw_identifier_leak"
     QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN = "question_entity_placeholder_forbidden"
     QUESTION_ANCHOR_ENTITY_LEAK = "question_anchor_entity_leak"
-    QUESTION_SELF_PERSPECTIVE_REQUIRED = "question_self_perspective_required"
-    SELF_ENTITY_ANCHOR_REQUIRED = "self_entity_anchor_required"
     ANCHOR_ENTITY_CHANGED = "anchor_entity_changed"
     TEMPORAL_ORDERING_NOT_GROUNDED = "temporal_ordering_not_grounded"
     GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE = "global_ranking_outside_anchor_scope"
     COUNT_LABEL_REQUIRES_COUNT_EVIDENCE = "count_label_requires_count_evidence"
     COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE = "count_label_outside_anchor_scope"
-    INITIAL_EXPLORATION_INSUFFICIENT = "initial_exploration_insufficient"
     INITIAL_LABEL_TOO_BROAD = "initial_label_too_broad"
     LABEL_SINGLE_TOOL_DERIVABLE = "label_single_tool_derivable"
     LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
     LABEL_IDENTIFIER_CHAIN_FORBIDDEN = "label_identifier_chain_forbidden"
-    LABEL_OPAQUE_IDENTIFIER_FORBIDDEN = "label_opaque_identifier_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
     DIFFICULTY_WEAKENED = "difficulty_weakened"
     REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED = "required_difficulty_axis_not_strengthened"
@@ -97,20 +91,16 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK,
         SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN,
         SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK,
-        SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED,
-        SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED,
         SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED,
         SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED,
         SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE,
         SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE,
         SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE,
-        SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT,
         SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD,
         SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE,
         SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY,
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN,
-        SubmitDraftErrorCode.LABEL_OPAQUE_IDENTIFIER_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
         SubmitDraftErrorCode.DIFFICULTY_WEAKENED,
         SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED,
@@ -591,60 +581,6 @@ def _blank_string_paths(value: object, *, path: str = "$") -> list[str]:
     return []
 
 
-_UUID_VALUE_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-    re.IGNORECASE,
-)
-_HEX_VALUE_RE = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
-_OPAQUE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
-def _looks_like_opaque_identifier_string(
-    value: str,
-    *,
-    config: AppConfig,
-) -> bool:
-    normalized = value.strip()
-    if not normalized or any(character.isspace() for character in normalized):
-        return False
-    lowered = normalized.lower()
-    if _UUID_VALUE_RE.fullmatch(lowered):
-        return True
-    if (
-        len(lowered) >= config.synthesis.runtime.opaque_identifier_hex_min_length
-        and _HEX_VALUE_RE.fullmatch(lowered)
-    ):
-        return True
-    if (
-        len(normalized) >= config.synthesis.runtime.opaque_identifier_token_min_length
-        and _OPAQUE_TOKEN_RE.fullmatch(normalized)
-        and any(character.isalpha() for character in normalized)
-        and any(character.isdigit() for character in normalized)
-    ):
-        return True
-    return False
-
-
-def _opaque_identifier_value_paths(
-    value: object,
-    *,
-    config: AppConfig,
-    path: str = "$",
-) -> list[str]:
-    opaque_paths: list[str] = []
-    if isinstance(value, str):
-        return [path] if _looks_like_opaque_identifier_string(value, config=config) else []
-    if isinstance(value, dict):
-        for key, item in value.items():
-            opaque_paths.extend(_opaque_identifier_value_paths(item, config=config, path=f"{path}.{key}"))
-        return opaque_paths
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            opaque_paths.extend(_opaque_identifier_value_paths(item, config=config, path=f"{path}[{index}]"))
-        return opaque_paths
-    return opaque_paths
-
-
 def _ungrounded_answer_strings(
     answer: object,
     *,
@@ -928,29 +864,6 @@ _ENTITY_PROMPT_RE = re.compile(
     re.DOTALL,
 )
 
-_PERSON_LIKE_ANCHOR_ALIASES: dict[str, tuple[str, ...]] = {
-    "customer": ("customer", "고객"),
-    "user": ("user", "사용자", "유저"),
-    "member": ("member", "회원"),
-    "patient": ("patient", "환자"),
-    "guest": ("guest", "게스트", "투숙객"),
-    "client": ("client", "고객", "클라이언트"),
-    "subscriber": ("subscriber", "구독자", "가입자"),
-    "rider": ("rider", "라이더", "탑승객"),
-    "driver": ("driver", "기사", "운전자", "드라이버"),
-    "student": ("student", "학생"),
-    "teacher": ("teacher", "교사", "선생님"),
-    "employee": ("employee", "직원"),
-    "staff": ("staff", "직원", "스태프"),
-    "agent": ("agent", "상담원", "에이전트"),
-    "buyer": ("buyer", "구매자"),
-    "seller": ("seller", "판매자"),
-    "owner": ("owner", "소유자"),
-    "passenger": ("passenger", "승객"),
-    "traveler": ("traveler", "여행자"),
-    "account_holder": ("account holder", "account_holder", "계정 소유자"),
-}
-
 
 def _split_entity_wrapped_prompt(
     value: str,
@@ -974,47 +887,6 @@ def _split_entity_wrapped_prompt(
     if not body:
         return anchor_entity, None, SubmitDraftErrorCode.QUESTION_BODY_REQUIRED
     return anchor_entity, body, None
-
-
-def _person_like_anchor_aliases(anchor_entity: dict[str, object]) -> tuple[str, ...]:
-    aliases: list[str] = []
-    for raw_key in anchor_entity:
-        normalized_key = normalize_words(str(raw_key), lowercase=True)
-        key_tokens = tuple(token for token in normalized_key.split() if token)
-        for token, token_aliases in _PERSON_LIKE_ANCHOR_ALIASES.items():
-            if token in key_tokens:
-                aliases.extend(token_aliases)
-    return tuple(dict.fromkeys(alias for alias in aliases if alias))
-
-
-def _anchor_entity_is_person_like(anchor_entity: dict[str, object]) -> bool:
-    return any(is_person_like_identifier(str(raw_key)) for raw_key in anchor_entity)
-
-
-def _question_uses_non_self_perspective(
-    question: str,
-    *,
-    anchor_entity: dict[str, object],
-) -> bool:
-    aliases = _person_like_anchor_aliases(anchor_entity)
-    if not aliases:
-        return False
-    lowered = question.lower()
-    for alias in aliases:
-        alias_pattern = re.escape(alias.lower())
-        english_patterns = (
-            rf"\b(?:this|that|the)\s+{alias_pattern}\b",
-            rf"\b{alias_pattern}'s\b",
-            rf"\bfor\s+(?:this|that|the)\s+{alias_pattern}\b",
-        )
-        korean_patterns = (
-            rf"(?:이|그|저|해당)\s*{alias_pattern}",
-            rf"{alias_pattern}(?:의|에게|한테|을|를|은|는|이|가)\b",
-        )
-        if any(re.search(pattern, lowered) for pattern in (*english_patterns, *korean_patterns)):
-            return True
-    return False
-
 
 def _question_repeats_anchor_entity(
     question: str,
@@ -1069,7 +941,6 @@ class SubmitDraftController:
     max_submissions: int
     phase_monitor: PipelinePhaseMonitorLogger | None = None
     forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
-    self_anchor_surface_names: tuple[str, ...] = ()
     accepted_draft: SynthesisTaskDraft | None = None
     attempts: list[SubmitDraftAttemptRecord] = field(default_factory=list)
     strongest_difficulty_vector: DifficultyVectorContract = field(
@@ -1087,8 +958,6 @@ class SubmitDraftController:
     _last_label_slot_count: int | None = field(default=None, init=False)
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
-    _last_primary_error_code: SubmitDraftErrorCode | None = field(default=None, init=False)
-    _consecutive_primary_error_count: int = field(default=0, init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
     _observed_response_strings: set[str] = field(default_factory=set, init=False)
 
@@ -1221,43 +1090,15 @@ class SubmitDraftController:
             error_codes.append(SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION)
         if not payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
-        elif self.self_anchor_surface_names and not _anchor_entity_is_person_like(payload.anchor_entity):
-            error_codes.append(SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED)
-            invalid_diagnostics["available_self_anchor_surfaces"] = list(
-                self.self_anchor_surface_names[
-                    : self.config.synthesis.runtime.diagnostic_item_limit
-                ]
-            )
         elif self._locked_anchor_entity is not None and payload.anchor_entity != self._locked_anchor_entity:
             error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED)
             invalid_diagnostics["locked_anchor_entity"] = self._locked_anchor_entity
-        elif payload.anchor_entity and (
-            not self.self_anchor_surface_names or _anchor_entity_is_person_like(payload.anchor_entity)
-        ):
+        elif payload.anchor_entity:
             self._locked_anchor_entity = dict(payload.anchor_entity)
         if _uses_temporal_ordering_language(question_body) and not _observed_temporal_surface(
             self._raw_atomic_tool_calls
         ):
             error_codes.append(SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED)
-        if not self.attempts:
-            atomic_observations = len(self._raw_atomic_tool_calls)
-            distinct_tool_count = _distinct_tool_name_count(self._raw_atomic_tool_calls)
-            anchor_scoped_observations = _anchor_scoped_tool_call_count(
-                self._raw_atomic_tool_calls,
-                anchor_entity=payload.anchor_entity,
-            )
-            if (
-                atomic_observations
-                < self.config.synthesis.runtime.initial_submit_min_atomic_observations
-                or distinct_tool_count
-                < self.config.synthesis.runtime.initial_submit_min_distinct_tools
-                or anchor_scoped_observations
-                < self.config.synthesis.runtime.initial_submit_min_anchor_scoped_observations
-            ):
-                error_codes.append(SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT)
-                invalid_diagnostics["atomic_observations"] = atomic_observations
-                invalid_diagnostics["distinct_tool_count"] = distinct_tool_count
-                invalid_diagnostics["anchor_scoped_observations"] = anchor_scoped_observations
         placeholder_tokens = _placeholder_tokens(
             {
                 "topic": payload.topic,
@@ -1274,8 +1115,7 @@ class SubmitDraftController:
         elif prompt_anchor_entity != payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH)
         if (
-            _anchor_entity_is_person_like(payload.anchor_entity)
-            and _uses_unanchored_global_ranking(
+            _uses_unanchored_global_ranking(
                 self._raw_atomic_tool_calls,
                 anchor_entity=payload.anchor_entity,
             )
@@ -1289,15 +1129,6 @@ class SubmitDraftController:
         if blank_paths:
             error_codes.append(SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN)
             invalid_diagnostics["blank_string_paths"] = blank_paths[
-                : self.config.synthesis.runtime.diagnostic_item_limit
-            ]
-        opaque_identifier_paths = _opaque_identifier_value_paths(
-            canonical_answer,
-            config=self.config,
-        )
-        if opaque_identifier_paths:
-            error_codes.append(SubmitDraftErrorCode.LABEL_OPAQUE_IDENTIFIER_FORBIDDEN)
-            invalid_diagnostics["opaque_identifier_paths"] = opaque_identifier_paths[
                 : self.config.synthesis.runtime.diagnostic_item_limit
             ]
         derivation_record = _single_tool_derivation_record(
@@ -1349,15 +1180,6 @@ class SubmitDraftController:
             ):
                 has_anchor_entity_leak = True
                 error_codes.append(SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK)
-            if (
-                not has_raw_identifier_leak
-                and not has_anchor_entity_leak
-                and _question_uses_non_self_perspective(
-                    question_body,
-                    anchor_entity=payload.anchor_entity,
-                )
-            ):
-                error_codes.append(SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED)
             if any(token in question_lower for token in self.forbidden_question_tokens):
                 error_codes.append(SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK)
         if _answer_uses_only_identifier_fields(canonical_answer):
@@ -1601,12 +1423,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK: (
                 "Rejected. Rewrite the user-request body without repeating the raw anchor entity id. The user only sees the entity block, so refer to that anchor naturally instead of surfacing its internal identifier again."
             ),
-            SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED: (
-                "Rejected. Treat the anchor entity as the requesting user. Rewrite the request from the user's own perspective, for example 'my recent payments' rather than 'this customer's payments'."
-            ),
-            SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED: (
-                "Rejected. A person-like self entity surface is available in the observed tool set. Anchor the task on the requesting user's own record instead of anchoring it on a content object, and keep the content object as related evidence or answer content."
-            ),
             SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED: (
                 "Rejected. Keep the same anchored user entity across retries. The requesting user has not changed, so do not switch anchor_entity to a different person or role while repairing this draft."
             ),
@@ -1622,9 +1438,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE: (
                 "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, only keep a count field if you observed a count or aggregate tool call whose parameters depend on anchor_entity. Otherwise drop the count field or gather anchored count evidence on the same user path instead of using a global total."
             ),
-            SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT: (
-                "Rejected. You tried to submit the first judged draft before you had fully understood the anchored user and the evidence path. Keep researching the same anchored user before drafting: gather more atomic observations, use more distinct tools, and inspect more anchor-scoped evidence paths before the first submit_draft call."
-            ),
             SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD: (
                 "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."
             ),
@@ -1639,9 +1452,6 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN: (
                 "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead. If the current hinted topic keeps forcing id-only answers, choose a better grounded topic for the same anchored user need before resubmitting."
-            ),
-            SubmitDraftErrorCode.LABEL_OPAQUE_IDENTIFIER_FORBIDDEN: (
-                "Rejected. The canonical answer contains opaque identifier values such as UUIDs, hashes, encrypted tokens, or other random-looking reference strings. Even if those values were observed, they are not user-facing business labels. Return readable business values, dates, amounts, counts, statuses, or ordered records instead."
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
                 "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings, dates, and other readable values that you actually observed in real tool outputs, and copy them exactly as they appeared there. Do not shorten names, paraphrase labels, normalize timestamp formatting, or manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."
@@ -1699,33 +1509,11 @@ class SubmitDraftController:
             primary += _too_easy_retry_guidance(
                 label_data=self._last_monitored_label_data,
             )
-        if error_codes and error_codes[0] is SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT:
-            primary = (
-                "Feedback. Do not submit yet. Go back to research mode first. Before the first judged draft, map the database relationships around the anchored user and keep exploring until you fully understand the nearby evidence paths and have enough grounded context: "
-                f"at least {self.config.synthesis.runtime.initial_submit_min_atomic_observations} atomic observations, "
-                f"at least {self.config.synthesis.runtime.initial_submit_min_distinct_tools} distinct tool names, and "
-                f"at least {self.config.synthesis.runtime.initial_submit_min_anchor_scoped_observations} anchor-scoped observations tied to anchor_entity. "
-                "Build a small relation map around the anchored user: the self entry itself, nearby one-hop links, nearby one-to-many sets, and any second-hop endpoint that might expose readable fields. "
-                "Keep each new tool call attached to that anchored neighborhood, and do not jump to an unrelated entry type unless you can explain how it connects back to the anchored user. "
-                "Use that research phase to classify nearby relationships and paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends, compare multiple candidate paths, and submit only after you understand why every answer slot is grounded and needed."
-            )
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (
                 " Keep the same anchored user need and fix only the failing part when possible. "
                 "Do not reset to a different topic, a different anchor, or a simpler global count just to satisfy this feedback."
-            )
-        escalation_guidance = ""
-        if (
-            error_codes
-            and error_codes[0] is self._last_primary_error_code
-            and self._consecutive_primary_error_count
-            >= self.config.synthesis.runtime.repeated_error_escalation_threshold
-        ):
-            escalation_guidance = (
-                " You have repeated the same failure multiple times. Abandon this label family and pivot: "
-                "make new atomic tool calls on a different anchored evidence path, or choose a different grounded topic for the same anchored user need. "
-                "Do not resubmit another small variant of the same id-only, single-call, or ungrounded answer."
             )
         additional_messages: list[str] = []
         for error_code in error_codes[1:3]:
@@ -1740,21 +1528,21 @@ class SubmitDraftController:
             attempts_left_after = self.submissions_left() - 1
             if additional_messages:
                 return (
-                    f"{primary}{preserve_guidance}{escalation_guidance} Also fix: {' '.join(additional_messages)} "
+                    f"{primary}{preserve_guidance} Also fix: {' '.join(additional_messages)} "
                     "Make another atomic tool call if needed, then call submit_draft again. Do not stop with plain text. "
                     f"{max(0, attempts_left_after)} attempts left."
                 )
             return (
-                f"{primary}{preserve_guidance}{escalation_guidance} Make another atomic tool call if needed, then call submit_draft again. "
+                f"{primary}{preserve_guidance} Make another atomic tool call if needed, then call submit_draft again. "
                 f"Do not stop with plain text. {max(0, attempts_left_after)} attempts left."
             )
         attempts_left_after = self.submissions_left() - 1
         if additional_messages:
             return (
-                f"{primary}{preserve_guidance}{escalation_guidance} Also fix: {' '.join(additional_messages)} "
+                f"{primary}{preserve_guidance} Also fix: {' '.join(additional_messages)} "
                 f"{max(0, attempts_left_after)} attempts left."
             )
-        return f"{primary}{preserve_guidance}{escalation_guidance} {max(0, attempts_left_after)} attempts left."
+        return f"{primary}{preserve_guidance} {max(0, attempts_left_after)} attempts left."
 
     def _record_feedback(
         self,
@@ -1765,7 +1553,6 @@ class SubmitDraftController:
         search_cost_observations: int | None = None,
         diagnostics: dict[str, object] | None = None,
     ) -> str:
-        self._update_primary_error_state(error_codes)
         self._feedback_events += 1
         attempts_left_after = self.submissions_left()
         self._emit_monitor(
@@ -1794,7 +1581,6 @@ class SubmitDraftController:
         search_cost_observations: int | None = None,
         diagnostics: dict[str, object] | None = None,
     ) -> str:
-        self._update_primary_error_state(error_codes)
         attempts_left_after = self.submissions_left() - 1
         self.attempts.append(
             SubmitDraftAttemptRecord(
@@ -1820,21 +1606,6 @@ class SubmitDraftController:
         if attempts_left_after <= 0:
             return f"{message} Budget exhausted. No more attempts."
         return message
-
-    def _update_primary_error_state(
-        self,
-        error_codes: list[SubmitDraftErrorCode],
-    ) -> None:
-        if not error_codes:
-            self._last_primary_error_code = None
-            self._consecutive_primary_error_count = 0
-            return
-        primary = error_codes[0]
-        if primary is self._last_primary_error_code:
-            self._consecutive_primary_error_count += 1
-        else:
-            self._last_primary_error_code = primary
-            self._consecutive_primary_error_count = 1
 
     def _emit_monitor(
         self,

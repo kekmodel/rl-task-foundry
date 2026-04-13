@@ -74,8 +74,6 @@ def validate_config(
         f"sdk_sessions_enabled={config.synthesis.runtime.sdk_sessions_enabled},"
         "max_generation_attempts="
         f"{config.synthesis.runtime.max_generation_attempts},"
-        "max_difficulty_cranks="
-        f"{config.synthesis.runtime.max_difficulty_cranks},"
         "max_consecutive_category_discards="
         f"{config.synthesis.runtime.max_consecutive_category_discards},"
         "category_backoff_duration_s="

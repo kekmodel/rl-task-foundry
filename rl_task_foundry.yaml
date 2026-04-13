@@ -93,7 +93,6 @@ synthesis:
     tracing: true
     sdk_sessions_enabled: false
     max_generation_attempts: 5
-    max_difficulty_cranks: 6
     max_consecutive_category_discards: 3
     category_backoff_duration_s: 3600
     schema_summary_max_tables: 32
@@ -101,21 +100,12 @@ synthesis:
     prompt_schema_orientation_max_tables: 8
     prompt_schema_orientation_max_columns: 8
     prompt_tool_surface_hint_limit: 16
-    prompt_self_anchor_surface_hint_limit: 8
-    initial_submit_min_atomic_observations: 6
-    initial_submit_min_distinct_tools: 4
-    initial_submit_min_anchor_scoped_observations: 3
-    selected_topic_min_token_length: 3
     label_preview_field_limit: 8
     diagnostic_item_limit: 5
     recent_tool_call_limit: 20
-    constraint_density_relax_threshold: 2
-    repeated_error_escalation_threshold: 2
     payload_preview_max_string_length: 400
     payload_preview_max_list_items: 3
     payload_preview_max_dict_items: 6
-    opaque_identifier_hex_min_length: 16
-    opaque_identifier_token_min_length: 20
   coverage_planner:
     target_count_per_band: 3
     include_unset_band: false

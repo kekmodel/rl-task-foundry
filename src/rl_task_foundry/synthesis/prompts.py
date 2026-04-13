@@ -85,18 +85,16 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "You may use the provided atomic function tools to inspect real database rows and aggregates. "
             "Assume the end user knows nothing about the database schema, hidden joins, internal identifiers, or tool paths. "
             "The user only sees the <entity> block and the natural-language request, so the task must read like a normal business request from that user's perspective. "
-            "Treat anchor_entity as the requesting user's own entity by default. "
-            "If the available tool surface exposes a person-like entity such as a customer, user, member, patient, or account holder, prefer that self entity as anchor_entity instead of anchoring on a content object. "
-            "Start from a believable first-person need of that anchored user, then derive the minimal sufficient label needed to answer it. "
+            "Start from a believable user need, then derive the minimal sufficient label needed to answer it. "
             "The requested topic is only a soft coverage hint, not a fixed contract. If the hint would force an id-only, trivial, or weak label, ignore it and choose the better grounded topic that naturally fits the observed label."
         ),
         (
             "Workflow",
-            "1. Research the database broadly before drafting anything. Build a relation map before drafting anything. Start from the best person-like self surface you can find, inspect that anchored entry, and map its nearby relationships with tools. Do not treat one discovered path as enough understanding.\n"
-            "2. Expand the anchored neighborhood systematically. For the same anchored user, inspect multiple one-hop and two-hop paths. Keep each new tool call attached to the current relation map, and do not jump to an unrelated entry type unless you can explain how it connects back to the anchored user. For each path you touch, figure out whether it returns one entry or many entries, whether the endpoint exposes readable business fields or only identifiers, and whether that path supports local counts, local ordering, or neither. After you submit a draft with a valid self anchor, keep that same anchor_entity across retries.\n"
+            "1. Research the database broadly before drafting anything. Build a relation map before drafting anything. Inspect the anchored entry and map its nearby relationships with tools. Do not treat one discovered path as enough understanding.\n"
+            "2. Expand the anchored neighborhood systematically. For the same anchored entity, inspect multiple one-hop and two-hop paths. Keep each new tool call attached to the current relation map, and do not jump to an unrelated entry type unless you can explain how it connects back to the anchored entity. For each path you touch, figure out whether it returns one entry or many entries, whether the endpoint exposes readable business fields or only identifiers, and whether that path supports local counts, local ordering, or neither.\n"
             "3. Classify paths before you draft. Mark paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends. Explicitly compare multiple candidate paths and do not commit to the first path that happens to return something unique.\n"
-            "4. Choose one path and build the label from that path. Pick the strongest grounded path that supports a readable, non-trivial, verifiable answer for the anchored user. Build the label first, then derive the selected topic string and the user-facing framing from that label.\n"
-            "5. Retry intelligently after feedback. Keep the same anchored user need, update your relation map with new evidence, and repair the smallest failing part first instead of resetting the task.\n"
+            "4. Choose one path and build the label from that path. Pick the strongest grounded path that supports a readable, non-trivial, verifiable answer. Build the label first, then derive the selected topic string and the user-facing framing from that label.\n"
+            "5. Retry intelligently after feedback. Keep the same anchored need, update your relation map with new evidence, and repair the smallest failing part first instead of resetting the task.\n"
             "6. Stop only on Accepted or Budget exhausted."
         ),
         (
@@ -104,7 +102,6 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "Do research and analysis first. Do not submit while you are still figuring out the database, the anchored user, or the evidence path. "
             "Submit only when you fully understand the anchored user, the relevant evidence path, which observed fields are actually readable, which paths are id-only dead ends, which paths support local counts or ordering, and why every answer slot is needed for a believable user request. "
             "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary, then you do not understand the task well enough yet and must keep exploring. "
-            f"Before the first judged submit_draft call, stay in exploration mode until you have gathered at least {runtime_config.initial_submit_min_atomic_observations} atomic observations across at least {runtime_config.initial_submit_min_distinct_tools} distinct tool names, including at least {runtime_config.initial_submit_min_anchor_scoped_observations} anchor-scoped observations whose parameters depend on anchor_entity. "
             "Use that research phase to build a small relation map around the anchored user: the self entry itself, nearby one-hop links, nearby one-to-many sets, and any second-hop endpoint that might expose readable fields. "
             "Use that map to classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends before you commit to a label. "
             "Prefer staying inside the connected anchored neighborhood. Do not jump to a disconnected table just because it happens to expose readable fields. "
@@ -128,7 +125,6 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "Do not guess hidden values. "
             "Do not treat schema orientation as proof that a field is answerable; a field is usable in the canonical answer only if you directly observed it in actual tool results on the chosen evidence path. "
             "Do not write a request that assumes the user understands hidden database structure. "
-            "Do not use opaque identifiers such as UUIDs, hashes, encrypted tokens, or other random-looking reference strings as answer values, even if they were observed. "
             "Do not submit blank or placeholder string fields in the canonical answer. "
             "Do not shorten, paraphrase, partially copy, or reformat observed string or date values. If a value is used in the canonical answer, copy the exact value you saw in the tool response. "
             "Do not merge separate observed fields into a new readable value, such as combining first_name and last_name into one full-name field, unless that exact combined value was itself observed in a tool response. "
@@ -158,7 +154,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
         (
             "BAD",
             "BAD: Returning a label such as {\"store_id\": 1}, {\"customer_id\": 42}, or any other single internal identifier object as the answer. "
-            "BAD: Returning *_id fields, UUIDs, hashes, tokens, or other random-looking references as the answer. "
+            "BAD: Returning *_id fields or other internal references as the answer. "
             "BAD: Writing SQL or describing the answer path as a SQL query instead of using tool observations. "
             "BAD: Asking for unreadable text from an id-only path, then inventing a readable label such as 'member 2' or 'record 17'. "
             "BAD: Returning 'Bob' when the tool response showed 'Jon Stephens', or returning an ISO-style timestamp when the tool response showed a different timestamp string. "
@@ -213,7 +209,6 @@ def build_synthesis_input(
         sections.append("# Schema Orientation\n" + "\n".join(schema_lines))
 
     tool_surface_lines: list[str] = []
-    self_anchor_lines: list[str] = []
     family_counts = tool_surface_summary.get("family_counts")
     tool_count = tool_surface_summary.get("tool_count")
     if isinstance(tool_count, int):
@@ -254,21 +249,6 @@ def build_synthesis_input(
         )
     if tool_surface_lines:
         sections.append("# Tool Surface Hints\n" + "\n".join(tool_surface_lines))
-    self_anchor_surfaces = tool_surface_summary.get("self_anchor_surfaces")
-    if isinstance(self_anchor_surfaces, list):
-        surface_names = [
-            str(name)
-            for name in self_anchor_surfaces[: runtime_config.prompt_self_anchor_surface_hint_limit]
-            if isinstance(name, str)
-        ]
-        if surface_names:
-            self_anchor_lines.append(
-                "- Person-like self anchor surfaces are available: "
-                + ", ".join(surface_names)
-                + ". Prefer one of these as anchor_entity before anchoring on a content object."
-            )
-    if self_anchor_lines:
-        sections.append("# Self Anchor Hints\n" + "\n".join(self_anchor_lines))
 
     language_name = LANGUAGE_NAMES.get(task_language, task_language)
     sections.append(

@@ -46,7 +46,6 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
                     "readable_fields": ["status", "total_amount"],
                 },
             ],
-            "self_anchor_surfaces": ["get_customer", "get_staff"],
         },
     )
 
@@ -55,7 +54,6 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "# Topic Semantics" in prompt
     assert "# Schema Orientation" in prompt
     assert "# Tool Surface Hints" in prompt
-    assert "# Self Anchor Hints" in prompt
     assert "# User-Facing Language" in prompt
     assert "public.customer" in prompt
     assert "public.rental" in prompt
@@ -66,7 +64,6 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "get_customer: readable fields=['first_name', 'last_name']" in prompt
     assert "get_staff: readable fields=[] (id-only surface)" in prompt
     assert "find_order_by_customer_id: readable fields=['status', 'total_amount']" in prompt
-    assert "Person-like self anchor surfaces are available: get_customer, get_staff." in prompt
     assert "Use text answer fields only from surfaces that already expose readable non-identifier fields" in prompt
     assert "Korean" in prompt
     assert "Coverage hint: record history" in prompt
@@ -93,14 +90,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "synthesis agent" in instructions
     assert "user knows nothing about the database schema" in instructions
     assert "normal business request from that user's perspective" in instructions
-    assert "Treat anchor_entity as the requesting user's own entity by default." in instructions
-    assert "prefer that self entity as anchor_entity instead of anchoring on a content object" in instructions
-    assert "Start from a believable first-person need of that anchored user" in instructions
+    assert "Start from a believable user need" in instructions
     assert "requested topic is only a soft coverage hint" in instructions
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
     assert "Research the database broadly before drafting anything." in instructions
     assert "Build a relation map before drafting anything." in instructions
-    assert "Start from the best person-like self surface you can find" in instructions
     assert "Expand the anchored neighborhood systematically." in instructions
     assert "inspect multiple one-hop and two-hop paths" in instructions
     assert "Keep each new tool call attached to the current relation map" in instructions
@@ -109,18 +103,14 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Build the label first, then derive the selected topic string and the user-facing framing from that label." in instructions
     assert "Retry intelligently after feedback." in instructions
     assert "Stop only on Accepted or Budget exhausted." in instructions
-    assert "After you submit a draft with a valid self anchor, keep that same anchor_entity across retries." in instructions
     assert "Do research and analysis first." in instructions
     assert "Submit only when you fully understand the anchored user, the relevant evidence path" in instructions
     assert "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary" in instructions
-    assert "Before the first judged submit_draft call, stay in exploration mode until you have gathered at least" in instructions
     assert "Use that research phase to build a small relation map around the anchored user" in instructions
     assert "classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends" in instructions
     assert "Do not jump to a disconnected table just because it happens to expose readable fields." in instructions
     assert "After a too-easy result, keep the current good readable path when possible" in instructions
     assert "make the smallest connected strengthening step on that same anchored relation map" in instructions
-    assert "distinct tool names" in instructions
-    assert "anchor-scoped observations whose parameters depend on anchor_entity" in instructions
     assert "identify multiple grounded label candidates" in instructions
     assert "pick one path to turn into the final label" in instructions
     assert "Calling submit_draft without anchor_entity is always wrong." not in instructions
@@ -132,7 +122,6 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "The JSON inside the <entity> block must exactly match anchor_entity" in instructions
     assert "Only use names, titles, labels, statuses, dates" in instructions
     assert "using the exact values and formatting you actually saw there" in instructions
-    assert "Do not use opaque identifiers such as UUIDs, hashes, encrypted tokens" in instructions
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
     assert "Do not shorten, paraphrase, partially copy, or reformat observed string or date values" in instructions
     assert "Do not merge separate observed fields into a new readable value" in instructions
@@ -146,11 +135,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not reveal internal tool paths, raw table names" in instructions
     assert "Jumping to a global count for a self-scoped request." in instructions
     assert 'Returning a label such as {"store_id": 1}, {"customer_id": 42}' in instructions
-    assert "Returning *_id fields, UUIDs, hashes, tokens" in instructions
+    assert "Returning *_id fields or other internal references" in instructions
     assert "Writing SQL or describing the answer path as a SQL query" in instructions
     assert "Returning 'Bob' when the tool response showed 'Jon Stephens'" in instructions
     assert "Which of my recent requests is still open, and when was it created?" in instructions
-    assert "Inspecting two or more nearby paths around the same anchored user" in instructions
+    assert "Inspecting two or more nearby paths around the same anchored" in instructions
     assert "After a too-easy result, keeping the current readable path and adding one more connected grounded fact" in instructions
     assert "When you strengthen search_cost" in instructions
     assert "When you strengthen solution_space" in instructions

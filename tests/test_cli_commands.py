@@ -56,7 +56,6 @@ def test_cli_validate_config_command():
     assert (
         "synthesis_runtime=max_turns=50,tracing=True,sdk_sessions_enabled=False,"
         "max_generation_attempts=5,"
-        "max_difficulty_cranks=6,"
         "max_consecutive_category_discards=3,category_backoff_duration_s=3600"
     ) in normalized
     assert "estimated_total_db_connections=40" in normalized

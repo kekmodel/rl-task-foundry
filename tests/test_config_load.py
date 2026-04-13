@@ -18,7 +18,6 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.atomic_tools.float_precision == 2
     assert config.synthesis.runtime.max_turns == 50
     assert config.synthesis.runtime.max_generation_attempts == 5
-    assert config.synthesis.runtime.max_difficulty_cranks == 6
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
     assert config.synthesis.runtime.category_backoff_duration_s == 3600
     assert config.synthesis.runtime.schema_summary_max_tables == 32
@@ -26,13 +25,9 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.synthesis.runtime.prompt_schema_orientation_max_tables == 8
     assert config.synthesis.runtime.prompt_schema_orientation_max_columns == 8
     assert config.synthesis.runtime.prompt_tool_surface_hint_limit == 16
-    assert config.synthesis.runtime.prompt_self_anchor_surface_hint_limit == 8
-    assert config.synthesis.runtime.selected_topic_min_token_length == 3
     assert config.synthesis.runtime.label_preview_field_limit == 8
     assert config.synthesis.runtime.diagnostic_item_limit == 5
     assert config.synthesis.runtime.recent_tool_call_limit == 20
-    assert config.synthesis.runtime.constraint_density_relax_threshold == 2
-    assert config.synthesis.runtime.repeated_error_escalation_threshold == 2
     assert config.synthesis.runtime.payload_preview_max_string_length == 400
     assert config.synthesis.runtime.payload_preview_max_list_items == 3
     assert config.synthesis.runtime.payload_preview_max_dict_items == 6

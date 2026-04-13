@@ -423,27 +423,6 @@ def _id_chain_payload() -> SubmitDraftPayload:
         }
     )
 
-
-def _opaque_identifier_payload() -> SubmitDraftPayload:
-    anchor_entity = {"customer_id": 1}
-    return SubmitDraftPayload.model_validate(
-        {
-            "topic": "record_history",
-            "canonical_answer_json": '{"tracking_token": "550e8400-e29b-41d4-a716-446655440000"}',
-            "anchor_entity": anchor_entity,
-            "difficulty_vector": {
-                "search_cost": 2.0,
-                "solution_space": 1.0,
-                "constraint_density": 1.0,
-            },
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "제 기록과 연결된 추적 정보를 알려 주세요.",
-            ),
-        }
-    )
-
-
 def test_ungrounded_answer_strings_accepts_datetime_observations() -> None:
     ungrounded = _ungrounded_answer_strings(
         {
@@ -565,49 +544,6 @@ async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_requires_more_first_submit_exploration(
-    tmp_path: Path,
-) -> None:
-    controller = SubmitDraftController(
-        config=_config_with_synthesis_output(tmp_path),
-        requested_topic="assignment",
-        solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=1,
-            total_solver_runs=2,
-        ),
-        build_draft=lambda payload: payload,
-        max_submissions=3,
-    )
-    controller.record_atomic_tool_call(
-        tool_name="get_customer",
-        params={"id": 1},
-        result={"customer_name": "Alice"},
-    )
-    controller.record_atomic_tool_call(
-        tool_name="find_payment_by_customer_id",
-        params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
-        result=[{"payment_id": 11}, {"payment_id": 12}],
-    )
-
-    message = await controller.submit(_accepted_payload())
-
-    assert "Do not submit yet" in message
-    assert "Go back to research mode first." in message
-    assert "map the database relationships around the anchored user" in message
-    assert "until you fully understand the nearby evidence paths" in message
-    assert "at least 6 atomic observations" in message
-    assert "at least 4 distinct tool names" in message
-    assert "at least 3 anchor-scoped observations" in message
-    assert "Build a small relation map around the anchored user" in message
-    assert "nearby one-hop links" in message
-    assert "second-hop endpoint that might expose readable fields" in message
-    assert "do not jump to an unrelated entry type unless you can explain how it connects back to the anchored user" in message
-    assert "classify nearby relationships and paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends" in message
-    assert "compare multiple candidate paths" in message
-    assert "why every answer slot is grounded and needed" in message
-
-
-@pytest.mark.asyncio
 async def test_submit_draft_rejects_mixed_count_label_without_count_evidence(
     tmp_path: Path,
 ) -> None:
@@ -645,7 +581,6 @@ async def test_submit_draft_keeps_locked_self_anchor_across_feedback_retries(
         ),
         build_draft=lambda payload: payload,
         max_submissions=3,
-        self_anchor_surface_names=("get_customer",),
     )
     _seed_min_initial_exploration(controller)
 
@@ -670,7 +605,6 @@ async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings
         ),
         build_draft=lambda payload: payload,
         max_submissions=3,
-        self_anchor_surface_names=("get_customer",),
     )
     _seed_min_initial_exploration(controller)
 
@@ -869,33 +803,6 @@ async def test_submit_draft_calls_out_id_only_identifier_chain_path(
 
     assert "current anchored evidence path is still id-only" in message
     assert "Do not submit another answer made only of *_id fields" in message
-
-
-@pytest.mark.asyncio
-async def test_submit_draft_rejects_opaque_identifier_values(
-    tmp_path: Path,
-) -> None:
-    controller = SubmitDraftController(
-        config=_config_with_synthesis_output(tmp_path),
-        requested_topic="record_history",
-        solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=1,
-            total_solver_runs=2,
-        ),
-        build_draft=lambda payload: payload,
-        max_submissions=3,
-    )
-    controller.record_atomic_tool_call(
-        tool_name="get_customer",
-        params={"id": 1},
-        result={"customer_id": 1, "tracking_token": "550e8400-e29b-41d4-a716-446655440000"},
-    )
-
-    message = await controller.submit(_opaque_identifier_payload())
-
-    assert "opaque identifier values" in message
-    assert "UUIDs, hashes, encrypted tokens" in message
-
 
 @pytest.mark.asyncio
 async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> None:

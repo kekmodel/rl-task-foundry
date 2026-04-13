@@ -34,29 +34,6 @@ class CategoryTaxonomy:
 
 
 _WORD_SEPARATOR_RE = re.compile(r"[_\-\s]+")
-_PERSON_LIKE_IDENTIFIER_ALIASES: tuple[str, ...] = (
-    "customer",
-    "user",
-    "member",
-    "patient",
-    "guest",
-    "client",
-    "subscriber",
-    "rider",
-    "driver",
-    "student",
-    "teacher",
-    "employee",
-    "staff",
-    "agent",
-    "buyer",
-    "seller",
-    "owner",
-    "passenger",
-    "traveler",
-    "account holder",
-    "account_holder",
-)
 
 
 def normalize_topic(value: object) -> str:
@@ -78,43 +55,6 @@ def normalize_words(value: str, *, lowercase: bool = False) -> str:
 
 def topic_phrase(value: object, *, lowercase: bool = False) -> str:
     return normalize_words(normalize_topic(value), lowercase=lowercase)
-
-
-def topic_tokens(value: object, *, min_token_length: int) -> tuple[str, ...]:
-    normalized = topic_phrase(value, lowercase=True)
-    return tuple(
-        token
-        for token in re.findall(r"[a-z0-9]+", normalized)
-        if len(token) >= min_token_length
-    )
-
-
-def is_person_like_identifier(value: str) -> bool:
-    normalized = normalize_words(value, lowercase=True)
-    if not normalized:
-        return False
-    tokens = tuple(token for token in normalized.split() if token)
-    if not tokens:
-        return False
-    for alias in _PERSON_LIKE_IDENTIFIER_ALIASES:
-        alias_tokens = tuple(token for token in normalize_words(alias, lowercase=True).split() if token)
-        if alias_tokens and all(token in tokens for token in alias_tokens):
-            return True
-    return False
-
-
-def entity_slug_from_get_tool_name(tool_name: str) -> str | None:
-    normalized = tool_name.strip().lower()
-    if not normalized.startswith("get_"):
-        return None
-    if normalized.endswith("_by_id"):
-        return normalized[4:-6]
-    if normalized.endswith("_by_ids_batch"):
-        return normalized[4:-13]
-    suffix = normalized[4:]
-    if suffix:
-        return suffix
-    return None
 
 
 class DifficultyAxis(StrEnum):

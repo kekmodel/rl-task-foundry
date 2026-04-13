@@ -33,8 +33,6 @@ from rl_task_foundry.synthesis.contracts import (
     RolloutConstraintsContract,
     StrictModel,
     TaskContract,
-    entity_slug_from_get_tool_name,
-    is_person_like_identifier,
     normalize_topic,
 )
 from rl_task_foundry.synthesis.canonicalize import (
@@ -310,7 +308,6 @@ def summarize_atomic_tool_surface(
     max_entity_surfaces: int,
 ) -> dict[str, object]:
     entity_surfaces: list[dict[str, object]] = []
-    self_anchor_surfaces: list[str] = []
     family_counts: dict[str, int] = {}
     for tool in bundle.tools:
         family_counts[tool.family.value] = family_counts.get(tool.family.value, 0) + 1
@@ -330,9 +327,6 @@ def summarize_atomic_tool_surface(
                 "id_only": len(readable_fields) == 0,
             }
         )
-        entity_slug = entity_slug_from_get_tool_name(tool.name)
-        if entity_slug is not None and is_person_like_identifier(entity_slug):
-            self_anchor_surfaces.append(tool.name)
     entity_surfaces.sort(
         key=lambda item: (
             bool(item.get("id_only")),
@@ -343,7 +337,6 @@ def summarize_atomic_tool_surface(
         "tool_count": len(bundle.tools),
         "family_counts": family_counts,
         "entity_surfaces": entity_surfaces[:max_entity_surfaces],
-        "self_anchor_surfaces": self_anchor_surfaces[:max_entity_surfaces],
     }
 
 
@@ -516,11 +509,6 @@ class SynthesisAgentRuntime:
             phase_monitor=self.phase_monitor,
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
             forbidden_question_tokens=forbidden_question_tokens(schema_summary),
-            self_anchor_surface_names=tuple(
-                str(name)
-                for name in tool_surface_summary.get("self_anchor_surfaces", ())
-                if isinstance(name, str) and name.strip()
-            ),
         )
         # The shared backend instances hold mutable bindings for tools and the current
         # submit controller, so we keep one full synthesis conversation bound at a time.
