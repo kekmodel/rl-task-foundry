@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, ValidationError, field_validator
@@ -22,6 +23,7 @@ from rl_task_foundry.synthesis.contracts import (
     topic_tokens,
 )
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
+from rl_task_foundry.synthesis.prompts import difficulty_axis_feedback
 
 if TYPE_CHECKING:
     from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentOrchestrator
@@ -57,6 +59,7 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_RAW_IDENTIFIER_LEAK = "question_raw_identifier_leak"
     QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN = "question_entity_placeholder_forbidden"
     QUESTION_ANCHOR_ENTITY_LEAK = "question_anchor_entity_leak"
+    QUESTION_SELF_PERSPECTIVE_REQUIRED = "question_self_perspective_required"
     LABEL_SINGLE_TOOL_DERIVABLE = "label_single_tool_derivable"
     LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
@@ -81,11 +84,19 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON,
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH,
         SubmitDraftErrorCode.QUESTION_BODY_REQUIRED,
+        SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED,
     }
 )
 
 
 class _ParsedCanonicalAnswerJson(str):
+    """Validated JSON string with an attached parsed-object cache.
+
+    The `parsed` attribute is an optimization only. If model round-tripping turns
+    this subclass back into a plain `str`, `SubmitDraftPayload.canonical_answer`
+    falls back to `json.loads` and remains correct.
+    """
+
     __slots__ = ("parsed",)
 
     def __new__(cls, value: str, *, parsed: object) -> _ParsedCanonicalAnswerJson:
@@ -258,29 +269,6 @@ def _weakened_difficulty_axes(
     return weakened
 
 
-def _difficulty_axis_hint(axis: DifficultyAxis) -> str:
-    if axis is DifficultyAxis.SEARCH_COST:
-        return (
-            "Strengthen the label through search_cost. Change the label so it depends on a longer grounded evidence path. "
-            "A good next step is to add one more linked entity, require one more lookup before the label is fixed, "
-            "or combine facts from a deeper chain instead of reading one obvious record. "
-            "Do not spend the extra hop on echoing the anchor id or on whichever related row happened to appear first in exploration results. "
-            "If you need one related row among many, define a grounded ordering or tie-breaker that you can explain naturally to the user. "
-            "Prefer a local ordering inside the anchored scope before jumping to a global ranking over the whole database."
-        )
-    if axis is DifficultyAxis.SOLUTION_SPACE:
-        return (
-            "Strengthen the label through solution_space. Change the label so it is larger or less immediately determined. "
-            "A good next step is to return more answer fields, return an ordered set instead of one scalar, "
-            "or choose among several grounded candidates with an explicit tie-breaker."
-        )
-    return (
-        "Strengthen the label through constraint_density. Change the label by adding one more hard grounded rule. "
-        "A good next step is to add a uniqueness rule, a stricter ordering rule, a tighter filter, "
-        "or another grounded condition that removes valid answers."
-    )
-
-
 def _placeholder_tokens(payload: object) -> list[str]:
     serialized = json.dumps(payload, ensure_ascii=False, default=str)
     return sorted({token for token in _FORBIDDEN_PLACEHOLDER_TOKENS if token in serialized})
@@ -302,10 +290,7 @@ def _preview_payload(value: object) -> object:
 def _constraint_summary_payload(
     items: list[SubmitConstraintSummaryItem | dict[str, object]],
 ) -> list[dict[str, object]]:
-    return [
-        SubmitConstraintSummaryItem.model_validate(item).model_dump(mode="json")
-        for item in items
-    ]
+    return [SubmitConstraintSummaryItem.model_validate(item).model_dump(mode="json") for item in items]
 
 
 def _stable_json(value: object) -> str:
@@ -658,6 +643,29 @@ _ENTITY_PROMPT_RE = re.compile(
     re.DOTALL,
 )
 
+_PERSON_LIKE_ANCHOR_ALIASES: dict[str, tuple[str, ...]] = {
+    "customer": ("customer", "고객"),
+    "user": ("user", "사용자", "유저"),
+    "member": ("member", "회원"),
+    "patient": ("patient", "환자"),
+    "guest": ("guest", "게스트", "투숙객"),
+    "client": ("client", "고객", "클라이언트"),
+    "subscriber": ("subscriber", "구독자", "가입자"),
+    "rider": ("rider", "라이더", "탑승객"),
+    "driver": ("driver", "기사", "운전자", "드라이버"),
+    "student": ("student", "학생"),
+    "teacher": ("teacher", "교사", "선생님"),
+    "employee": ("employee", "직원"),
+    "staff": ("staff", "직원", "스태프"),
+    "agent": ("agent", "상담원", "에이전트"),
+    "buyer": ("buyer", "구매자"),
+    "seller": ("seller", "판매자"),
+    "owner": ("owner", "소유자"),
+    "passenger": ("passenger", "승객"),
+    "traveler": ("traveler", "여행자"),
+    "account_holder": ("account holder", "account_holder", "계정 소유자"),
+}
+
 
 def _split_entity_wrapped_prompt(
     value: str,
@@ -691,14 +699,59 @@ def _label_summary_matches_selected_topic(*, selected_topic: str, label_summary:
     return all(token in normalized_summary for token in selected_topic_tokens)
 
 
+def _person_like_anchor_aliases(anchor_entity: dict[str, object]) -> tuple[str, ...]:
+    aliases: list[str] = []
+    for raw_key in anchor_entity:
+        normalized_key = normalize_words(str(raw_key), lowercase=True)
+        key_tokens = tuple(token for token in normalized_key.split() if token)
+        for token, token_aliases in _PERSON_LIKE_ANCHOR_ALIASES.items():
+            if token in key_tokens:
+                aliases.extend(token_aliases)
+    return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def _question_uses_non_self_perspective(
+    question: str,
+    *,
+    anchor_entity: dict[str, object],
+) -> bool:
+    aliases = _person_like_anchor_aliases(anchor_entity)
+    if not aliases:
+        return False
+    lowered = question.lower()
+    for alias in aliases:
+        alias_pattern = re.escape(alias.lower())
+        english_patterns = (
+            rf"\b(?:this|that|the)\s+{alias_pattern}\b",
+            rf"\b{alias_pattern}'s\b",
+            rf"\bfor\s+(?:this|that|the)\s+{alias_pattern}\b",
+        )
+        korean_patterns = (
+            rf"(?:이|그|저|해당)\s*{alias_pattern}",
+            rf"{alias_pattern}(?:의|에게|한테|을|를|은|는|이|가)\b",
+        )
+        if any(re.search(pattern, lowered) for pattern in (*english_patterns, *korean_patterns)):
+            return True
+    return False
+
+
 def _question_repeats_anchor_entity(
     question: str,
     *,
     anchor_entity: dict[str, object],
 ) -> bool:
     lowered = question.lower()
-    for raw_key, raw_value in anchor_entity.items():
-        key = str(raw_key).strip().lower()
+    anchor_items = tuple(sorted((str(key), str(value)) for key, value in anchor_entity.items()))
+    return any(pattern.search(lowered) for pattern in _anchor_entity_patterns(anchor_items))
+
+
+@lru_cache(maxsize=256)
+def _anchor_entity_patterns(
+    anchor_items: tuple[tuple[str, str], ...],
+) -> tuple[re.Pattern[str], ...]:
+    compiled_patterns: list[re.Pattern[str]] = []
+    for raw_key, raw_value in anchor_items:
+        key = raw_key.strip().lower()
         if not key:
             continue
         base_key = key
@@ -709,17 +762,21 @@ def _question_repeats_anchor_entity(
         if not base_key:
             continue
         key_pattern = re.escape(normalize_words(base_key, lowercase=True))
-        value = str(raw_value).strip().lower()
+        value = raw_value.strip().lower()
         if not value:
             continue
         value_pattern = re.escape(value)
-        patterns = (
-            rf"(?<![a-z0-9_]){key_pattern}\s*[:#-]?\s*{value_pattern}(?![a-z0-9_])",
-            rf"(?<![a-z0-9_]){value_pattern}(?:번)?\s*[:#-]?\s*{key_pattern}(?![a-z0-9_])",
+        compiled_patterns.extend(
+            (
+                re.compile(
+                    rf"(?<![a-z0-9_]){key_pattern}\s*[:#-]?\s*{value_pattern}(?![a-z0-9_])"
+                ),
+                re.compile(
+                    rf"(?<![a-z0-9_]){value_pattern}(?:번)?\s*[:#-]?\s*{key_pattern}(?![a-z0-9_])"
+                ),
+            )
         )
-        if any(re.search(pattern, lowered) for pattern in patterns):
-            return True
-    return False
+    return tuple(compiled_patterns)
 
 
 @dataclass(slots=True)
@@ -897,8 +954,6 @@ class SubmitDraftController:
             error_codes.append(prompt_error)
         elif prompt_anchor_entity != payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH)
-        label_signature: str | None = None
-        label_slot_count: int | None = None
         constraint_count = len(payload.constraint_summary)
         label_signature = _stable_json(canonical_answer)
         label_slot_count = _answer_slot_count(canonical_answer)
@@ -936,13 +991,26 @@ class SubmitDraftController:
             question_lower = question_body.lower()
             if _contains_entity_placeholder_token(question_lower):
                 error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN)
+            has_raw_identifier_leak = False
+            has_anchor_entity_leak = False
             if _contains_raw_identifier_token(question_lower):
+                has_raw_identifier_leak = True
                 error_codes.append(SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK)
             if _question_repeats_anchor_entity(
                 question_body,
                 anchor_entity=payload.anchor_entity,
             ):
+                has_anchor_entity_leak = True
                 error_codes.append(SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK)
+            if (
+                not has_raw_identifier_leak
+                and not has_anchor_entity_leak
+                and _question_uses_non_self_perspective(
+                    question_body,
+                    anchor_entity=payload.anchor_entity,
+                )
+            ):
+                error_codes.append(SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED)
             if any(token in question_lower for token in self.forbidden_question_tokens):
                 error_codes.append(SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK)
         if _answer_uses_only_identifier_fields(canonical_answer):
@@ -968,14 +1036,12 @@ class SubmitDraftController:
                 error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED)
         if (
             self.required_axis is not None
-            and label_signature is not None
             and self._last_label_signature is not None
             and label_signature == self._last_label_signature
         ):
             error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
         if (
             self.required_axis is DifficultyAxis.SOLUTION_SPACE
-            and label_slot_count is not None
             and self._last_label_slot_count is not None
             and label_slot_count <= self._last_label_slot_count
         ):
@@ -1084,7 +1150,7 @@ class SubmitDraftController:
                 message=(
                     "Rejected. solver pass rate "
                     f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
-                    f"Crank {requested_axis.value}. {_difficulty_axis_hint(requested_axis)} "
+                    f"Crank {requested_axis.value}. {difficulty_axis_feedback(requested_axis)} "
                     f"Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that axis above {strongest_axis_value:.1f} with the smallest grounded step you can justify before resubmitting. "
                     f"{max(0, attempts_left_after)} attempts left."
                 ),
@@ -1157,16 +1223,19 @@ class SubmitDraftController:
                 "Rejected. Replace every placeholder token with grounded names and values from the current database."
             ),
             SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK: (
-                "Rejected. Rewrite the user-facing question without raw table names, join-table names, or SQL keywords."
+                "Rejected. Rewrite the user-facing question for a non-technical user who knows nothing about the database schema. Remove raw table names, bridge-table names, SQL keywords, and other internal data-model language."
             ),
             SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK: (
-                "Rejected. Rewrite the user-facing question without raw identifier field names such as <entity>_id. Keep identifiers only inside anchor_entity."
+                "Rejected. Rewrite the user-facing question for a user who does not know internal field names. Remove raw identifier names such as <entity>_id and keep identifiers only inside anchor_entity."
             ),
             SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN: (
                 "Rejected. Do not repeat the literal <entity> token inside the user-request body. Use it only once as the required XML entity block at the top."
             ),
             SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK: (
-                "Rejected. Rewrite the user-request body without repeating the raw anchor entity id. Keep the raw anchor only inside the entity block and refer to it naturally in the request."
+                "Rejected. Rewrite the user-request body without repeating the raw anchor entity id. The user only sees the entity block, so refer to that anchor naturally instead of surfacing its internal identifier again."
+            ),
+            SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED: (
+                "Rejected. Treat the anchor entity as the requesting user. Rewrite the request from the user's own perspective, for example 'my recent payments' rather than 'this customer's payments'."
             ),
             SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE: (
                 "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations. A one-hop foreign-key lookup that only returns identifiers is still too weak."
@@ -1263,7 +1332,7 @@ class SubmitDraftController:
         submission_index: int,
         message: str,
         error_codes: list[SubmitDraftErrorCode],
-        payload: SubmitDraftPayload | None = None,
+        payload: SubmitDraftPayload | dict[str, object] | None = None,
         pass_rate: float | None = None,
         matched_solver_runs: int | None = None,
         total_solver_runs: int | None = None,

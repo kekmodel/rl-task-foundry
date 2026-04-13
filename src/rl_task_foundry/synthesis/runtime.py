@@ -58,6 +58,7 @@ from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_use
 from rl_task_foundry.synthesis.schema_inference import extract_output_schema_from_canonical
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
+    SubmitDraftErrorCode,
     SubmitDraftPayload,
 )
 from rl_task_foundry.synthesis.tool_runtime import (
@@ -348,7 +349,6 @@ def summarize_atomic_tool_surface(
         )
     return {
         "entity_surfaces": entity_surfaces[:max_entity_surfaces],
-        "point_lookups": entity_surfaces[:max_entity_surfaces],
     }
 
 
@@ -495,6 +495,8 @@ class SynthesisAgentRuntime:
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
             forbidden_question_tokens=forbidden_question_tokens(schema_summary),
         )
+        # The shared backend instances hold mutable bindings for tools and the current
+        # submit controller, so we keep one full synthesis conversation bound at a time.
         async with self._conversation_lock:
             await self._prime_synthesis_backends_with_context(
                 db_id=db_id,
@@ -868,9 +870,9 @@ class SynthesisAgentRuntime:
             outcome = SynthesisGenerationOutcome.ARTIFACT_INVALID
             if record.outcome == "accepted":
                 outcome = SynthesisGenerationOutcome.PASSED
-            elif "reject_too_easy" in error_codes:
+            elif SubmitDraftErrorCode.REJECT_TOO_EASY.value in error_codes:
                 outcome = SynthesisGenerationOutcome.DIFFICULTY_CRANK_INVALID
-            elif "reject_too_hard" in error_codes:
+            elif SubmitDraftErrorCode.REJECT_TOO_HARD.value in error_codes:
                 outcome = SynthesisGenerationOutcome.DIFFICULTY_WEAKENED
             attempts.append(
                 SynthesisGenerationAttempt(

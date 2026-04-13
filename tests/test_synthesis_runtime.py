@@ -569,8 +569,50 @@ async def test_submit_draft_rejects_questions_that_repeat_raw_identifier_fields(
 
     message = await controller.submit(payload)
 
-    assert "raw identifier field names" in message
+    assert "user who does not know internal field names" in message
+    assert "Remove raw identifier names" in message
     assert controller.attempts[-1].error_codes[0] == "question_raw_identifier_leak"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_feedbacks_when_person_anchor_is_not_self_perspective(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="payment_history",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_payment_by_customer_id",
+        params={"customer_id": 1, "limit": 5},
+        result=[{"payment_id": 10}, {"payment_id": 11}],
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"customer_id": 1},
+            "question": _wrap_user_prompt(
+                {"customer_id": 1},
+                "이 고객의 최근 결제 내역을 알려 주세요.",
+            ),
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Treat the anchor entity as the requesting user." in message
+    assert "Submission budget unchanged." in message
+    assert controller.attempts == []
+    assert controller.submissions_left() == controller.max_submissions
 
 
 @pytest.mark.asyncio
@@ -808,7 +850,8 @@ async def test_submit_draft_rejects_raw_identifier_fields_with_korean_particles(
 
     message = await controller.submit(payload)
 
-    assert "raw identifier field names" in message
+    assert "user who does not know internal field names" in message
+    assert "Remove raw identifier names" in message
     assert controller.attempts[-1].error_codes[0] == "question_raw_identifier_leak"
 
 

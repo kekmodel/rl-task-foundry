@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rl_task_foundry.synthesis.contracts import topic_phrase
+from rl_task_foundry.synthesis.contracts import DifficultyAxis, topic_phrase
 
 LANGUAGE_NAMES = {
     "ko": "Korean",
@@ -16,11 +16,42 @@ TASK_LANGUAGE_INSTRUCTION = (
     "Schema field names, JSON keys, SQL, and tool names must remain in English."
 )
 
+_DIFFICULTY_AXIS_GUIDANCE_BY_AXIS: dict[DifficultyAxis, str] = {
+    DifficultyAxis.SEARCH_COST: (
+        "change the label so it depends on a longer grounded evidence path: for example, "
+        "add one more linked entity, require one more lookup before the label is fixed, "
+        "or force the label to combine facts from a deeper chain instead of a single obvious record. "
+        "Do not spend the extra hop on echoing the anchor id or on whichever related row happened to appear first in exploration results. "
+        "If you need one related row among many, define a grounded ordering or tie-breaker that you can explain naturally to the user. "
+        "Prefer a local ordering inside the anchored scope before jumping to a global ranking over the whole database."
+    ),
+    DifficultyAxis.SOLUTION_SPACE: (
+        "change the label so it is larger or less immediately determined: for example, "
+        "add more answer fields, return an ordered set instead of one scalar, ask for the top few grounded items instead of one item, "
+        "or require choosing among several grounded candidates with an explicit tie-breaker."
+    ),
+    DifficultyAxis.CONSTRAINT_DENSITY: (
+        "change the label by adding one more hard grounded rule: for example, "
+        "add a uniqueness rule, add a stricter ordering or tie-breaker, require a subset condition, "
+        "or combine two grounded filters so fewer labels remain valid."
+    ),
+}
+
+
+def difficulty_axis_guidance(axis: DifficultyAxis) -> str:
+    return _DIFFICULTY_AXIS_GUIDANCE_BY_AXIS[axis]
+
+
+def difficulty_axis_feedback(axis: DifficultyAxis) -> str:
+    guidance = difficulty_axis_guidance(axis)
+    return f"Strengthen the label through {axis.value}. {guidance[:1].upper()}{guidance[1:]}"
+
+
 DIFFICULTY_AXIS_GUIDANCE = (
     "Difficulty axes are ways to change the label itself, not just to rewrite the question. "
-    "When you strengthen search_cost, change the label so it depends on a longer grounded evidence path: for example, add one more linked entity, require one more lookup before the label is fixed, or force the label to combine facts from a deeper chain instead of a single obvious record. "
-    "When you strengthen solution_space, change the label so it is larger or less immediately determined: for example, add more answer fields, return an ordered set instead of one scalar, ask for the top few grounded items instead of one item, or require choosing among several grounded candidates with an explicit tie-breaker. "
-    "When you strengthen constraint_density, change the label by adding one more hard grounded rule: for example, add a uniqueness rule, add a stricter ordering or tie-breaker, require a subset condition, or combine two grounded filters so fewer labels remain valid. "
+    f"When you strengthen {DifficultyAxis.SEARCH_COST.value}, {difficulty_axis_guidance(DifficultyAxis.SEARCH_COST)} "
+    f"When you strengthen {DifficultyAxis.SOLUTION_SPACE.value}, {difficulty_axis_guidance(DifficultyAxis.SOLUTION_SPACE)} "
+    f"When you strengthen {DifficultyAxis.CONSTRAINT_DENSITY.value}, {difficulty_axis_guidance(DifficultyAxis.CONSTRAINT_DENSITY)} "
     "After a too-easy result, do not keep the same label and only rewrite the question. Strengthen the label itself in the requested way."
 )
 
@@ -46,6 +77,9 @@ def build_synthesis_agent_instructions() -> str:
         "You are a synthesis agent that builds grounded RLVR database tasks. "
         "You may use the provided atomic function tools to inspect real database rows and aggregates. "
         "Build the grounded label first. Then derive both the selected topic string and the anchor entity from that label. "
+        "Assume the end user knows nothing about the database schema, hidden joins, internal identifiers, or tool paths. "
+        "The user only sees the <entity> block and the natural-language request, so the task must read like a normal business request from that user's perspective. "
+        "Treat anchor_entity as the requesting user's own entity by default. "
         "The requested topic is only a soft coverage hint, not a fixed contract. "
         "If the hint would force an id-only, trivial, or weak label, ignore it and choose the better grounded topic that naturally fits the observed label. "
         "You may change the anchor entity when you need a better grounded task. "
@@ -58,6 +92,7 @@ def build_synthesis_agent_instructions() -> str:
         "The JSON inside the <entity> block must exactly match anchor_entity, including multi-column primary keys when present. "
         "Do not guess hidden values. "
         "Treat schema orientation as navigation only. A column appearing in the schema summary does not make it available for the label. A field is usable in the canonical answer only if you directly observed it in actual tool results on the chosen evidence path. "
+        "Do not write a request that assumes the user understands hidden database structure. If a relationship is only visible because you explored it with tools, express it as a natural business need rather than as an internal linkage or data-model fact. "
         "Make label_summary an English explanation that explicitly includes the selected topic phrase and explains why the label is grounded and unique. "
         "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. Do not invent placeholders such as Unknown or Entity #1. "
         "Do not submit blank or placeholder string fields in the canonical answer. Every answer field must carry a grounded, non-empty value. "
@@ -71,6 +106,8 @@ def build_synthesis_agent_instructions() -> str:
         "Keep exploring until the label requires combining at least two distinct grounded observations. "
         "Do not base the label on whichever related row happened to appear first during exploration. If you need one related row among many, define a grounded ordering or tie-breaker that the user can understand, such as earliest date, latest payment, lowest amount, highest count, or alphabetical title. "
         "Do not reveal internal tool paths in the user-facing question. "
+        "Do not expose hidden database concepts such as rows, columns, links, bridge tables, foreign keys, or implementation-specific relationships in the user-facing request. "
+        "When the anchor is a person-like record such as a customer, user, member, patient, rider, or account holder, write the request from that person's first-person perspective whenever natural, for example 'my recent payments' rather than 'this customer's payments'. "
         "Do not repeat the raw anchor entity key or raw anchor entity id inside the user-request body; the <entity> block already provides that grounding. Refer to the anchor naturally with a domain-appropriate phrase instead of the raw identifier. "
         "Do not repeat raw identifier field names such as <entity>_id in the user-request body; keep identifiers only inside anchor_entity and the entity block. "
         "Do not mention raw table names, bridge-table names, or SQL keywords such as JOIN, LIMIT, SELECT, or ORDER BY in the user-request body. "
@@ -120,8 +157,6 @@ def build_synthesis_input(
 
     tool_surface_lines: list[str] = []
     surfaces = tool_surface_summary.get("entity_surfaces")
-    if not isinstance(surfaces, list):
-        surfaces = tool_surface_summary.get("point_lookups")
     if isinstance(surfaces, list):
         for item in surfaces[:16]:
             if not isinstance(item, dict):
