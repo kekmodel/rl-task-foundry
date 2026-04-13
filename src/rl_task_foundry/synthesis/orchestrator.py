@@ -11,7 +11,6 @@ from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryStatus,
-    SynthesisDifficultyRetrySeed,
     SynthesisEnvironmentDraft,
 )
 from rl_task_foundry.synthesis.scheduler import (
@@ -35,7 +34,6 @@ class SynthesisRuntimeHandle(Protocol):
         db_id: str,
         requested_topic: str,
         graph: SchemaGraph | None = None,
-        retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> SynthesisEnvironmentDraft: ...
 
     async def close(self) -> None: ...

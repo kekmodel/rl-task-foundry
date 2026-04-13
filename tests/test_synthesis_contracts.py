@@ -11,7 +11,6 @@ from rl_task_foundry.synthesis.contracts import (
     ConstraintSummaryItem,
     CrossInstanceSet,
     DifficultyAxis,
-    DIFFICULTY_AXIS_SPECS,
     DIFFICULTY_CRANK_ORDER,
     EnvironmentContract,
     EnvironmentQualityMetrics,
@@ -27,13 +26,6 @@ from rl_task_foundry.synthesis.contracts import (
     OutputSchemaContract,
     RolloutConstraintsContract,
     TaskContract,
-    ToolContract,
-    ToolEmptyResultBehavior,
-    ToolParameterContract,
-    ToolParameterType,
-    ToolSelfTestCheck,
-    ToolSelfTestContract,
-    ToolTimeoutBehavior,
     build_difficulty_vector,
 )
 
@@ -218,42 +210,11 @@ def test_cross_instance_set_rejects_duplicate_label_signatures_when_required() -
         )
 
 
-def test_tool_contract_defaults_error_behavior() -> None:
-    tool = ToolContract(
-        name="get_hotels_by_city",
-        return_schema=OutputFieldContract(
-            name="hotels",
-            type=OutputFieldType.LIST,
-            items=OutputFieldContract(name="hotel", type=OutputFieldType.STRING),
-        ),
-    )
-
-    assert tool.empty_result_behavior is ToolEmptyResultBehavior.RETURN_EMPTY
-    assert tool.timeout_behavior is ToolTimeoutBehavior.RAISE_TIMEOUT
-
-
-def test_tool_self_test_contract_defaults_required_checks() -> None:
-    contract = ToolSelfTestContract()
-
-    assert contract.entrypoint == "run_self_test"
-    assert contract.required_checks == [
-        ToolSelfTestCheck.HAPPY_PATH,
-        ToolSelfTestCheck.EMPTY_RESULT_BEHAVIOR,
-        ToolSelfTestCheck.TIMEOUT_BEHAVIOR,
-        ToolSelfTestCheck.DETERMINISTIC_ORDERING,
-    ]
-
-
-def test_difficulty_axis_specs_cover_every_axis_in_crank_order() -> None:
-    assert set(DIFFICULTY_AXIS_SPECS) == set(DifficultyAxis)
-    assert tuple(DIFFICULTY_AXIS_SPECS) == DIFFICULTY_CRANK_ORDER
+def test_difficulty_crank_order_covers_every_axis_once() -> None:
+    assert set(DIFFICULTY_CRANK_ORDER) == set(DifficultyAxis)
+    assert len(DIFFICULTY_CRANK_ORDER) == len(set(DIFFICULTY_CRANK_ORDER))
 
 
 def test_float_range_parameter_space_rejects_invalid_bounds() -> None:
     with pytest.raises(ValidationError):
         FloatRangeParameterSpace(min=10.0, max=5.0)
-
-
-def test_tool_parameter_contract_requires_enum_values_for_enum_types() -> None:
-    with pytest.raises(ValidationError):
-        ToolParameterContract(name="bucket", type=ToolParameterType.ENUM)

@@ -17,7 +17,6 @@ def test_load_config_uses_solver_replicas_source_of_truth():
     assert config.atomic_tools.max_batch_values == 128
     assert config.atomic_tools.float_precision == 2
     assert config.synthesis.runtime.max_turns == 8
-    assert config.synthesis.runtime.explicit_memory_window == 8
     assert config.synthesis.runtime.max_generation_attempts == 5
     assert config.synthesis.runtime.max_difficulty_cranks == 6
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
@@ -31,11 +30,9 @@ def test_load_config_applies_runtime_model_overrides():
     config = load_config(
         Path("rl_task_foundry.yaml"),
         composer_provider="local_server",
-        solver_backbone_provider="local_server",
         solver_provider="local_server",
         solver_model="local-gpt",
     )
     assert config.models.composer.provider == "local_server"
-    assert config.models.solver_backbone.provider == "local_server"
     assert all(solver.provider == "local_server" for solver in config.models.solvers)
     assert all(solver.model == "local-gpt" for solver in config.models.solvers)

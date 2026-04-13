@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,34 +12,25 @@ from types import SimpleNamespace
 from typing import Any
 
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
+from rl_task_foundry.infra.sdk_helpers import (
+    ToolExecutor,
+    extract_token_usage as _extract_token_usage,
+    extract_tool_call_name as _extract_tool_call_name,
+    extract_turn_count as _extract_turn_count,
+    load_sdk_components as _shared_load_sdk_components,
+    make_sdk_tool as _shared_make_sdk_tool,
+    normalize_tool_definition as _shared_normalize_tool_definition,
+)
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
 
 ArtifactWriter = Callable[[str, dict[str, Any]], str]
-ToolExecutor = Callable[[dict[str, Any]], Any]
 
 
 def _load_sdk_components() -> SimpleNamespace:
-    from agents import (
-        Agent,
-        ModelSettings,
-        OpenAIChatCompletionsModel,
-        Runner,
-        SQLiteSession,
-        ToolsToFinalOutputResult,
-        set_tracing_disabled,
-    )
-    from openai import AsyncOpenAI
-
-    return SimpleNamespace(
-        Agent=Agent,
-        AsyncOpenAI=AsyncOpenAI,
-        ModelSettings=ModelSettings,
-        OpenAIChatCompletionsModel=OpenAIChatCompletionsModel,
-        Runner=Runner,
-        SQLiteSession=SQLiteSession,
-        ToolsToFinalOutputResult=ToolsToFinalOutputResult,
-        set_tracing_disabled=set_tracing_disabled,
+    return _shared_load_sdk_components(
+        include_sqlite_session=True,
+        include_tools_to_final_output=True,
     )
 
 
@@ -57,51 +47,6 @@ def _raw_output_text(final_output: Any, submitted_answer_text: str | None) -> st
 def _failure_raw_output_text(error: Exception) -> str:
     del error
     return ""
-
-
-def _extract_token_usage(run_result: Any) -> dict[str, int]:
-    usage = getattr(getattr(run_result, "context_wrapper", None), "usage", None)
-    if usage is None:
-        return {}
-    return {
-        "requests": int(getattr(usage, "requests", 0) or 0),
-        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
-    }
-
-
-def _extract_turn_count(run_result: Any) -> int:
-    explicit_turn_count = getattr(run_result, "_current_turn", None)
-    if explicit_turn_count is None:
-        explicit_turn_count = getattr(run_result, "current_turn", None)
-    if explicit_turn_count:
-        return int(explicit_turn_count)
-
-    raw_responses = getattr(run_result, "raw_responses", None)
-    if isinstance(raw_responses, list) and raw_responses:
-        return len(raw_responses)
-
-    usage = getattr(getattr(run_result, "context_wrapper", None), "usage", None)
-    requests = getattr(usage, "requests", 0) if usage is not None else 0
-    return int(requests or 0)
-
-
-def _extract_tool_call_name(item: Any) -> str | None:
-    for attr in ("name", "tool_name"):
-        value = getattr(item, attr, None)
-        if isinstance(value, str) and value:
-            return value
-    raw_item = getattr(item, "raw_item", None)
-    if raw_item is not None:
-        for attr in ("name", "tool_name"):
-            value = getattr(raw_item, attr, None)
-            if isinstance(value, str) and value:
-                return value
-    match = re.search(r"tool-call\(([^)]+)\)", repr(item))
-    if match:
-        return match.group(1)
-    return None
 
 
 def _extract_tool_calls(
@@ -176,38 +121,11 @@ def _parse_submission_output_string(final_output: str) -> dict[str, Any] | None:
 
 
 def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(definition, dict):
-        raise TypeError("tool definitions must be dict-like payloads")
-    return {
-        "name": definition["name"],
-        "description": definition["description"],
-        "params_schema": dict(definition.get("params_schema", {})),
-        "semantic_key": definition.get("semantic_key"),
-    }
+    return _shared_normalize_tool_definition(definition, include_semantic_key=True)
 
 
 def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object:
-    from agents import FunctionTool
-    from agents.strict_schema import ensure_strict_json_schema
-
-    params_json_schema = ensure_strict_json_schema(dict(definition["params_schema"]))
-
-    async def _invoke_tool(_tool_context: Any, input_json: str) -> Any:
-        payload = json.loads(input_json) if input_json else {}
-        if not isinstance(payload, dict):
-            raise ValueError("Tool input must be a JSON object")
-        result = executor(payload)
-        if hasattr(result, "__await__"):
-            return await result
-        return result
-
-    return FunctionTool(
-        name=str(definition["name"]),
-        description=str(definition["description"]),
-        params_json_schema=params_json_schema,
-        on_invoke_tool=_invoke_tool,
-        strict_json_schema=True,
-    )
+    return _shared_make_sdk_tool(definition, executor)
 
 
 def _make_submit_result_tool() -> object:

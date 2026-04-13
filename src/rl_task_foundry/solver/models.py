@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-
-class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+from rl_task_foundry.config.models import StrictModel
 
 
 class SolverResult(StrictModel):

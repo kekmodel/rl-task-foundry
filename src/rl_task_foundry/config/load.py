@@ -44,14 +44,12 @@ def apply_model_overrides(
     *,
     composer_provider: str | None = None,
     composer_model: str | None = None,
-    solver_backbone_provider: str | None = None,
-    solver_backbone_model: str | None = None,
     solver_provider: str | None = None,
     solver_model: str | None = None,
 ) -> AppConfig:
     """Apply runtime model/provider overrides without mutating the source config."""
 
-    for provider_name in (composer_provider, solver_backbone_provider, solver_provider):
+    for provider_name in (composer_provider, solver_provider):
         if provider_name is not None:
             _validate_provider_name(config, provider_name)
 
@@ -61,11 +59,6 @@ def apply_model_overrides(
         models.composer.provider = composer_provider
     if composer_model is not None:
         models.composer.model = composer_model
-
-    if solver_backbone_provider is not None:
-        models.solver_backbone.provider = solver_backbone_provider
-    if solver_backbone_model is not None:
-        models.solver_backbone.model = solver_backbone_model
 
     if solver_provider is not None or solver_model is not None:
         updated_solvers: list[SolverModelConfig] = []
@@ -79,7 +72,6 @@ def apply_model_overrides(
             updated_solvers.append(updated)
         models = ModelsConfig(
             composer=models.composer,
-            solver_backbone=models.solver_backbone,
             solvers=updated_solvers,
         )
 
@@ -91,8 +83,6 @@ def load_config(
     *,
     composer_provider: str | None = None,
     composer_model: str | None = None,
-    solver_backbone_provider: str | None = None,
-    solver_backbone_model: str | None = None,
     solver_provider: str | None = None,
     solver_model: str | None = None,
 ) -> AppConfig:
@@ -104,8 +94,6 @@ def load_config(
         config,
         composer_provider=composer_provider,
         composer_model=composer_model,
-        solver_backbone_provider=solver_backbone_provider,
-        solver_backbone_model=solver_backbone_model,
         solver_provider=solver_provider,
         solver_model=solver_model,
     )

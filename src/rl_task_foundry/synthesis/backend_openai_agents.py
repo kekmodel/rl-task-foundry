@@ -11,6 +11,15 @@ from types import SimpleNamespace
 from typing import Any
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
+from rl_task_foundry.infra.sdk_helpers import (
+    ToolExecutor,
+    extract_token_usage as _extract_token_usage,
+    extract_tool_call_name as _extract_tool_call_name,
+    extract_turn_count as _extract_turn_count,
+    load_sdk_components as _shared_load_sdk_components,
+    make_sdk_tool as _shared_make_sdk_tool,
+    normalize_tool_definition as _normalize_tool_definition,
+)
 from rl_task_foundry.synthesis.prompts import (
     build_synthesis_agent_instructions,
     build_synthesis_input,
@@ -19,7 +28,6 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     build_submit_draft_sdk_tool,
 )
-from rl_task_foundry.synthesis.tool_runtime import ToolExecutor
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,126 +42,8 @@ class SynthesisConversationResult:
     tool_calls: tuple[str, ...] = ()
 
 
-def _load_sdk_components() -> SimpleNamespace:
-    from agents import (
-        Agent,
-        ModelSettings,
-        OpenAIChatCompletionsModel,
-        Runner,
-        set_tracing_disabled,
-    )
-    from openai import AsyncOpenAI
-
-    return SimpleNamespace(
-        Agent=Agent,
-        AsyncOpenAI=AsyncOpenAI,
-        ModelSettings=ModelSettings,
-        OpenAIChatCompletionsModel=OpenAIChatCompletionsModel,
-        Runner=Runner,
-        set_tracing_disabled=set_tracing_disabled,
-    )
-
-
 def _trace_stub(kind: str, db_id: str, provider: str, model: str) -> str:
     return f"memory://{kind}/{db_id}/synthesis/{provider}/{model}"
-
-
-def _extract_token_usage(run_result: Any) -> dict[str, int]:
-    usage = getattr(getattr(run_result, "context_wrapper", None), "usage", None)
-    if usage is None:
-        return {}
-    return {
-        "requests": int(getattr(usage, "requests", 0) or 0),
-        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
-    }
-
-
-def _extract_turn_count(run_result: Any) -> int:
-    explicit_turn_count = getattr(run_result, "_current_turn", None)
-    if explicit_turn_count is None:
-        explicit_turn_count = getattr(run_result, "current_turn", None)
-    if explicit_turn_count:
-        return int(explicit_turn_count)
-    raw_responses = getattr(run_result, "raw_responses", None)
-    if isinstance(raw_responses, list) and raw_responses:
-        return len(raw_responses)
-    usage = getattr(getattr(run_result, "context_wrapper", None), "usage", None)
-    return int(getattr(usage, "requests", 0) or 0)
-
-
-def _extract_tool_call_name(item: Any) -> str | None:
-    for attr in ("name", "tool_name"):
-        value = getattr(item, attr, None)
-        if isinstance(value, str) and value:
-            return value
-    raw_item = getattr(item, "raw_item", None)
-    if raw_item is not None:
-        for attr in ("name", "tool_name"):
-            value = getattr(raw_item, attr, None)
-            if isinstance(value, str) and value:
-                return value
-    if isinstance(item, str) and item.startswith("tool-call(") and item.endswith(")"):
-        return item[len("tool-call(") : -1]
-    return None
-
-
-def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(definition, dict):
-        raise TypeError("tool definitions must be dict-like payloads")
-    return {
-        "name": definition["name"],
-        "description": definition["description"],
-        "params_schema": dict(definition.get("params_schema", {})),
-    }
-
-
-def _preview_payload(value: object) -> object:
-    if isinstance(value, str):
-        return value[:400]
-    if isinstance(value, list):
-        return [_preview_payload(item) for item in value[:3]]
-    if isinstance(value, dict):
-        preview: dict[str, object] = {}
-        for key, item in list(value.items())[:6]:
-            preview[str(key)] = _preview_payload(item)
-        return preview
-    return value
-
-
-def _make_sdk_tool(
-    definition: dict[str, Any],
-    executor: ToolExecutor,
-    *,
-    controller: SubmitDraftController,
-) -> object:
-    from agents import FunctionTool
-    from agents.strict_schema import ensure_strict_json_schema
-
-    params_json_schema = ensure_strict_json_schema(dict(definition["params_schema"]))
-
-    async def _invoke_tool(_tool_context: Any, input_json: str) -> Any:
-        payload = json.loads(input_json) if input_json else {}
-        if not isinstance(payload, dict):
-            raise ValueError("Tool input must be a JSON object")
-        result = executor(payload)
-        if hasattr(result, "__await__"):
-            result = await result
-        controller.record_atomic_tool_call(
-            tool_name=str(definition["name"]),
-            params={str(key): value for key, value in payload.items()},
-            result=result,
-        )
-        return result
-
-    return FunctionTool(
-        name=str(definition["name"]),
-        description=str(definition["description"]),
-        params_json_schema=params_json_schema,
-        on_invoke_tool=_invoke_tool,
-        strict_json_schema=True,
-    )
 
 
 def _build_agent(
@@ -170,6 +60,10 @@ def _build_agent(
         output_type=None,
         model_settings=sdk.ModelSettings(parallel_tool_calls=False),
     )
+
+
+def _load_sdk_components() -> SimpleNamespace:
+    return _shared_load_sdk_components()
 
 
 @dataclass(slots=True)
@@ -239,10 +133,14 @@ class OpenAIAgentsSynthesisBackend:
             if executor is None:
                 continue
             sdk_tools.append(
-                _make_sdk_tool(
+                _shared_make_sdk_tool(
                     definition,
                     executor,
-                    controller=self.submit_draft_controller,
+                    after_invoke=lambda name, payload, result, controller=self.submit_draft_controller: controller.record_atomic_tool_call(
+                        tool_name=name,
+                        params=payload,
+                        result=result,
+                    ),
                 )
             )
         sdk_tools.append(build_submit_draft_sdk_tool(self.submit_draft_controller))

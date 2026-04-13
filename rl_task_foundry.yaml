@@ -36,9 +36,6 @@ models:
   composer:
     provider: "codex_oauth"
     model: "gpt-5.4-mini"
-  solver_backbone:
-    provider: "codex_oauth"
-    model: "gpt-5.4-mini"
   solvers:
     - solver_id: "gpt54m_replica"
       backend: "openai_agents"
@@ -72,7 +69,6 @@ synthesis:
     max_turns: 8
     tracing: true
     sdk_sessions_enabled: false
-    explicit_memory_window: 8
     max_generation_attempts: 5
     max_difficulty_cranks: 6
     max_consecutive_category_discards: 3
@@ -83,10 +79,8 @@ synthesis:
 
 solver_runtime:
   max_turns: 16
-  structured_output_required: true
   tracing: true
   sdk_sessions_enabled: true
-  canonical_state_store: "run_db"
 
 calibration:
   lower_pass_rate: 0.25
@@ -96,23 +90,6 @@ calibration:
   post_canary_batch_size: 3
   full_replica_limit: 30
   safe_early_termination: true
-  difficulty_weight_hops: 100.0
-  difficulty_weight_family: 10.0
-  difficulty_weight_outcome: 3.0
-  difficulty_weight_answer_width: 1.0
-  difficulty_weight_fanout: 0.1
-  difficulty_weight_shortcuts: 0.5
-  difficulty_fanout_cap: 99.0
-  difficulty_family_order:
-    status_lookup: 0
-    timeline_resolution: 1
-    causal_chain: 2
-    aggregate_verification: 3
-  difficulty_outcome_order:
-    answer: 0
-    no_result: 1
-    clarify: 2
-    deny: 2
 
 dedup:
   exact_enabled: true

@@ -438,8 +438,13 @@ class EnvironmentRegistryWriter:
         except Exception:
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            if final_dir.exists() and not self._has_env_row(env.env_id):
-                shutil.rmtree(final_dir, ignore_errors=True)
+            if final_dir.exists():
+                try:
+                    has_env_row = self._has_env_row(env.env_id)
+                except Exception:
+                    has_env_row = True
+                if not has_env_row:
+                    shutil.rmtree(final_dir, ignore_errors=True)
             raise
 
         if self.near_dup_enabled:

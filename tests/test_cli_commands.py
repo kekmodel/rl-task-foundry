@@ -48,7 +48,7 @@ def test_cli_validate_config_command():
     ) in normalized
     assert (
         "synthesis_runtime=max_turns=8,tracing=True,sdk_sessions_enabled=False,"
-        "memory_window=8,max_generation_attempts=5,"
+        "max_generation_attempts=5,"
         "max_difficulty_cranks=6,"
         "max_consecutive_category_discards=3,category_backoff_duration_s=3600"
     ) in normalized
@@ -445,8 +445,6 @@ def test_cli_validate_config_applies_runtime_overrides():
             "validate-config",
             "--composer-provider",
             "local_server",
-            "--solver-backbone-provider",
-            "local_server",
             "--solver-provider",
             "local_server",
             "--solver-model",
@@ -455,7 +453,6 @@ def test_cli_validate_config_applies_runtime_overrides():
     )
     assert result.exit_code == 0
     assert "composer=local_server/gpt-5.4-mini" in result.stdout
-    assert "solver_backbone=local_server/gpt-5.4-mini" in result.stdout
     assert "gpt54m_replica=local_server/local-gptx4" in result.stdout
 
 def test_cli_run_summary_reads_run_db(tmp_path):

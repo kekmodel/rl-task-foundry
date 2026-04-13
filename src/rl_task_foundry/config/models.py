@@ -59,7 +59,6 @@ class SolverModelConfig(StrictModel):
 
 class ModelsConfig(StrictModel):
     composer: ModelRef
-    solver_backbone: ModelRef
     solvers: list[SolverModelConfig]
 
     @computed_field  # type: ignore[prop-decorator]
@@ -79,7 +78,6 @@ class SynthesisRuntimeConfig(StrictModel):
     max_turns: int = Field(default=8, ge=1)
     tracing: bool = True
     sdk_sessions_enabled: bool = False
-    explicit_memory_window: int = Field(default=8, ge=1)
     max_generation_attempts: int = Field(default=5, ge=1)
     max_difficulty_cranks: int = Field(default=6, ge=1)
     max_consecutive_category_discards: int = Field(default=3, ge=1)
@@ -100,10 +98,8 @@ class SynthesisConfig(StrictModel):
 
 class SolverRuntimeConfig(StrictModel):
     max_turns: int = 16
-    structured_output_required: bool = True
     tracing: bool = True
     sdk_sessions_enabled: bool = True
-    canonical_state_store: Literal["run_db"] = "run_db"
 
 
 class CalibrationConfig(StrictModel):
@@ -114,29 +110,6 @@ class CalibrationConfig(StrictModel):
     post_canary_batch_size: int = Field(default=3, ge=1)
     full_replica_limit: int = Field(default=30, ge=1)
     safe_early_termination: bool = True
-    difficulty_weight_hops: float = 100.0
-    difficulty_weight_family: float = 10.0
-    difficulty_weight_outcome: float = 3.0
-    difficulty_weight_answer_width: float = 1.0
-    difficulty_weight_fanout: float = 0.1
-    difficulty_weight_shortcuts: float = 0.5
-    difficulty_fanout_cap: float = Field(default=99.0, ge=1.0)
-    difficulty_family_order: dict[str, int] = Field(
-        default_factory=lambda: {
-            "status_lookup": 0,
-            "timeline_resolution": 1,
-            "causal_chain": 2,
-            "aggregate_verification": 3,
-        }
-    )
-    difficulty_outcome_order: dict[str, int] = Field(
-        default_factory=lambda: {
-            "answer": 0,
-            "no_result": 1,
-            "clarify": 2,
-            "deny": 2,
-        }
-    )
 
 
 class ProviderResilienceConfig(StrictModel):

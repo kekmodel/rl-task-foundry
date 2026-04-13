@@ -215,10 +215,6 @@ class SynthesisArtifactDiagnostics(StrictModel):
     payload_repair_codes: list[str] = Field(default_factory=list)
 
 
-class SynthesisDifficultyRetrySeed(StrictModel):
-    """Compatibility shim for callers that still pass retry_seed."""
-
-
 class SynthesisGenerationAttempt(StrictModel):
     attempt_index: int
     outcome: SynthesisGenerationOutcome
@@ -461,9 +457,7 @@ class SynthesisAgentRuntime:
         db_id: str,
         requested_topic: str,
         graph: SchemaGraph | None = None,
-        retry_seed: SynthesisDifficultyRetrySeed | None = None,
     ) -> SynthesisEnvironmentDraft:
-        del retry_seed
         requested_topic = normalize_topic(requested_topic)
         await self._bind_db_id(db_id)
         await self._ensure_category_available(db_id, requested_topic)
@@ -926,14 +920,6 @@ class SynthesisAgentRuntime:
             self._atomic_tool_materializer.materialize_bundle(bundle)
             self._atomic_tool_bundles[db_id] = bundle
             return bundle
-
-    def _atomic_tool_bundle_for_bound_db(self) -> AtomicToolBundle:
-        if self._bound_db_id is None:
-            raise RuntimeError("atomic tool bundle requested before db binding")
-        bundle = self._atomic_tool_bundles.get(self._bound_db_id)
-        if bundle is None:
-            raise RuntimeError("atomic tool bundle requested before generation")
-        return bundle
 
     async def _database_pools_for_tools(self) -> DatabasePools:
         if self._database_pools is None:

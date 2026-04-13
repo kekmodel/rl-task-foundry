@@ -212,10 +212,8 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
         ),
         runtime_config=SolverRuntimeConfig(
             max_turns=8,
-            structured_output_required=True,
             tracing=True,
             sdk_sessions_enabled=True,
-            canonical_state_store="run_db",
         ),
         tool_definitions=_sample_tool_definitions(),
         tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
@@ -367,10 +365,8 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
         ),
         runtime_config=SolverRuntimeConfig(
             max_turns=8,
-            structured_output_required=True,
             tracing=True,
             sdk_sessions_enabled=True,
-            canonical_state_store="run_db",
         ),
         tool_definitions=_sample_tool_definitions(),
         tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},

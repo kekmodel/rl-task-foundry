@@ -7,13 +7,9 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
-
-class StrictModel(BaseModel):
-    """Base model with strict extra-field rejection."""
-
-    model_config = ConfigDict(extra="forbid")
+from rl_task_foundry.config.models import StrictModel
 
 
 class TopicName(str):
@@ -72,10 +68,6 @@ class DifficultyAxis(StrEnum):
     CONSTRAINT_DENSITY = "constraint_density"
 
 
-class DifficultyAxisUnit(StrEnum):
-    SCORE = "score"
-
-
 class EnvironmentStatus(StrEnum):
     DRAFT = "draft"
     ACCEPTED = "accepted"
@@ -106,51 +98,10 @@ class OutputFieldType(StrEnum):
     LIST = "list"
 
 
-class ToolParameterType(StrEnum):
-    STRING = "string"
-    INT = "int"
-    FLOAT = "float"
-    BOOL = "bool"
-    DATE = "date"
-    DATETIME = "datetime"
-    ENUM = "enum"
-    LIST_STRING = "list[string]"
-    LIST_INT = "list[int]"
-    LIST_FLOAT = "list[float]"
-    OBJECT = "object"
-
-
-class ToolEmptyResultBehavior(StrEnum):
-    RETURN_EMPTY = "return_empty"
-    RETURN_NULL = "return_null"
-    RAISE_NOT_FOUND = "raise_not_found"
-
-
-class ToolTimeoutBehavior(StrEnum):
-    RAISE_TIMEOUT = "raise_timeout"
-    RETURN_ERROR = "return_error"
-
-
-class ToolSelfTestCheck(StrEnum):
-    HAPPY_PATH = "happy_path"
-    EMPTY_RESULT_BEHAVIOR = "empty_result_behavior"
-    TIMEOUT_BEHAVIOR = "timeout_behavior"
-    DETERMINISTIC_ORDERING = "deterministic_ordering"
-
-
 class InstanceSamplingStrategy(StrEnum):
     DETERMINISTIC_HASH = "deterministic_hash"
     GRID = "grid"
     STRATIFIED_HASH = "stratified_hash"
-
-
-class DifficultyAxisSpec(StrictModel):
-    axis: DifficultyAxis
-    unit: DifficultyAxisUnit
-    crank_rank: int
-    description: str
-    minimum: float = 0.0
-    maximum: float | None = None
 
 
 class DifficultyVectorContract(StrictModel):
@@ -171,30 +122,6 @@ class DifficultyVectorContract(StrictModel):
     def nonzero_axes(self) -> dict[DifficultyAxis, float]:
         return {axis: value for axis, value in self.flatten().items() if value > 0.0}
 
-
-DIFFICULTY_AXIS_SPECS: dict[DifficultyAxis, DifficultyAxisSpec] = {
-    DifficultyAxis.SEARCH_COST: DifficultyAxisSpec(
-        axis=DifficultyAxis.SEARCH_COST,
-        unit=DifficultyAxisUnit.SCORE,
-        crank_rank=1,
-        description="Tool-call search cost required to gather the DB facts needed for the answer.",
-        minimum=0.0,
-    ),
-    DifficultyAxis.SOLUTION_SPACE: DifficultyAxisSpec(
-        axis=DifficultyAxis.SOLUTION_SPACE,
-        unit=DifficultyAxisUnit.SCORE,
-        crank_rank=2,
-        description="Size of the candidate solution space that must be explored or composed.",
-        minimum=0.0,
-    ),
-    DifficultyAxis.CONSTRAINT_DENSITY: DifficultyAxisSpec(
-        axis=DifficultyAxis.CONSTRAINT_DENSITY,
-        unit=DifficultyAxisUnit.SCORE,
-        crank_rank=3,
-        description="Inverse density of valid solutions after applying hard constraints.",
-        minimum=0.0,
-    ),
-}
 
 DIFFICULTY_CRANK_ORDER: tuple[DifficultyAxis, ...] = (
     DifficultyAxis.SEARCH_COST,
@@ -230,22 +157,6 @@ def build_difficulty_vector(
 
 ScalarRuntimeValue = str | int | float | bool | date | datetime | None
 RuntimeValue = ScalarRuntimeValue | list[ScalarRuntimeValue]
-
-
-class ToolParameterContract(StrictModel):
-    name: str
-    type: ToolParameterType
-    description: str = ""
-    required: bool = True
-    enum_values: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_enum_values(self) -> ToolParameterContract:
-        if self.type == ToolParameterType.ENUM and not self.enum_values:
-            raise ValueError("enum tool parameters must declare enum_values")
-        if self.type != ToolParameterType.ENUM and self.enum_values:
-            raise ValueError("enum_values are only allowed for enum tool parameters")
-        return self
 
 
 class OutputFieldContract(StrictModel):
@@ -344,18 +255,6 @@ class ConstraintSummaryItem(StrictModel):
     representation_role: Literal["review_summary"] = "review_summary"
 
 
-class ToolContract(StrictModel):
-    name: str
-    description: str = ""
-    parameters: list[ToolParameterContract] = Field(default_factory=list)
-    return_schema: OutputFieldContract
-    async_callable: Literal[True] = True
-    connection_parameter: Literal["conn"] = "conn"
-    read_only: Literal[True] = True
-    empty_result_behavior: ToolEmptyResultBehavior = ToolEmptyResultBehavior.RETURN_EMPTY
-    timeout_behavior: ToolTimeoutBehavior = ToolTimeoutBehavior.RAISE_TIMEOUT
-
-
 class TaskContract(StrictModel):
     question: str
     topic: str
@@ -372,21 +271,6 @@ class TaskContract(StrictModel):
     @property
     def category(self) -> TopicName:
         return TopicName(self.topic)
-
-
-class ToolSelfTestContract(StrictModel):
-    entrypoint: Literal["run_self_test"] = "run_self_test"
-    role: Literal["registration_gate"] = "registration_gate"
-    async_entrypoint: Literal[True] = True
-    visible_to_solver: Literal[False] = False
-    required_checks: list[ToolSelfTestCheck] = Field(
-        default_factory=lambda: [
-            ToolSelfTestCheck.HAPPY_PATH,
-            ToolSelfTestCheck.EMPTY_RESULT_BEHAVIOR,
-            ToolSelfTestCheck.TIMEOUT_BEHAVIOR,
-            ToolSelfTestCheck.DETERMINISTIC_ORDERING,
-        ]
-    )
 
 
 class RolloutConstraintsContract(StrictModel):

@@ -4,15 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
-
+from rl_task_foundry.config.models import StrictModel
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.synthesis.contracts import EnvironmentContract
-
-
-class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
 
 class SolverEpisodeInput(StrictModel):
     environment: EnvironmentContract

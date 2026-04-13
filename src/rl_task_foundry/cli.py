@@ -43,8 +43,6 @@ def validate_config(
     config_path: Path = Path("rl_task_foundry.yaml"),
     composer_provider: str | None = None,
     composer_model: str | None = None,
-    solver_backbone_provider: str | None = None,
-    solver_backbone_model: str | None = None,
     solver_provider: str | None = None,
     solver_model: str | None = None,
 ) -> None:
@@ -54,8 +52,6 @@ def validate_config(
         config_path,
         composer_provider=composer_provider,
         composer_model=composer_model,
-        solver_backbone_provider=solver_backbone_provider,
-        solver_backbone_model=solver_backbone_model,
         solver_provider=solver_provider,
         solver_model=solver_model,
     )
@@ -64,10 +60,6 @@ def validate_config(
     console.print(f"run_db={config.output.run_db_path}")
     console.print(
         f"composer={config.models.composer.provider}/{config.models.composer.model}"
-    )
-    console.print(
-        "solver_backbone="
-        f"{config.models.solver_backbone.provider}/{config.models.solver_backbone.model}"
     )
     console.print(
         "atomic_tools="
@@ -81,7 +73,6 @@ def validate_config(
         f"max_turns={config.synthesis.runtime.max_turns},"
         f"tracing={config.synthesis.runtime.tracing},"
         f"sdk_sessions_enabled={config.synthesis.runtime.sdk_sessions_enabled},"
-        f"memory_window={config.synthesis.runtime.explicit_memory_window},"
         "max_generation_attempts="
         f"{config.synthesis.runtime.max_generation_attempts},"
         "max_difficulty_cranks="

@@ -44,9 +44,7 @@ class _FakeSynthesisRuntime:
         *,
         db_id: str,
         requested_topic: str,
-        retry_seed=None,
     ) -> object:
-        del retry_seed
         self.calls.append({"db_id": db_id, "requested_topic": requested_topic})
         if self.exc is not None:
             raise self.exc

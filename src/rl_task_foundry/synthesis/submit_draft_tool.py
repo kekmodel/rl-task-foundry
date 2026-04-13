@@ -929,7 +929,7 @@ class SubmitDraftController:
             len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
         )
 
-        if len(self._atomic_tool_calls) <= self._tool_call_count_at_last_submission:
+        if len(self._raw_atomic_tool_calls) <= self._tool_call_count_at_last_submission:
             error_codes.append(SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION)
         if not payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
@@ -1100,7 +1100,7 @@ class SubmitDraftController:
         quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
         self.last_quality_gate_status = quality_gate_summary.status.value
         self.last_quality_gate_pass_rate = quality_gate_summary.pass_rate
-        self._tool_call_count_at_last_submission = len(self._atomic_tool_calls)
+        self._tool_call_count_at_last_submission = len(self._raw_atomic_tool_calls)
         self._last_label_signature = label_signature
         self._last_label_slot_count = label_slot_count
         self._last_constraint_count = constraint_count
