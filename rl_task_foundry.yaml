@@ -108,9 +108,8 @@ calibration:
   lower_pass_rate: 0.25
   upper_pass_rate: 0.75
   ci_alpha: 0.1
-  canary_solver_count: 3
-  post_canary_solver_batch_size: 3
-  full_solver_run_limit: 30
+  solver_batch_size: 3
+  max_solver_runs: 30
   safe_early_termination: true
 
 dedup:

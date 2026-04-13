@@ -204,7 +204,7 @@ class ProofTaskRunner:
                 phase="rollout",
                 status="completed",
                 expected_contract={
-                    "planned_solver_runs_upper_bound": self.config.calibration.full_solver_run_limit,
+                    "max_solver_runs": self.config.calibration.max_solver_runs,
                 },
                 actual_data={
                     "planned_solver_runs": rollout_summary.planned_solver_runs,

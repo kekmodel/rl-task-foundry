@@ -518,9 +518,8 @@ Rollback trigger:
 
 ```yaml
 calibration:
-  full_replica_limit: 30
-  canary_replica_count: 3
-  post_canary_batch_size: 3
+  max_solver_runs: 30
+  solver_batch_size: 3
   lower_pass_rate: 0.25
   upper_pass_rate: 0.75
   ci_alpha: 0.1

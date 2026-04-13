@@ -23,6 +23,8 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.synthesis.runtime.category_backoff_duration_s == 3600
     assert config.synthesis.coverage_planner.target_count_per_band == 3
     assert config.synthesis.coverage_planner.include_unset_band is False
+    assert config.calibration.solver_batch_size == 3
+    assert config.calibration.max_solver_runs == 30
     assert config.estimated_total_db_connections == 40
 
 

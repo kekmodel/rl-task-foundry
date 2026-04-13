@@ -172,7 +172,7 @@ class SolverOrchestrator:
                 )
             )
 
-        planned_solver_runs = min(len(calls), self.config.calibration.full_solver_run_limit)
+        planned_solver_runs = min(len(calls), self.config.calibration.max_solver_runs)
         scheduled_calls = calls[:planned_solver_runs]
         early_stop_decision: str | None = None
         if scheduled_calls:
@@ -327,8 +327,10 @@ class SolverOrchestrator:
         if total_solver_runs == 0:
             return runs, None
 
-        canary_size = min(self.config.calibration.canary_solver_count, total_solver_runs)
-        batch_size = max(1, self.config.calibration.post_canary_solver_batch_size)
+        batch_size = max(
+            1,
+            min(self.config.calibration.solver_batch_size, total_solver_runs),
+        )
         cursor = 0
         early_stop_decision: str | None = None
         band = PassRateBand(
@@ -337,13 +339,10 @@ class SolverOrchestrator:
         )
 
         while cursor < total_solver_runs:
-            current_batch_size = canary_size if cursor == 0 else batch_size
-            batch = calls[cursor : cursor + current_batch_size]
+            batch = calls[cursor : cursor + batch_size]
             cursor += len(batch)
             runs.extend(await asyncio.gather(*(call() for call in batch)))
             if not self.config.calibration.safe_early_termination:
-                continue
-            if len(runs) < canary_size:
                 continue
             early_stop_decision = calibration_decision(
                 total_solver_runs=total_solver_runs,

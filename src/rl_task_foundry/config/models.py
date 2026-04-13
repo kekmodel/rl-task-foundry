@@ -105,9 +105,8 @@ class CalibrationConfig(StrictModel):
     lower_pass_rate: float = Field(ge=0.0, le=1.0)
     upper_pass_rate: float = Field(ge=0.0, le=1.0)
     ci_alpha: float = Field(default=0.1, ge=0.0, le=1.0)
-    canary_solver_count: int = Field(default=3, ge=1)
-    post_canary_solver_batch_size: int = Field(default=3, ge=1)
-    full_solver_run_limit: int = Field(default=30, ge=1)
+    solver_batch_size: int = Field(default=3, ge=1)
+    max_solver_runs: int = Field(default=30, ge=1)
     safe_early_termination: bool = True
 
 
