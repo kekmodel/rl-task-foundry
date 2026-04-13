@@ -199,12 +199,47 @@ class OpenAIAgentsSynthesisBackend:
             tool_surface_summary=tool_surface_summary,
         )
         started_at = perf_counter()
-        run_result = await sdk.Runner.run(
-            agent,
-            request_input,
-            max_turns=max_turns,
-            session=None,
-        )
+        try:
+            run_result = await sdk.Runner.run(
+                agent,
+                request_input,
+                max_turns=max_turns,
+                session=None,
+            )
+        except Exception as exc:
+            latency_ms = int((perf_counter() - started_at) * 1000)
+            transcript_ref = self._write_artifact(
+                kind="transcripts",
+                db_id=db_id,
+                requested_topic=requested_topic,
+                payload={
+                    "input": request_input,
+                    "error": {
+                        "type": exc.__class__.__name__,
+                        "detail": str(exc),
+                    },
+                    "latency_ms": latency_ms,
+                    "max_turns": max_turns,
+                },
+            )
+            self._write_artifact(
+                kind="tool_traces",
+                db_id=db_id,
+                requested_topic=requested_topic,
+                payload={
+                    "error": {
+                        "type": exc.__class__.__name__,
+                        "detail": str(exc),
+                    },
+                    "transcript_ref": transcript_ref,
+                    "recent_atomic_tool_calls": (
+                        self.submit_draft_controller._atomic_tool_calls[-20:]
+                        if self.submit_draft_controller is not None
+                        else []
+                    ),
+                },
+            )
+            raise
         latency_ms = int((perf_counter() - started_at) * 1000)
         tool_calls = tuple(
             tool_name

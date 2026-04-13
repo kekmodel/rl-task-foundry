@@ -40,7 +40,8 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
                     "tool_name": "traverse_customer_to_order_by_customer_id",
                     "readable_fields": ["status", "total_amount"],
                 },
-            ]
+            ],
+            "self_anchor_surfaces": ["get_customer_by_id", "get_staff_by_id"],
         },
     )
 
@@ -49,12 +50,14 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "# Topic Semantics" in prompt
     assert "# Schema Orientation" in prompt
     assert "# Tool Surface Hints" in prompt
+    assert "# Self Anchor Hints" in prompt
     assert "# User-Facing Language" in prompt
     assert "public.customer" in prompt
     assert "public.rental" in prompt
     assert "get_customer_by_id: readable fields=['first_name', 'last_name']" in prompt
     assert "get_staff_by_id: readable fields=[] (id-only surface)" in prompt
     assert "traverse_customer_to_order_by_customer_id: readable fields=['status', 'total_amount']" in prompt
+    assert "Person-like self anchor surfaces are available: get_customer_by_id, get_staff_by_id." in prompt
     assert "Use text answer fields only from surfaces that already expose readable non-identifier fields" in prompt
     assert "Korean" in prompt
     assert "Coverage hint: record history" in prompt
@@ -76,6 +79,8 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "user knows nothing about the database schema" in instructions
     assert "normal business request from that user's perspective" in instructions
     assert "Treat anchor_entity as the requesting user's own entity by default." in instructions
+    assert "prefer that self entity as anchor_entity instead of anchoring the task on a content object" in instructions
+    assert "Start from a believable first-person need of that anchored user" in instructions
     assert "requested topic is only a soft coverage hint" in instructions
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
     assert "Before every submit_draft call" in instructions
@@ -88,11 +93,14 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
     assert "Before choosing text answer fields such as names, titles, labels, or statuses" in instructions
     assert "If the observed surface is id-only" in instructions
+    assert "Do not manufacture readable labels by wrapping an id in generic words" in instructions
+    assert "If the label returns a count, ground that count with an explicit count or aggregate observation." in instructions
     assert "Do not copy anchor_entity fields into the canonical answer" in instructions
     assert "prefer local grounded orderings inside the anchored scope" in instructions
     assert "Single-call labels are forbidden." in instructions
     assert "requires combining at least two distinct grounded observations" in instructions
     assert "Do not base the label on whichever related row happened to appear first" in instructions
+    assert "The first few sampled rows you happened to inspect are not a valid notion of recency or priority." in instructions
     assert "Do not expose hidden database concepts such as rows, columns, links" in instructions
     assert "write the request from that person's first-person perspective" in instructions
     assert "'my recent payments' rather than 'this customer's payments'" in instructions
@@ -100,6 +108,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not repeat raw identifier field names" in instructions
     assert "only chains of internal *_id fields" in instructions
     assert "Do not mention raw table names" in instructions
+    assert "keep rankings, counts, and tie-breakers local to the anchored user's own records" in instructions
     assert "When you strengthen search_cost" in instructions
     assert "When you strengthen solution_space" in instructions
     assert "When you strengthen constraint_density" in instructions

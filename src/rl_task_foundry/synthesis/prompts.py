@@ -80,6 +80,8 @@ def build_synthesis_agent_instructions() -> str:
         "Assume the end user knows nothing about the database schema, hidden joins, internal identifiers, or tool paths. "
         "The user only sees the <entity> block and the natural-language request, so the task must read like a normal business request from that user's perspective. "
         "Treat anchor_entity as the requesting user's own entity by default. "
+        "If the available tool surface exposes a person-like entity such as a customer, user, member, patient, or account holder, prefer that self entity as anchor_entity instead of anchoring the task on a content object such as a film, category, product, or store. "
+        "Start from a believable first-person need of that anchored user, then derive the minimal sufficient label needed to answer it. "
         "The requested topic is only a soft coverage hint, not a fixed contract. "
         "If the hint would force an id-only, trivial, or weak label, ignore it and choose the better grounded topic that naturally fits the observed label. "
         "You may change the anchor entity when you need a better grounded task. "
@@ -97,20 +99,22 @@ def build_synthesis_agent_instructions() -> str:
         "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. Do not invent placeholders such as Unknown or Entity #1. "
         "Do not submit blank or placeholder string fields in the canonical answer. Every answer field must carry a grounded, non-empty value. "
         "Before choosing text answer fields such as names, titles, labels, or statuses, confirm that the observed tool results for the chosen surface actually expose those readable fields. "
-        "If the observed surface is id-only, do not ask for unreadable text fields from it. Switch to grounded counts, dates, amounts, statuses, ordering, or choose a different anchor or related entity whose observed rows expose readable fields. "
+        "If the observed surface is id-only, do not ask for unreadable text fields from it. Switch to grounded counts, dates, amounts, statuses, ordering, or choose a different anchor or related entity whose observed rows expose readable fields. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. "
+        "If the label returns a count, ground that count with an explicit count or aggregate observation. Do not treat the first sampled rows you happened to inspect as the total. "
         "Do not copy anchor_entity fields into the canonical answer unless they are genuinely needed to distinguish multiple returned rows; the entity block already provides the anchor. "
         "Avoid trivial tasks such as returning a single foreign key or a raw count when richer grounded tasks are possible. "
         "Prefer multi-field answers, ordered answer sets, explicit tie-breakers, or tasks that require combining multiple grounded facts. "
         "When you need a tie-breaker or a single related row, prefer local grounded orderings inside the anchored scope before using global rankings over the whole database. "
         "Single-call labels are forbidden. If one atomic tool call already returns the full label, or a direct projection of the full label, do not submit that task. "
         "Keep exploring until the label requires combining at least two distinct grounded observations. "
-        "Do not base the label on whichever related row happened to appear first during exploration. If you need one related row among many, define a grounded ordering or tie-breaker that the user can understand, such as earliest date, latest payment, lowest amount, highest count, or alphabetical title. "
+        "Do not base the label on whichever related row happened to appear first during exploration. If you need one related row among many, define a grounded ordering or tie-breaker that the user can understand, such as earliest date, latest payment, lowest amount, highest count, or alphabetical title. Do not use recent, latest, earliest, first, or similar semantics unless you directly observed a temporal or sequence field that grounds that ordering. The first few sampled rows you happened to inspect are not a valid notion of recency or priority. "
         "Do not reveal internal tool paths in the user-facing question. "
         "Do not expose hidden database concepts such as rows, columns, links, bridge tables, foreign keys, or implementation-specific relationships in the user-facing request. "
         "When the anchor is a person-like record such as a customer, user, member, patient, rider, or account holder, write the request from that person's first-person perspective whenever natural, for example 'my recent payments' rather than 'this customer's payments'. "
         "Do not repeat the raw anchor entity key or raw anchor entity id inside the user-request body; the <entity> block already provides that grounding. Refer to the anchor naturally with a domain-appropriate phrase instead of the raw identifier. "
         "Do not repeat raw identifier field names such as <entity>_id in the user-request body; keep identifiers only inside anchor_entity and the entity block. "
         "Do not mention raw table names, bridge-table names, or SQL keywords such as JOIN, LIMIT, SELECT, or ORDER BY in the user-request body. "
+        "For self-anchored requests, keep rankings, counts, and tie-breakers local to the anchored user's own records unless the user-facing request explicitly asks for an overall or global benchmark. "
         "Prefer user-relevant business values such as names, titles, dates, amounts, counts, statuses, or ordered records over answers that are only chains of internal *_id fields. "
         f"{DIFFICULTY_AXIS_GUIDANCE} "
         "When submit_draft returns a rejection, keep working inside the same conversation, make at least one new atomic tool call, inspect more data, and resubmit a better draft. "
@@ -156,6 +160,7 @@ def build_synthesis_input(
         sections.append("# Schema Orientation\n" + "\n".join(schema_lines))
 
     tool_surface_lines: list[str] = []
+    self_anchor_lines: list[str] = []
     surfaces = tool_surface_summary.get("entity_surfaces")
     if isinstance(surfaces, list):
         for item in surfaces[:16]:
@@ -179,6 +184,17 @@ def build_synthesis_input(
         )
     if tool_surface_lines:
         sections.append("# Tool Surface Hints\n" + "\n".join(tool_surface_lines))
+    self_anchor_surfaces = tool_surface_summary.get("self_anchor_surfaces")
+    if isinstance(self_anchor_surfaces, list):
+        surface_names = [str(name) for name in self_anchor_surfaces[:8] if isinstance(name, str)]
+        if surface_names:
+            self_anchor_lines.append(
+                "- Person-like self anchor surfaces are available: "
+                + ", ".join(surface_names)
+                + ". Prefer one of these as anchor_entity before anchoring on a content object."
+            )
+    if self_anchor_lines:
+        sections.append("# Self Anchor Hints\n" + "\n".join(self_anchor_lines))
 
     language_name = LANGUAGE_NAMES.get(task_language, task_language)
     sections.append(

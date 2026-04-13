@@ -620,6 +620,274 @@ async def test_submit_draft_feedbacks_when_person_anchor_is_not_self_perspective
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_feedbacks_when_non_self_anchor_is_used_despite_available_self_surface(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+        self_anchor_surface_names=("get_customer_by_id",),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_film_to_film_actor_by_film_id",
+        params={"film_id": 508, "limit": 20},
+        result=[{"actor_id": 147, "film_id": 508}, {"actor_id": 102, "film_id": 508}],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_film",
+        params={},
+        result=1000,
+    )
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "canonical_answer_json": '{"cast_size": 2, "film_count": 1000}',
+            "anchor_entity": {"film_id": 508},
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 2.0,
+                "constraint_density": 1.0,
+            },
+            "question": _wrap_user_prompt(
+                {"film_id": 508},
+                "이 영화에 배정된 배우 수와 전체 영화 수를 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_scope",
+                    "kind": "membership",
+                    "summary": "Answer only for the anchored film and the overall catalog count.",
+                }
+            ],
+            "instance_space": {
+                "anchor_query": {
+                    "sql": "SELECT film_id FROM film ORDER BY film_id",
+                    "outputs": ["film_id"],
+                }
+            },
+            "label_summary": "This assignment label is grounded because it combines the anchored film cast size with the total film count from a separate aggregate.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Anchor the task on the requesting user's own record" in message
+    assert "Submission budget unchanged." in message
+    assert controller.attempts == []
+    assert controller.submissions_left() == controller.max_submissions
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_temporal_ordering_without_grounded_temporal_field(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_rental_by_customer_id",
+        params={"customer_id": 48, "limit": 10},
+        result=[{"rental_id": 1689}, {"rental_id": 9402}, {"rental_id": 8716}],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_rental",
+        params={},
+        result=16044,
+    )
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "rental_history",
+            "canonical_answer_json": '{"rental_count": 10}',
+            "anchor_entity": {"customer_id": 48},
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 1.0,
+                "constraint_density": 1.0,
+            },
+            "question": _wrap_user_prompt(
+                {"customer_id": 48},
+                "제 계정에서 최근에 이용한 대여가 몇 건인지 알려주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "recent_window",
+                    "kind": "ordering",
+                    "summary": "Count the recent rentals visible from my account in the observed sample window.",
+                }
+            ],
+            "instance_space": {
+                "anchor_query": {
+                    "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                    "outputs": ["customer_id"],
+                }
+            },
+            "label_summary": "This rental history label is grounded because it counts the recent rentals for the anchored customer.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Do not use recent, latest, earliest, first, or similar ordering language" in message
+    assert controller.attempts[-1].error_codes[0] == "temporal_ordering_not_grounded"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_unscoped_global_ranking_for_self_anchor(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+        self_anchor_surface_names=("get_customer_by_id",),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 592},
+        result={"customer_id": 592},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_rental_by_customer_id",
+        params={"customer_id": 592, "limit": 20},
+        result=[{"rental_id": 12619}, {"rental_id": 1423}, {"rental_id": 7278}],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="top_inventory_id_by_count_rental_desc",
+        params={"limit": 3},
+        result=[
+            {"inventory_id": 2, "value": 5},
+            {"inventory_id": 6, "value": 5},
+            {"inventory_id": 14, "value": 5},
+        ],
+    )
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "rental_assignment",
+            "canonical_answer_json": '{"top_inventory_ids_by_rental_count_desc":[2,6,14],"top_rental_count":5}',
+            "anchor_entity": {"customer_id": 592},
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 2.0,
+                "constraint_density": 2.0,
+            },
+            "question": _wrap_user_prompt(
+                {"customer_id": 592},
+                "내가 빌린 것들 가운데 가장 많이 대여된 상품 3개가 무엇인지 알려주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_customer_scope",
+                    "kind": "membership",
+                    "summary": "The answer must be grounded in the rentals associated with the anchored customer.",
+                },
+                {
+                    "key": "rank_by_rental_frequency",
+                    "kind": "ordering",
+                    "summary": "Identify the inventory items with the highest rental frequency among the observed relevant records.",
+                },
+            ],
+            "instance_space": {
+                "anchor_query": {
+                    "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                    "outputs": ["customer_id"],
+                }
+            },
+            "label_summary": "This rental assignment label is grounded because it combines the anchored customer scope with inventory ranking evidence.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "jumps from the anchored user's own records to a global ranking" in message
+    assert controller.attempts[-1].error_codes[0] == "global_ranking_outside_anchor_scope"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_count_label_without_explicit_count_evidence(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_rental_by_customer_id",
+        params={"customer_id": 39, "limit": 5},
+        result=[{"rental_id": 12459}, {"rental_id": 10269}, {"rental_id": 4419}],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_rental_to_payment_by_rental_id",
+        params={"rental_id": 12459, "limit": 5},
+        result=[{"payment_id": 1094}],
+    )
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "rental_payment_assignment",
+            "canonical_answer_json": '{"payment_count": 5}',
+            "anchor_entity": {"customer_id": 39},
+            "difficulty_vector": {
+                "search_cost": 4.0,
+                "solution_space": 2.0,
+                "constraint_density": 2.0,
+            },
+            "question": _wrap_user_prompt(
+                {"customer_id": 39},
+                "나의 대여 기록들에 연결된 결제가 몇 건인지 알려주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_scope",
+                    "kind": "membership",
+                    "summary": "The answer must count only payments linked to the anchored customer's rentals.",
+                },
+                {
+                    "key": "count_distinct_rental_payments",
+                    "kind": "counting",
+                    "summary": "Count the linked payments without duplicates.",
+                },
+            ],
+            "instance_space": {
+                "anchor_query": {
+                    "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                    "outputs": ["customer_id"],
+                }
+            },
+            "label_summary": "This rental payment assignment label is grounded because it counts linked payments for the anchored customer.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "count-like label needs explicit count evidence" in message
+    assert controller.attempts[-1].error_codes[0] == "count_label_requires_count_evidence"
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_requires_entity_wrapped_question_shape(
     tmp_path: Path,
 ) -> None:
@@ -1025,8 +1293,8 @@ async def test_submit_draft_explains_when_single_tool_shortcut_is_global(
 
     message = await controller.submit(payload)
 
-    assert "single global tool call that does not depend on the anchor entity" in message
-    assert controller.attempts[-1].error_codes[0] == "label_single_tool_derivable"
+    assert "jumps from the anchored user's own records to a global ranking" in message
+    assert controller.attempts[-1].error_codes[0] == "global_ranking_outside_anchor_scope"
 
 
 @pytest.mark.asyncio

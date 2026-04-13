@@ -21,6 +21,7 @@ from rl_task_foundry.synthesis.contracts import (
     InstanceSpaceContract,
     StrictModel,
     flatten_difficulty_vector,
+    is_person_like_identifier,
     normalize_words,
     topic_tokens,
 )
@@ -62,6 +63,10 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN = "question_entity_placeholder_forbidden"
     QUESTION_ANCHOR_ENTITY_LEAK = "question_anchor_entity_leak"
     QUESTION_SELF_PERSPECTIVE_REQUIRED = "question_self_perspective_required"
+    SELF_ENTITY_ANCHOR_REQUIRED = "self_entity_anchor_required"
+    TEMPORAL_ORDERING_NOT_GROUNDED = "temporal_ordering_not_grounded"
+    GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE = "global_ranking_outside_anchor_scope"
+    COUNT_LABEL_REQUIRES_COUNT_EVIDENCE = "count_label_requires_count_evidence"
     LABEL_SINGLE_TOOL_DERIVABLE = "label_single_tool_derivable"
     LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
@@ -87,6 +92,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH,
         SubmitDraftErrorCode.QUESTION_BODY_REQUIRED,
         SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED,
+        SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED,
     }
 )
 
@@ -609,6 +615,29 @@ _IDENTIFIER_FIELD_TOKEN_RE = re.compile(
     r"(?<![a-z0-9_])[a-z][a-z0-9_]*_ids?(?![a-z0-9_])",
     re.IGNORECASE,
 )
+_TEMPORAL_FIELD_TOKEN_RE = re.compile(
+    r"(?:^|_)(?:date|time|timestamp|created|updated|start|end|due|expires?|expiry|scheduled|last_update)(?:$|_)",
+    re.IGNORECASE,
+)
+_TEMPORAL_CONSTRAINT_TOKENS = (
+    "recent",
+    "latest",
+    "earliest",
+    "oldest",
+    "newest",
+    "first",
+    "last",
+)
+_GLOBAL_SCOPE_TOKENS = (
+    "global",
+    "overall",
+    "across all",
+    "among all",
+    "entire database",
+    "전체",
+    "전역",
+    "모든",
+)
 
 
 def _is_identifier_field_name(value: str) -> bool:
@@ -623,6 +652,124 @@ def _contains_raw_identifier_token(text: str) -> bool:
 def _contains_entity_placeholder_token(text: str) -> bool:
     lowered = text.lower()
     return "<entity>" in lowered or "&lt;entity&gt;" in lowered
+
+
+def _uses_temporal_ordering_language(constraint_summary: list[SubmitConstraintSummaryItem]) -> bool:
+    normalized_parts: list[str] = []
+    for item in constraint_summary:
+        if isinstance(item, SubmitConstraintSummaryItem):
+            key = item.key
+            kind = item.kind
+            summary = item.summary
+        elif isinstance(item, dict):
+            key = str(item.get("key", ""))
+            kind = str(item.get("kind", ""))
+            summary = str(item.get("summary", ""))
+        else:
+            continue
+        normalized_parts.extend(
+            [
+                normalize_words(key, lowercase=True),
+                normalize_words(kind, lowercase=True),
+                normalize_words(summary, lowercase=True),
+            ]
+        )
+    combined = " ".join(part for part in normalized_parts if part)
+    return any(token in combined for token in _TEMPORAL_CONSTRAINT_TOKENS)
+
+
+def _observed_temporal_surface(tool_calls: list[dict[str, object]]) -> bool:
+    def _walk(value: object) -> bool:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if _TEMPORAL_FIELD_TOKEN_RE.search(str(key)):
+                    return True
+                if _walk(item):
+                    return True
+            return False
+        if isinstance(value, list):
+            return any(_walk(item) for item in value)
+        return False
+
+    return any(_walk(record.get("result")) for record in tool_calls)
+
+
+def _uses_unanchored_global_ranking(
+    tool_calls: list[dict[str, object]],
+    *,
+    anchor_entity: dict[str, object],
+) -> bool:
+    for record in tool_calls:
+        tool_name = str(record.get("tool_name", ""))
+        if not tool_name.startswith("top_"):
+            continue
+        if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
+            continue
+        return True
+    return False
+
+
+def _mentions_global_scope(
+    question_body: str | None,
+    constraint_summary: list[SubmitConstraintSummaryItem],
+) -> bool:
+    text_parts: list[str] = []
+    if question_body:
+        text_parts.append(normalize_words(question_body, lowercase=True))
+    for item in constraint_summary:
+        if isinstance(item, SubmitConstraintSummaryItem):
+            text_parts.extend(
+                [
+                    normalize_words(item.key, lowercase=True),
+                    normalize_words(item.kind, lowercase=True),
+                    normalize_words(item.summary, lowercase=True),
+                ]
+            )
+        elif isinstance(item, dict):
+            text_parts.extend(
+                [
+                    normalize_words(str(item.get("key", "")), lowercase=True),
+                    normalize_words(str(item.get("kind", "")), lowercase=True),
+                    normalize_words(str(item.get("summary", "")), lowercase=True),
+                ]
+            )
+    combined = " ".join(part for part in text_parts if part)
+    return any(token in combined for token in _GLOBAL_SCOPE_TOKENS)
+
+
+def _count_semantics_present(
+    answer: object,
+    constraint_summary: list[SubmitConstraintSummaryItem],
+) -> bool:
+    if isinstance(answer, dict):
+        count_keys = [key for key in answer if isinstance(key, str) and "count" in key.lower()]
+        if count_keys and len(count_keys) == len(answer):
+            return True
+        return False
+    if not isinstance(answer, (int, float)):
+        return False
+    text_parts: list[str] = []
+    for item in constraint_summary:
+        if isinstance(item, SubmitConstraintSummaryItem):
+            text_parts.extend([item.key, item.kind, item.summary])
+        elif isinstance(item, dict):
+            text_parts.extend(
+                [
+                    str(item.get("key", "")),
+                    str(item.get("kind", "")),
+                    str(item.get("summary", "")),
+                ]
+            )
+    combined = " ".join(normalize_words(part, lowercase=True) for part in text_parts if part)
+    return any(token in combined for token in ("count", "counting", "cardinality"))
+
+
+def _observed_count_evidence(tool_calls: list[dict[str, object]]) -> bool:
+    for record in tool_calls:
+        tool_name = str(record.get("tool_name", ""))
+        if tool_name.startswith("count_"):
+            return True
+    return False
 
 
 _ENTITY_PROMPT_RE = re.compile(
@@ -695,6 +842,10 @@ def _person_like_anchor_aliases(anchor_entity: dict[str, object]) -> tuple[str, 
             if token in key_tokens:
                 aliases.extend(token_aliases)
     return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def _anchor_entity_is_person_like(anchor_entity: dict[str, object]) -> bool:
+    return any(is_person_like_identifier(str(raw_key)) for raw_key in anchor_entity)
 
 
 def _question_uses_non_self_perspective(
@@ -775,6 +926,7 @@ class SubmitDraftController:
     phase_monitor: PipelinePhaseMonitorLogger | None = None
     max_submissions: int = 5
     forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
+    self_anchor_surface_names: tuple[str, ...] = ()
     accepted_draft: SynthesisEnvironmentDraft | None = None
     attempts: list[SubmitDraftAttemptRecord] = field(default_factory=list)
     strongest_difficulty_vector: DifficultyVectorContract = field(
@@ -920,6 +1072,16 @@ class SubmitDraftController:
             error_codes.append(SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION)
         if not payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
+        elif self.self_anchor_surface_names and not _anchor_entity_is_person_like(payload.anchor_entity):
+            error_codes.append(SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED)
+            invalid_diagnostics["available_self_anchor_surfaces"] = list(
+                self.self_anchor_surface_names[:5]
+            )
+        if (
+            _uses_temporal_ordering_language(payload.constraint_summary)
+            and not _observed_temporal_surface(self._raw_atomic_tool_calls)
+        ):
+            error_codes.append(SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED)
         placeholder_tokens = _placeholder_tokens(
             {
                 "topic": payload.topic,
@@ -941,6 +1103,15 @@ class SubmitDraftController:
             error_codes.append(prompt_error)
         elif prompt_anchor_entity != payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH)
+        if (
+            _anchor_entity_is_person_like(payload.anchor_entity)
+            and _uses_unanchored_global_ranking(
+                self._raw_atomic_tool_calls,
+                anchor_entity=payload.anchor_entity,
+            )
+            and not _mentions_global_scope(question_body, payload.constraint_summary)
+        ):
+            error_codes.append(SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE)
         constraint_count = len(payload.constraint_summary)
         label_signature = canonical_json(canonical_answer, default=str)
         label_slot_count = _answer_slot_count(canonical_answer)
@@ -1002,6 +1173,11 @@ class SubmitDraftController:
                 error_codes.append(SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK)
         if _answer_uses_only_identifier_fields(canonical_answer):
             error_codes.append(SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN)
+        if (
+            _count_semantics_present(canonical_answer, payload.constraint_summary)
+            and not _observed_count_evidence(self._raw_atomic_tool_calls)
+        ):
+            error_codes.append(SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE)
         if not _label_summary_matches_selected_topic(
             selected_topic=payload.topic,
             label_summary=payload.label_summary,
@@ -1224,6 +1400,18 @@ class SubmitDraftController:
             SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED: (
                 "Rejected. Treat the anchor entity as the requesting user. Rewrite the request from the user's own perspective, for example 'my recent payments' rather than 'this customer's payments'."
             ),
+            SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED: (
+                "Rejected. A person-like self entity surface is available in the observed tool set. Anchor the task on the requesting user's own record instead of anchoring it on a content object, and keep the content object as related evidence or answer content."
+            ),
+            SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED: (
+                "Rejected. Do not use recent, latest, earliest, first, or similar ordering language unless you directly observed a temporal or sequence field that grounds that ordering. The current evidence path only shows ids or unordered rows, so sampled rows are not a valid notion of recency or priority."
+            ),
+            SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE: (
+                "Rejected. The draft jumps from the anchored user's own records to a global ranking without saying so. Keep rankings local to the anchored scope, or explicitly ask for a global benchmark in the user-facing request and constraints."
+            ),
+            SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE: (
+                "Rejected. A count-like label needs explicit count evidence. Do not infer a total from the first sampled rows you happened to inspect; use a grounded count or aggregate observation for that anchored scope."
+            ),
             SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE: (
                 "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations. A one-hop foreign-key lookup that only returns identifiers is still too weak."
             ),
@@ -1237,7 +1425,7 @@ class SubmitDraftController:
                 "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
+                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
             ),
             SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED: (
                 "Rejected. label_summary must explicitly name the selected topic and keep the draft semantically centered on that topic."
