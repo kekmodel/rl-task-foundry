@@ -67,7 +67,7 @@ class ModelsConfig(StrictModel):
 
 
 class AtomicToolConfig(StrictModel):
-    max_tool_count: int = Field(default=256, ge=8)
+    max_tools: int = Field(default=300, ge=8)
     bounded_result_limit: int = Field(default=100, ge=1)
     max_batch_values: int = Field(default=128, ge=1)
     float_precision: int = Field(default=2, ge=0)

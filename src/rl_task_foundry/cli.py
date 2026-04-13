@@ -62,7 +62,7 @@ def validate_config(
     )
     console.print(
         "atomic_tools="
-        f"max_tool_count={config.atomic_tools.max_tool_count},"
+        f"max_tools={config.atomic_tools.max_tools},"
         f"bounded_result_limit={config.atomic_tools.bounded_result_limit},"
         f"max_batch_values={config.atomic_tools.max_batch_values},"
         f"float_precision={config.atomic_tools.float_precision}"

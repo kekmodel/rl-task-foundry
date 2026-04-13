@@ -312,16 +312,9 @@ def summarize_atomic_tool_surface(
     entity_surfaces: list[dict[str, object]] = []
     self_anchor_surfaces: list[str] = []
     for tool in bundle.tools:
-        if tool.family not in {
-            AtomicToolFamily.T1_POINT_LOOKUP,
-            AtomicToolFamily.T4_FK_TRAVERSAL,
-        }:
+        if tool.family is not AtomicToolFamily.GET:
             continue
-        properties = tool.returns_schema.get("properties", {})
-        if not isinstance(properties, dict):
-            items = tool.returns_schema.get("items")
-            if isinstance(items, dict):
-                properties = items.get("properties", {})
+        properties = _tool_return_properties(tool.returns_schema)
         if not isinstance(properties, dict):
             continue
         field_names = [str(key) for key in properties.keys()]
@@ -348,6 +341,26 @@ def summarize_atomic_tool_surface(
         "entity_surfaces": entity_surfaces[:max_entity_surfaces],
         "self_anchor_surfaces": self_anchor_surfaces[:max_entity_surfaces],
     }
+
+
+def _tool_return_properties(returns_schema: dict[str, object]) -> dict[str, object] | None:
+    properties = returns_schema.get("properties")
+    if isinstance(properties, dict):
+        return properties
+    items = returns_schema.get("items")
+    if isinstance(items, dict):
+        item_properties = items.get("properties")
+        if isinstance(item_properties, dict):
+            return item_properties
+    any_of = returns_schema.get("anyOf")
+    if isinstance(any_of, list):
+        for variant in any_of:
+            if not isinstance(variant, dict):
+                continue
+            variant_properties = variant.get("properties")
+            if isinstance(variant_properties, dict):
+                return variant_properties
+    return None
 
 
 def forbidden_question_tokens(schema_summary: dict[str, object]) -> frozenset[str]:

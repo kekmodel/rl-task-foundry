@@ -82,7 +82,7 @@ provider_resilience:
   release_semaphore_on_backoff: true
 
 atomic_tools:
-  max_tool_count: 256
+  max_tools: 300
   bounded_result_limit: 100
   max_batch_values: 128
   float_precision: 2

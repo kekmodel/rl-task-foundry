@@ -458,43 +458,63 @@ def build_proof_task_draft(
 def _proof_atomic_tool_bundle() -> AtomicToolBundle:
     tools = [
         AtomicToolDefinition(
-            name="get_proof_anchor_by_id",
-            family=AtomicToolFamily.T1_POINT_LOOKUP,
-            description="Fetch one proof anchor row by anchor_id.",
+            name="get_proof_anchor",
+            family=AtomicToolFamily.GET,
+            description="Retrieve one proof anchor by ID. Returns all fields or nothing.",
             params_schema={
                 "type": "object",
-                "properties": {"anchor_id": {"type": "integer"}},
-                "required": ["anchor_id"],
+                "properties": {"id": {"type": "integer"}},
+                "required": ["id"],
                 "additionalProperties": False,
             },
             returns_schema={
-                "type": ["object", "null"],
-                "properties": {
-                    "anchor_id": {"type": "integer"},
-                    "season": {"type": "string"},
-                    "budget_bucket": {"type": "string"},
-                    "start_city_id": {"type": "integer"},
-                },
-                "required": ["anchor_id", "season", "budget_bucket", "start_city_id"],
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "anchor_id": {"type": "integer"},
+                            "season": {"type": "string"},
+                            "budget_bucket": {"type": "string"},
+                            "start_city_id": {"type": "integer"},
+                        },
+                        "required": ["anchor_id", "season", "budget_bucket", "start_city_id"],
+                        "additionalProperties": False,
+                    },
+                    {"type": "null"},
+                ]
             },
             sql=(
                 "SELECT anchor_id, season, budget_bucket, start_city_id "
                 "FROM proof_anchors WHERE anchor_id = $1 LIMIT 1"
             ),
             result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
-            semantic_key="proof_anchors:get_by_id",
+            semantic_key="proof_anchors:get",
         ),
         AtomicToolDefinition(
-            name="list_proof_city_by_season_eq",
-            family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
-            description="List proof cities visible in one season.",
+            name="find_proof_city_by_season",
+            family=AtomicToolFamily.FIND,
+            description="Find proof city entries where season matches a condition. Returns a list.",
             params_schema={
                 "type": "object",
                 "properties": {
-                    "season": {"type": "string"},
+                    "op": {"type": "string", "enum": ["any", "eq", "in", "like"]},
+                    "value": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "minItems": 1,
+                                "maxItems": 20,
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                    "sort_by": {"anyOf": [{"type": "string", "enum": ["city_id", "city_name", "region_name"]}, {"type": "null"}]},
+                    "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
-                "required": ["season", "limit"],
+                "required": ["op", "value", "sort_by", "direction", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -512,22 +532,36 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
             },
             sql=(
                 "SELECT city_id, city_name, region_name "
-                "FROM proof_cities WHERE season = $1 ORDER BY city_id LIMIT $2"
+                "FROM proof_cities WHERE TRUE ORDER BY city_id LIMIT $1"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key="proof_cities:season_eq",
+            semantic_key="proof_cities:find:season",
         ),
         AtomicToolDefinition(
-            name="list_proof_city_link_by_city_id_eq",
-            family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
-            description="List neighbor city ids for a proof city.",
+            name="find_proof_city_link_by_city_id",
+            family=AtomicToolFamily.FIND,
+            description="Find proof city link entries where city id matches a condition. Returns a list.",
             params_schema={
                 "type": "object",
                 "properties": {
-                    "city_id": {"type": "integer"},
+                    "op": {"type": "string", "enum": ["any", "eq", "in", "lt", "gt", "lte", "gte"]},
+                    "value": {
+                        "anyOf": [
+                            {"type": "integer"},
+                            {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "minItems": 1,
+                                "maxItems": 20,
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                    "sort_by": {"anyOf": [{"type": "string", "enum": ["neighbor_city_id"]}, {"type": "null"}]},
+                    "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
-                "required": ["city_id", "limit"],
+                "required": ["op", "value", "sort_by", "direction", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -540,23 +574,36 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                 },
             },
             sql=(
-                "SELECT neighbor_city_id FROM proof_city_links "
-                "WHERE city_id = $1 ORDER BY neighbor_city_id LIMIT $2"
+                "SELECT neighbor_city_id FROM proof_city_links WHERE TRUE ORDER BY neighbor_city_id LIMIT $1"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key="proof_city_links:city_id_eq",
+            semantic_key="proof_city_links:find:city_id",
         ),
         AtomicToolDefinition(
-            name="traverse_proof_city_to_proof_lodging_by_city_id",
-            family=AtomicToolFamily.T4_FK_TRAVERSAL,
-            description="From a proof city, get all linked proof lodging rows.",
+            name="find_proof_lodging_by_city_id",
+            family=AtomicToolFamily.FIND,
+            description="Find proof lodging entries where city id matches a condition. Returns a list.",
             params_schema={
                 "type": "object",
                 "properties": {
-                    "city_id": {"type": "integer"},
+                    "op": {"type": "string", "enum": ["any", "eq", "in", "lt", "gt", "lte", "gte"]},
+                    "value": {
+                        "anyOf": [
+                            {"type": "integer"},
+                            {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "minItems": 1,
+                                "maxItems": 20,
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                    "sort_by": {"anyOf": [{"type": "string", "enum": ["lodging_id", "lodging_name", "nightly_cost"]}, {"type": "null"}]},
+                    "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
-                "required": ["city_id", "limit"],
+                "required": ["op", "value", "sort_by", "direction", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -573,23 +620,36 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                 },
             },
             sql=(
-                "SELECT lodging_id, lodging_name, nightly_cost FROM proof_lodgings "
-                "WHERE city_id = $1 ORDER BY lodging_id LIMIT $2"
+                "SELECT lodging_id, lodging_name, nightly_cost FROM proof_lodgings WHERE TRUE ORDER BY lodging_id LIMIT $1"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key="proof_cities->proof_lodgings:city_id",
+            semantic_key="proof_lodgings:find:city_id",
         ),
         AtomicToolDefinition(
-            name="traverse_proof_city_to_proof_activity_by_city_id",
-            family=AtomicToolFamily.T4_FK_TRAVERSAL,
-            description="From a proof city, get all linked proof activity rows.",
+            name="find_proof_activity_by_city_id",
+            family=AtomicToolFamily.FIND,
+            description="Find proof activity entries where city id matches a condition. Returns a list.",
             params_schema={
                 "type": "object",
                 "properties": {
-                    "city_id": {"type": "integer"},
+                    "op": {"type": "string", "enum": ["any", "eq", "in", "lt", "gt", "lte", "gte"]},
+                    "value": {
+                        "anyOf": [
+                            {"type": "integer"},
+                            {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "minItems": 1,
+                                "maxItems": 20,
+                            },
+                            {"type": "null"},
+                        ]
+                    },
+                    "sort_by": {"anyOf": [{"type": "string", "enum": ["activity_id", "activity_name", "ticket_cost"]}, {"type": "null"}]},
+                    "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
-                "required": ["city_id", "limit"],
+                "required": ["op", "value", "sort_by", "direction", "limit"],
                 "additionalProperties": False,
             },
             returns_schema={
@@ -606,11 +666,10 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                 },
             },
             sql=(
-                "SELECT activity_id, activity_name, ticket_cost FROM proof_activities "
-                "WHERE city_id = $1 ORDER BY activity_id LIMIT $2"
+                "SELECT activity_id, activity_name, ticket_cost FROM proof_activities WHERE TRUE ORDER BY activity_id LIMIT $1"
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key="proof_cities->proof_activities:city_id",
+            semantic_key="proof_activities:find:city_id",
         ),
     ]
     source = """
@@ -618,7 +677,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
 from __future__ import annotations
 
 
-async def get_proof_anchor_by_id(conn, anchor_id):
+async def get_proof_anchor(conn, id):
     row = await conn.fetchrow(
         \"\"\"
         SELECT anchor_id, season, budget_bucket, start_city_id
@@ -626,28 +685,41 @@ async def get_proof_anchor_by_id(conn, anchor_id):
         WHERE anchor_id = $1
         LIMIT 1
         \"\"\",
-        anchor_id,
+        id,
     )
     return None if row is None else dict(row)
 
 
-async def list_proof_city_by_season_eq(conn, season, limit):
+async def find_proof_city_by_season(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):
     limit = min(limit, 20)
-    rows = await conn.fetch(
-        \"\"\"
-        SELECT city_id, city_name, region_name
-        FROM proof_cities
-        WHERE season = $1
-        ORDER BY city_id
-        LIMIT $2
-        \"\"\",
-        season,
-        limit,
-    )
+    if op not in {\"any\", \"eq\"}:
+        raise ValueError(\"unsupported op\")
+    if op == \"any\":
+        rows = await conn.fetch(
+            \"\"\"
+            SELECT city_id, city_name, region_name
+            FROM proof_cities
+            ORDER BY city_id
+            LIMIT $1
+            \"\"\",
+            limit,
+        )
+    else:
+        rows = await conn.fetch(
+            \"\"\"
+            SELECT city_id, city_name, region_name
+            FROM proof_cities
+            WHERE season = $1
+            ORDER BY city_id
+            LIMIT $2
+            \"\"\",
+            value,
+            limit,
+        )
     return [dict(row) for row in rows]
 
 
-async def list_proof_city_link_by_city_id_eq(conn, city_id, limit):
+async def find_proof_city_link_by_city_id(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
@@ -657,13 +729,13 @@ async def list_proof_city_link_by_city_id_eq(conn, city_id, limit):
         ORDER BY neighbor_city_id
         LIMIT $2
         \"\"\",
-        city_id,
+        value,
         limit,
     )
     return [dict(row) for row in rows]
 
 
-async def traverse_proof_city_to_proof_lodging_by_city_id(conn, city_id, limit):
+async def find_proof_lodging_by_city_id(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
@@ -673,13 +745,13 @@ async def traverse_proof_city_to_proof_lodging_by_city_id(conn, city_id, limit):
         ORDER BY lodging_id
         LIMIT $2
         \"\"\",
-        city_id,
+        value,
         limit,
     )
     return [dict(row) for row in rows]
 
 
-async def traverse_proof_city_to_proof_activity_by_city_id(conn, city_id, limit):
+async def find_proof_activity_by_city_id(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
@@ -689,7 +761,7 @@ async def traverse_proof_city_to_proof_activity_by_city_id(conn, city_id, limit)
         ORDER BY activity_id
         LIMIT $2
         \"\"\",
-        city_id,
+        value,
         limit,
     )
     return [dict(row) for row in rows]

@@ -65,8 +65,8 @@ def _seed_min_initial_exploration(
         result=[customer_id, customer_id + 1, customer_id + 2],
     )
     controller.record_atomic_tool_call(
-        tool_name="get_customer_by_id",
-        params={"customer_id": customer_id},
+        tool_name="get_customer",
+        params={"id": customer_id},
         result={"customer_id": customer_id, "store_id": 2},
     )
     controller.record_atomic_tool_call(
@@ -80,13 +80,19 @@ def _seed_min_initial_exploration(
         result=[{"payment_id": 11}, {"payment_id": 12}],
     )
     controller.record_atomic_tool_call(
-        tool_name="get_payment_by_id",
-        params={"payment_id": 11},
+        tool_name="get_payment",
+        params={"id": 11},
         result={"payment_id": 11},
     )
     controller.record_atomic_tool_call(
-        tool_name="get_customer_by_ids_batch",
-        params={"ids": [customer_id, customer_id + 1]},
+        tool_name="find_customer_by_customer_id",
+        params={
+            "op": "in",
+            "value": [customer_id, customer_id + 1],
+            "sort_by": "customer_id",
+            "direction": "asc",
+            "limit": 2,
+        },
         result=[{"customer_id": customer_id}, {"customer_id": customer_id + 1}],
     )
 
@@ -130,22 +136,34 @@ def _sample_atomic_tool_bundle(db_id: str = "sakila") -> AtomicToolBundle:
         db_id=db_id,
         tools=[
             AtomicToolDefinition(
-                name="get_customer_by_id",
-                family=AtomicToolFamily.T1_POINT_LOOKUP,
-                description="Look up a single customer by its primary key. Returns one row or nothing.",
-                params_schema={"type": "object", "properties": {"customer_id": {"type": "integer"}}},
-                returns_schema={
+                name="get_customer",
+                family=AtomicToolFamily.GET,
+                description="Retrieve one customer by ID. Returns all fields or nothing.",
+                params_schema={
                     "type": "object",
-                    "properties": {
-                        "customer_name": {"type": "string"},
-                    },
+                    "properties": {"id": {"type": "integer"}},
+                    "required": ["id"],
+                    "additionalProperties": False,
+                },
+                returns_schema={
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "customer_name": {"type": "string"},
+                            },
+                            "required": ["customer_name"],
+                            "additionalProperties": False,
+                        },
+                        {"type": "null"},
+                    ],
                 },
                 sql="SELECT 1",
                 result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
-                semantic_key="customer:get_by_id",
+                semantic_key="customer:get",
             )
         ],
-        source="async def get_customer_by_id(conn, customer_id):\n    return {'store_id': 1}\n",
+        source="async def get_customer(conn, id):\n    return {'store_id': 1}\n",
     )
 
 
@@ -210,8 +228,8 @@ class _FakeBackend:
             result=[1, 2, 3],
         )
         self.bound_controller.record_atomic_tool_call(
-            tool_name="get_customer_by_id",
-            params={"customer_id": 1},
+            tool_name="get_customer",
+            params={"id": 1},
             result={"store_id": 1},
         )
         self.bound_controller.record_atomic_tool_call(
@@ -230,8 +248,8 @@ class _FakeBackend:
             result=5,
         )
         self.bound_controller.record_atomic_tool_call(
-            tool_name="get_payment_by_id",
-            params={"payment_id": 11},
+            tool_name="get_payment",
+            params={"id": 11},
             result={"payment_id": 11},
         )
         if self.reject_payload is not None:
@@ -249,7 +267,7 @@ class _FakeBackend:
                 "token_usage": {"requests": 1},
                 "transcript_ref": "memory://transcript",
                 "tool_trace_ref": "memory://tool-trace",
-                "tool_calls": ("get_customer_by_id", "submit_draft"),
+                "tool_calls": ("get_customer", "submit_draft"),
             },
         )()
 
@@ -533,13 +551,13 @@ async def test_submit_draft_requires_more_first_submit_exploration(
         max_submissions=3,
     )
     controller.record_atomic_tool_call(
-        tool_name="get_customer_by_id",
-        params={"customer_id": 1},
+        tool_name="get_customer",
+        params={"id": 1},
         result={"customer_name": "Alice"},
     )
     controller.record_atomic_tool_call(
         tool_name="traverse_customer_to_store_by_store_id",
-        params={"customer_id": 1},
+        params={"id": 1},
         result={"store_id": 1},
     )
 
@@ -571,8 +589,8 @@ async def test_submit_draft_rejects_mixed_count_label_without_count_evidence(
         max_submissions=3,
     )
     controller.record_atomic_tool_call(
-        tool_name="get_customer_by_id",
-        params={"customer_id": 1},
+        tool_name="get_customer",
+        params={"id": 1},
         result={"customer_name": "Alice"},
     )
 
@@ -594,7 +612,7 @@ async def test_submit_draft_keeps_locked_self_anchor_across_feedback_retries(
         ),
         build_draft=lambda payload: payload,
         max_submissions=3,
-        self_anchor_surface_names=("get_customer_by_id",),
+        self_anchor_surface_names=("get_customer",),
     )
     _seed_min_initial_exploration(controller)
 
@@ -619,7 +637,7 @@ async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings
         ),
         build_draft=lambda payload: payload,
         max_submissions=3,
-        self_anchor_surface_names=("get_customer_by_id",),
+        self_anchor_surface_names=("get_customer",),
     )
     _seed_min_initial_exploration(controller)
 
@@ -644,8 +662,8 @@ async def test_submit_draft_pushes_self_scoped_count_back_to_anchor_evidence(
         max_submissions=3,
     )
     controller.record_atomic_tool_call(
-        tool_name="get_customer_by_id",
-        params={"customer_id": 1},
+        tool_name="get_customer",
+        params={"id": 1},
         result={"customer_name": "Alice"},
     )
     controller.record_atomic_tool_call(
@@ -707,8 +725,8 @@ async def test_submit_draft_rejects_opaque_identifier_values(
         max_submissions=3,
     )
     controller.record_atomic_tool_call(
-        tool_name="get_customer_by_id",
-        params={"customer_id": 1},
+        tool_name="get_customer",
+        params={"id": 1},
         result={"customer_id": 1, "tracking_token": "550e8400-e29b-41d4-a716-446655440000"},
     )
 
@@ -732,11 +750,11 @@ async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> 
     runtime._graph_cache = _sample_graph()
     runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle()
 
-    async def _get_customer_by_id(_kwargs):
+    async def _get_customer(_kwargs):
         return {"customer_name": "Alice"}
 
     runtime._tool_executor_cache["sakila"] = {
-        "get_customer_by_id": _get_customer_by_id,
+        "get_customer": _get_customer,
     }
 
     try:
@@ -769,11 +787,11 @@ async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: 
     runtime._graph_cache = _sample_graph()
     runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle()
 
-    async def _get_customer_by_id(_kwargs):
+    async def _get_customer(_kwargs):
         return {"customer_name": "Alice"}
 
     runtime._tool_executor_cache["sakila"] = {
-        "get_customer_by_id": _get_customer_by_id,
+        "get_customer": _get_customer,
     }
 
     try:

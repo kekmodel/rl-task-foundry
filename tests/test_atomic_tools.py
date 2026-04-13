@@ -223,7 +223,7 @@ def _sample_graph() -> SchemaGraph:
     )
 
 
-def test_atomic_tool_generator_is_deterministic_and_covers_tool_families() -> None:
+def test_atomic_tool_generator_is_deterministic_and_covers_new_tool_families() -> None:
     config = load_config("rl_task_foundry.yaml")
     generator = AtomicToolGenerator(config.atomic_tools)
     graph = _sample_graph()
@@ -234,80 +234,61 @@ def test_atomic_tool_generator_is_deterministic_and_covers_tool_families() -> No
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
     assert first.actor_tool_definitions_json() == second.actor_tool_definitions_json()
     assert {tool.family for tool in first.tools} == {
-        AtomicToolFamily.T1_POINT_LOOKUP,
-        AtomicToolFamily.T2_BOUNDED_ENUMERATION,
-        AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
-        AtomicToolFamily.T4_FK_TRAVERSAL,
-        AtomicToolFamily.T5_DISTINCT_VALUES,
-        AtomicToolFamily.T6_FILTERED_AGGREGATE,
-        AtomicToolFamily.T7_SORTED_TOP_K,
-        AtomicToolFamily.T8_GROUPED_AGGREGATE_TOP_K,
+        AtomicToolFamily.GET,
+        AtomicToolFamily.FIND,
+        AtomicToolFamily.CALC,
+        AtomicToolFamily.RANK,
     }
 
     names = {tool.name for tool in first.tools}
     tool_by_name = {tool.name: tool for tool in first.tools}
-    assert "get_customer_by_id" in names
-    assert "get_customer_by_ids_batch" in names
-    assert "count_customer" in names
-    assert "list_customer_ids" in names
-    assert "filter_customer_by_tier_like" in names
-    assert "filter_order_by_total_amount_range" in names
-    assert "distinct_order_status" in names
-    assert "traverse_order_to_customer_by_customer_id" in names
-    assert "traverse_customer_to_order_by_customer_id" in names
-    assert "count_order_by_status_eq" in names
-    assert "sum_order_total_amount_by_status_eq" in names
-    assert "top_k_order_by_total_amount_asc" in names
-    assert "top_k_order_by_total_amount_asc_where_status_eq" in names
-    assert "top_customer_id_by_sum_order_total_amount_desc" in names
-    assert "top_customer_id_by_sum_order_total_amount_desc_where_status_eq" in names
+    assert "get_customer" in names
+    assert "find_customer_by_api_key" in names
+    assert "find_customer_by_tier" in names
+    assert "find_order_by_customer_id" in names
+    assert "calc_order" in names
+    assert "rank_customer_by_api_key" in names
+    assert "rank_order_by_customer_id" in names
     assert (
-        tool_by_name["get_customer_by_id"].description
-        == "Look up a single customer by its primary key. Returns one row or nothing."
+        tool_by_name["get_customer"].description
+        == "Retrieve one customer by ID. Returns all fields or nothing."
     )
     assert (
-        tool_by_name["top_k_order_by_total_amount_asc"].description
-        == "Get the top order rows, sorted by total amount ascending."
+        tool_by_name["find_order_by_status"].description
+        == "Find order entries where status matches a condition. Returns a list."
     )
     assert (
-        tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].description
-        == "Get order rows for a specific status, sorted by total amount ascending."
+        tool_by_name["calc_order"].description
+        == "Compute a statistic over order entries. Returns one number."
     )
     assert (
-        tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].description
-        == "Rank customer id groups by their sum total amount in order, descending."
+        tool_by_name["rank_order_by_customer_id"].description
+        == "Rank customer id groups by a statistic over order. Returns a sorted list."
     )
 
 
-def test_atomic_tool_generator_excludes_internal_and_blocked_columns() -> None:
+def test_atomic_tool_generator_returns_all_table_fields() -> None:
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    tool_by_name = {tool.name: tool for tool in bundle.tools}
 
-    assert all("email" not in tool.name for tool in bundle.tools)
-    assert all("api_key" not in tool.name for tool in bundle.tools)
-    assert all("email" not in tool.sql for tool in bundle.tools)
-    assert all("api_key" not in tool.sql for tool in bundle.tools)
+    customer_schema = tool_by_name["get_customer"].returns_schema["anyOf"][0]
+    assert customer_schema["properties"]["email"] == {"type": ["string", "null"]}
+    assert customer_schema["properties"]["api_key"] == {"type": ["string", "null"]}
+    assert "customer_id" in customer_schema["properties"]
 
 
-def test_atomic_tool_generator_applies_deterministic_compression_priority() -> None:
+def test_atomic_tool_generator_compresses_by_removing_whole_tables() -> None:
     bundle = AtomicToolGenerator(
         AtomicToolConfig(
-            max_tool_count=26,
+            max_tools=18,
             bounded_result_limit=100,
             max_batch_values=128,
         )
     ).generate_bundle(_sample_graph(), db_id="sakila")
 
-    names = {tool.name for tool in bundle.tools}
-    assert len(bundle.tools) <= 26
-    assert "get_customer_by_id" in names
-    assert "filter_customer_by_tier_eq" in names
-    assert "traverse_order_to_customer_by_customer_id" in names
-    assert all(tool.family != AtomicToolFamily.T6_FILTERED_AGGREGATE for tool in bundle.tools)
-    assert all(tool.family != AtomicToolFamily.T8_GROUPED_AGGREGATE_TOP_K for tool in bundle.tools)
-    assert all(tool.family != AtomicToolFamily.T7_SORTED_TOP_K for tool in bundle.tools)
-    assert all(not tool.name.endswith("_like") for tool in bundle.tools)
-    assert all(not tool.name.startswith("distinct_") for tool in bundle.tools)
-    assert all(not tool.name.endswith("_range") for tool in bundle.tools)
+    assert len(bundle.tools) <= 18
+    remaining_tables = {tool.runtime_metadata["qualified_name"] for tool in bundle.tools}
+    assert remaining_tables == {"public.orders"}
 
 
 def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
@@ -321,138 +302,89 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
         "params_schema",
         "returns_schema",
     }
-    assert "async def get_customer_by_id(conn, customer_id):" in bundle.source
-    assert "async def list_customer_ids(conn, limit, _shuffle_seed=None):" in bundle.source
+    assert "async def get_customer(conn, id):" in bundle.source
+    assert (
+        "async def find_customer_by_tier(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):"
+        in bundle.source
+    )
+    assert "async def calc_customer(conn, fn, metric, by, op, value):" in bundle.source
+    assert (
+        "async def rank_customer_by_tier(conn, fn, metric, direction, limit, by, op, value, _shuffle_seed=None):"
+        in bundle.source
+    )
     assert "MAX_BATCH_VALUES = 128" in bundle.source
     assert "MAX_BOUNDED_RESULT_LIMIT = 100" in bundle.source
-    assert "limit = _bounded_limit(limit)" in bundle.source
-    assert "await conn.fetchrow" in bundle.source
-    assert "await conn.fetch(" in bundle.source
-    assert "await conn.fetchval" in bundle.source
+    assert "FLOAT_PRECISION = 2" in bundle.source
     assert "INSERT" not in bundle.source
     assert "UPDATE" not in bundle.source
     assert "DELETE" not in bundle.source
 
 
-def test_atomic_tool_generator_applies_seeded_row_shuffle_to_unordered_tools_only() -> None:
+def test_atomic_tool_generator_applies_seeded_row_shuffle_to_find_and_rank_only() -> None:
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
-    assert "md5(" not in tool_by_name["get_customer_by_id"].sql
-    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"customer_id\"::text, ''), COALESCE($2::text, ''))) ASC" in tool_by_name["list_customer_ids"].sql
-    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["filter_order_by_status_eq"].sql
-    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"customer_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["filter_customer_by_tier_in"].sql
-    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($4::text, ''))) ASC" in tool_by_name["filter_order_by_total_amount_range"].sql
-    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"customer_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["filter_customer_by_tier_like"].sql
-    assert "md5(" not in tool_by_name["traverse_order_to_customer_by_customer_id"].sql
-    assert "ORDER BY md5(concat_ws('|', COALESCE(source.\"order_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["traverse_customer_to_order_by_customer_id"].sql
-    assert "md5(" not in tool_by_name["distinct_order_status"].sql
-    assert "ORDER BY t.\"total_amount\" ASC," in tool_by_name["top_k_order_by_total_amount_asc"].sql
-    assert "md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($2::text, ''))) ASC" in tool_by_name["top_k_order_by_total_amount_asc"].sql
-    assert "ORDER BY t.\"total_amount\" ASC," in tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].sql
-    assert "md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].sql
-    assert "md5(" not in tool_by_name["count_customer"].sql
-    assert "md5(" not in tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].sql
+    assert "md5(" not in tool_by_name["get_customer"].sql
+    assert "md5(" in tool_by_name["find_customer_by_tier"].sql
+    assert "md5(" not in tool_by_name["calc_customer"].sql
+    assert "md5(" in tool_by_name["rank_customer_by_tier"].sql
 
 
-def test_atomic_multi_row_tools_require_limit_param_with_runtime_cap() -> None:
+def test_atomic_tool_params_follow_family_patterns() -> None:
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
-    assert tool_by_name["list_customer_ids"].params_schema["required"] == ["limit"]
-    assert "limit" in tool_by_name["filter_customer_by_tier_eq"].params_schema["required"]
-    assert "limit" in tool_by_name["filter_order_by_total_amount_range"].params_schema["required"]
-    assert "limit" in tool_by_name["distinct_order_status"].params_schema["required"]
-    assert "limit" in tool_by_name["traverse_customer_to_order_by_customer_id"].params_schema["required"]
-    assert tool_by_name["top_k_order_by_total_amount_asc"].params_schema["required"] == ["limit"]
-    assert "limit" in tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].params_schema["required"]
-    assert tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].params_schema["required"] == [
-        "limit"
+    get_schema = tool_by_name["get_customer"].params_schema
+    assert get_schema["required"] == ["id"]
+
+    text_find_schema = tool_by_name["find_customer_by_tier"].params_schema
+    assert text_find_schema["required"] == ["op", "value", "sort_by", "direction", "limit"]
+    assert text_find_schema["properties"]["op"]["enum"] == ["any", "eq", "in", "like"]
+    assert text_find_schema["properties"]["sort_by"]["anyOf"][0]["enum"] == [
+        "customer_id",
+        "tier",
+        "signup_date",
+        "score",
+        "email",
+        "api_key",
     ]
-    assert "limit" in tool_by_name[
-        "top_customer_id_by_sum_order_total_amount_desc_where_status_eq"
-    ].params_schema["required"]
-    assert tool_by_name["count_customer"].params_schema["required"] == []
-    assert tool_by_name["count_order_by_status_eq"].params_schema["required"] == ["value"]
-    assert "maximum" not in tool_by_name["list_customer_ids"].params_schema["properties"]["limit"]
+
+    numeric_find_schema = tool_by_name["find_order_by_total_amount"].params_schema
+    assert numeric_find_schema["properties"]["op"]["enum"] == [
+        "any",
+        "eq",
+        "in",
+        "lt",
+        "gt",
+        "lte",
+        "gte",
+    ]
+
+    calc_schema = tool_by_name["calc_order"].params_schema
+    assert calc_schema["required"] == ["fn", "metric", "by", "op", "value"]
+    assert calc_schema["properties"]["fn"]["enum"] == ["count", "sum", "avg", "min", "max"]
+    assert calc_schema["properties"]["metric"]["anyOf"][0]["enum"] == ["order_id", "customer_id", "total_amount"]
+
+    rank_schema = tool_by_name["rank_order_by_customer_id"].params_schema
+    assert rank_schema["required"] == ["fn", "metric", "direction", "limit", "by", "op", "value"]
+    assert rank_schema["properties"]["direction"]["enum"] == ["asc", "desc"]
 
 
-def test_filtered_aggregate_rounds_avg_and_float_sum_with_configured_precision() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig(float_precision=2)).generate_bundle(
-        _sample_graph(),
-        db_id="sakila",
-    )
-    tool_by_name = {tool.name: tool for tool in bundle.tools}
-
-    avg_sql = tool_by_name["avg_customer_score_by_tier_eq"].sql
-    float_sum_sql = tool_by_name["sum_order_total_amount_by_status_eq"].sql
-    int_sum_sql = tool_by_name["sum_line_item_quantity_by_sku_eq"].sql
-
-    assert "ROUND(AVG(t.\"score\")::numeric, 2) AS value" in avg_sql
-    assert "ROUND(SUM(t.\"total_amount\")::numeric, 2) AS value" in float_sum_sql
-    assert "ROUND(" not in int_sum_sql
-    assert tool_by_name["avg_line_item_quantity_by_sku_eq"].returns_schema == {
-        "type": ["number", "null"]
-    }
-    assert tool_by_name["sum_line_item_quantity_by_sku_eq"].returns_schema == {
-        "type": ["integer", "null"]
-    }
-
-
-def test_grouped_aggregate_rounds_avg_and_float_sum_with_configured_precision() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig(float_precision=2)).generate_bundle(
-        _sample_graph(),
-        db_id="sakila",
-    )
-    tool_by_name = {tool.name: tool for tool in bundle.tools}
-
-    avg_sql = tool_by_name["top_tier_by_avg_customer_score_desc"].sql
-    float_sum_sql = tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].sql
-    count_sql = tool_by_name["top_customer_id_by_count_order_desc"].sql
-
-    assert "ROUND(AVG(t.\"score\")::numeric, 2) AS value" in avg_sql
-    assert "ROUND(SUM(t.\"total_amount\")::numeric, 2) AS value" in float_sum_sql
-    assert "COUNT(t.\"order_id\")::bigint AS value" in count_sql
-    assert tool_by_name["top_tier_by_avg_customer_score_desc"].returns_schema == {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "tier": {"type": "string"},
-                "value": {"type": "number"},
-            },
-            "required": ["tier", "value"],
-            "additionalProperties": False,
-        },
-        "maxItems": 100,
-    }
-    assert tool_by_name["top_customer_id_by_count_order_desc"].returns_schema == {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "customer_id": {"type": "integer"},
-                "value": {"type": "integer"},
-            },
-            "required": ["customer_id", "value"],
-            "additionalProperties": False,
-        },
-        "maxItems": 100,
-    }
-
-
-def test_generated_atomic_tool_source_is_ast_valid_and_async_conn_first() -> None:
+def test_generated_atomic_tool_source_is_ast_valid_and_tool_functions_are_async() -> None:
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
 
     module = ast.parse(bundle.source)
-    async_defs = [node for node in module.body if isinstance(node, ast.AsyncFunctionDef)]
+    async_defs = {
+        node.name: node for node in module.body if isinstance(node, ast.AsyncFunctionDef)
+    }
 
-    assert len(async_defs) == len(bundle.tools)
-    assert all(node.args.args for node in async_defs)
-    assert all(node.args.args[0].arg == "conn" for node in async_defs)
+    for tool in bundle.tools:
+        assert tool.name in async_defs
+        assert async_defs[tool.name].args.args
+        assert async_defs[tool.name].args.args[0].arg == "conn"
 
 
-def test_generated_atomic_tool_sql_parses_under_postgres_dialect() -> None:
+def test_generated_atomic_tool_sql_templates_parse_under_postgres_dialect() -> None:
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
 
     for tool in bundle.tools:

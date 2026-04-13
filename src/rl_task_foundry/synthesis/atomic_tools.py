@@ -1,22 +1,17 @@
-"""Deterministic db-level atomic tool generation from a schema graph.
-
-This module intentionally duplicates a few tiny helpers that also exist under the
-legacy ``rl_task_foundry.tools`` directory. The duplication is temporary and
-keeps the atomic-tool transition free of imports from the path-centric stack that
-will be deleted in C11.
-"""
+"""Deterministic schema-derived atomic tools for one database."""
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import Field
 
 from rl_task_foundry.config.models import AtomicToolConfig, StrictModel
-from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
+from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
 
 _TEXT_TYPES = {
     "bpchar",
@@ -56,34 +51,27 @@ _DATETIME_TYPES = {
     "timestamp without time zone",
     "timestamptz",
 }
-_SCALAR_TYPES = _TEXT_TYPES | _INTEGER_TYPES | _FLOAT_TYPES | _BOOLEAN_TYPES | _DATE_TYPES | _DATETIME_TYPES
-_COMPRESSION_DROP_ORDER = (
-    "aggregate",
-    "grouped_aggregate",
-    "sorted_top_k",
-    "like",
-    "distinct",
-    "range",
-    "in",
+_SCALAR_TYPES = (
+    _TEXT_TYPES | _INTEGER_TYPES | _FLOAT_TYPES | _BOOLEAN_TYPES | _DATE_TYPES | _DATETIME_TYPES
 )
+_FIND_COMPARABLE_TYPES = _INTEGER_TYPES | _FLOAT_TYPES | _DATE_TYPES | _DATETIME_TYPES
+_ALL_FIND_OPS = ("any", "eq", "in", "lt", "gt", "lte", "gte", "like")
+_CALC_FILTER_OPS = ("eq", "in", "lt", "gt", "lte", "gte", "like")
+
+logger = logging.getLogger(__name__)
 
 
 class AtomicToolFamily(StrEnum):
-    T1_POINT_LOOKUP = "t1_point_lookup"
-    T2_BOUNDED_ENUMERATION = "t2_bounded_enumeration"
-    T3_SINGLE_COLUMN_FILTER = "t3_single_column_filter"
-    T4_FK_TRAVERSAL = "t4_fk_traversal"
-    T5_DISTINCT_VALUES = "t5_distinct_values"
-    T6_FILTERED_AGGREGATE = "t6_filtered_aggregate"
-    T7_SORTED_TOP_K = "t7_sorted_top_k"
-    T8_GROUPED_AGGREGATE_TOP_K = "t8_grouped_aggregate_top_k"
+    GET = "get"
+    FIND = "find"
+    CALC = "calc"
+    RANK = "rank"
 
 
 class AtomicToolResultMode(StrEnum):
     OBJECT_OR_NULL = "object_or_null"
     ROW_LIST = "row_list"
     SCALAR = "scalar"
-    SCALAR_LIST = "scalar_list"
 
 
 class AtomicToolDefinition(StrictModel):
@@ -95,17 +83,7 @@ class AtomicToolDefinition(StrictModel):
     sql: str
     result_mode: AtomicToolResultMode
     semantic_key: str
-    compression_bucket: Literal[
-        "core",
-        "aggregate",
-        "grouped_aggregate",
-        "sorted_top_k",
-        "like",
-        "distinct",
-        "range",
-        "in",
-    ] = "core"
-    scalar_list_column: str | None = None
+    runtime_metadata: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
     def actor_payload(self) -> dict[str, Any]:
         return {
@@ -141,22 +119,15 @@ class AtomicToolGenerator:
         table_slugs = _table_slug_map(graph)
         compiled: list[AtomicToolDefinition] = []
         for table in sorted(graph.tables, key=lambda item: (item.schema_name, item.table_name)):
-            compiled.extend(self._generate_table_tools(table, table_slugs))
-        for edge in sorted(
-            graph.edges,
-            key=lambda item: (
-                item.source_schema,
-                item.source_table,
-                item.target_schema,
-                item.target_table,
-                item.constraint_name,
-            ),
-        ):
-            compiled.extend(self._generate_edge_tools(graph, edge, table_slugs))
+            compiled.extend(self._build_get_tools(table, table_slugs))
+            compiled.extend(self._build_find_tools(table, table_slugs))
+            compiled.extend(self._build_calc_tools(table, table_slugs))
+            compiled.extend(self._build_rank_tools(table, table_slugs))
 
         compiled = _compress_tools(
             sorted(compiled, key=lambda tool: (_family_rank(tool.family), tool.name)),
-            max_tool_count=self.config.max_tool_count,
+            graph=graph,
+            max_tools=self.config.max_tools,
         )
         return AtomicToolBundle(
             db_id=db_id,
@@ -166,803 +137,143 @@ class AtomicToolGenerator:
                 tools=compiled,
                 max_batch_values=self.config.max_batch_values,
                 max_bounded_result_limit=self.config.bounded_result_limit,
+                float_precision=self.config.float_precision,
             ),
         )
 
-    def _generate_table_tools(
+    def _build_get_tools(
+        self,
+        table: TableProfile,
+        table_slugs: dict[tuple[str, str], str],
+    ) -> list[AtomicToolDefinition]:
+        if not table.primary_key:
+            return []
+        table_slug = table_slugs[(table.schema_name, table.table_name)]
+        return [
+            AtomicToolDefinition(
+                name=f"get_{table_slug}",
+                family=AtomicToolFamily.GET,
+                description=(
+                    f"Retrieve one {humanize_identifier(table_slug)} by ID. "
+                    "Returns all fields or nothing."
+                ),
+                params_schema=_get_params_schema(table),
+                returns_schema=_nullable_object_schema(tuple(table.columns)),
+                sql=_get_sql_template(table),
+                result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
+                semantic_key=f"{table.qualified_name}:get",
+                runtime_metadata=_table_runtime_metadata(table),
+            )
+        ]
+
+    def _build_find_tools(
         self,
         table: TableProfile,
         table_slugs: dict[tuple[str, str], str],
     ) -> list[AtomicToolDefinition]:
         table_slug = table_slugs[(table.schema_name, table.table_name)]
-        projection_columns = _projection_columns(table)
         tools: list[AtomicToolDefinition] = []
-
-        if table.primary_key:
-            tools.append(self._build_get_by_id_tool(table, table_slug, projection_columns))
-            if len(table.primary_key) == 1:
-                tools.append(self._build_get_by_ids_batch_tool(table, table_slug, projection_columns))
-            tools.append(self._build_count_tool(table, table_slug))
-            tools.append(self._build_list_ids_tool(table, table_slug))
-        else:
-            tools.append(self._build_count_tool(table, table_slug))
-
-        filter_columns = _filter_columns(table)
-        for column in filter_columns:
-            tools.append(self._build_eq_filter_tool(table, table_slug, projection_columns, column))
-            if _supports_in_filter(column):
-                tools.append(self._build_in_filter_tool(table, table_slug, projection_columns, column))
-            if _supports_range_filter(column):
-                tools.append(self._build_range_filter_tool(table, table_slug, projection_columns, column))
-            if _supports_like_filter(column):
-                tools.append(self._build_like_filter_tool(table, table_slug, projection_columns, column))
-            if _supports_distinct(column):
-                tools.append(self._build_distinct_tool(table, table_slug, column))
-
-        metric_columns = [column for column in filter_columns if _is_numeric(column)]
-        aggregate_filter_columns = [column for column in filter_columns if _supports_eq_filter(column)]
-        for filter_column in aggregate_filter_columns:
-            tools.append(self._build_filtered_count_tool(table, table_slug, filter_column=filter_column))
-        for metric in metric_columns:
-            for filter_column in aggregate_filter_columns:
-                if filter_column.column_name == metric.column_name:
-                    continue
-                tools.extend(
-                    self._build_aggregate_tools(
+        for column in _find_columns(table):
+            allowed_ops = _find_ops_for_column(column)
+            tools.append(
+                AtomicToolDefinition(
+                    name=f"find_{table_slug}_by_{column.column_name}",
+                    family=AtomicToolFamily.FIND,
+                    description=(
+                        f"Find {humanize_identifier(table_slug)} entries where "
+                        f"{humanize_identifier(column.column_name)} matches a condition. Returns a list."
+                    ),
+                    params_schema=_find_params_schema(
                         table,
-                        table_slug,
-                        metric=metric,
-                        filter_column=filter_column,
-                    )
+                        column=column,
+                        allowed_ops=allowed_ops,
+                        max_batch_values=self.config.max_batch_values,
+                        max_items=self.config.bounded_result_limit,
+                    ),
+                    returns_schema=_row_list_schema(
+                        tuple(table.columns),
+                        max_items=self.config.bounded_result_limit,
+                    ),
+                    sql=_find_sql_template(table, column),
+                    result_mode=AtomicToolResultMode.ROW_LIST,
+                    semantic_key=f"{table.qualified_name}:find:{column.column_name}",
+                    runtime_metadata={
+                        **_table_runtime_metadata(table),
+                        "filter_column": column.column_name,
+                        "allowed_ops": list(allowed_ops),
+                    },
                 )
-        if table.primary_key:
-            sortable_columns = [column for column in filter_columns if _supports_sorted_top_k(column)]
-            for sort_column in sortable_columns:
-                tools.extend(
-                    self._build_sorted_top_k_tools(
-                        table,
-                        table_slug,
-                        projection_columns,
-                        sort_column=sort_column,
-                    )
-                )
-                for filter_column in aggregate_filter_columns:
-                    if filter_column.column_name == sort_column.column_name:
-                        continue
-                    tools.extend(
-                        self._build_sorted_top_k_tools(
-                            table,
-                            table_slug,
-                            projection_columns,
-                            sort_column=sort_column,
-                            filter_column=filter_column,
-                        )
-                    )
-        group_columns = _grouped_aggregate_group_columns(table)
-        count_metric_columns = _grouped_aggregate_count_metric_columns(table)
-        grouped_aggregate_filter_columns = _grouped_aggregate_filter_columns(table)
-        for group_column in group_columns:
-            for metric in count_metric_columns:
-                tools.extend(
-                    self._build_grouped_aggregate_top_k_tools(
-                        table,
-                        table_slug,
-                        group_column=group_column,
-                        aggregate_name="count",
-                        metric=metric,
-                    )
-                )
-                for filter_column in grouped_aggregate_filter_columns:
-                    if filter_column.column_name in {group_column.column_name, metric.column_name}:
-                        continue
-                    tools.extend(
-                        self._build_grouped_aggregate_top_k_tools(
-                            table,
-                            table_slug,
-                            group_column=group_column,
-                            aggregate_name="count",
-                            metric=metric,
-                            filter_column=filter_column,
-                        )
-                    )
-        for group_column in group_columns:
-            for metric in metric_columns:
-                if metric.column_name == group_column.column_name:
-                    continue
-                for aggregate_name in ("sum", "avg", "min", "max"):
-                    tools.extend(
-                        self._build_grouped_aggregate_top_k_tools(
-                            table,
-                            table_slug,
-                            group_column=group_column,
-                            aggregate_name=aggregate_name,
-                            metric=metric,
-                        )
-                    )
-                    for filter_column in grouped_aggregate_filter_columns:
-                        if filter_column.column_name in {group_column.column_name, metric.column_name}:
-                            continue
-                        tools.extend(
-                            self._build_grouped_aggregate_top_k_tools(
-                                table,
-                                table_slug,
-                                group_column=group_column,
-                                aggregate_name=aggregate_name,
-                                metric=metric,
-                                filter_column=filter_column,
-                            )
-                        )
+            )
         return tools
 
-    def _generate_edge_tools(
+    def _build_calc_tools(
         self,
-        graph: SchemaGraph,
-        edge: ForeignKeyEdge,
+        table: TableProfile,
         table_slugs: dict[tuple[str, str], str],
     ) -> list[AtomicToolDefinition]:
-        source_table = graph.get_table(edge.source_table, schema_name=edge.source_schema)
-        target_table = graph.get_table(edge.target_table, schema_name=edge.target_schema)
-        source_slug = table_slugs[(source_table.schema_name, source_table.table_name)]
-        target_slug = table_slugs[(target_table.schema_name, target_table.table_name)]
-        join_column_slug = "_".join(edge.source_columns)
-        source_projection = _projection_columns(source_table)
-        target_projection = _projection_columns(target_table)
-        if not source_table.primary_key or not target_table.primary_key:
-            return []
-
-        forward_sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("target", target_projection)}
-            FROM {quote_table(source_table.schema_name, source_table.table_name)} AS source
-            JOIN {quote_table(target_table.schema_name, target_table.table_name)} AS target
-              ON {_edge_join_sql("source", "target", edge)}
-            WHERE {_pk_predicate_sql("source", source_table, start_index=1)}
-            LIMIT 1
-            """
-        )
-        reverse_sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("source", source_projection)}
-            FROM {quote_table(target_table.schema_name, target_table.table_name)} AS target
-            JOIN {quote_table(source_table.schema_name, source_table.table_name)} AS source
-              ON {_edge_join_sql("source", "target", edge)}
-            WHERE {_pk_predicate_sql("target", target_table, start_index=1)}
-            ORDER BY {_seeded_order_hash_sql("source", source_table, seed_param_index=len(target_table.primary_key) + 2, projection_columns=source_projection)},
-                     {_order_by_sql("source", source_table, source_projection)}
-            LIMIT ${len(target_table.primary_key) + 1}
-            """
-        )
+        table_slug = table_slugs[(table.schema_name, table.table_name)]
+        numeric_columns = _numeric_columns(table)
+        allowed_fns = ("count",) if not numeric_columns else ("count", "sum", "avg", "min", "max")
         return [
             AtomicToolDefinition(
-                name=f"traverse_{source_slug}_to_{target_slug}_by_{join_column_slug}",
-                family=AtomicToolFamily.T4_FK_TRAVERSAL,
+                name=f"calc_{table_slug}",
+                family=AtomicToolFamily.CALC,
                 description=(
-                    f"From a {humanize_identifier(source_slug)}, get the linked "
-                    f"{humanize_identifier(target_slug)} record. Returns one row."
+                    f"Compute a statistic over {humanize_identifier(table_slug)} entries. "
+                    "Returns one number."
                 ),
-                params_schema=_pk_params_schema(source_table),
-                returns_schema=_nullable_object_schema(target_projection),
-                sql=forward_sql,
-                result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
-                semantic_key=f"{source_table.qualified_name}->{edge.constraint_name}->{target_table.qualified_name}:forward",
-            ),
-            AtomicToolDefinition(
-                name=f"traverse_{target_slug}_to_{source_slug}_by_{join_column_slug}",
-                family=AtomicToolFamily.T4_FK_TRAVERSAL,
-                description=(
-                    f"From a {humanize_identifier(target_slug)}, get all linked "
-                    f"{humanize_identifier(source_slug)} rows."
+                params_schema=_calc_params_schema(
+                    table,
+                    allowed_fns=allowed_fns,
+                    max_batch_values=self.config.max_batch_values,
                 ),
-                params_schema=_with_limit_param(
-                    _pk_params_schema(target_table),
-                    max_items=self.config.bounded_result_limit,
-                ),
-                returns_schema=_row_list_schema(
-                    source_projection,
-                    max_items=self.config.bounded_result_limit,
-                ),
-                sql=reverse_sql,
-                result_mode=AtomicToolResultMode.ROW_LIST,
-                semantic_key=f"{target_table.qualified_name}->{edge.constraint_name}->{source_table.qualified_name}:reverse",
-            ),
+                returns_schema=_calc_returns_schema(),
+                sql=_calc_sql_template(table),
+                result_mode=AtomicToolResultMode.SCALAR,
+                semantic_key=f"{table.qualified_name}:calc",
+                runtime_metadata={
+                    **_table_runtime_metadata(table),
+                    "allowed_fns": list(allowed_fns),
+                },
+            )
         ]
 
-    def _build_get_by_id_tool(
+    def _build_rank_tools(
         self,
         table: TableProfile,
-        table_slug: str,
-        projection_columns: tuple[ColumnProfile, ...],
-    ) -> AtomicToolDefinition:
-        sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("t", projection_columns)}
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE {_pk_predicate_sql("t", table, start_index=1)}
-            LIMIT 1
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"get_{table_slug}_by_id",
-            family=AtomicToolFamily.T1_POINT_LOOKUP,
-            description=(
-                f"Look up a single {humanize_identifier(table_slug)} by its primary key. "
-                "Returns one row or nothing."
-            ),
-            params_schema=_pk_params_schema(table),
-            returns_schema=_nullable_object_schema(projection_columns),
-            sql=sql,
-            result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
-            semantic_key=f"{table.qualified_name}:get_by_id",
-        )
-
-    def _build_get_by_ids_batch_tool(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        projection_columns: tuple[ColumnProfile, ...],
-    ) -> AtomicToolDefinition:
-        pk_column = table.get_column(table.primary_key[0])
-        sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("t", projection_columns)}
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE t.{quote_ident(pk_column.column_name)} = ANY($1::{_postgres_array_cast(pk_column)}[])
-            ORDER BY {_order_by_sql("t", table, projection_columns)}
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"get_{table_slug}_by_ids_batch",
-            family=AtomicToolFamily.T1_POINT_LOOKUP,
-            description=(
-                f"Look up multiple {humanize_identifier(table_slug)} rows by a list of primary keys."
-            ),
-            params_schema=_array_params_schema(
-                "ids",
-                items_schema=_non_null_json_schema_for_column(pk_column),
-                max_items=self.config.max_batch_values,
-                description=f"Primary key values for {humanize_identifier(table_slug)}.",
-            ),
-            returns_schema=_row_list_schema(
-                projection_columns,
-                max_items=self.config.max_batch_values,
-            ),
-            sql=sql,
-            result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key=f"{table.qualified_name}:get_by_ids_batch",
-        )
-
-    def _build_count_tool(self, table: TableProfile, table_slug: str) -> AtomicToolDefinition:
-        sql = readonly_query(
-            f"""
-            SELECT COUNT(*)::bigint AS value
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"count_{table_slug}",
-            family=AtomicToolFamily.T2_BOUNDED_ENUMERATION,
-            description=f"Count total number of {humanize_identifier(table_slug)} rows.",
-            params_schema=_empty_params_schema(),
-            returns_schema={"type": "integer"},
-            sql=sql,
-            result_mode=AtomicToolResultMode.SCALAR,
-            semantic_key=f"{table.qualified_name}:count",
-        )
-
-    def _build_list_ids_tool(self, table: TableProfile, table_slug: str) -> AtomicToolDefinition:
-        id_columns = tuple(table.get_column(column_name) for column_name in table.primary_key)
-        sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("t", id_columns)}
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=2, projection_columns=id_columns)},
-                     {_order_by_sql("t", table, id_columns)}
-            LIMIT $1
-            """
-        )
-        if len(id_columns) == 1:
-            returns_schema = _scalar_list_schema(
-                items_schema=_non_null_json_schema_for_column(id_columns[0]),
-                max_items=self.config.bounded_result_limit,
-            )
-            result_mode = AtomicToolResultMode.SCALAR_LIST
-        else:
-            returns_schema = _row_list_schema(
-                id_columns,
-                max_items=self.config.bounded_result_limit,
-            )
-            result_mode = AtomicToolResultMode.ROW_LIST
-        return AtomicToolDefinition(
-            name=f"list_{table_slug}_ids",
-            family=AtomicToolFamily.T2_BOUNDED_ENUMERATION,
-            description=(
-                f"List {humanize_identifier(table_slug)} primary keys, up to a given limit."
-            ),
-            params_schema=_limit_only_params_schema(max_items=self.config.bounded_result_limit),
-            returns_schema=returns_schema,
-            sql=sql,
-            result_mode=result_mode,
-            semantic_key=f"{table.qualified_name}:list_ids",
-            scalar_list_column=id_columns[0].column_name if len(id_columns) == 1 else None,
-        )
-
-    def _build_eq_filter_tool(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        projection_columns: tuple[ColumnProfile, ...],
-        column: ColumnProfile,
-    ) -> AtomicToolDefinition:
-        sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("t", projection_columns)}
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE t.{quote_ident(column.column_name)} = $1
-            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=3, projection_columns=projection_columns)},
-                     {_order_by_sql("t", table, projection_columns)}
-            LIMIT $2
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"filter_{table_slug}_by_{column.column_name}_eq",
-            family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
-            description=(
-                f"Find all {humanize_identifier(table_slug)} rows for a specific "
-                f"{humanize_identifier(column.column_name)}."
-            ),
-            params_schema=_with_limit_param(
-                _single_value_params_schema(
-                    "value",
-                    _non_null_json_schema_for_column(column),
-                    description=f"Exact match value for {humanize_identifier(column.column_name)}.",
-                ),
-                max_items=self.config.bounded_result_limit,
-            ),
-            returns_schema=_row_list_schema(
-                projection_columns,
-                max_items=self.config.bounded_result_limit,
-            ),
-            sql=sql,
-            result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key=f"{table.qualified_name}:filter:{column.column_name}:eq",
-        )
-
-    def _build_in_filter_tool(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        projection_columns: tuple[ColumnProfile, ...],
-        column: ColumnProfile,
-    ) -> AtomicToolDefinition:
-        sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("t", projection_columns)}
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE t.{quote_ident(column.column_name)} = ANY($1::{_postgres_array_cast(column)}[])
-            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=3, projection_columns=projection_columns)},
-                     {_order_by_sql("t", table, projection_columns)}
-            LIMIT $2
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"filter_{table_slug}_by_{column.column_name}_in",
-            family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
-            description=(
-                f"Find all {humanize_identifier(table_slug)} rows for a set of "
-                f"{humanize_identifier(column.column_name)} values."
-            ),
-            params_schema=_with_limit_param(
-                _array_params_schema(
-                    "values",
-                    items_schema=_non_null_json_schema_for_column(column),
-                    max_items=self.config.max_batch_values,
-                    description=f"Accepted values for {humanize_identifier(column.column_name)}.",
-                ),
-                max_items=self.config.bounded_result_limit,
-            ),
-            returns_schema=_row_list_schema(
-                projection_columns,
-                max_items=self.config.bounded_result_limit,
-            ),
-            sql=sql,
-            result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key=f"{table.qualified_name}:filter:{column.column_name}:in",
-            compression_bucket="in",
-        )
-
-    def _build_range_filter_tool(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        projection_columns: tuple[ColumnProfile, ...],
-        column: ColumnProfile,
-    ) -> AtomicToolDefinition:
-        boundary_schema = _nullable_json_schema_for_column(column)
-        sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("t", projection_columns)}
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE ($1 IS NULL OR t.{quote_ident(column.column_name)} >= $1)
-              AND ($2 IS NULL OR t.{quote_ident(column.column_name)} <= $2)
-            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=4, projection_columns=projection_columns)},
-                     {_order_by_sql("t", table, projection_columns)}
-            LIMIT $3
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"filter_{table_slug}_by_{column.column_name}_range",
-            family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
-            description=(
-                f"Find {humanize_identifier(table_slug)} rows within a "
-                f"{humanize_identifier(column.column_name)} range."
-            ),
-            params_schema=_with_limit_param(
-                _object_schema(
-                    {
-                        "minimum": boundary_schema,
-                        "maximum": boundary_schema,
+        table_slugs: dict[tuple[str, str], str],
+    ) -> list[AtomicToolDefinition]:
+        table_slug = table_slugs[(table.schema_name, table.table_name)]
+        numeric_columns = _numeric_columns(table)
+        allowed_fns = ("count",) if not numeric_columns else ("count", "sum", "avg", "min", "max")
+        tools: list[AtomicToolDefinition] = []
+        for column in _group_columns(table):
+            tools.append(
+                AtomicToolDefinition(
+                    name=f"rank_{table_slug}_by_{column.column_name}",
+                    family=AtomicToolFamily.RANK,
+                    description=(
+                        f"Rank {humanize_identifier(column.column_name)} groups by a statistic over "
+                        f"{humanize_identifier(table_slug)}. Returns a sorted list."
+                    ),
+                    params_schema=_rank_params_schema(
+                        table,
+                        allowed_fns=allowed_fns,
+                        max_batch_values=self.config.max_batch_values,
+                        max_items=self.config.bounded_result_limit,
+                    ),
+                    returns_schema=_rank_returns_schema(
+                        group_column=column,
+                        max_items=self.config.bounded_result_limit,
+                    ),
+                    sql=_rank_sql_template(table, column),
+                    result_mode=AtomicToolResultMode.ROW_LIST,
+                    semantic_key=f"{table.qualified_name}:rank:{column.column_name}",
+                    runtime_metadata={
+                        **_table_runtime_metadata(table),
+                        "group_column": column.column_name,
+                        "allowed_fns": list(allowed_fns),
                     },
-                    required=(),
-                ),
-                max_items=self.config.bounded_result_limit,
-            ),
-            returns_schema=_row_list_schema(
-                projection_columns,
-                max_items=self.config.bounded_result_limit,
-            ),
-            sql=sql,
-            result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key=f"{table.qualified_name}:filter:{column.column_name}:range",
-            compression_bucket="range",
-        )
-
-    def _build_like_filter_tool(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        projection_columns: tuple[ColumnProfile, ...],
-        column: ColumnProfile,
-    ) -> AtomicToolDefinition:
-        sql = readonly_query(
-            f"""
-            SELECT {_select_projection_sql("t", projection_columns)}
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE t.{quote_ident(column.column_name)} ILIKE $1
-            ORDER BY {_seeded_order_hash_sql("t", table, seed_param_index=3, projection_columns=projection_columns)},
-                     {_order_by_sql("t", table, projection_columns)}
-            LIMIT $2
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"filter_{table_slug}_by_{column.column_name}_like",
-            family=AtomicToolFamily.T3_SINGLE_COLUMN_FILTER,
-            description=(
-                f"Search {humanize_identifier(table_slug)} rows by "
-                f"{humanize_identifier(column.column_name)} pattern (case-insensitive)."
-            ),
-            params_schema=_with_limit_param(
-                _single_value_params_schema(
-                    "pattern",
-                    {"type": "string"},
-                    description=(
-                        f"Case-insensitive LIKE pattern for "
-                        f"{humanize_identifier(column.column_name)}."
-                    ),
-                ),
-                max_items=self.config.bounded_result_limit,
-            ),
-            returns_schema=_row_list_schema(
-                projection_columns,
-                max_items=self.config.bounded_result_limit,
-            ),
-            sql=sql,
-            result_mode=AtomicToolResultMode.ROW_LIST,
-            semantic_key=f"{table.qualified_name}:filter:{column.column_name}:like",
-            compression_bucket="like",
-        )
-
-    def _build_distinct_tool(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        column: ColumnProfile,
-    ) -> AtomicToolDefinition:
-        sql = readonly_query(
-            f"""
-            SELECT DISTINCT t.{quote_ident(column.column_name)} AS value
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE t.{quote_ident(column.column_name)} IS NOT NULL
-            ORDER BY t.{quote_ident(column.column_name)} ASC
-            LIMIT $1
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"distinct_{table_slug}_{column.column_name}",
-            family=AtomicToolFamily.T5_DISTINCT_VALUES,
-            description=(
-                f"List all distinct {humanize_identifier(column.column_name)} values that appear in "
-                f"{humanize_identifier(table_slug)}."
-            ),
-            params_schema=_limit_only_params_schema(max_items=self.config.bounded_result_limit),
-            returns_schema=_scalar_list_schema(
-                items_schema=_non_null_json_schema_for_column(column),
-                max_items=self.config.bounded_result_limit,
-            ),
-            sql=sql,
-            result_mode=AtomicToolResultMode.SCALAR_LIST,
-            semantic_key=f"{table.qualified_name}:distinct:{column.column_name}",
-            compression_bucket="distinct",
-            scalar_list_column="value",
-        )
-
-    def _build_filtered_count_tool(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        *,
-        filter_column: ColumnProfile,
-    ) -> AtomicToolDefinition:
-        sql = readonly_query(
-            f"""
-            SELECT COUNT(*)::bigint AS value
-            FROM {quote_table(table.schema_name, table.table_name)} AS t
-            WHERE t.{quote_ident(filter_column.column_name)} = $1
-            """
-        )
-        return AtomicToolDefinition(
-            name=f"count_{table_slug}_by_{filter_column.column_name}_eq",
-            family=AtomicToolFamily.T6_FILTERED_AGGREGATE,
-            description=(
-                f"Count how many {humanize_identifier(table_slug)} rows match a specific "
-                f"{humanize_identifier(filter_column.column_name)}."
-            ),
-            params_schema=_single_value_params_schema(
-                "value",
-                _non_null_json_schema_for_column(filter_column),
-                description=f"Filter value for {humanize_identifier(filter_column.column_name)}.",
-            ),
-            returns_schema={"type": "integer"},
-            sql=sql,
-            result_mode=AtomicToolResultMode.SCALAR,
-            semantic_key=f"{table.qualified_name}:aggregate:count:by:{filter_column.column_name}",
-            compression_bucket="aggregate",
-        )
-
-    def _build_aggregate_tools(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        *,
-        metric: ColumnProfile,
-        filter_column: ColumnProfile,
-    ) -> list[AtomicToolDefinition]:
-        tools: list[AtomicToolDefinition] = []
-        for aggregate_name in ("sum", "avg", "min", "max"):
-            aggregate_expression = _aggregate_sql_expression(
-                metric,
-                aggregate_name=aggregate_name,
-                float_precision=self.config.float_precision,
-            )
-            sql = readonly_query(
-                f"""
-                SELECT {aggregate_expression} AS value
-                FROM {quote_table(table.schema_name, table.table_name)} AS t
-                WHERE t.{quote_ident(filter_column.column_name)} = $1
-                  AND t.{quote_ident(metric.column_name)} IS NOT NULL
-                """
-            )
-            tools.append(
-                AtomicToolDefinition(
-                    name=(
-                        f"{aggregate_name}_{table_slug}_{metric.column_name}"
-                        f"_by_{filter_column.column_name}_eq"
-                    ),
-                    family=AtomicToolFamily.T6_FILTERED_AGGREGATE,
-                    description=(
-                        f"Get the {_aggregate_phrase(aggregate_name, metric.column_name)} for "
-                        f"{humanize_identifier(table_slug)} rows matching a specific "
-                        f"{humanize_identifier(filter_column.column_name)}."
-                    ),
-                    params_schema=_single_value_params_schema(
-                        "value",
-                        _non_null_json_schema_for_column(filter_column),
-                        description=f"Filter value for {humanize_identifier(filter_column.column_name)}.",
-                    ),
-                    returns_schema=_aggregate_returns_schema(metric, aggregate_name=aggregate_name),
-                    sql=sql,
-                    result_mode=AtomicToolResultMode.SCALAR,
-                    semantic_key=(
-                        f"{table.qualified_name}:aggregate:{aggregate_name}:"
-                        f"{metric.column_name}:by:{filter_column.column_name}"
-                    ),
-                    compression_bucket="aggregate",
-                )
-            )
-        return tools
-
-    def _build_sorted_top_k_tools(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        projection_columns: tuple[ColumnProfile, ...],
-        *,
-        sort_column: ColumnProfile,
-        filter_column: ColumnProfile | None = None,
-    ) -> list[AtomicToolDefinition]:
-        tools: list[AtomicToolDefinition] = []
-        for direction_slug, direction_sql in (("asc", "ASC"), ("desc", "DESC")):
-            predicate_lines = []
-            if filter_column is not None:
-                predicate_lines.append(
-                    f"t.{quote_ident(filter_column.column_name)} = $1"
-                )
-            predicate_lines.append(f"t.{quote_ident(sort_column.column_name)} IS NOT NULL")
-            where_sql = ""
-            if predicate_lines:
-                where_sql = "WHERE " + "\n                  AND ".join(predicate_lines)
-            limit_index = 2 if filter_column is not None else 1
-            sql = readonly_query(
-                f"""
-                SELECT {_select_projection_sql("t", projection_columns)}
-                FROM {quote_table(table.schema_name, table.table_name)} AS t
-                {where_sql}
-                ORDER BY t.{quote_ident(sort_column.column_name)} {direction_sql},
-                         {_seeded_order_hash_sql("t", table, seed_param_index=limit_index + 1, projection_columns=projection_columns)},
-                         {_order_by_sql("t", table, projection_columns)}
-                LIMIT ${limit_index}
-                """
-            )
-            if filter_column is None:
-                name = f"top_k_{table_slug}_by_{sort_column.column_name}_{direction_slug}"
-                description = (
-                    f"Get the top {humanize_identifier(table_slug)} rows, sorted by "
-                    f"{humanize_identifier(sort_column.column_name)} "
-                    f"{_direction_word(direction_slug)}."
-                )
-                params_schema = _limit_only_params_schema(max_items=self.config.bounded_result_limit)
-                semantic_key = (
-                    f"{table.qualified_name}:sorted_top_k:{sort_column.column_name}:{direction_slug}:all"
-                )
-            else:
-                name = (
-                    f"top_k_{table_slug}_by_{sort_column.column_name}_{direction_slug}"
-                    f"_where_{filter_column.column_name}_eq"
-                )
-                description = (
-                    f"Get {humanize_identifier(table_slug)} rows for a specific "
-                    f"{humanize_identifier(filter_column.column_name)}, sorted by "
-                    f"{humanize_identifier(sort_column.column_name)} "
-                    f"{_direction_word(direction_slug)}."
-                )
-                params_schema = _with_limit_param(
-                    _single_value_params_schema(
-                        "value",
-                        _non_null_json_schema_for_column(filter_column),
-                        description=(
-                            f"Filter value for {humanize_identifier(filter_column.column_name)}."
-                        ),
-                    ),
-                    max_items=self.config.bounded_result_limit,
-                )
-                semantic_key = (
-                    f"{table.qualified_name}:sorted_top_k:{sort_column.column_name}:"
-                    f"{direction_slug}:by:{filter_column.column_name}"
-                )
-            tools.append(
-                AtomicToolDefinition(
-                    name=name,
-                    family=AtomicToolFamily.T7_SORTED_TOP_K,
-                    description=description,
-                    params_schema=params_schema,
-                    returns_schema=_row_list_schema(
-                        projection_columns,
-                        max_items=self.config.bounded_result_limit,
-                    ),
-                    sql=sql,
-                    result_mode=AtomicToolResultMode.ROW_LIST,
-                    semantic_key=semantic_key,
-                    compression_bucket="sorted_top_k",
-                )
-            )
-        return tools
-
-    def _build_grouped_aggregate_top_k_tools(
-        self,
-        table: TableProfile,
-        table_slug: str,
-        *,
-        group_column: ColumnProfile,
-        aggregate_name: str,
-        metric: ColumnProfile,
-        filter_column: ColumnProfile | None = None,
-    ) -> list[AtomicToolDefinition]:
-        tools: list[AtomicToolDefinition] = []
-        for direction_slug, direction_sql in (("asc", "ASC"), ("desc", "DESC")):
-            aggregate_expression = _grouped_aggregate_sql_expression(
-                metric,
-                aggregate_name=aggregate_name,
-                float_precision=self.config.float_precision,
-            )
-            predicates = [f"t.{quote_ident(metric.column_name)} IS NOT NULL"]
-            if filter_column is not None:
-                predicates.insert(0, f"t.{quote_ident(filter_column.column_name)} = $1")
-            limit_index = 2 if filter_column is not None else 1
-            sql = readonly_query(
-                f"""
-                SELECT t.{quote_ident(group_column.column_name)} AS {quote_ident(group_column.column_name)},
-                       {aggregate_expression} AS value
-                FROM {quote_table(table.schema_name, table.table_name)} AS t
-                WHERE {" AND ".join(predicates)}
-                GROUP BY t.{quote_ident(group_column.column_name)}
-                ORDER BY value {direction_sql},
-                         t.{quote_ident(group_column.column_name)} ASC
-                LIMIT ${limit_index}
-                """
-            )
-            if filter_column is None:
-                name = _grouped_aggregate_tool_name(
-                    group_column=group_column.column_name,
-                    aggregate_name=aggregate_name,
-                    table_slug=table_slug,
-                    metric_column=metric.column_name,
-                    direction_slug=direction_slug,
-                    filter_column=None,
-                )
-                description = (
-                    f"Rank {humanize_identifier(group_column.column_name)} groups by their "
-                    f"{_aggregate_phrase(aggregate_name, metric.column_name)} in "
-                    f"{humanize_identifier(table_slug)}, {_direction_word(direction_slug)}."
-                )
-                params_schema = _limit_only_params_schema(max_items=self.config.bounded_result_limit)
-                semantic_key = (
-                    f"{table.qualified_name}:grouped_aggregate:{aggregate_name}:{metric.column_name}:"
-                    f"group_by:{group_column.column_name}:{direction_slug}:all"
-                )
-            else:
-                name = _grouped_aggregate_tool_name(
-                    group_column=group_column.column_name,
-                    aggregate_name=aggregate_name,
-                    table_slug=table_slug,
-                    metric_column=metric.column_name,
-                    direction_slug=direction_slug,
-                    filter_column=filter_column.column_name,
-                )
-                description = (
-                    f"Rank {humanize_identifier(group_column.column_name)} groups for a specific "
-                    f"{humanize_identifier(filter_column.column_name)} by their "
-                    f"{_aggregate_phrase(aggregate_name, metric.column_name)} in "
-                    f"{humanize_identifier(table_slug)}, {_direction_word(direction_slug)}."
-                )
-                params_schema = _with_limit_param(
-                    _single_value_params_schema(
-                        "value",
-                        _non_null_json_schema_for_column(filter_column),
-                        description=(
-                            f"Filter value for {humanize_identifier(filter_column.column_name)}."
-                        ),
-                    ),
-                    max_items=self.config.bounded_result_limit,
-                )
-                semantic_key = (
-                    f"{table.qualified_name}:grouped_aggregate:{aggregate_name}:{metric.column_name}:"
-                    f"group_by:{group_column.column_name}:{direction_slug}:by:{filter_column.column_name}"
-                )
-            tools.append(
-                AtomicToolDefinition(
-                    name=name,
-                    family=AtomicToolFamily.T8_GROUPED_AGGREGATE_TOP_K,
-                    description=description,
-                    params_schema=params_schema,
-                    returns_schema=_grouped_aggregate_row_list_schema(
-                        group_column,
-                        aggregate_name=aggregate_name,
-                        metric=metric,
-                        max_items=self.config.bounded_result_limit,
-                    ),
-                    sql=sql,
-                    result_mode=AtomicToolResultMode.ROW_LIST,
-                    semantic_key=semantic_key,
-                    compression_bucket="grouped_aggregate",
                 )
             )
         return tools
@@ -970,14 +281,10 @@ class AtomicToolGenerator:
 
 def _family_rank(family: AtomicToolFamily) -> int:
     order = {
-        AtomicToolFamily.T1_POINT_LOOKUP: 0,
-        AtomicToolFamily.T2_BOUNDED_ENUMERATION: 1,
-        AtomicToolFamily.T3_SINGLE_COLUMN_FILTER: 2,
-        AtomicToolFamily.T4_FK_TRAVERSAL: 3,
-        AtomicToolFamily.T5_DISTINCT_VALUES: 4,
-        AtomicToolFamily.T6_FILTERED_AGGREGATE: 5,
-        AtomicToolFamily.T7_SORTED_TOP_K: 6,
-        AtomicToolFamily.T8_GROUPED_AGGREGATE_TOP_K: 7,
+        AtomicToolFamily.GET: 0,
+        AtomicToolFamily.FIND: 1,
+        AtomicToolFamily.CALC: 2,
+        AtomicToolFamily.RANK: 3,
     }
     return order[family]
 
@@ -985,20 +292,57 @@ def _family_rank(family: AtomicToolFamily) -> int:
 def _compress_tools(
     tools: list[AtomicToolDefinition],
     *,
-    max_tool_count: int,
+    graph: SchemaGraph,
+    max_tools: int,
 ) -> list[AtomicToolDefinition]:
-    if len(tools) <= max_tool_count:
+    if len(tools) <= max_tools:
+        return tools
+    return _compress_by_table_removal(tools, graph=graph, max_tools=max_tools)
+
+
+def _compress_by_table_removal(
+    tools: list[AtomicToolDefinition],
+    *,
+    graph: SchemaGraph,
+    max_tools: int,
+) -> list[AtomicToolDefinition]:
+    if len(tools) <= max_tools:
         return tools
 
-    kept = list(tools)
-    for bucket in _COMPRESSION_DROP_ORDER:
-        if len(kept) <= max_tool_count:
-            break
-        kept = [tool for tool in kept if tool.compression_bucket != bucket]
+    edge_counts = {table.qualified_name: 0 for table in graph.tables}
+    for edge in graph.edges:
+        edge_counts[edge.source_qualified_name] = edge_counts.get(edge.source_qualified_name, 0) + 1
+        edge_counts[edge.target_qualified_name] = edge_counts.get(edge.target_qualified_name, 0) + 1
 
-    if len(kept) <= max_tool_count:
-        return kept
-    return kept[:max_tool_count]
+    removal_order = sorted(
+        graph.tables,
+        key=lambda table: (
+            edge_counts.get(table.qualified_name, 0),
+            table.qualified_name,
+        ),
+    )
+
+    removed_tables: set[str] = set()
+    remaining = list(tools)
+    for table in removal_order:
+        if len(remaining) <= max_tools:
+            break
+        table_name = table.qualified_name
+        remaining = [
+            tool
+            for tool in remaining
+            if str(tool.runtime_metadata.get("qualified_name")) != table_name
+        ]
+        removed_tables.add(table_name)
+
+    if removed_tables:
+        logger.warning(
+            "schema exceeds max_tools=%d, removed %d tables: %s",
+            max_tools,
+            len(removed_tables),
+            sorted(removed_tables),
+        )
+    return remaining
 
 
 def _table_slug_map(graph: SchemaGraph) -> dict[tuple[str, str], str]:
@@ -1028,57 +372,8 @@ def _singularize_identifier(identifier: str) -> str:
     return "_".join(parts)
 
 
-def _visible_columns(table: TableProfile) -> tuple[ColumnProfile, ...]:
-    return tuple(column for column in table.columns if column.visibility == "user_visible")
-
-
-def _projection_columns(table: TableProfile) -> tuple[ColumnProfile, ...]:
-    seen: set[str] = set()
-    projection: list[ColumnProfile] = []
-    for column_name in table.primary_key:
-        column = table.get_column(column_name)
-        projection.append(column)
-        seen.add(column.column_name)
-    for column in _visible_columns(table):
-        if column.column_name in seen:
-            continue
-        projection.append(column)
-        seen.add(column.column_name)
-    return tuple(projection)
-
-
-def _filter_columns(table: TableProfile) -> list[ColumnProfile]:
-    return [
-        column
-        for column in _visible_columns(table)
-        if column.column_name not in set(table.primary_key) and _is_scalar(column)
-    ]
-
-
-def _grouped_aggregate_group_columns(table: TableProfile) -> list[ColumnProfile]:
-    columns: list[ColumnProfile] = []
-    for column in table.columns:
-        if not _supports_grouped_aggregate_group(column):
-            continue
-        if column.is_foreign_key or column.visibility == "user_visible":
-            columns.append(column)
-    return columns
-
-
-def _grouped_aggregate_count_metric_columns(table: TableProfile) -> list[ColumnProfile]:
-    if table.primary_key:
-        primary_key_column = table.get_column(table.primary_key[0])
-        if _is_scalar(primary_key_column):
-            return [primary_key_column]
-    return _grouped_aggregate_group_columns(table)[:1]
-
-
-def _grouped_aggregate_filter_columns(table: TableProfile) -> list[ColumnProfile]:
-    return [
-        column
-        for column in _filter_columns(table)
-        if _supports_grouped_aggregate_filter(column)
-    ]
+def _normalized_data_type(data_type: str) -> str:
+    return " ".join(data_type.strip().lower().split())
 
 
 def _is_scalar(column: ColumnProfile) -> bool:
@@ -1089,159 +384,190 @@ def _is_numeric(column: ColumnProfile) -> bool:
     return _normalized_data_type(column.data_type) in (_INTEGER_TYPES | _FLOAT_TYPES)
 
 
-def _supports_eq_filter(column: ColumnProfile) -> bool:
-    return _is_scalar(column)
-
-
-def _supports_in_filter(column: ColumnProfile) -> bool:
-    return _supports_eq_filter(column)
-
-
-def _supports_range_filter(column: ColumnProfile) -> bool:
-    return _normalized_data_type(column.data_type) in (
-        _INTEGER_TYPES | _FLOAT_TYPES | _DATE_TYPES | _DATETIME_TYPES
-    )
-
-
-def _supports_like_filter(column: ColumnProfile) -> bool:
-    return _normalized_data_type(column.data_type) in _TEXT_TYPES
-
-
-def _supports_distinct(column: ColumnProfile) -> bool:
-    return _supports_eq_filter(column)
-
-
-def _supports_sorted_top_k(column: ColumnProfile) -> bool:
-    return _normalized_data_type(column.data_type) in (
-        _INTEGER_TYPES | _FLOAT_TYPES | _DATE_TYPES | _DATETIME_TYPES
-    )
-
-
-def _supports_grouped_aggregate_group(column: ColumnProfile) -> bool:
-    normalized = _normalized_data_type(column.data_type)
-    if column.is_foreign_key:
-        return _is_scalar(column)
-    if column.visibility != "user_visible":
-        return False
-    return normalized in (_TEXT_TYPES | _BOOLEAN_TYPES)
-
-
-def _supports_grouped_aggregate_filter(column: ColumnProfile) -> bool:
-    return _normalized_data_type(column.data_type) in (
-        _TEXT_TYPES | _BOOLEAN_TYPES | _DATE_TYPES | _DATETIME_TYPES
-    )
-
-
-def _is_non_integer_numeric(column: ColumnProfile) -> bool:
+def _is_float_like(column: ColumnProfile) -> bool:
     return _normalized_data_type(column.data_type) in _FLOAT_TYPES
 
 
-def _normalized_data_type(data_type: str) -> str:
-    return " ".join(data_type.strip().lower().split())
+def _find_columns(table: TableProfile) -> list[ColumnProfile]:
+    return [column for column in table.columns if _is_scalar(column)]
 
 
-def _postgres_array_cast(column: ColumnProfile) -> str:
+def _numeric_columns(table: TableProfile) -> list[ColumnProfile]:
+    return [column for column in table.columns if _is_numeric(column)]
+
+
+def _group_columns(table: TableProfile) -> list[ColumnProfile]:
+    return [column for column in table.columns if _is_scalar(column)]
+
+
+def _sortable_columns(table: TableProfile) -> list[ColumnProfile]:
+    return [column for column in table.columns if _is_scalar(column)]
+
+
+def _find_ops_for_column(column: ColumnProfile) -> tuple[str, ...]:
     normalized = _normalized_data_type(column.data_type)
-    if normalized in _INTEGER_TYPES:
-        if normalized == "smallint":
-            return "int2"
-        if normalized in {"integer", "int4"}:
-            return "int4"
-        return "int8"
-    if normalized in _FLOAT_TYPES:
-        if normalized == "real":
-            return "float4"
-        if normalized == "double precision":
-            return "float8"
-        return "numeric"
-    if normalized in _BOOLEAN_TYPES:
-        return "bool"
-    if normalized in _DATE_TYPES:
-        return "date"
-    if normalized in _DATETIME_TYPES:
-        return "timestamptz" if normalized == "timestamptz" else "timestamp"
-    if normalized == "uuid":
-        return "uuid"
-    return "text"
+    ops = ["any", "eq", "in"]
+    if normalized in _FIND_COMPARABLE_TYPES:
+        ops.extend(["lt", "gt", "lte", "gte"])
+    if normalized in _TEXT_TYPES:
+        ops.append("like")
+    return tuple(ops)
 
 
-def _pk_params_schema(table: TableProfile) -> dict[str, Any]:
+def _table_runtime_metadata(table: TableProfile) -> dict[str, Any]:
+    return {
+        "schema_name": table.schema_name,
+        "table_name": table.table_name,
+        "qualified_name": table.qualified_name,
+        "all_columns": [column.column_name for column in table.columns],
+        "primary_key": list(table.primary_key),
+        "order_columns": list(table.primary_key) or [column.column_name for column in table.columns],
+        "column_types": {
+            column.column_name: _normalized_data_type(column.data_type) for column in table.columns
+        },
+        "array_casts": {column.column_name: _postgres_array_cast(column) for column in table.columns},
+        "numeric_columns": [column.column_name for column in _numeric_columns(table)],
+        "filter_columns": [column.column_name for column in _find_columns(table)],
+        "sortable_columns": [column.column_name for column in _sortable_columns(table)],
+    }
+
+
+def _get_params_schema(table: TableProfile) -> dict[str, Any]:
+    if len(table.primary_key) == 1:
+        pk_column = table.get_column(table.primary_key[0])
+        return _object_schema(
+            {
+                "id": _described_schema(
+                    _non_null_json_schema_for_column(pk_column),
+                    "Identifier of the entry to retrieve.",
+                )
+            },
+            required=("id",),
+        )
+
     return _object_schema(
         {
-            column_name: _non_null_json_schema_for_column(table.get_column(column_name))
-            for column_name in table.primary_key
+            "id": _described_schema(
+                _object_schema(
+                    {
+                        column_name: _non_null_json_schema_for_column(table.get_column(column_name))
+                        for column_name in table.primary_key
+                    },
+                    required=table.primary_key,
+                ),
+                "Identifier of the entry to retrieve. Use an object keyed by ID field name when the entry uses multiple ID fields.",
+            )
         },
-        required=table.primary_key,
+        required=("id",),
     )
 
 
-def _empty_params_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {},
-        "required": [],
-        "additionalProperties": False,
-    }
-
-
-def _limit_only_params_schema(*, max_items: int) -> dict[str, Any]:
-    return _object_schema({"limit": _limit_param_schema(max_items=max_items)}, required=("limit",))
-
-
-def _with_limit_param(params_schema: dict[str, Any], *, max_items: int) -> dict[str, Any]:
-    properties = dict(params_schema.get("properties", {}))
-    properties["limit"] = _limit_param_schema(max_items=max_items)
-    required = [*params_schema.get("required", [])]
-    if "limit" not in required:
-        required.append("limit")
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": params_schema.get("additionalProperties", False),
-    }
-
-
-def _limit_param_schema(*, max_items: int) -> dict[str, Any]:
-    return {
-        "type": "integer",
-        "minimum": 1,
-        "description": (
-            "Maximum rows to return. Values above "
-            f"{max_items} are capped by the runtime."
-        ),
-    }
-
-
-def _single_value_params_schema(
-    name: str,
-    schema: dict[str, Any],
+def _find_params_schema(
+    table: TableProfile,
     *,
-    description: str,
-) -> dict[str, Any]:
-    payload = dict(schema)
-    payload["description"] = description
-    return _object_schema({name: payload}, required=(name,))
-
-
-def _array_params_schema(
-    name: str,
-    *,
-    items_schema: dict[str, Any],
+    column: ColumnProfile,
+    allowed_ops: tuple[str, ...],
+    max_batch_values: int,
     max_items: int,
-    description: str,
 ) -> dict[str, Any]:
+    sort_fields = [candidate.column_name for candidate in _sortable_columns(table)]
     return _object_schema(
         {
-            name: {
-                "type": "array",
-                "description": description,
-                "items": items_schema,
-                "minItems": 1,
-                "maxItems": max_items,
-            }
+            "op": _described_schema(
+                {"type": "string", "enum": list(allowed_ops)},
+                _op_description(allow_any="any" in allowed_ops),
+            ),
+            "value": _described_schema(
+                _find_value_schema(column, max_batch_values=max_batch_values),
+                "Value to match against. Use a list for op=in. Use null for op=any.",
+            ),
+            "sort_by": _described_schema(
+                _nullable_enum_schema(sort_fields),
+                "Field to order results by. Use null for seeded deterministic order.",
+            ),
+            "direction": _described_schema(
+                {"type": "string", "enum": ["asc", "desc"]},
+                "Sort order: asc (smallest first) or desc (largest first).",
+            ),
+            "limit": _limit_param_schema(max_items=max_items),
         },
-        required=(name,),
+        required=("op", "value", "sort_by", "direction", "limit"),
+    )
+
+
+def _calc_params_schema(
+    table: TableProfile,
+    *,
+    allowed_fns: tuple[str, ...],
+    max_batch_values: int,
+) -> dict[str, Any]:
+    metric_columns = [column.column_name for column in _numeric_columns(table)]
+    filter_columns = [column.column_name for column in _find_columns(table)]
+    return _object_schema(
+        {
+            "fn": _described_schema(
+                {"type": "string", "enum": list(allowed_fns)},
+                "Statistic to compute: count, sum, avg, min, or max.",
+            ),
+            "metric": _described_schema(
+                _nullable_enum_schema(metric_columns),
+                "Field to compute the statistic on. Use null when fn=count.",
+            ),
+            "by": _described_schema(
+                _nullable_enum_schema(filter_columns),
+                "Field to filter on. Use null for no filter.",
+            ),
+            "op": _described_schema(
+                _nullable_enum_schema(_CALC_FILTER_OPS),
+                "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
+            ),
+            "value": _described_schema(
+                _generic_filter_value_schema(table, max_batch_values=max_batch_values),
+                "Value to match against. Single value or list (for op=in). Use null for no filter.",
+            ),
+        },
+        required=("fn", "metric", "by", "op", "value"),
+    )
+
+
+def _rank_params_schema(
+    table: TableProfile,
+    *,
+    allowed_fns: tuple[str, ...],
+    max_batch_values: int,
+    max_items: int,
+) -> dict[str, Any]:
+    metric_columns = [column.column_name for column in _numeric_columns(table)]
+    filter_columns = [column.column_name for column in _find_columns(table)]
+    return _object_schema(
+        {
+            "fn": _described_schema(
+                {"type": "string", "enum": list(allowed_fns)},
+                "Statistic to compute: count, sum, avg, min, or max.",
+            ),
+            "metric": _described_schema(
+                _nullable_enum_schema(metric_columns),
+                "Field to compute the statistic on. Use null when fn=count.",
+            ),
+            "direction": _described_schema(
+                {"type": "string", "enum": ["asc", "desc"]},
+                "Sort order: asc (smallest first) or desc (largest first).",
+            ),
+            "limit": _limit_param_schema(max_items=max_items),
+            "by": _described_schema(
+                _nullable_enum_schema(filter_columns),
+                "Field to filter on. Use null for no filter.",
+            ),
+            "op": _described_schema(
+                _nullable_enum_schema(_CALC_FILTER_OPS),
+                "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
+            ),
+            "value": _described_schema(
+                _generic_filter_value_schema(table, max_batch_values=max_batch_values),
+                "Value to match against. Single value or list (for op=in). Use null for no filter.",
+            ),
+        },
+        required=("fn", "metric", "direction", "limit", "by", "op", "value"),
     )
 
 
@@ -1256,6 +582,71 @@ def _object_schema(
         "required": list(required),
         "additionalProperties": False,
     }
+
+
+def _described_schema(schema: dict[str, Any], description: str) -> dict[str, Any]:
+    payload = dict(schema)
+    payload["description"] = description
+    return payload
+
+
+def _nullable_enum_schema(values: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    return {
+        "anyOf": [
+            {"type": "string", "enum": list(values)},
+            {"type": "null"},
+        ]
+    }
+
+
+def _find_value_schema(column: ColumnProfile, *, max_batch_values: int) -> dict[str, Any]:
+    scalar_schema = _non_null_json_schema_for_column(column)
+    return {
+        "anyOf": [
+            scalar_schema,
+            {
+                "type": "array",
+                "items": scalar_schema,
+                "minItems": 1,
+                "maxItems": max_batch_values,
+            },
+            {"type": "null"},
+        ]
+    }
+
+
+def _generic_filter_value_schema(table: TableProfile, *, max_batch_values: int) -> dict[str, Any]:
+    scalar_variants = _dedupe_schemas(
+        [_non_null_json_schema_for_column(column) for column in _find_columns(table)]
+    ) or [{"type": "string"}]
+    array_variants = [
+        {
+            "type": "array",
+            "items": schema,
+            "minItems": 1,
+            "maxItems": max_batch_values,
+        }
+        for schema in scalar_variants
+    ]
+    return {
+        "anyOf": [
+            *scalar_variants,
+            *array_variants,
+            {"type": "null"},
+        ]
+    }
+
+
+def _dedupe_schemas(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for schema in schemas:
+        key = json.dumps(schema, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(schema)
+    return deduped
 
 
 def _row_object_schema(columns: tuple[ColumnProfile, ...]) -> dict[str, Any]:
@@ -1286,112 +677,37 @@ def _row_list_schema(
     }
 
 
-def _grouped_aggregate_row_list_schema(
-    group_column: ColumnProfile,
+def _calc_returns_schema() -> dict[str, Any]:
+    return {
+        "anyOf": [
+            {"type": "integer"},
+            {"type": "number"},
+            {"type": "null"},
+        ]
+    }
+
+
+def _rank_returns_schema(
     *,
-    aggregate_name: str,
-    metric: ColumnProfile,
+    group_column: ColumnProfile,
     max_items: int,
 ) -> dict[str, Any]:
-    required = ["value"]
-    if not group_column.is_nullable:
-        required.insert(0, group_column.column_name)
     return {
         "type": "array",
         "items": _object_schema(
             {
-                group_column.column_name: _json_schema_for_column(group_column),
-                "value": _grouped_aggregate_value_schema(
-                    metric,
-                    aggregate_name=aggregate_name,
-                ),
+                "group_key": _json_schema_for_column(group_column),
+                "value": {
+                    "anyOf": [
+                        {"type": "integer"},
+                        {"type": "number"},
+                    ]
+                },
             },
-            required=tuple(required),
+            required=("group_key", "value"),
         ),
         "maxItems": max_items,
     }
-
-
-def _scalar_list_schema(
-    *,
-    items_schema: dict[str, Any],
-    max_items: int,
-) -> dict[str, Any]:
-    return {
-        "type": "array",
-        "items": items_schema,
-        "maxItems": max_items,
-    }
-
-
-def _nullable_json_schema_for_metric(column: ColumnProfile) -> dict[str, Any]:
-    schema = _non_null_json_schema_for_column(column)
-    schema["type"] = [schema["type"], "null"] if isinstance(schema["type"], str) else [*schema["type"], "null"]
-    return schema
-
-
-def _aggregate_returns_schema(
-    column: ColumnProfile,
-    *,
-    aggregate_name: str,
-) -> dict[str, Any]:
-    if aggregate_name == "avg":
-        return {"type": ["number", "null"]}
-    if aggregate_name == "sum" and _is_non_integer_numeric(column):
-        return {"type": ["number", "null"]}
-    return _nullable_json_schema_for_metric(column)
-
-
-def _grouped_aggregate_value_schema(
-    column: ColumnProfile,
-    *,
-    aggregate_name: str,
-) -> dict[str, Any]:
-    if aggregate_name == "count":
-        return {"type": "integer"}
-    if aggregate_name == "avg":
-        return {"type": "number"}
-    if aggregate_name == "sum" and _is_non_integer_numeric(column):
-        return {"type": "number"}
-    return _non_null_json_schema_for_column(column)
-
-
-def _aggregate_sql_expression(
-    column: ColumnProfile,
-    *,
-    aggregate_name: str,
-    float_precision: int,
-) -> str:
-    column_sql = f"t.{quote_ident(column.column_name)}"
-    base = f"{aggregate_name.upper()}({column_sql})"
-    if aggregate_name == "avg":
-        return f"ROUND({base}::numeric, {float_precision})"
-    if aggregate_name == "sum" and _is_non_integer_numeric(column):
-        return f"ROUND({base}::numeric, {float_precision})"
-    return base
-
-
-def _grouped_aggregate_sql_expression(
-    column: ColumnProfile,
-    *,
-    aggregate_name: str,
-    float_precision: int,
-) -> str:
-    column_sql = f"t.{quote_ident(column.column_name)}"
-    if aggregate_name == "count":
-        return f"COUNT({column_sql})::bigint"
-    return _aggregate_sql_expression(
-        column,
-        aggregate_name=aggregate_name,
-        float_precision=float_precision,
-    )
-
-
-def _nullable_json_schema_for_column(column: ColumnProfile) -> dict[str, Any]:
-    schema = _non_null_json_schema_for_column(column)
-    if isinstance(schema.get("type"), str):
-        schema["type"] = [schema["type"], "null"]
-    return schema
 
 
 def _json_schema_for_column(column: ColumnProfile) -> dict[str, Any]:
@@ -1417,31 +733,65 @@ def _non_null_json_schema_for_column(column: ColumnProfile) -> dict[str, Any]:
     return {"type": "string"}
 
 
-def _select_projection_sql(alias: str, columns: tuple[ColumnProfile, ...]) -> str:
-    return ", ".join(
-        f"{alias}.{quote_ident(column.column_name)} AS {quote_ident(column.column_name)}"
-        for column in columns
+def _limit_param_schema(*, max_items: int) -> dict[str, Any]:
+    return {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Maximum number of results.",
+    }
+
+
+def _get_sql_template(table: TableProfile) -> str:
+    alias = "t"
+    return readonly_query(
+        f"""
+        SELECT *
+        FROM {quote_table(table.schema_name, table.table_name)} AS {alias}
+        WHERE {_pk_predicate_sql(alias, table, start_index=1)}
+        LIMIT 1
+        """
     )
 
 
-def _order_by_sql(alias: str, table: TableProfile, projection_columns: tuple[ColumnProfile, ...]) -> str:
-    column_names = list(table.primary_key) or [column.column_name for column in projection_columns]
-    return ", ".join(f"{alias}.{quote_ident(column_name)} ASC" for column_name in column_names)
+def _find_sql_template(table: TableProfile, column: ColumnProfile) -> str:
+    alias = "t"
+    seed_index = 3
+    return readonly_query(
+        f"""
+        SELECT *
+        FROM {quote_table(table.schema_name, table.table_name)} AS {alias}
+        WHERE /* dynamic condition for {quote_ident(column.column_name)} */ TRUE
+        ORDER BY {_seeded_order_hash_sql(alias, table, seed_param_index=seed_index)}{", " if _order_by_sql(alias, table) else ""}{_order_by_sql(alias, table)}
+        LIMIT $1
+        """
+    )
 
 
-def _seeded_order_hash_sql(
-    alias: str,
-    table: TableProfile,
-    *,
-    seed_param_index: int,
-    projection_columns: tuple[ColumnProfile, ...],
-) -> str:
-    column_names = list(table.primary_key) or [column.column_name for column in projection_columns]
-    parts = [
-        *(f"COALESCE({alias}.{quote_ident(column_name)}::text, '')" for column_name in column_names),
-        f"COALESCE(${seed_param_index}::text, '')",
-    ]
-    return f"md5(concat_ws('|', {', '.join(parts)})) ASC"
+def _calc_sql_template(table: TableProfile) -> str:
+    return readonly_query(
+        f"""
+        SELECT /* dynamic statistic */ COUNT(*)::bigint AS value
+        FROM {quote_table(table.schema_name, table.table_name)} AS t
+        WHERE /* optional dynamic condition */ TRUE
+        """
+    )
+
+
+def _rank_sql_template(table: TableProfile, group_column: ColumnProfile) -> str:
+    seed_index = 2
+    return readonly_query(
+        f"""
+        SELECT t.{quote_ident(group_column.column_name)} AS group_key,
+               COUNT(*)::bigint AS value
+        FROM {quote_table(table.schema_name, table.table_name)} AS t
+        WHERE /* optional dynamic condition */ TRUE
+        GROUP BY t.{quote_ident(group_column.column_name)}
+        ORDER BY value DESC,
+                 md5(concat_ws('|', COALESCE(t.{quote_ident(group_column.column_name)}::text, ''), COALESCE(${seed_index}::text, ''))) ASC,
+                 t.{quote_ident(group_column.column_name)} ASC
+        LIMIT $1
+        """
+    )
 
 
 def _pk_predicate_sql(alias: str, table: TableProfile, *, start_index: int) -> str:
@@ -1451,18 +801,43 @@ def _pk_predicate_sql(alias: str, table: TableProfile, *, start_index: int) -> s
     )
 
 
-def _edge_join_sql(source_alias: str, target_alias: str, edge: ForeignKeyEdge) -> str:
-    return " AND ".join(
-        (
-            f"{source_alias}.{quote_ident(source_column)} = "
-            f"{target_alias}.{quote_ident(target_column)}"
-        )
-        for source_column, target_column in zip(
-            edge.source_columns,
-            edge.target_columns,
-            strict=True,
-        )
-    )
+def _seeded_order_hash_sql(alias: str, table: TableProfile, *, seed_param_index: int) -> str:
+    column_names = list(table.primary_key) or [column.column_name for column in table.columns]
+    parts = [
+        *(f"COALESCE({alias}.{quote_ident(column_name)}::text, '')" for column_name in column_names),
+        f"COALESCE(${seed_param_index}::text, '')",
+    ]
+    return f"md5(concat_ws('|', {', '.join(parts)})) ASC"
+
+
+def _order_by_sql(alias: str, table: TableProfile) -> str:
+    column_names = list(table.primary_key) or [column.column_name for column in table.columns]
+    return ", ".join(f"{alias}.{quote_ident(column_name)} ASC" for column_name in column_names)
+
+
+def _postgres_array_cast(column: ColumnProfile) -> str:
+    normalized = _normalized_data_type(column.data_type)
+    if normalized in _INTEGER_TYPES:
+        if normalized == "smallint":
+            return "int2"
+        if normalized in {"integer", "int4"}:
+            return "int4"
+        return "int8"
+    if normalized in _FLOAT_TYPES:
+        if normalized == "real":
+            return "float4"
+        if normalized == "double precision":
+            return "float8"
+        return "numeric"
+    if normalized in _BOOLEAN_TYPES:
+        return "bool"
+    if normalized in _DATE_TYPES:
+        return "date"
+    if normalized in _DATETIME_TYPES:
+        return "timestamptz" if normalized == "timestamptz" else "timestamp"
+    if normalized == "uuid":
+        return "uuid"
+    return "text"
 
 
 def _render_atomic_tool_source(
@@ -1471,6 +846,7 @@ def _render_atomic_tool_source(
     tools: list[AtomicToolDefinition],
     max_batch_values: int,
     max_bounded_result_limit: int,
+    float_precision: int,
 ) -> str:
     lines = [
         '"""Schema-derived atomic tools for one database."""',
@@ -1479,9 +855,10 @@ def _render_atomic_tool_source(
         "",
         "from typing import Any",
         "",
-        f'DB_ID = {db_id!r}',
+        f"DB_ID = {db_id!r}",
         f"MAX_BATCH_VALUES = {max_batch_values}",
         f"MAX_BOUNDED_RESULT_LIMIT = {max_bounded_result_limit}",
+        f"FLOAT_PRECISION = {float_precision}",
         "",
         "def _row_to_dict(row: Any) -> dict[str, Any] | None:",
         "    if row is None:",
@@ -1491,12 +868,14 @@ def _render_atomic_tool_source(
         "def _rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:",
         "    return [dict(row) for row in rows]",
         "",
-        "def _scalar_list(rows: list[Any], column_name: str) -> list[Any]:",
-        "    return [row[column_name] for row in rows]",
+        "def _quote_ident(identifier: str) -> str:",
+        "    return '\"' + identifier.replace('\"', '\"\"') + '\"'",
         "",
-        "def _ensure_bounded_sequence(values: list[Any], *, name: str) -> None:",
-        "    if len(values) > MAX_BATCH_VALUES:",
-        '        raise ValueError(f"{name} exceeds MAX_BATCH_VALUES")',
+        "def _quote_table(schema_name: str, table_name: str) -> str:",
+        "    return f\"{_quote_ident(schema_name)}.{_quote_ident(table_name)}\"",
+        "",
+        "def _readonly_query(sql: str) -> str:",
+        "    return ' '.join(sql.split())",
         "",
         "def _bounded_limit(limit: int) -> int:",
         "    if isinstance(limit, bool) or not isinstance(limit, int):",
@@ -1505,6 +884,240 @@ def _render_atomic_tool_source(
         '        raise ValueError("limit must be >= 1")',
         "    return min(limit, MAX_BOUNDED_RESULT_LIMIT)",
         "",
+        "def _ensure_bounded_sequence(values: list[Any], *, name: str) -> None:",
+        "    if len(values) > MAX_BATCH_VALUES:",
+        '        raise ValueError(f"{name} exceeds MAX_BATCH_VALUES")',
+        "",
+        "def _normalize_direction(direction: str) -> str:",
+        "    if direction not in {'asc', 'desc'}:",
+        '        raise ValueError("direction must be asc or desc")',
+        "    return direction.upper()",
+        "",
+        "def _seeded_order_hash_sql(alias: str, column_names: list[str], *, seed_param_index: int) -> str:",
+        "    parts = [*(f\"COALESCE({alias}.{_quote_ident(column_name)}::text, '')\" for column_name in column_names), f\"COALESCE(${seed_param_index}::text, '')\"]",
+        "    return f\"md5(concat_ws('|', {', '.join(parts)})) ASC\"",
+        "",
+        "def _stable_order_sql(alias: str, column_names: list[str]) -> str:",
+        "    if not column_names:",
+        "        return ''",
+        "    return ', '.join(f\"{alias}.{_quote_ident(column_name)} ASC\" for column_name in column_names)",
+        "",
+        "def _coerce_id_params(meta: dict[str, Any], id_value: Any) -> list[Any]:",
+        "    primary_key = list(meta['primary_key'])",
+        "    if len(primary_key) == 1:",
+        "        if isinstance(id_value, dict):",
+        "            expected_key = primary_key[0]",
+        "            if set(id_value) != {expected_key}:",
+        '                raise ValueError("id object must match the single ID field exactly")',
+        "            return [id_value[expected_key]]",
+        "        return [id_value]",
+        "    if not isinstance(id_value, dict):",
+        '        raise TypeError("id must be an object when the entry uses multiple ID fields")',
+        "    if set(id_value) != set(primary_key):",
+        '        raise ValueError("id object must include exactly the ID field names for the entry")',
+        "    return [id_value[column_name] for column_name in primary_key]",
+        "",
+        "def _validate_choice(value: Any, allowed: list[str], *, allow_null: bool = False, field_name: str) -> Any:",
+        "    if value is None:",
+        "        if allow_null:",
+        "            return None",
+        '        raise ValueError(f"{field_name} cannot be null")',
+        "    if value not in allowed:",
+        '        raise ValueError(f\"{field_name} must be one of {sorted(allowed)}\")',
+        "    return value",
+        "",
+        "def _validate_find_value(op: str, value: Any) -> None:",
+        "    if op == 'any':",
+        "        if value is not None:",
+        '            raise ValueError("value must be null when op=any")',
+        "        return",
+        "    if op == 'in':",
+        "        if not isinstance(value, list) or not value:",
+        '            raise ValueError("value must be a non-empty list when op=in")',
+        "        _ensure_bounded_sequence(value, name='value')",
+        "        return",
+        "    if value is None:",
+        '        raise ValueError("value cannot be null for this op")',
+        "    if op == 'like' and not isinstance(value, str):",
+        '        raise ValueError("value must be a string when op=like")',
+        "",
+        "def _validate_filter_context(meta: dict[str, Any], by: Any, op: Any, value: Any) -> tuple[str | None, str | None, Any]:",
+        "    filter_columns = list(meta['filter_columns'])",
+        "    if by is None:",
+        "        if op is not None or value is not None:",
+        '            raise ValueError("op and value must be null when by is null")',
+        "        return None, None, None",
+        "    by = _validate_choice(by, filter_columns, field_name='by')",
+        "    if op is None:",
+        '        raise ValueError("op is required when by is provided")',
+        "    op = _validate_choice(op, list(meta.get('filter_ops', ['eq', 'in', 'lt', 'gt', 'lte', 'gte', 'like'])), field_name='op')",
+        "    _validate_dynamic_op(meta, by, op)",
+        "    _validate_find_value(op, value)",
+        "    return by, op, value",
+        "",
+        "def _validate_dynamic_op(meta: dict[str, Any], column_name: str, op: str) -> None:",
+        "    column_type = meta['column_types'][column_name]",
+        "    allowed = {'eq', 'in'}",
+        "    if column_type in {'bigint', 'int2', 'int4', 'int8', 'integer', 'smallint', 'decimal', 'double precision', 'float4', 'float8', 'numeric', 'real', 'date', 'timestamp', 'timestamp with time zone', 'timestamp without time zone', 'timestamptz'}:",
+        "        allowed.update({'lt', 'gt', 'lte', 'gte'})",
+        "    if column_type in {'bpchar', 'char', 'character', 'character varying', 'citext', 'name', 'text', 'uuid', 'varchar'}:",
+        "        allowed.add('like')",
+        "    if op not in allowed:",
+        '        raise ValueError(f"op={op} is not supported for the selected field")',
+        "",
+        "def _predicate_sql(*, alias: str, column_name: str, column_cast: str, op: str, start_index: int) -> tuple[str, int]:",
+        "    column_sql = f\"{alias}.{_quote_ident(column_name)}\"",
+        "    if op == 'eq':",
+        "        return f\"{column_sql} = ${start_index}\", 1",
+        "    if op == 'in':",
+        "        return f\"{column_sql} = ANY(${start_index}::{column_cast}[])\", 1",
+        "    if op == 'lt':",
+        "        return f\"{column_sql} < ${start_index}\", 1",
+        "    if op == 'gt':",
+        "        return f\"{column_sql} > ${start_index}\", 1",
+        "    if op == 'lte':",
+        "        return f\"{column_sql} <= ${start_index}\", 1",
+        "    if op == 'gte':",
+        "        return f\"{column_sql} >= ${start_index}\", 1",
+        "    if op == 'like':",
+        "        return f\"{column_sql} ILIKE ${start_index}\", 1",
+        "    if op == 'any':",
+        "        return 'TRUE', 0",
+        '    raise ValueError(f"unsupported op: {op}")',
+        "",
+        "def _aggregate_sql(fn: str, metric: str, *, column_type: str) -> str:",
+        "    column_sql = f\"t.{_quote_ident(metric)}\"",
+        "    if fn == 'count':",
+        "        return 'COUNT(*)::bigint'",
+        "    base = f\"{fn.upper()}({column_sql})\"",
+        "    if fn == 'avg':",
+        "        return f\"ROUND({base}::numeric, {FLOAT_PRECISION})\"",
+        "    if fn == 'sum' and column_type in {'decimal', 'double precision', 'float4', 'float8', 'numeric', 'real'}:",
+        "        return f\"ROUND({base}::numeric, {FLOAT_PRECISION})\"",
+        "    return base",
+        "",
+        "async def _run_get(conn, meta: dict[str, Any], id: Any) -> dict[str, Any] | None:",
+        "    params = _coerce_id_params(meta, id)",
+        "    predicates = ' AND '.join(",
+        "        f\"t.{_quote_ident(column_name)} = ${index}\"",
+        "        for index, column_name in enumerate(meta['primary_key'], start=1)",
+        "    )",
+        "    sql = _readonly_query(",
+        "        f\"SELECT * FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {predicates} LIMIT 1\"",
+        "    )",
+        "    row = await conn.fetchrow(sql, *params)",
+        "    return _row_to_dict(row)",
+        "",
+        "async def _run_find(conn, meta: dict[str, Any], op: str, value: Any, sort_by: Any, direction: str, limit: int, shuffle_seed: Any) -> list[dict[str, Any]]:",
+        "    op = _validate_choice(op, list(meta['allowed_ops']), field_name='op')",
+        "    _validate_find_value(op, value)",
+        "    limit = _bounded_limit(limit)",
+        "    if sort_by is not None:",
+        "        sort_by = _validate_choice(sort_by, list(meta['sortable_columns']), field_name='sort_by')",
+        "    direction_sql = _normalize_direction(direction)",
+        "    params: list[Any] = []",
+        "    if op == 'any':",
+        "        where_sql = 'TRUE'",
+        "    else:",
+        "        where_sql, _ = _predicate_sql(",
+        "            alias='t',",
+        "            column_name=str(meta['filter_column']),",
+        "            column_cast=str(meta['array_casts'][meta['filter_column']]),",
+        "            op=op,",
+        "            start_index=1,",
+        "        )",
+        "        params.append(value)",
+        "    params.append(limit)",
+        "    seed_param_index = len(params) + 1",
+        "    seed_sql = _seeded_order_hash_sql('t', list(meta['order_columns']), seed_param_index=seed_param_index)",
+        "    stable_sql = _stable_order_sql('t', list(meta['order_columns']))",
+        "    if sort_by is None:",
+        "        order_parts = [seed_sql]",
+        "    else:",
+        "        order_parts = [f\"t.{_quote_ident(sort_by)} {direction_sql}\", seed_sql]",
+        "    if stable_sql:",
+        "        order_parts.append(stable_sql)",
+        "    sql = _readonly_query(",
+        "        f\"SELECT * FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql} ORDER BY {', '.join(order_parts)} LIMIT ${len(params)}\"",
+        "    )",
+        "    params.append(shuffle_seed)",
+        "    rows = await conn.fetch(sql, *params)",
+        "    return _rows_to_dicts(rows)",
+        "",
+        "async def _run_calc(conn, meta: dict[str, Any], fn: str, metric: Any, by: Any, op: Any, value: Any) -> Any:",
+        "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
+        "    if fn == 'count':",
+        "        if metric is not None:",
+        '            raise ValueError("metric must be null when fn=count")',
+        "        metric_name = None",
+        "    else:",
+        "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",
+        "    by, op, value = _validate_filter_context(meta, by, op, value)",
+        "    params: list[Any] = []",
+        "    predicates: list[str] = []",
+        "    if by is not None and op is not None:",
+        "        predicate_sql, _ = _predicate_sql(",
+        "            alias='t',",
+        "            column_name=str(by),",
+        "            column_cast=str(meta['array_casts'][by]),",
+        "            op=op,",
+        "            start_index=1,",
+        "        )",
+        "        predicates.append(predicate_sql)",
+        "        params.append(value)",
+        "    if metric_name is not None:",
+        "        predicates.append(f\"t.{_quote_ident(metric_name)} IS NOT NULL\")",
+        "        column_type = str(meta['column_types'][metric_name])",
+        "        aggregate_sql = _aggregate_sql(fn, metric_name, column_type=column_type)",
+        "    else:",
+        "        aggregate_sql = _aggregate_sql('count', '__unused__', column_type='integer')",
+        "    where_sql = 'TRUE' if not predicates else ' AND '.join(predicates)",
+        "    sql = _readonly_query(",
+        "        f\"SELECT {aggregate_sql} AS value FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql}\"",
+        "    )",
+        "    return await conn.fetchval(sql, *params)",
+        "",
+        "async def _run_rank(conn, meta: dict[str, Any], fn: str, metric: Any, direction: str, limit: int, by: Any, op: Any, value: Any, shuffle_seed: Any) -> list[dict[str, Any]]:",
+        "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
+        "    if fn == 'count':",
+        "        if metric is not None:",
+        '            raise ValueError("metric must be null when fn=count")',
+        "        metric_name = None",
+        "    else:",
+        "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",
+        "    by, op, value = _validate_filter_context(meta, by, op, value)",
+        "    limit = _bounded_limit(limit)",
+        "    direction_sql = _normalize_direction(direction)",
+        "    params: list[Any] = []",
+        "    predicates: list[str] = []",
+        "    if by is not None and op is not None:",
+        "        predicate_sql, _ = _predicate_sql(",
+        "            alias='t',",
+        "            column_name=str(by),",
+        "            column_cast=str(meta['array_casts'][by]),",
+        "            op=op,",
+        "            start_index=1,",
+        "        )",
+        "        predicates.append(predicate_sql)",
+        "        params.append(value)",
+        "    if metric_name is not None:",
+        "        predicates.append(f\"t.{_quote_ident(metric_name)} IS NOT NULL\")",
+        "        column_type = str(meta['column_types'][metric_name])",
+        "        aggregate_sql = _aggregate_sql(fn, metric_name, column_type=column_type)",
+        "    else:",
+        "        aggregate_sql = _aggregate_sql('count', '__unused__', column_type='integer')",
+        "    params.append(limit)",
+        "    seed_param_index = len(params) + 1",
+        "    group_column = str(meta['group_column'])",
+        "    tiebreak_sql = _seeded_order_hash_sql('t', [group_column], seed_param_index=seed_param_index)",
+        "    where_sql = 'TRUE' if not predicates else ' AND '.join(predicates)",
+        "    sql = _readonly_query(",
+        "        f\"SELECT t.{_quote_ident(group_column)} AS group_key, {aggregate_sql} AS value FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql} GROUP BY t.{_quote_ident(group_column)} ORDER BY value {direction_sql}, {tiebreak_sql}, t.{_quote_ident(group_column)} ASC LIMIT ${len(params)}\"",
+        "    )",
+        "    params.append(shuffle_seed)",
+        "    rows = await conn.fetch(sql, *params)",
+        "    return _rows_to_dicts(rows)",
+        "",
     ]
     for tool in tools:
         lines.extend(_render_tool_function(tool))
@@ -1512,123 +1125,38 @@ def _render_atomic_tool_source(
 
 
 def _render_tool_function(tool: AtomicToolDefinition) -> list[str]:
-    signature_parts = _signature_param_parts(tool.params_schema)
-    sql_param_names = _sql_param_names(tool.params_schema)
-    if _tool_requires_shuffle_seed(tool):
-        signature_parts.append("_shuffle_seed=None")
-        sql_param_names.append("_shuffle_seed")
-    signature = ", ".join(["conn", *signature_parts])
-    lines = [
-        f"async def {tool.name}({signature}):",
-        f"    sql = {tool.sql!r}",
+    meta_literal = repr(tool.runtime_metadata)
+    if tool.family is AtomicToolFamily.GET:
+        return [
+            f"async def {tool.name}(conn, id):",
+            f"    meta = {meta_literal}",
+            "    return await _run_get(conn, meta, id)",
+            "",
+        ]
+    if tool.family is AtomicToolFamily.FIND:
+        return [
+            f"async def {tool.name}(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):",
+            f"    meta = {meta_literal}",
+            "    return await _run_find(conn, meta, op, value, sort_by, direction, limit, _shuffle_seed)",
+            "",
+        ]
+    if tool.family is AtomicToolFamily.CALC:
+        return [
+            f"async def {tool.name}(conn, fn, metric, by, op, value):",
+            f"    meta = {meta_literal}",
+            "    return await _run_calc(conn, meta, fn, metric, by, op, value)",
+            "",
+        ]
+    return [
+        f"async def {tool.name}(conn, fn, metric, direction, limit, by, op, value, _shuffle_seed=None):",
+        f"    meta = {meta_literal}",
+        "    return await _run_rank(conn, meta, fn, metric, direction, limit, by, op, value, _shuffle_seed)",
+        "",
     ]
-    if any(param_schema.get("type") == "array" for param_schema in tool.params_schema.get("properties", {}).values()):
-        for name, schema in tool.params_schema.get("properties", {}).items():
-            if schema.get("type") == "array":
-                lines.append(f"    _ensure_bounded_sequence({name}, name={name!r})")
-    if "limit" in tool.params_schema.get("properties", {}):
-        lines.append("    limit = _bounded_limit(limit)")
-    call_args = ", ".join(sql_param_names)
-    if tool.result_mode == AtomicToolResultMode.OBJECT_OR_NULL:
-        call = f"await conn.fetchrow(sql{', ' if call_args else ''}{call_args})"
-        lines.extend(
-            [
-                f"    row = {call}",
-                "    return _row_to_dict(row)",
-            ]
-        )
-    elif tool.result_mode == AtomicToolResultMode.ROW_LIST:
-        call = f"await conn.fetch(sql{', ' if call_args else ''}{call_args})"
-        lines.extend(
-            [
-                f"    rows = {call}",
-                "    return _rows_to_dicts(rows)",
-            ]
-        )
-    elif tool.result_mode == AtomicToolResultMode.SCALAR_LIST:
-        call = f"await conn.fetch(sql{', ' if call_args else ''}{call_args})"
-        lines.extend(
-            [
-                f"    rows = {call}",
-                f"    return _scalar_list(rows, {tool.scalar_list_column!r})",
-            ]
-        )
-    else:
-        call = f"await conn.fetchval(sql{', ' if call_args else ''}{call_args})"
-        lines.append(f"    return {call}")
-    lines.append("")
-    return lines
 
 
 def _tool_requires_shuffle_seed(tool: AtomicToolDefinition) -> bool:
-    if tool.family is AtomicToolFamily.T2_BOUNDED_ENUMERATION:
-        return tool.result_mode in {
-            AtomicToolResultMode.ROW_LIST,
-            AtomicToolResultMode.SCALAR_LIST,
-        }
-    if tool.family is AtomicToolFamily.T3_SINGLE_COLUMN_FILTER:
-        return True
-    if tool.family is AtomicToolFamily.T4_FK_TRAVERSAL:
-        return tool.result_mode is AtomicToolResultMode.ROW_LIST
-    if tool.family is AtomicToolFamily.T7_SORTED_TOP_K:
-        return True
-    return False
-
-
-def _ordered_param_names(params_schema: dict[str, Any]) -> list[str]:
-    return _sql_param_names(params_schema)
-
-
-def _sql_param_names(params_schema: dict[str, Any]) -> list[str]:
-    return list(params_schema.get("properties", {}).keys())
-
-
-def _signature_param_parts(params_schema: dict[str, Any]) -> list[str]:
-    properties = params_schema.get("properties", {})
-    required = set(params_schema.get("required", []))
-    signature_parts = [name for name in properties if name in required]
-    signature_parts.extend(f"{name}=None" for name in properties if name not in required)
-    return signature_parts
-
-
-def _direction_word(direction_slug: str) -> str:
-    return "ascending" if direction_slug == "asc" else "descending"
-
-
-def _aggregate_word(aggregate_name: str) -> str:
-    return {
-        "avg": "average",
-        "min": "minimum",
-        "max": "maximum",
-    }.get(aggregate_name, aggregate_name)
-
-
-def _aggregate_phrase(aggregate_name: str, metric_column: str) -> str:
-    aggregate_word = _aggregate_word(aggregate_name)
-    if aggregate_name == "count":
-        return aggregate_word
-    return f"{aggregate_word} {humanize_identifier(metric_column)}"
-
-
-def _grouped_aggregate_tool_name(
-    *,
-    group_column: str,
-    aggregate_name: str,
-    table_slug: str,
-    metric_column: str,
-    direction_slug: str,
-    filter_column: str | None,
-) -> str:
-    if aggregate_name == "count":
-        name = f"top_{group_column}_by_count_{table_slug}_{direction_slug}"
-    else:
-        name = (
-            f"top_{group_column}_by_{aggregate_name}_{table_slug}_"
-            f"{metric_column}_{direction_slug}"
-        )
-    if filter_column is not None:
-        name += f"_where_{filter_column}_eq"
-    return name
+    return tool.family in {AtomicToolFamily.FIND, AtomicToolFamily.RANK}
 
 
 def readonly_query(sql: str) -> str:
@@ -1656,3 +1184,15 @@ def humanize_identifier(identifier: str) -> str:
     if not parts:
         return identifier.strip()
     return " ".join(parts)
+
+
+def _op_description(*, allow_any: bool) -> str:
+    if allow_any:
+        return (
+            "Condition type: any (no condition), eq (exact), in (any of list), "
+            "lt, gt, lte, gte (comparison), like (pattern)."
+        )
+    return (
+        "Condition type: eq (exact), in (any of list), lt, gt, lte, gte "
+        "(comparison), like (pattern)."
+    )

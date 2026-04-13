@@ -105,10 +105,15 @@ def is_person_like_identifier(value: str) -> bool:
 
 def entity_slug_from_get_tool_name(tool_name: str) -> str | None:
     normalized = tool_name.strip().lower()
-    if normalized.startswith("get_") and normalized.endswith("_by_id"):
+    if not normalized.startswith("get_"):
+        return None
+    if normalized.endswith("_by_id"):
         return normalized[4:-6]
-    if normalized.startswith("get_") and normalized.endswith("_by_ids_batch"):
+    if normalized.endswith("_by_ids_batch"):
         return normalized[4:-13]
+    suffix = normalized[4:]
+    if suffix:
+        return suffix
     return None
 
 
