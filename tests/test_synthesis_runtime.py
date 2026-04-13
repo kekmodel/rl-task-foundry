@@ -566,7 +566,12 @@ async def test_submit_draft_requires_more_first_submit_exploration(
     assert "at least 6 atomic observations" in message
     assert "at least 4 distinct tool names" in message
     assert "at least 3 anchor-scoped observations" in message
-    assert "classify nearby relationships and paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends" in message
+    assert "Build a small relation map around the anchored user" in message
+    assert "nearby one-hop links" in message
+    assert "second-hop endpoint that might expose readable fields" in message
+    assert "do not jump to an unrelated entry type unless you can explain how it connects back to the anchored user" in message
+    assert "classify nearby relationships and paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends" in message
+    assert "compare multiple candidate paths" in message
     assert "why every answer slot is grounded and needed" in message
 
 

@@ -99,13 +99,14 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "requested topic is only a soft coverage hint" in instructions
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
     assert "Research the database broadly before drafting anything." in instructions
-    assert "Map the database relationships first." in instructions
-    assert "trace many relationships and interesting grounded data paths across the database" in instructions
-    assert "understand the exposed relationships across the database" in instructions
-    assert "Analyze the anchored user's reachable surfaces." in instructions
-    assert "Compare candidate paths before you choose a label." in instructions
-    assert "choose one path before you draft" in instructions
-    assert "Choose the label first, then derive topic and anchor framing from it." in instructions
+    assert "Build a relation map before drafting anything." in instructions
+    assert "Start from the best person-like self surface you can find" in instructions
+    assert "Expand the anchored neighborhood systematically." in instructions
+    assert "inspect multiple one-hop and two-hop paths" in instructions
+    assert "Keep each new tool call attached to the current relation map" in instructions
+    assert "Classify paths before you draft." in instructions
+    assert "Choose one path and build the label from that path." in instructions
+    assert "Build the label first, then derive the selected topic string and the user-facing framing from that label." in instructions
     assert "Retry intelligently after feedback." in instructions
     assert "Stop only on Accepted or Budget exhausted." in instructions
     assert "After you submit a draft with a valid self anchor, keep that same anchor_entity across retries." in instructions
@@ -113,7 +114,9 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Submit only when you fully understand the anchored user, the relevant evidence path" in instructions
     assert "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary" in instructions
     assert "Before the first judged submit_draft call, stay in exploration mode until you have gathered at least" in instructions
-    assert "Use that research phase to classify nearby paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends" in instructions
+    assert "Use that research phase to build a small relation map around the anchored user" in instructions
+    assert "classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends" in instructions
+    assert "Do not jump to a disconnected table just because it happens to expose readable fields." in instructions
     assert "distinct tool names" in instructions
     assert "anchor-scoped observations whose parameters depend on anchor_entity" in instructions
     assert "identify multiple grounded label candidates" in instructions
@@ -141,6 +144,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Returning *_id fields, UUIDs, hashes, tokens" in instructions
     assert "Writing SQL or describing the answer path as a SQL query" in instructions
     assert "Which of my recent requests is still open, and when was it created?" in instructions
+    assert "Inspecting two or more nearby paths around the same anchored user" in instructions
     assert "When you strengthen search_cost" in instructions
     assert "When you strengthen solution_space" in instructions
     assert "When you strengthen constraint_density" in instructions
@@ -150,6 +154,9 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "use anchor-scoped count evidence rather than a global database total" in instructions
     assert "A rejection is not the end of the task." in instructions
     assert "Continue until submit_draft returns Accepted or Budget exhausted." in instructions
+    assert "Submitting a label from the first path you happened to inspect before you understand the nearby relationships" in instructions
+    assert "Seeing that one nearby path only returns identifiers, but drafting from it anyway" in instructions
+    assert "Jumping to an unrelated entry type that is not yet connected to the anchored neighborhood" in instructions
 
 
 def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules() -> None:

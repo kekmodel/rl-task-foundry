@@ -176,14 +176,22 @@ class AtomicToolGenerator:
         tools: list[AtomicToolDefinition] = []
         for column in _find_columns(graph, table):
             allowed_ops = _find_ops_for_column(column)
+            target_label = _foreign_key_target_label(graph, table, column, table_slugs)
+            if target_label is not None:
+                description = (
+                    f"Find {humanize_identifier(table_slug)} for a given {target_label}. "
+                    "Returns a list."
+                )
+            else:
+                description = (
+                    f"Find {humanize_identifier(table_slug)} entries where "
+                    f"{humanize_identifier(column.column_name)} matches a condition. Returns a list."
+                )
             tools.append(
                 AtomicToolDefinition(
                     name=f"find_{table_slug}_by_{column.column_name}",
                     family=AtomicToolFamily.FIND,
-                    description=(
-                        f"Find {humanize_identifier(table_slug)} entries where "
-                        f"{humanize_identifier(column.column_name)} matches a condition. Returns a list."
-                    ),
+                    description=description,
                     params_schema=_find_params_schema(
                         table,
                         column=column,
@@ -252,14 +260,22 @@ class AtomicToolGenerator:
         allowed_fns = ("count",) if not numeric_columns else ("count", "sum", "avg", "min", "max")
         tools: list[AtomicToolDefinition] = []
         for column in _group_columns(graph, table):
+            target_label = _foreign_key_target_label(graph, table, column, table_slugs)
+            if target_label is not None:
+                description = (
+                    f"Rank {target_label} groups across {humanize_identifier(table_slug)}. "
+                    "Returns a sorted list."
+                )
+            else:
+                description = (
+                    f"Rank {humanize_identifier(column.column_name)} groups by a statistic over "
+                    f"{humanize_identifier(table_slug)}. Returns a sorted list."
+                )
             tools.append(
                 AtomicToolDefinition(
                     name=f"rank_{table_slug}_by_{column.column_name}",
                     family=AtomicToolFamily.RANK,
-                    description=(
-                        f"Rank {humanize_identifier(column.column_name)} groups by a statistic over "
-                        f"{humanize_identifier(table_slug)}. Returns a sorted list."
-                    ),
+                    description=description,
                     params_schema=_rank_params_schema(
                         graph,
                         table,
@@ -425,6 +441,24 @@ def _foreign_key_column_names(graph: SchemaGraph | None, table: TableProfile) ->
     for edge in graph.edges_from(table.table_name, schema_name=table.schema_name):
         names.update(edge.source_columns)
     return names
+
+
+def _foreign_key_target_label(
+    graph: SchemaGraph | None,
+    table: TableProfile,
+    column: ColumnProfile,
+    table_slugs: dict[tuple[str, str], str],
+) -> str | None:
+    if graph is None:
+        return None
+    for edge in graph.edges_from(table.table_name, schema_name=table.schema_name):
+        if edge.source_columns != (column.column_name,):
+            continue
+        target_slug = table_slugs.get((edge.target_schema, edge.target_table))
+        if target_slug is not None:
+            return humanize_identifier(target_slug)
+        return humanize_identifier(edge.target_table)
+    return None
 
 
 def _find_columns(graph: SchemaGraph | None, table: TableProfile) -> list[ColumnProfile]:

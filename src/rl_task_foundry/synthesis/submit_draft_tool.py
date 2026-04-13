@@ -1803,7 +1803,9 @@ class SubmitDraftController:
                 f"at least {self.config.synthesis.runtime.initial_submit_min_atomic_observations} atomic observations, "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_distinct_tools} distinct tool names, and "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_anchor_scoped_observations} anchor-scoped observations tied to anchor_entity. "
-                "Use that research phase to classify nearby relationships and paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends, and submit only after you understand why every answer slot is grounded and needed."
+                "Build a small relation map around the anchored user: the self entry itself, nearby one-hop links, nearby one-to-many sets, and any second-hop endpoint that might expose readable fields. "
+                "Keep each new tool call attached to that anchored neighborhood, and do not jump to an unrelated entry type unless you can explain how it connects back to the anchored user. "
+                "Use that research phase to classify nearby relationships and paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends, compare multiple candidate paths, and submit only after you understand why every answer slot is grounded and needed."
             )
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:

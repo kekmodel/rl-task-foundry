@@ -88,11 +88,11 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
         ),
         (
             "Workflow",
-            "1. Research the database broadly before drafting anything. Map the database relationships first. Use the tools to trace many relationships and interesting grounded data paths across the database until you understand the exposed relationships across the database, especially the person-like self surfaces, their nearby transactional paths, their lookup paths, and which paths are one-hop shortcuts versus deeper evidence chains.\n"
-            "2. Analyze the anchored user's reachable surfaces. Before the first judged submit_draft call, you may refine which self entity to anchor on if you discover a better person-like self surface. After you submit a draft with a valid self anchor, keep that same anchor_entity across retries.\n"
-            "3. Compare candidate paths before you choose a label. Identify multiple grounded candidate paths, compare which one can support the strongest readable non-trivial answer, and choose one path before you draft.\n"
-            "4. Choose the label first, then derive topic and anchor framing from it. Build a unique, verifiable grounded label from the chosen path first. Then derive both the selected topic string and the anchor entity from that label.\n"
-            "5. Retry intelligently after feedback. Keep the same anchored user need, gather more evidence, and repair the smallest failing part first.\n"
+            "1. Research the database broadly before drafting anything. Build a relation map before drafting anything. Start from the best person-like self surface you can find, inspect that anchored entry, and map its nearby relationships with tools. Do not treat one discovered path as enough understanding.\n"
+            "2. Expand the anchored neighborhood systematically. For the same anchored user, inspect multiple one-hop and two-hop paths. Keep each new tool call attached to the current relation map, and do not jump to an unrelated entry type unless you can explain how it connects back to the anchored user. For each path you touch, figure out whether it returns one entry or many entries, whether the endpoint exposes readable business fields or only identifiers, and whether that path supports local counts, local ordering, or neither. After you submit a draft with a valid self anchor, keep that same anchor_entity across retries.\n"
+            "3. Classify paths before you draft. Mark paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends. Explicitly compare multiple candidate paths and do not commit to the first path that happens to return something unique.\n"
+            "4. Choose one path and build the label from that path. Pick the strongest grounded path that supports a readable, non-trivial, verifiable answer for the anchored user. Build the label first, then derive the selected topic string and the user-facing framing from that label.\n"
+            "5. Retry intelligently after feedback. Keep the same anchored user need, update your relation map with new evidence, and repair the smallest failing part first instead of resetting the task.\n"
             "6. Stop only on Accepted or Budget exhausted."
         ),
         (
@@ -101,7 +101,9 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "Submit only when you fully understand the anchored user, the relevant evidence path, which observed fields are actually readable, which paths are id-only dead ends, which paths support local counts or ordering, and why every answer slot is needed for a believable user request. "
             "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary, then you do not understand the task well enough yet and must keep exploring. "
             f"Before the first judged submit_draft call, stay in exploration mode until you have gathered at least {runtime_config.initial_submit_min_atomic_observations} atomic observations across at least {runtime_config.initial_submit_min_distinct_tools} distinct tool names, including at least {runtime_config.initial_submit_min_anchor_scoped_observations} anchor-scoped observations whose parameters depend on anchor_entity. "
-            "Use that research phase to classify nearby paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends before you commit to a label. "
+            "Use that research phase to build a small relation map around the anchored user: the self entry itself, nearby one-hop links, nearby one-to-many sets, and any second-hop endpoint that might expose readable fields. "
+            "Use that map to classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends before you commit to a label. "
+            "Prefer staying inside the connected anchored neighborhood. Do not jump to a disconnected table just because it happens to expose readable fields. "
             "Use your research to identify multiple grounded label candidates for the anchored user, compare them, and then pick one path to turn into the final label. "
             "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
             "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
@@ -135,11 +137,12 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
         ),
         (
             "Example",
-            "A strong run looks like this: first trace many nearby relationships around the anchored user with tools, then classify which paths are readable versus id-only, then identify a few grounded label candidates, then choose one path that supports a unique verifiable label, and only then call submit_draft."
+            "A strong run looks like this: first inspect one anchored self entry, then map several nearby one-hop and two-hop paths with tools, then classify which paths end in readable fields versus id-only dead ends, then compare a few grounded candidate paths, then choose one path that supports a unique verifiable label, and only then call submit_draft."
         ),
         (
             "GOOD",
-            "A first-person request such as 'Which of my recent requests is still open, and when was it created?' when both status and creation time were directly observed on the anchored path. "
+            "A first-person request such as 'Which of my recent requests is still open, and when was it created?' when both status and creation time were directly observed on one anchored path. "
+            "Inspecting two or more nearby paths around the same anchored user, noticing that one path is id-only while another exposes readable status and date fields, and then choosing the readable path for the final label. "
             "A label that combines two grounded observations, such as an amount plus a status, or a title plus a date, rather than one internal identifier. "
             "A tie-breaker that is grounded by an observed field, such as earliest date, latest timestamp, lowest amount, highest count, or alphabetical label."
         ),
@@ -149,7 +152,9 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "BAD: Returning *_id fields, UUIDs, hashes, tokens, or other random-looking references as the answer. "
             "BAD: Writing SQL or describing the answer path as a SQL query instead of using tool observations. "
             "BAD: Asking for unreadable text from an id-only path, then inventing a readable label such as 'member 2' or 'record 17'. "
-            "BAD: Submitting a label from the first path you happened to inspect before you understand the nearby relationships. "
+            "BAD: Submitting a label from the first path you happened to inspect before you understand the nearby relationships and before you compare alternative paths around the same anchored user. "
+            "BAD: Seeing that one nearby path only returns identifiers, but drafting from it anyway instead of mapping a second path that might expose readable business fields. "
+            "BAD: Jumping to an unrelated entry type that is not yet connected to the anchored neighborhood just because it has readable fields. "
             "BAD: Using the first sampled row as 'latest', 'earliest', or 'first' without grounded temporal or sequence evidence. "
             "BAD: Jumping to a global count for a self-scoped request. "
             "BAD: Repeating raw identifier field names or raw anchor ids in the user-facing request. "

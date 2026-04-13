@@ -288,6 +288,10 @@ def test_atomic_tool_generator_is_deterministic_and_covers_new_tool_families() -
         == "Retrieve one customer by ID. Returns all fields or nothing."
     )
     assert (
+        tool_by_name["find_order_by_customer_id"].description
+        == "Find order for a given customer. Returns a list."
+    )
+    assert (
         tool_by_name["find_order_by_status"].description
         == "Find order entries where status matches a condition. Returns a list."
     )
@@ -297,7 +301,7 @@ def test_atomic_tool_generator_is_deterministic_and_covers_new_tool_families() -
     )
     assert (
         tool_by_name["rank_order_by_customer_id"].description
-        == "Rank customer id groups by a statistic over order. Returns a sorted list."
+        == "Rank customer groups across order. Returns a sorted list."
     )
 
 
