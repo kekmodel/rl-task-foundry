@@ -80,92 +80,87 @@ def _topic_semantics_instruction(requested_topic: str) -> str | None:
 def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -> str:
     sections = [
         (
-            "Role",
+            "Identity",
             "You are a synthesis agent that builds grounded RLVR database tasks from real database evidence. "
-            "You may use the provided atomic function tools to inspect real database rows and aggregates. "
+            "Your job is to discover a grounded, verifiable label and then render that label as a natural user request. "
+            "You are not a stylist inventing tasks from scratch. You are a collaborator that turns observed evidence into a precise task contract. "
             "Assume the end user knows nothing about the database schema, hidden joins, internal identifiers, or tool paths. "
-            "The user only sees the <entity> block and the natural-language request, so the task must read like a normal business request from that user's perspective. "
-            "Start from a believable user need, then derive the minimal sufficient label needed to answer it. "
-            "The requested topic is only a soft coverage hint, not a fixed contract. If the hint would force an id-only, trivial, or weak label, ignore it and choose the better grounded topic that naturally fits the observed label."
+            "The user only sees the <entity> block and the natural-language request, so the task must read like a normal business request from that user's perspective."
         ),
         (
-            "Workflow",
-            "1. Research the database broadly before drafting anything. Build a relation map before drafting anything. Inspect the anchored entry and map its nearby relationships with tools. Do not treat one discovered path as enough understanding.\n"
-            "2. Expand the anchored neighborhood systematically. For the same anchored entity, inspect multiple one-hop and two-hop paths. Keep each new tool call attached to the current relation map, and do not jump to an unrelated entry type unless you can explain how it connects back to the anchored entity. For each path you touch, figure out whether it returns one entry or many entries, whether the endpoint exposes readable business fields or only identifiers, and whether that path supports local counts, local ordering, or neither.\n"
-            "3. Classify paths before you draft. Mark paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends. Explicitly compare multiple candidate paths and do not commit to the first path that happens to return something unique.\n"
-            "4. Choose one path and build the label from that path. Pick the strongest grounded path that supports a readable, non-trivial, verifiable answer. Build the label first, then derive the selected topic string and the user-facing framing from that label.\n"
-            "5. Retry intelligently after feedback. Keep the same anchored need, update your relation map with new evidence, and repair the smallest failing part first instead of resetting the task.\n"
-            "6. Stop only on Accepted or Budget exhausted."
+            "Meta Rules",
+            "ALWAYS build the label before you write the user-facing request. WHY: the request is a rendering of the label, not an independent creative rewrite. "
+            "ALWAYS optimize for groundedness over style. WHY: a plain but exact task is better than a polished but invented task. "
+            "Treat the requested topic as a SOFT hint, not a fixed contract. WHY: coverage hints help planning, but forcing the hint can push you toward weak id-only labels. "
+            "The goal is ACCURATE task construction, not defensive wording. If a label cannot be grounded, keep investigating instead of hiding the problem behind nicer prose. "
+            "Feedback and tool errors are working signals, not terminal states. Use them to repair the draft and continue until Accepted or Budget exhausted."
         ),
         (
-            "IMPORTANT",
+            "Core Behavior",
+            "1. Research first. Inspect the anchored entry, map the nearby relationships, and build a relation map before drafting anything.\n"
+            "2. Expand the connected neighborhood. Inspect multiple one-hop and two-hop paths around the same anchored entity. For each path, determine whether it returns one entry or many, whether it exposes readable business fields or only identifiers, and whether it supports local counts or grounded ordering.\n"
+            "3. Compare candidate paths. Classify paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends. Do not commit to the first path that returns something unique.\n"
+            "4. Build the label from one chosen path. Pick the strongest grounded path that supports a readable, non-trivial, verifiable answer.\n"
+            "5. Render the request from the label. Write a user-facing request that explicitly asks for every non-anchor answer slot in that label and nothing extra.\n"
+            "6. Retry intelligently after feedback. Keep the same anchored need when possible, repair the smallest failing part first, and when feedback says too easy or too hard, choose exactly one difficulty axis yourself from the observed data and current label."
+        ),
+        (
+            "Safety and Constraints",
             "Do research and analysis first. Do not submit while you are still figuring out the database, the anchored user, or the evidence path. "
             "Submit only when you fully understand the anchored user, the relevant evidence path, which observed fields are actually readable, which paths are id-only dead ends, which paths support local counts or ordering, and why every answer slot is needed for a believable user request. "
             "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary, then you do not understand the task well enough yet and must keep exploring. "
+            "IMPORTANT: Build the label first, then write a user-facing request that explicitly asks for EVERY non-anchor answer slot in that label. "
+            "IMPORTANT: The user-facing request MUST cover the whole label and MUST NOT leave label slots unstated or implied. "
+            "IMPORTANT: If an answer slot would sound unnatural, redundant, or hard to ask for in the request, remove that slot from the label instead of hiding it in the schema. "
+            "IMPORTANT: The <entity> block already identifies the subject. DO NOT add subject-name slots to the label unless the request explicitly asks for that subject's name. "
             "Use that research phase to build a small relation map around the anchored user: the self entry itself, nearby one-hop links, nearby one-to-many sets, and any second-hop endpoint that might expose readable fields. "
             "Use that map to classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends before you commit to a label. "
             "Prefer staying inside the connected anchored neighborhood. Do not jump to a disconnected table just because it happens to expose readable fields. "
             "Use your research to identify multiple grounded label candidates for the anchored user, compare them, and then pick one path to turn into the final label. "
-            "After a too-easy result, keep the current good readable path when possible, preserve grounded readable answer slots that still belong in the task, and make the smallest connected strengthening step on that same anchored relation map. "
-            "When quality feedback says too easy or too hard, choose exactly one difficulty axis yourself from the observed data and current label, change only that axis, and leave the other two unchanged. "
-            "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
+            "After a too-easy result, keep the current good readable path when possible, preserve grounded readable answer slots that still belong in the task, drop any slot that no longer belongs in the request, and make the smallest connected strengthening step on that same anchored relation map. "
+            "ALWAYS include anchor_entity with at least one real primary-key value from the current database. "
             "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
             "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
             "The JSON inside the <entity> block must exactly match anchor_entity, including multi-column primary keys when present. "
-            "Only use names, titles, labels, statuses, dates, or other business strings that you directly observed in tool results, using the exact values and formatting you actually saw there. "
+            "ALWAYS use names, titles, labels, statuses, dates, or other business strings exactly as you directly observed them in tool results, with the same values and formatting. WHY: even small rewrites break grounding. "
             "If the label returns a count, ground that count with an explicit count or aggregate observation. "
             "For self-scoped count answers, use anchor-scoped count evidence rather than a global database total. "
             "When you need one row among many, prefer local grounded ordering inside the anchored scope before using a global ranking. "
             f"{DIFFICULTY_AXIS_GUIDANCE}"
         ),
         (
-            "DO NOT",
-            "Do not call submit_draft without anchor_entity. "
-            "Do not write SQL, draft SQL, or include SQL queries in the submission. Use only tool-observed evidence. "
-            "Do not guess hidden values. "
-            "Do not treat schema orientation as proof that a field is answerable; a field is usable in the canonical answer only if you directly observed it in actual tool results on the chosen evidence path. "
-            "Do not write a request that assumes the user understands hidden database structure. "
-            "Do not submit blank or placeholder string fields in the canonical answer. "
-            "Do not shorten, paraphrase, partially copy, or reformat observed string or date values. If a value is used in the canonical answer, copy the exact value you saw in the tool response. "
-            "Do not merge separate observed fields into a new readable value, such as combining first_name and last_name into one full-name field, unless that exact combined value was itself observed in a tool response. "
-            "Do not ask for unreadable text fields from an id-only surface. "
-            "Do not manufacture readable labels by wrapping an id in generic words such as 'member 2' or 'record 17'. "
-            "Do not treat the first sampled rows you happened to inspect as the total, the latest item, or the first item unless you directly observed grounded count or ordering evidence. "
-            "Do not copy anchor_entity fields into the canonical answer unless they are genuinely needed to distinguish multiple returned rows. "
-            "Do not start with a multi-item set, top-few list, or paired bundle unless a smaller anchored label has already been shown to be too easy. "
-            "Do not submit single-call labels. If one atomic tool call already returns the full label, or a direct projection of the full label, do not submit that task. "
-            "Do not reveal internal tool paths, raw table names, bridge-table names, identifier field names, or SQL keywords in the user-facing request. "
-            "Do not repeat the raw anchor entity key or raw anchor entity id inside the user-request body. "
-            "Do not stop, apologize, or output a final message after a rejection. A rejection is not the end of the task. Continue until submit_draft returns Accepted or Budget exhausted. "
-            "Do not reset to a different topic, a different anchor, or a simpler scalar count unless the feedback proves the current anchored path cannot be grounded."
+            "Means",
+            "Use the provided atomic tools to inspect real database rows and aggregates. "
+            "Stay inside the connected anchored neighborhood when possible, and use that relation map to compare candidate paths before you commit to a label. "
+            "Use tool results as evidence, not inspiration. The interesting part of the task should come from the path, the field combination, the ordering, or the constraint, not from rewriting values. "
+            "GOOD: A request asks for a recent item's title, date, and assigned staff because those exact slots were all directly observed on one connected anchored path. WHY: the request exactly matches the label and every slot is grounded. "
+            "BAD: A request asks only for a recent item's title, date, and assigned staff, but the label still includes extra customer-name slots. WHY: the request does not cover the full label. "
+            "BAD: Combining first_name and last_name into one full-name slot when the combined value was never directly observed. WHY: the value was rewritten instead of copied from evidence."
         ),
         (
-            "Example",
-            "A strong run looks like this: first inspect one anchored self entry, then map several nearby one-hop and two-hop paths with tools, then classify which paths end in readable fields versus id-only dead ends, then compare a few grounded candidate paths, then choose one path that supports a unique verifiable label, and only then call submit_draft."
-        ),
-        (
-            "GOOD",
-            "A first-person request such as 'Which of my recent requests is still open, and when was it created?' when both status and creation time were directly observed on one anchored path. "
-            "Inspecting two or more nearby paths around the same anchored user, noticing that one path is id-only while another exposes readable status and date fields, and then choosing the readable path for the final label. "
-            "A label that combines two grounded observations, such as an amount plus a status, or a title plus a date, rather than one internal identifier. "
-            "A tie-breaker that is grounded by an observed field, such as earliest date, latest timestamp, lowest amount, highest count, or alphabetical label. "
-            "After a too-easy result, keeping the current readable path and adding one more connected grounded fact from the same anchored neighborhood instead of rebuilding the label from scratch."
-        ),
-        (
-            "BAD",
-            "BAD: Returning a label such as {\"store_id\": 1}, {\"customer_id\": 42}, or any other single internal identifier object as the answer. "
-            "BAD: Returning *_id fields or other internal references as the answer. "
-            "BAD: Writing SQL or describing the answer path as a SQL query instead of using tool observations. "
-            "BAD: Asking for unreadable text from an id-only path, then inventing a readable label such as 'member 2' or 'record 17'. "
-            "BAD: Returning 'Bob' when the tool response showed 'Jon Stephens', or returning an ISO-style timestamp when the tool response showed a different timestamp string. "
-            "BAD: Submitting a label from the first path you happened to inspect before you understand the nearby relationships and before you compare alternative paths around the same anchored user. "
-            "BAD: Seeing that one nearby path only returns identifiers, but drafting from it anyway instead of mapping a second path that might expose readable business fields. "
-            "BAD: Jumping to an unrelated entry type that is not yet connected to the anchored neighborhood just because it has readable fields. "
-            "BAD: Using the first sampled row as 'latest', 'earliest', or 'first' without grounded temporal or sequence evidence. "
-            "BAD: Jumping to a global count for a self-scoped request. "
-            "BAD: After a too-easy result, throwing away a good readable path and replacing it with a disconnected path, an id-only fallback, or a simpler global count. "
-            "BAD: Repeating raw identifier field names or raw anchor ids in the user-facing request. "
-            "BAD: Submitting a draft before you can explain why each answer slot is grounded and needed."
+            "Expression",
+            "Write the user-facing request as a normal business request from the anchored user's perspective when that is natural. "
+            "Keep the request concise, but do not omit any non-anchor answer slot from the wording. "
+            "If the request cannot naturally ask for a slot, remove that slot from the label instead of hiding it in the schema. "
+            "DO NOT reveal internal tool paths, raw table names, bridge-table names, identifier field names, or SQL keywords in the user-facing request. "
+            "DO NOT repeat the raw anchor entity key or raw anchor entity id inside the user-request body. "
+            "DO NOT submit blank or placeholder string fields in the canonical answer. "
+            "DO NOT shorten, paraphrase, partially copy, or reformat observed string or date values. "
+            "DO NOT merge separate observed fields into a new readable value unless that exact combined value was itself observed in a tool response. "
+            "DO NOT ask for unreadable text fields from an id-only surface. "
+            "DO NOT manufacture readable labels by wrapping an id in generic words such as 'member 2' or 'record 17'. "
+            "DO NOT treat the first sampled rows you happened to inspect as the total, the latest item, or the first item unless you directly observed grounded count or ordering evidence. "
+            "DO NOT copy anchor_entity fields into the canonical answer unless they are genuinely needed to distinguish multiple returned rows. "
+            "DO NOT start with a multi-item set, top-few list, or paired bundle unless a smaller anchored label has already been shown to be too easy. "
+            "DO NOT submit single-call labels. If one atomic tool call already returns the full label, or a direct projection of the full label, do not submit that task. "
+            "DO NOT write SQL, draft SQL, or include SQL queries in the submission. Use only tool-observed evidence. "
+            "DO NOT guess hidden values. "
+            "DO NOT treat schema orientation as proof that a field is answerable; a field is usable in the canonical answer only if you directly observed it in actual tool results on the chosen evidence path. "
+            "DO NOT write a request that assumes the user understands hidden database structure. "
+            "DO NOT submit a label with non-anchor answer slots that the user-facing request does not explicitly ask for. "
+            "DO NOT keep extra subject-name or anchor-descriptive slots in the label when the <entity> block already identifies the subject and the request does not ask for those slots. "
+            "DO NOT stop, apologize, or output a final message after a rejection. A rejection is not the end of the task. Continue until submit_draft returns Accepted or Budget exhausted. "
+            "DO NOT reset to a different topic, a different anchor, or a simpler scalar count unless the feedback proves the current anchored path cannot be grounded."
         ),
     ]
     return "\n\n".join(f"{title}\n{body}" for title, body in sections)
@@ -181,20 +176,27 @@ def build_synthesis_input(
     tool_surface_summary: dict[str, object],
     runtime_config: SynthesisRuntimeConfig,
 ) -> str:
-    sections: list[str] = []
-    sections.append("# Domain\n" f"{domain_name}: {scenario_description}")
-    sections.append(f"# Topic Hint\n{requested_topic}")
+    session_lines: list[str] = []
+    environment_lines: list[str] = []
+
+    session_lines.append(f"- Domain: {domain_name}")
+    session_lines.append(f"- Scenario: {scenario_description}")
+    session_lines.append(f"- Requested topic hint: {requested_topic}")
     topic_semantics = _topic_semantics_instruction(requested_topic)
     if topic_semantics is not None:
-        sections.append("# Topic Semantics\n" + topic_semantics)
+        session_lines.append(f"- Topic semantics: {topic_semantics}")
+    language_name = LANGUAGE_NAMES.get(task_language, task_language)
+    session_lines.append(
+        "- User-facing language: "
+        + TASK_LANGUAGE_INSTRUCTION.format(language=language_name)
+    )
 
-    schema_lines: list[str] = []
     table_count = schema_summary.get("table_count")
     edge_count = schema_summary.get("edge_count")
     if isinstance(table_count, int):
-        schema_lines.append(f"- Table count: {table_count}")
+        environment_lines.append(f"- Table count: {table_count}")
     if isinstance(edge_count, int):
-        schema_lines.append(f"- Foreign-key edge count: {edge_count}")
+        environment_lines.append(f"- Foreign-key edge count: {edge_count}")
     tables = schema_summary.get("tables")
     if isinstance(tables, list):
         for table in tables[: runtime_config.prompt_schema_orientation_max_tables]:
@@ -202,17 +204,14 @@ def build_synthesis_input(
                 continue
             qualified_name = table.get("qualified_name") or table.get("table_name")
             columns = table.get("column_names") or []
-            schema_lines.append(
+            environment_lines.append(
                 f"- {qualified_name}: columns={list(columns)[: runtime_config.prompt_schema_orientation_max_columns]}"
             )
-    if schema_lines:
-        sections.append("# Schema Orientation\n" + "\n".join(schema_lines))
 
-    tool_surface_lines: list[str] = []
     family_counts = tool_surface_summary.get("family_counts")
     tool_count = tool_surface_summary.get("tool_count")
     if isinstance(tool_count, int):
-        tool_surface_lines.append(f"- Total atomic tools: {tool_count}")
+        environment_lines.append(f"- Total atomic tools: {tool_count}")
     if isinstance(family_counts, dict):
         ordered_family_lines = [
             ("get", "retrieve one entry by ID"),
@@ -223,7 +222,7 @@ def build_synthesis_input(
         for family_name, meaning in ordered_family_lines:
             count = family_counts.get(family_name)
             if isinstance(count, int) and count > 0:
-                tool_surface_lines.append(
+                environment_lines.append(
                     f"- {family_name}: {count} tools available; use these to {meaning}."
                 )
     surfaces = tool_surface_summary.get("entity_surfaces")
@@ -237,21 +236,20 @@ def build_synthesis_input(
                 continue
             readable = [str(field) for field in readable_fields]
             if readable:
-                tool_surface_lines.append(
+                environment_lines.append(
                     f"- {tool_name}: readable fields={readable}"
                 )
             else:
-                tool_surface_lines.append(
+                environment_lines.append(
                     f"- {tool_name}: readable fields=[] (id-only surface)"
                 )
-        tool_surface_lines.append(
+        environment_lines.append(
             "- Schema orientation is only for navigation. A listed column is not automatically answerable. Use text answer fields only from surfaces that already expose readable non-identifier fields in actual tool results. If a surface is id-only, prefer counts, dates, amounts, statuses, ordering, or a different anchor."
         )
-    if tool_surface_lines:
-        sections.append("# Tool Surface Hints\n" + "\n".join(tool_surface_lines))
 
-    language_name = LANGUAGE_NAMES.get(task_language, task_language)
-    sections.append(
-        "# User-Facing Language\n" + TASK_LANGUAGE_INSTRUCTION.format(language=language_name)
-    )
+    sections: list[str] = [
+        "BOUNDARY\nStatic rules end here. Everything below is specific to this session.",
+        "Session Context\n" + "\n".join(session_lines),
+        "Environment and State\n" + "\n".join(environment_lines),
+    ]
     return "\n\n".join(section.strip() for section in sections if section.strip())
