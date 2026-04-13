@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 LANGUAGE_NAMES = {
     "ko": "Korean",
     "en": "English",
@@ -16,26 +18,19 @@ TASK_LANGUAGE_INSTRUCTION = (
 
 
 def _topic_semantics_instruction(requested_topic: str) -> str | None:
-    normalized = requested_topic.strip().lower()
-    if normalized == "assignment":
-        return (
-            "Stay semantically tight to assignment. The user-facing question should ask about who or what is assigned, "
-            "handled, owned, responsible, attached, or linked to the anchor in a natural business sense. "
-            "Do not turn assignment into arbitrary lineage tracing across unrelated entities. "
-            "Make the assignment relation explicit. If more than one assignee or assignment candidate could match, add a tie-breaker or ask for an ordered set. "
-            "When the answer is a person or business entity, prefer human-readable business attributes such as names or titles over opaque internal ids. "
-            "Prefer assignment relations whose assignee side exposes human-readable business fields in the observed tool results. "
-            "If an entity surface only exposes opaque ids, do not center the task on returning that entity. "
-            "Start with the smallest nontrivial assignment task: one explicit assignment relation plus at most one supporting contextual detail, unless solver feedback says the task is too easy."
-        )
-    if normalized == "payment_history":
-        return (
-            "Stay semantically tight to payment_history. The user-facing question should ask about payments, charges, refunds, payment dates, payment amounts, payment counts, or payment ordering in a natural support or account-history sense. "
-            "Prefer business-facing payment details such as amounts, timestamps, statuses, titles, or counts over raw internal identifiers. "
-            "Do not make the final answer a list of payment_id or rental_id values unless no more readable payment-facing value exists, which is unlikely for this topic. "
-            "When you need an ordered answer, order by observable payment facts such as date, amount, or status and make the tie-breaker explicit."
-        )
-    return None
+    normalized = requested_topic.strip()
+    if not normalized:
+        return None
+    topic_phrase = re.sub(r"[_\-\s]+", " ", normalized).strip()
+    if not topic_phrase:
+        return None
+    return (
+        f"Stay semantically tight to the requested topic: {topic_phrase}. "
+        "Use the plain-language meaning of that topic as the semantic center of the task. "
+        "Do not turn the task into generic lineage tracing across unrelated entities. "
+        "Keep the final answer centered on readable business-facing values rather than opaque internal identifiers whenever the observed tool results allow it. "
+        "If multiple grounded answers could fit, add an explicit tie-breaker or ask for an ordered answer set."
+    )
 
 
 def build_synthesis_agent_instructions() -> str:
@@ -45,18 +40,20 @@ def build_synthesis_agent_instructions() -> str:
         "The requested topic is fixed and must not be changed. "
         "You may change the anchor entity when you need a better grounded task. "
         "Before every submit_draft call, observe real data with atomic tools and verify the canonical answer from those observations. "
-        "Every draft must include anchor_entity with at least one real primary-key value from the current database, for example {\"customer_id\": 148} or {\"store_id\": 1}. "
+        "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
         "Calling submit_draft without anchor_entity is always wrong. Choose the anchor first and keep it explicit in the payload. "
         "When you call submit_draft, include all required arguments: canonical_answer_json, anchor_entity, difficulty_vector, question, constraint_summary, instance_space, and label_summary. "
         "Do not guess hidden values. "
-        "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. Do not invent placeholders such as Unknown or Staff #1. "
+        "Make label_summary an English explanation that explicitly includes the requested topic phrase and explains why the label is grounded and unique. "
+        "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. Do not invent placeholders such as Unknown or Entity #1. "
+        "Do not submit blank or placeholder string fields in the canonical answer. Every answer field must carry a grounded, non-empty value. "
         "Avoid trivial tasks such as returning a single foreign key or a raw count when richer grounded tasks are possible. "
         "Prefer multi-field answers, ordered answer sets, explicit tie-breakers, or tasks that require combining multiple grounded facts. "
         "Single-call labels are forbidden. If one atomic tool call already returns the full label, or a direct projection of the full label, do not submit that task. "
         "Keep exploring until the label requires combining at least two distinct grounded observations. "
         "Do not reveal internal tool paths in the user-facing question. "
-        "Do not repeat the raw anchor entity key or raw anchor entity id inside the user-facing question; the <entity> block already provides that grounding. Refer to the anchor naturally as this customer, this store, this staff member, or the equivalent in the task language. "
-        "Do not repeat raw identifier field names such as customer_id, store_id, or address_id in the user-facing question; keep those only inside anchor_entity. "
+        "Do not repeat the raw anchor entity key or raw anchor entity id inside the user-facing question; the <entity> block already provides that grounding. Refer to the anchor naturally with a domain-appropriate phrase instead of the raw identifier. "
+        "Do not repeat raw identifier field names such as <entity>_id in the user-facing question; keep identifiers only inside anchor_entity. "
         "Do not mention raw table names, bridge-table names, or SQL keywords such as JOIN, LIMIT, SELECT, or ORDER BY in the user-facing question. "
         "Prefer user-relevant business values such as names, titles, dates, amounts, counts, statuses, or ordered records over answers that are only chains of internal *_id fields. "
         "When submit_draft returns a rejection, keep working inside the same conversation, make at least one new atomic tool call, inspect more data, and resubmit a better draft. "

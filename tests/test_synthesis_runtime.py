@@ -207,7 +207,7 @@ def _accepted_payload() -> SubmitDraftPayload:
                     "outputs": ["customer_id"],
                 }
             },
-            "label_summary": "The store_id comes from the customer lookup and the total customer count comes from a separate aggregate.",
+            "label_summary": "This assignment answer is grounded because the store_id comes from the customer lookup and the total customer count comes from a separate aggregate.",
         }
     )
 
@@ -428,128 +428,6 @@ async def test_synthesize_environment_draft_raises_when_submit_budget_exhausts(
         )
 
     assert exc_info.value.attempts
-
-
-@pytest.mark.asyncio
-async def test_synthesize_environment_draft_rejects_assignment_topic_when_tool_surface_is_id_only(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
-    runtime.synthesis_backends = [_FakeBackend(accept_payload=_accepted_payload())]
-
-    async def _fake_bind_db_id(self, db_id: str):
-        self._bound_db_id = db_id
-
-    async def _fake_ensure_category_available(self, db_id: str, topic: str):
-        return None
-
-    async def _fake_introspect_graph(self):
-        return _sample_graph()
-
-    async def _fake_ensure_atomic_tool_bundle(self, *, db_id: str, graph: SchemaGraph):
-        del db_id, graph
-        return AtomicToolBundle(
-            db_id="sakila",
-            tools=[
-                AtomicToolDefinition(
-                    name="get_staff_by_id",
-                    family=AtomicToolFamily.T1_POINT_LOOKUP,
-                    description="Look up a single staff by its primary key. Returns one row or nothing.",
-                    params_schema={"type": "object", "properties": {"staff_id": {"type": "integer"}}},
-                    returns_schema={"type": "object", "properties": {}},
-                    sql="SELECT 1",
-                    result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
-                    semantic_key="staff:get_by_id",
-                )
-            ],
-            source="async def get_staff_by_id(conn, staff_id):\n    return {'staff_id': 1}\n",
-        )
-
-    monkeypatch.setattr(SynthesisAgentRuntime, "_bind_db_id", _fake_bind_db_id)
-    monkeypatch.setattr(
-        SynthesisAgentRuntime,
-        "_ensure_category_available",
-        _fake_ensure_category_available,
-    )
-    monkeypatch.setattr(SynthesisAgentRuntime, "_introspect_graph", _fake_introspect_graph)
-    monkeypatch.setattr(
-        SynthesisAgentRuntime,
-        "_ensure_atomic_tool_bundle",
-        _fake_ensure_atomic_tool_bundle,
-    )
-
-    with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
-        await runtime.synthesize_environment_draft(
-            db_id="sakila",
-            requested_topic="assignment",
-        )
-
-    assert exc_info.value.last_artifact_diagnostics is not None
-    assert exc_info.value.last_artifact_diagnostics.error_codes == [
-        "assignment_topic_requires_readable_surface"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_synthesize_environment_draft_rejects_payment_history_when_tool_surface_is_id_only(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
-    runtime.synthesis_backends = [_FakeBackend(accept_payload=_accepted_payload())]
-
-    async def _fake_bind_db_id(self, db_id: str):
-        self._bound_db_id = db_id
-
-    async def _fake_ensure_category_available(self, db_id: str, topic: str):
-        return None
-
-    async def _fake_introspect_graph(self):
-        return _sample_graph()
-
-    async def _fake_ensure_atomic_tool_bundle(self, *, db_id: str, graph: SchemaGraph):
-        del db_id, graph
-        return AtomicToolBundle(
-            db_id="sakila",
-            tools=[
-                AtomicToolDefinition(
-                    name="get_payment_by_id",
-                    family=AtomicToolFamily.T1_POINT_LOOKUP,
-                    description="Look up a single payment by its primary key. Returns one row or nothing.",
-                    params_schema={"type": "object", "properties": {"payment_id": {"type": "integer"}}},
-                    returns_schema={"type": "object", "properties": {}},
-                    sql="SELECT 1",
-                    result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
-                    semantic_key="payment:get_by_id",
-                )
-            ],
-            source="async def get_payment_by_id(conn, payment_id):\n    return {'payment_id': 1}\n",
-        )
-
-    monkeypatch.setattr(SynthesisAgentRuntime, "_bind_db_id", _fake_bind_db_id)
-    monkeypatch.setattr(
-        SynthesisAgentRuntime,
-        "_ensure_category_available",
-        _fake_ensure_category_available,
-    )
-    monkeypatch.setattr(SynthesisAgentRuntime, "_introspect_graph", _fake_introspect_graph)
-    monkeypatch.setattr(
-        SynthesisAgentRuntime,
-        "_ensure_atomic_tool_bundle",
-        _fake_ensure_atomic_tool_bundle,
-    )
-
-    with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
-        await runtime.synthesize_environment_draft(
-            db_id="sakila",
-            requested_topic="payment_history",
-        )
-
-    assert exc_info.value.last_artifact_diagnostics is not None
-    assert exc_info.value.last_artifact_diagnostics.error_codes == [
-        "payment_history_topic_requires_readable_surface"
-    ]
 
 
 @pytest.mark.asyncio
@@ -818,12 +696,12 @@ async def test_submit_draft_rejects_plural_identifier_outputs(
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_rejects_questions_misaligned_with_assignment_topic(
+async def test_submit_draft_rejects_label_summaries_that_do_not_name_requested_topic(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
         config=_config_with_synthesis_output(tmp_path),
-        requested_topic="assignment",
+        requested_topic="payment_history",
         environment_orchestrator=_FakeEnvironmentOrchestrator(
             matched_solver_runs=2,
             total_solver_runs=4,
@@ -845,12 +723,13 @@ async def test_submit_draft_rejects_questions_misaligned_with_assignment_topic(
             "anchor_entity": {"payment_id": 10},
             "canonical_answer_json": '{"payment_amount": "4.99", "rental_id": 20}',
             "question": "결제 하나를 따라가서 연결된 대여 정보를 알려 주세요.",
+            "label_summary": "The answer is grounded in observed payment and rental rows.",
         }
     )
 
     message = await controller.submit(payload)
 
-    assert "drifted away from the requested topic" in message
+    assert "label_summary must explicitly name the requested topic" in message
     assert controller.attempts[-1].error_codes == ("requested_topic_misaligned",)
 
 
@@ -889,6 +768,44 @@ async def test_submit_draft_rejects_string_values_not_grounded_in_tool_results(
 
     assert "not directly grounded in the observed tool results" in message
     assert controller.attempts[-1].error_codes[0] == "label_values_not_grounded"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_blank_string_values_in_canonical_answer(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_film_by_id",
+        params={"film_id": 292},
+        result={"film_title": "EXAMPLE FILM"},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_film_actor_by_film_id_eq",
+        params={"film_id": 292},
+        result=8,
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"film_id": 292},
+            "canonical_answer_json": '{"film_title":"","assigned_cast_count":8}',
+            "question": "기준 영화에 배정된 배우는 모두 몇 명인가요?",
+            "label_summary": "This assignment answer is grounded in the observed film and assigned cast count.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "contains blank string fields" in message
+    assert controller.attempts[-1].error_codes[0] == "label_blank_string_forbidden"
 
 
 def test_next_difficulty_crank_axis_wraps_back_to_first_axis() -> None:

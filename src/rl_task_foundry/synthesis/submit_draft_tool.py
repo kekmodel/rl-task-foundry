@@ -43,7 +43,7 @@ class SubmitDraftPayload(StrictModel):
         min_length=1,
         description=(
             "Mandatory anchor entity with at least one real primary-key value from the current database. "
-            'Example: {"customer_id": 148} or {"store_id": 1}. Never omit this field.'
+            "Never omit this field."
         )
     )
     difficulty_vector: DifficultyVectorContract = Field(
@@ -322,6 +322,22 @@ def _collect_answer_strings(value: object, *, sink: list[str]) -> None:
             _collect_answer_strings(item, sink=sink)
 
 
+def _blank_string_paths(value: object, *, path: str = "$") -> list[str]:
+    if isinstance(value, str):
+        return [path] if not value.strip() else []
+    if isinstance(value, dict):
+        blank_paths: list[str] = []
+        for key, item in value.items():
+            blank_paths.extend(_blank_string_paths(item, path=f"{path}.{key}"))
+        return blank_paths
+    if isinstance(value, list):
+        blank_paths: list[str] = []
+        for index, item in enumerate(value):
+            blank_paths.extend(_blank_string_paths(item, path=f"{path}[{index}]"))
+        return blank_paths
+    return []
+
+
 def _ungrounded_answer_strings(
     answer: object,
     tool_calls: list[dict[str, object]],
@@ -344,26 +360,6 @@ def _ungrounded_answer_strings(
     return sorted(dict.fromkeys(ungrounded))
 
 
-_ASSIGNMENT_TOPIC_MARKERS = (
-    "assign",
-    "assigned",
-    "assignment",
-    "responsible",
-    "responsibility",
-    "owner",
-    "owned",
-    "managed",
-    "manager",
-    "allocated",
-    "allocation",
-    "배정",
-    "담당",
-    "소속",
-    "맡",
-    "할당",
-    "책임",
-)
-
 _IDENTIFIER_FIELD_TOKEN_RE = re.compile(
     r"(?<![a-z0-9_])[a-z][a-z0-9_]*_ids?(?![a-z0-9_])",
     re.IGNORECASE,
@@ -379,22 +375,53 @@ def _contains_raw_identifier_token(text: str) -> bool:
     return _IDENTIFIER_FIELD_TOKEN_RE.search(text.lower()) is not None
 
 
-def _question_matches_requested_topic(*, requested_topic: str, question: str) -> bool:
-    normalized_topic = requested_topic.strip().lower()
-    if normalized_topic != "assignment":
+def _normalize_topic_phrase(value: str) -> str:
+    return re.sub(r"[_\-\s]+", " ", value.strip().lower()).strip()
+
+def _label_summary_matches_requested_topic(*, requested_topic: str, label_summary: str) -> bool:
+    normalized_topic = _normalize_topic_phrase(requested_topic)
+    if not normalized_topic:
         return True
-    lowered = question.lower()
-    return any(marker in lowered for marker in _ASSIGNMENT_TOPIC_MARKERS)
+    topic_tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized_topic)
+        if len(token) >= 3
+    ]
+    if not topic_tokens:
+        return True
+    lowered_summary = label_summary.lower()
+    return all(token in lowered_summary for token in topic_tokens)
 
 
-def _question_repeats_anchor_entity(question: str) -> bool:
+def _question_repeats_anchor_entity(
+    question: str,
+    *,
+    anchor_entity: dict[str, object],
+) -> bool:
     lowered = question.lower()
-    patterns = (
-        r"\b(?:staff|customer|store|address|payment|rental|inventory|film|city|country)\s*\d+(?:\b|[가-힣])",
-        r"\b\d+\s*(?:번)?\s*(?:staff|customer|store|address|payment|rental|inventory|film|city|country)(?:\b|[가-힣])",
-        r"(?:매장|고객|직원|영화|주소|도시|국가)\s*\d+",
-    )
-    return any(re.search(pattern, lowered) for pattern in patterns)
+    for raw_key, raw_value in anchor_entity.items():
+        key = str(raw_key).strip().lower()
+        if not key:
+            continue
+        base_key = key
+        if base_key.endswith("_ids"):
+            base_key = base_key[:-4]
+        elif base_key.endswith("_id"):
+            base_key = base_key[:-3]
+        if not base_key:
+            continue
+        key_pattern = re.escape(re.sub(r"[_\-\s]+", " ", base_key))
+        value = str(raw_value).strip().lower()
+        if not value:
+            continue
+        value_pattern = re.escape(value)
+        patterns = (
+            rf"(?<![a-z0-9_]){key_pattern}\s*[:#-]?\s*{value_pattern}(?![a-z0-9_])",
+            rf"(?<![a-z0-9_]){value_pattern}(?:번)?\s*[:#-]?\s*{key_pattern}(?![a-z0-9_])",
+        )
+        if any(re.search(pattern, lowered) for pattern in patterns):
+            return True
+    return False
 
 
 @dataclass(slots=True)
@@ -523,6 +550,10 @@ class SubmitDraftController:
         except json.JSONDecodeError:
             canonical_answer = None
         if canonical_answer is not None:
+            blank_paths = _blank_string_paths(canonical_answer)
+            if blank_paths:
+                error_codes.append("label_blank_string_forbidden")
+                invalid_diagnostics["blank_string_paths"] = blank_paths[:5]
             derivation_tool = _single_tool_derivation_source(
                 canonical_answer,
                 self._raw_atomic_tool_calls,
@@ -540,15 +571,18 @@ class SubmitDraftController:
         question_lower = payload.question.lower()
         if _contains_raw_identifier_token(question_lower):
             error_codes.append("question_raw_identifier_leak")
-        if _question_repeats_anchor_entity(payload.question):
+        if _question_repeats_anchor_entity(
+            payload.question,
+            anchor_entity=payload.anchor_entity,
+        ):
             error_codes.append("question_anchor_entity_leak")
         if any(token in question_lower for token in self.forbidden_question_tokens):
             error_codes.append("question_internal_schema_leak")
         if canonical_answer is not None and _answer_uses_only_identifier_fields(canonical_answer):
             error_codes.append("label_identifier_chain_forbidden")
-        if not _question_matches_requested_topic(
+        if not _label_summary_matches_requested_topic(
             requested_topic=self.requested_topic,
-            question=payload.question,
+            label_summary=payload.label_summary,
         ):
             error_codes.append("requested_topic_misaligned")
 
@@ -693,13 +727,16 @@ class SubmitDraftController:
                 "Rejected. Rewrite the user-facing question without raw table names, join-table names, or SQL keywords."
             ),
             "question_raw_identifier_leak": (
-                "Rejected. Rewrite the user-facing question without raw identifier field names such as customer_id or store_id. Keep identifiers only inside anchor_entity."
+                "Rejected. Rewrite the user-facing question without raw identifier field names such as <entity>_id. Keep identifiers only inside anchor_entity."
             ),
             "question_anchor_entity_leak": (
                 "Rejected. Rewrite the user-facing question without repeating the raw anchor entity id. Keep the raw anchor only inside the entity block and refer to it naturally in the question."
             ),
             "label_single_tool_derivable": (
                 "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations."
+            ),
+            "label_blank_string_forbidden": (
+                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value."
             ),
             "label_identifier_chain_forbidden": (
                 "Rejected. The canonical answer is only a chain of internal identifier fields. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
@@ -708,7 +745,7 @@ class SubmitDraftController:
                 "Rejected. Some label values were not directly grounded in the observed tool results. Only use business strings you actually observed."
             ),
             "requested_topic_misaligned": (
-                "Rejected. The user-facing question drifted away from the requested topic. For assignment, ask about who or what is assigned, handled, owned, responsible, attached, or linked to the anchor."
+                "Rejected. label_summary must explicitly name the requested topic and keep the draft semantically centered on that topic."
             ),
             "difficulty_weakened": (
                 "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."
@@ -851,13 +888,12 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "Submit a grounded RLVR task draft after inspecting real database rows. "
             "Include the canonical answer JSON, anchor entity, declared difficulty vector, "
             "natural user-facing question, constraint summary, instance space, and label summary. "
-            "anchor_entity is mandatory and must include at least one real primary-key value, "
-            "for example {\"customer_id\": 148} or {\"store_id\": 1}. "
+            "anchor_entity is mandatory and must include at least one real primary-key value. "
             "Do not call submit_draft until anchor_entity is present and final for that draft. "
+            "label_summary must be English, must explicitly include the requested topic phrase, and must explain why the label is grounded and unique. "
+            "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "
             "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "
             "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "
-            "For assignment tasks, make the assignee relation explicit and use human-readable assignee attributes when possible. "
-            "If the candidate assignee surface only exposes opaque ids in tool results, choose a different assignment relation instead of centering the task on that entity. "
             "After any rejection, make at least one new atomic tool call before calling submit_draft again. "
             "A rejection means keep going in the same conversation, not stop. "
             "All submit_draft arguments are schema-validated; missing required fields and invalid canonical_answer_json values are rejected automatically."

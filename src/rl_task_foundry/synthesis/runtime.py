@@ -342,24 +342,6 @@ def summarize_atomic_tool_surface(
     return {"point_lookups": point_lookups[:max_point_lookups]}
 
 
-def topic_surface_infeasibility_code(
-    *,
-    requested_topic: str,
-    tool_surface_summary: dict[str, object],
-) -> str | None:
-    normalized_topic = requested_topic.strip().lower()
-    if normalized_topic not in {"assignment", "payment_history"}:
-        return None
-    point_lookups = tool_surface_summary.get("point_lookups")
-    if not isinstance(point_lookups, list) or not point_lookups:
-        return None
-    if all(bool(item.get("id_only")) for item in point_lookups if isinstance(item, dict)):
-        if normalized_topic == "assignment":
-            return "assignment_topic_requires_readable_surface"
-        return "payment_history_topic_requires_readable_surface"
-    return None
-
-
 def forbidden_question_tokens(schema_summary: dict[str, object]) -> frozenset[str]:
     tokens = {
         "select ",
@@ -486,23 +468,6 @@ class SynthesisAgentRuntime:
         )
         schema_summary = summarize_schema_graph(resolved_graph)
         tool_surface_summary = summarize_atomic_tool_surface(atomic_tool_bundle)
-        infeasibility_code = topic_surface_infeasibility_code(
-            requested_topic=requested_topic,
-            tool_surface_summary=tool_surface_summary,
-        )
-        if infeasibility_code is not None:
-            diagnostics = SynthesisArtifactDiagnostics(error_codes=[infeasibility_code])
-            await self._record_category_discard(
-                db_id,
-                requested_topic,
-                outcome=SynthesisGenerationOutcome.ARTIFACT_INVALID,
-                error_codes=list(diagnostics.error_codes),
-            )
-            raise SynthesisArtifactGenerationError(
-                "requested topic is not feasible with the current visible tool surface",
-                attempts=[],
-                last_artifact_diagnostics=diagnostics,
-            )
         shuffle_seed = _build_shuffle_seed(
             "synthesis",
             db_id,

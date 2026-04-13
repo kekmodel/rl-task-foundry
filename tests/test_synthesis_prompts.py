@@ -10,7 +10,7 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     prompt = build_synthesis_input(
         domain_name="service_operations",
         scenario_description="end-user support requests over a business database",
-        requested_topic="assignment",
+        requested_topic="record_history",
         task_language="ko",
         schema_summary={
             "table_count": 2,
@@ -51,11 +51,9 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "get_customer_by_id: readable fields=['first_name', 'last_name']" in prompt
     assert "get_staff_by_id: readable fields=[] (id-only surface)" in prompt
     assert "Korean" in prompt
-    assert "Stay semantically tight to assignment" in prompt
-    assert "Make the assignment relation explicit" in prompt
-    assert "prefer human-readable business attributes" in prompt
-    assert "Prefer assignment relations whose assignee side exposes human-readable business fields" in prompt
-    assert "Start with the smallest nontrivial assignment task" in prompt
+    assert "Stay semantically tight to the requested topic: record history" in prompt
+    assert "Use the plain-language meaning of that topic as the semantic center" in prompt
+    assert "Keep the final answer centered on readable business-facing values" in prompt
     assert "Previous Phase Outputs" not in prompt
     assert "Grounded Evidence" not in prompt
     assert "Recent Memory" not in prompt
@@ -69,7 +67,10 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "synthesis agent" in instructions
     assert "requested topic is fixed" in instructions
     assert "Before every submit_draft call" in instructions
+    assert "label_summary" in instructions
+    assert "explicitly includes the requested topic phrase" in instructions
     assert "Only use names, titles, labels, statuses" in instructions
+    assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
     assert "Single-call labels are forbidden." in instructions
     assert "requires combining at least two distinct grounded observations" in instructions
     assert "Do not repeat the raw anchor entity key or raw anchor entity id" in instructions
@@ -84,7 +85,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not emit markdown fences" in instructions
 
 
-def test_synthesis_input_adds_payment_history_semantics() -> None:
+def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules() -> None:
     prompt = build_synthesis_input(
         domain_name="service_operations",
         scenario_description="end-user support requests over a business database",
@@ -104,6 +105,6 @@ def test_synthesis_input_adds_payment_history_semantics() -> None:
     )
 
     assert "# Topic Semantics" in prompt
-    assert "Stay semantically tight to payment_history" in prompt
-    assert "Prefer business-facing payment details such as amounts, timestamps, statuses, titles, or counts" in prompt
-    assert "Do not make the final answer a list of payment_id or rental_id values" in prompt
+    assert "Stay semantically tight to the requested topic: payment history" in prompt
+    assert "Use the plain-language meaning of that topic as the semantic center" in prompt
+    assert "Keep the final answer centered on readable business-facing values" in prompt
