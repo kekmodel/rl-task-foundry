@@ -397,6 +397,44 @@ def _ungrounded_text_payload(*, customer_id: int = 1) -> SubmitDraftPayload:
     )
 
 
+def _partially_rewritten_string_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "latest_rental_assignment",
+            "canonical_answer_json": json.dumps(
+                {
+                    "rental_staff_name": "Bob",
+                    "latest_rental_date": "2005-08-22T20:03:46",
+                },
+                ensure_ascii=False,
+            ),
+            "anchor_entity": anchor_entity,
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 2.0,
+                "constraint_density": 2.0,
+            },
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "제가 최근에 대여한 기록의 처리 직원 이름과 대여 시각을 알려주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_self",
+                    "kind": "membership",
+                    "summary": "Answer must stay within the anchored customer.",
+                },
+                {
+                    "key": "latest_rental",
+                    "kind": "ordering",
+                    "summary": "Use the latest observed rental for the anchored customer.",
+                },
+            ],
+        }
+    )
+
+
 def _global_count_payload() -> SubmitDraftPayload:
     anchor_entity = {"customer_id": 1}
     return SubmitDraftPayload.model_validate(
@@ -693,6 +731,52 @@ async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_requires_exact_observed_string_values(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    controller.record_atomic_tool_call(
+        tool_name="find_rental_by_customer_id",
+        params={"op": "eq", "value": 1, "sort_by": "rental_date", "direction": "desc", "limit": 1},
+        result=[
+            {
+                "customer_id": 1,
+                "rental_id": 15315,
+                "rental_date": "2005-08-22 20:03:46",
+                "return_date": "2005-08-30 01:51:46",
+                "staff_id": 2,
+            }
+        ],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_staff",
+        params={"id": 2},
+        result={
+            "staff_id": 2,
+            "first_name": "Jon",
+            "last_name": "Stephens",
+            "email": "Jon.Stephens@sakilastaff.com",
+        },
+    )
+
+    message = await controller.submit(_partially_rewritten_string_payload())
+
+    assert "copy them exactly as they appeared there" in message
+    assert "Do not shorten names" in message
+    assert "normalize timestamp formatting" in message
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_pushes_self_scoped_count_back_to_anchor_evidence(
     tmp_path: Path,
 ) -> None:
@@ -757,6 +841,7 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
         params={"id": 1},
         result={
             "staff_id": 1,
+            "staff_name": "Mike Hillyer",
             "first_name": "Mike",
             "last_name": "Hillyer",
             "email": "Mike.Hillyer@sakilastaff.com",

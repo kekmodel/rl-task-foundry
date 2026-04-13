@@ -130,9 +130,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "anchor_entity must be a flat JSON object" in instructions
     assert "question must already be the full user-facing prompt in this exact shape" in instructions
     assert "The JSON inside the <entity> block must exactly match anchor_entity" in instructions
-    assert "Only use names, titles, labels, statuses" in instructions
+    assert "Only use names, titles, labels, statuses, dates" in instructions
+    assert "using the exact values and formatting you actually saw there" in instructions
     assert "Do not use opaque identifiers such as UUIDs, hashes, encrypted tokens" in instructions
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
+    assert "Do not shorten, paraphrase, partially copy, or reformat observed string or date values" in instructions
     assert "Do not manufacture readable labels by wrapping an id in generic words" in instructions
     assert "If the label returns a count, ground that count with an explicit count or aggregate observation." in instructions
     assert "Do not copy anchor_entity fields into the canonical answer" in instructions
@@ -145,6 +147,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert 'Returning a label such as {"store_id": 1}, {"customer_id": 42}' in instructions
     assert "Returning *_id fields, UUIDs, hashes, tokens" in instructions
     assert "Writing SQL or describing the answer path as a SQL query" in instructions
+    assert "Returning 'Bob' when the tool response showed 'Jon Stephens'" in instructions
     assert "Which of my recent requests is still open, and when was it created?" in instructions
     assert "Inspecting two or more nearby paths around the same anchored user" in instructions
     assert "After a too-easy result, keeping the current readable path and adding one more connected grounded fact" in instructions

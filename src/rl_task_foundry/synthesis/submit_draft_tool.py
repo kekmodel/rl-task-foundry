@@ -588,20 +588,19 @@ def _answer_repeats_anchor_entity(
     return False
 
 
-def _collect_observed_string_tokens(value: object, *, strings: set[str], tokens: set[str]) -> None:
+def _collect_observed_strings(value: object, *, strings: set[str]) -> None:
     if isinstance(value, str):
         normalized = value.strip().lower()
         if normalized:
             strings.add(normalized)
-            tokens.update(re.findall(r"[a-z0-9가-힣]+", normalized))
         return
     if isinstance(value, dict):
         for item in value.values():
-            _collect_observed_string_tokens(item, strings=strings, tokens=tokens)
+            _collect_observed_strings(item, strings=strings)
         return
     if isinstance(value, list):
         for item in value:
-            _collect_observed_string_tokens(item, strings=strings, tokens=tokens)
+            _collect_observed_strings(item, strings=strings)
 
 
 def _collect_answer_strings(value: object, *, sink: list[str]) -> None:
@@ -693,18 +692,14 @@ def _ungrounded_answer_strings(
     tool_calls: list[dict[str, object]],
 ) -> list[str]:
     observed_strings: set[str] = set()
-    observed_tokens: set[str] = set()
     for record in tool_calls:
-        _collect_observed_string_tokens(record.get("result"), strings=observed_strings, tokens=observed_tokens)
+        _collect_observed_strings(record.get("result"), strings=observed_strings)
 
     answer_strings: list[str] = []
     _collect_answer_strings(answer, sink=answer_strings)
     ungrounded: list[str] = []
     for value in answer_strings:
         if value in observed_strings:
-            continue
-        tokens = re.findall(r"[a-z0-9가-힣]+", value)
-        if tokens and all(token in observed_tokens for token in tokens):
             continue
         ungrounded.append(value)
     return sorted(dict.fromkeys(ungrounded))
@@ -933,15 +928,10 @@ def _observed_anchor_readable_string_surface(
     anchor_entity: dict[str, object],
 ) -> bool:
     observed_strings: set[str] = set()
-    observed_tokens: set[str] = set()
     for record in tool_calls:
         if not _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
             continue
-        _collect_observed_string_tokens(
-            record.get("result"),
-            strings=observed_strings,
-            tokens=observed_tokens,
-        )
+        _collect_observed_strings(record.get("result"), strings=observed_strings)
     return bool(observed_strings)
 
 
@@ -1813,7 +1803,7 @@ class SubmitDraftController:
                 "Rejected. The canonical answer contains opaque identifier values such as UUIDs, hashes, encrypted tokens, or other random-looking reference strings. Even if those values were observed, they are not user-facing business labels. Return readable business values, dates, amounts, counts, statuses, or ordered records instead."
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."
+                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings, dates, and other readable values that you actually observed in real tool outputs, and copy them exactly as they appeared there. Do not shorten names, paraphrase labels, normalize timestamp formatting, or manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."
             ),
             SubmitDraftErrorCode.DIFFICULTY_WEAKENED: (
                 "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."
