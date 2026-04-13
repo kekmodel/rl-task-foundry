@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
+
+from rl_task_foundry.config.models import ProviderConfig
 
 ToolExecutor = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 ToolInvokeCallback = Callable[[str, dict[str, Any], Any], Any | Awaitable[Any]]
@@ -61,7 +64,7 @@ def extract_turn_count(run_result: Any) -> int:
     explicit_turn_count = getattr(run_result, "_current_turn", None)
     if explicit_turn_count is None:
         explicit_turn_count = getattr(run_result, "current_turn", None)
-    if explicit_turn_count:
+    if explicit_turn_count is not None:
         return int(explicit_turn_count)
 
     raw_responses = getattr(run_result, "raw_responses", None)
@@ -119,6 +122,22 @@ def preview_payload(value: object) -> object:
             preview[str(key)] = preview_payload(item)
         return preview
     return value
+
+
+def resolve_provider_api_key(
+    provider: ProviderConfig,
+    *,
+    missing_error_factory: Callable[[str], Exception] | None = None,
+) -> str:
+    env_value = os.environ.get(provider.api_key_env)
+    if env_value:
+        return env_value
+    if provider.type == "openai_compatible":
+        return "dummy"
+    message = f"Required API key env var is missing: {provider.api_key_env}"
+    if missing_error_factory is None:
+        raise RuntimeError(message)
+    raise missing_error_factory(message)
 
 
 def make_sdk_tool(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -165,6 +165,7 @@ class _FakeBackend:
     bound_controller: object | None = None
     bound_tool_definitions: list[dict[str, object]] | None = None
     bound_tool_executors: dict[str, object] | None = None
+    seen_max_turns: list[int] = field(default_factory=list)
 
     def bind_atomic_tools(self, *, tool_definitions, tool_executors) -> None:
         self.bound_tool_definitions = tool_definitions
@@ -185,7 +186,8 @@ class _FakeBackend:
         tool_surface_summary: dict[str, object],
         max_turns: int,
     ):
-        del db_id, requested_topic, domain_name, task_language, scenario_description, schema_summary, tool_surface_summary, max_turns
+        del db_id, requested_topic, domain_name, task_language, scenario_description, schema_summary, tool_surface_summary
+        self.seen_max_turns.append(max_turns)
         assert self.bound_controller is not None
         self.bound_controller.record_atomic_tool_call(
             tool_name="get_customer_by_id",
@@ -363,9 +365,10 @@ async def test_synthesize_environment_draft_runs_single_agent_and_returns_accept
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
-    runtime.synthesis_backends = [
-        _FakeBackend(
+    config = _config_with_synthesis_output(tmp_path)
+    config.synthesis.runtime.max_turns = 17
+    runtime = SynthesisAgentRuntime(config)
+    backend = _FakeBackend(
             accept_payload=_accepted_payload().model_copy(
                 update={
                     "topic": "store_assignment",
@@ -377,7 +380,7 @@ async def test_synthesize_environment_draft_runs_single_agent_and_returns_accept
                 }
             )
         )
-    ]
+    runtime.synthesis_backends = [backend]
     runtime._environment_orchestrator = _FakeEnvironmentOrchestrator(
         matched_solver_runs=2,
         total_solver_runs=4,
@@ -436,6 +439,7 @@ async def test_synthesize_environment_draft_runs_single_agent_and_returns_accept
     assert '"customer_id": 1' in draft.instances[0].rendered_user_prompt
     assert draft.canonical_answers[0].label_signature.startswith("sha256:")
     assert draft.generation_attempts[-1].outcome.value == "passed"
+    assert backend.seen_max_turns == [17]
 
 
 @pytest.mark.asyncio

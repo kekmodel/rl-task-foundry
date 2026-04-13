@@ -12,7 +12,7 @@ from hashlib import sha256
 from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.infra.db import DatabasePools
+from rl_task_foundry.infra.db import DatabasePools, ensure_database_pools
 from rl_task_foundry.pipeline.provider_resilience import (
     ProviderCircuitBreaker,
     ProviderCircuitSnapshot,
@@ -546,7 +546,7 @@ class SynthesisAgentRuntime:
             status="accepted",
             expected_contract={
                 "requested_topic": requested_topic,
-                "max_turns": 50,
+                "max_turns": self.config.synthesis.runtime.max_turns,
             },
             actual_data={
                 "env_id": accepted_draft.environment.env_id,
@@ -737,7 +737,7 @@ class SynthesisAgentRuntime:
                     scenario_description=self.config.domain.scenario_description,
                     schema_summary=schema_summary,
                     tool_surface_summary=tool_surface_summary,
-                    max_turns=50,
+                    max_turns=self.config.synthesis.runtime.max_turns,
                 )
             except Exception as exc:  # pragma: no cover
                 breaker.record_failure()
@@ -928,7 +928,10 @@ class SynthesisAgentRuntime:
 
     async def _database_pools_for_tools(self) -> DatabasePools:
         if self._database_pools is None:
-            self._database_pools = await DatabasePools.create(self.config.database)
+            self._database_pools = await ensure_database_pools(
+                self._database_pools,
+                self.config.database,
+            )
         return self._database_pools
 
     async def _tool_executors_for_bundle(

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import httpx
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig
+from rl_task_foundry.infra.sdk_helpers import resolve_provider_api_key as _resolve_provider_api_key
 
 
 class JsonChatCompletionError(RuntimeError):
@@ -15,12 +15,10 @@ class JsonChatCompletionError(RuntimeError):
 
 
 def resolve_provider_api_key(provider: ProviderConfig) -> str:
-    env_value = os.environ.get(provider.api_key_env)
-    if env_value:
-        return env_value
-    if provider.type == "openai_compatible":
-        return "dummy"
-    raise JsonChatCompletionError(f"Missing API key env var: {provider.api_key_env}")
+    return _resolve_provider_api_key(
+        provider,
+        missing_error_factory=JsonChatCompletionError,
+    )
 
 
 async def request_json_chat_completion(

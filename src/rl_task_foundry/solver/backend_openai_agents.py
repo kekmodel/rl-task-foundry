@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
@@ -20,6 +19,7 @@ from rl_task_foundry.infra.sdk_helpers import (
     load_sdk_components as _shared_load_sdk_components,
     make_sdk_tool as _shared_make_sdk_tool,
     normalize_tool_definition as _shared_normalize_tool_definition,
+    resolve_provider_api_key as _resolve_provider_api_key,
 )
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
@@ -188,16 +188,10 @@ class OpenAIAgentsSolverBackend:
     artifact_writer: ArtifactWriter | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
+    _shared_models: ClassVar[dict[tuple[str, str | None, str, float, str], Any]] = {}
 
     def _resolve_api_key(self) -> str:
-        env_name = self.provider_config.api_key_env
-        env_value = os.environ.get(env_name)
-        if env_value:
-            return env_value
-        if self.provider_config.type == "openai_compatible":
-            # Most local OpenAI-compatible servers accept an arbitrary non-empty key.
-            return "dummy"
-        raise RuntimeError(f"Required API key env var is missing: {env_name}")
+        return _resolve_provider_api_key(self.provider_config)
 
     def _sdk_components(self) -> SimpleNamespace:
         if self._sdk is None:
@@ -211,8 +205,22 @@ class OpenAIAgentsSolverBackend:
             raise NotImplementedError(
                 f"OpenAI Agents backend does not yet support provider type: {self.provider_config.type}"
             )
+        api_key = self._resolve_api_key()
+        cache_key = (
+            id(sdk.AsyncOpenAI),
+            id(sdk.OpenAIChatCompletionsModel),
+            self.provider_config.type,
+            self.provider_config.base_url,
+            api_key,
+            float(self.provider_config.timeout_s),
+            self.solver_config.model,
+        )
+        cached = self._shared_models.get(cache_key)
+        if cached is not None:
+            self._model = cached
+            return self._model
         client = sdk.AsyncOpenAI(
-            api_key=self._resolve_api_key(),
+            api_key=api_key,
             base_url=self.provider_config.base_url,
             timeout=float(self.provider_config.timeout_s),
         )
@@ -220,6 +228,7 @@ class OpenAIAgentsSolverBackend:
             model=self.solver_config.model,
             openai_client=client,
         )
+        self._shared_models[cache_key] = self._model
         return self._model
 
     def _normalized_tool_definitions(self) -> list[dict[str, Any]]:

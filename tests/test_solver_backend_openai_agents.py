@@ -390,7 +390,9 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_solver_backend_reuses_cached_sdk_model(tmp_path, monkeypatch):
+async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_instances(
+    tmp_path, monkeypatch
+):
     episode = _sample_episode()
 
     class FakeAsyncOpenAI:
@@ -445,8 +447,34 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model(tmp_path, mo
             ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
         ),
     )
+    OpenAIAgentsSolverBackend._shared_models.clear()
 
-    backend = OpenAIAgentsSolverBackend(
+    backend_a = OpenAIAgentsSolverBackend(
+        solver_config=SolverModelConfig(
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+            replicas=1,
+            memory_mode="none",
+            summarization_mode="off",
+        ),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SolverRuntimeConfig(
+            max_turns=8,
+            tracing=True,
+            sdk_sessions_enabled=False,
+        ),
+        tool_definitions=_sample_tool_definitions(),
+        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
+        traces_dir=tmp_path / "traces",
+    )
+    backend_b = OpenAIAgentsSolverBackend(
         solver_config=SolverModelConfig(
             solver_id="solver_a",
             provider="codex_oauth",
@@ -472,11 +500,17 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model(tmp_path, mo
         traces_dir=tmp_path / "traces",
     )
 
-    await backend.run(episode, replica_index=0)
-    await backend.run(episode, replica_index=1)
+    await backend_a.run(episode, replica_index=0)
+    await backend_b.run(episode, replica_index=1)
 
     assert len(FakeAsyncOpenAI.calls) == 1
     assert len(FakeChatModel.calls) == 1
+
+
+def test_extract_turn_count_preserves_explicit_zero() -> None:
+    run_result = SimpleNamespace(_current_turn=0, raw_responses=["a", "b"])
+
+    assert backend_module._extract_turn_count(run_result) == 0
 
 
 def test_openai_agents_solver_backend_rejects_unsupported_provider():

@@ -106,6 +106,15 @@ class DatabasePools:
         await self.control_pool.close()
 
 
+async def ensure_database_pools(
+    existing: DatabasePools | None,
+    config: DatabaseConfig,
+) -> DatabasePools:
+    if existing is not None:
+        return existing
+    return await DatabasePools.create(config)
+
+
 async def smoke_test_connection(config: DatabaseConfig) -> dict[str, str]:
     """Open a single connection and return a tiny identity payload."""
 

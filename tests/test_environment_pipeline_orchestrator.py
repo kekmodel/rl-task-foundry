@@ -157,6 +157,28 @@ async def test_environment_orchestrator_injects_distinct_shuffle_seed_per_solver
     assert len(set(shuffle_seeds)) == 2
 
 
+@pytest.mark.asyncio
+async def test_environment_orchestrator_close_clears_cached_tool_executors(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    orchestrator = EnvironmentOrchestrator(
+        _config(tmp_path),
+        runtime_factory=lambda *_args: _FakeRuntime(
+            '{"customer":"Alice","day":"2026-04-12"}',
+            [],
+        ),
+        tool_executor_factory=lambda _bundle: {"noop": lambda _kwargs: {}},
+    )
+
+    await orchestrator.run_draft(draft)
+    assert orchestrator._tool_executor_cache
+
+    await orchestrator.close()
+
+    assert orchestrator._tool_executor_cache == {}
+
+
 def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> None:
     config = _config(tmp_path)
     summary = EnvironmentRolloutSummary(

@@ -18,6 +18,7 @@ from datasketch import MinHash, MinHashLSH
 import yaml
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
     EnvironmentContract,
@@ -610,17 +611,6 @@ class EnvironmentRegistryWriter:
             ),
         )
 
-    def _lookup_duplicate(self, exact_signature: str) -> sqlite3.Row | None:
-        with self._connect() as conn:
-            return conn.execute(
-                """
-                SELECT env_id, difficulty_band, filesystem_path
-                FROM environments
-                WHERE exact_signature = ?
-                """,
-                (exact_signature,),
-            ).fetchone()
-
     def _lookup_semantic_duplicate(
         self,
         *,
@@ -739,10 +729,7 @@ class EnvironmentRegistryWriter:
 
     @staticmethod
     def _jsonl_content(records: Any) -> str:
-        lines = [
-            json.dumps(record, ensure_ascii=False, sort_keys=True)
-            for record in records
-        ]
+        lines = [canonical_json(record, default=str) for record in records]
         if not lines:
             return ""
         return "\n".join(lines) + "\n"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -19,6 +18,7 @@ from rl_task_foundry.infra.sdk_helpers import (
     load_sdk_components as _shared_load_sdk_components,
     make_sdk_tool as _shared_make_sdk_tool,
     normalize_tool_definition as _normalize_tool_definition,
+    resolve_provider_api_key as _resolve_provider_api_key,
 )
 from rl_task_foundry.synthesis.prompts import (
     build_synthesis_agent_instructions,
@@ -62,10 +62,6 @@ def _build_agent(
     )
 
 
-def _load_sdk_components() -> SimpleNamespace:
-    return _shared_load_sdk_components()
-
-
 @dataclass(slots=True)
 class OpenAIAgentsSynthesisBackend:
     model_ref: ModelRef
@@ -87,17 +83,11 @@ class OpenAIAgentsSynthesisBackend:
         return self.model_ref.model
 
     def _resolve_api_key(self) -> str:
-        env_name = self.provider_config.api_key_env
-        env_value = os.environ.get(env_name)
-        if env_value:
-            return env_value
-        if self.provider_config.type == "openai_compatible":
-            return "dummy"
-        raise RuntimeError(f"Required API key env var is missing: {env_name}")
+        return _resolve_provider_api_key(self.provider_config)
 
     def _sdk_components(self) -> SimpleNamespace:
         if self._sdk is None:
-            self._sdk = _load_sdk_components()
+            self._sdk = _shared_load_sdk_components()
         return self._sdk
 
     def _build_model(self, sdk: SimpleNamespace) -> Any:

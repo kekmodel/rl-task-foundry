@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import Field, ValidationError, field_validator
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     DIFFICULTY_CRANK_ORDER,
@@ -275,19 +276,6 @@ def _placeholder_tokens(payload: object) -> list[str]:
     return sorted({token for token in _FORBIDDEN_PLACEHOLDER_TOKENS if token in serialized})
 
 
-def _preview_payload(value: object) -> object:
-    if isinstance(value, str):
-        return value[:400]
-    if isinstance(value, list):
-        return [_preview_payload(item) for item in value[:3]]
-    if isinstance(value, dict):
-        preview: dict[str, object] = {}
-        for key, item in list(value.items())[:6]:
-            preview[str(key)] = _preview_payload(item)
-        return preview
-    return value
-
-
 def _constraint_summary_payload(
     items: list[SubmitConstraintSummaryItem | dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -300,7 +288,7 @@ def _monitor_answer_snapshot(value: object) -> dict[str, object]:
             "root_type": "object",
             "slot_count": len(value),
             "field_names": list(value.keys())[:8],
-            "preview": _preview_payload(value),
+            "preview": preview_payload(value),
         }
     if isinstance(value, list):
         field_names: list[str] = []
@@ -310,13 +298,13 @@ def _monitor_answer_snapshot(value: object) -> dict[str, object]:
             "root_type": "array",
             "slot_count": len(value),
             "field_names": field_names,
-            "preview": _preview_payload(value),
+            "preview": preview_payload(value),
         }
     return {
         "root_type": type(value).__name__,
         "slot_count": 1,
         "field_names": [],
-        "preview": _preview_payload(value),
+        "preview": preview_payload(value),
     }
 
 
@@ -353,7 +341,7 @@ def _monitor_label_data(
         label_summary = payload.get("label_summary")
         raw_constraints = payload.get("constraint_summary")
         constraint_summary = (
-            _preview_payload(raw_constraints)
+            preview_payload(raw_constraints)
             if isinstance(raw_constraints, list)
             else []
         )
@@ -825,8 +813,8 @@ class SubmitDraftController:
         self._atomic_tool_calls.append(
             {
                 "tool_name": tool_name,
-                "params": _preview_payload(params),
-                "result": _preview_payload(result),
+                "params": preview_payload(params),
+                "result": preview_payload(result),
             }
         )
 
