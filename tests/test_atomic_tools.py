@@ -345,11 +345,12 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
         "async def find_customer_by_tier(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):"
         in bundle.source
     )
-    assert "async def calc_customer(conn, fn, metric, by, op, value):" in bundle.source
+    assert "async def calc_customer(conn, fn, metric=None, by=None, op=None, value=None):" in bundle.source
     assert (
-        "async def rank_customer_by_tier(conn, fn, metric, direction, limit, by, op, value, _shuffle_seed=None):"
+        "async def rank_customer_by_tier(conn, fn, metric=None, direction='desc', limit=1, by=None, op=None, value=None, _shuffle_seed=None):"
         in bundle.source
     )
+    assert 'raise ValueError("metric must be null when fn=count")' not in bundle.source
     assert "MAX_BATCH_VALUES = 128" in bundle.source
     assert "MAX_BOUNDED_RESULT_LIMIT = 100" in bundle.source
     assert "FLOAT_PRECISION = 2" in bundle.source
@@ -401,14 +402,16 @@ def test_atomic_tool_params_follow_family_patterns() -> None:
     ]
 
     calc_schema = tool_by_name["calc_order"].params_schema
-    assert calc_schema["required"] == ["fn", "metric", "by", "op", "value"]
+    assert calc_schema["required"] == ["fn", "by", "op", "value"]
     assert calc_schema["properties"]["fn"]["enum"] == ["count", "sum", "avg", "min", "max"]
     assert calc_schema["properties"]["metric"]["anyOf"][0]["enum"] == ["order_id", "customer_id", "total_amount"]
+    assert "Leave null or omit it when fn=count." in calc_schema["properties"]["metric"]["description"]
 
     rank_schema = tool_by_name["rank_order_by_customer_id"].params_schema
-    assert rank_schema["required"] == ["fn", "metric", "direction", "limit", "by", "op", "value"]
+    assert rank_schema["required"] == ["fn", "direction", "limit", "by", "op", "value"]
     assert rank_schema["properties"]["direction"]["enum"] == ["asc", "desc"]
     assert rank_schema["properties"]["limit"]["maximum"] == 100
+    assert "Leave null or omit it when fn=count." in rank_schema["properties"]["metric"]["description"]
 
 
 def test_atomic_tool_definition_sql_is_documented_as_display_only() -> None:

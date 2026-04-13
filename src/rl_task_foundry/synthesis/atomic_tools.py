@@ -614,7 +614,7 @@ def _calc_params_schema(
             ),
             "metric": _described_schema(
                 _nullable_enum_schema(metric_columns),
-                "Field to compute the statistic on. Use null when fn=count.",
+                "Field to compute the statistic on. Leave null or omit it when fn=count. Any provided metric is ignored for count.",
             ),
             "by": _described_schema(
                 _nullable_enum_schema(filter_columns),
@@ -629,7 +629,7 @@ def _calc_params_schema(
                 "Value to match against. Single value or list (for op=in). Use null for no filter.",
             ),
         },
-        required=("fn", "metric", "by", "op", "value"),
+        required=("fn", "by", "op", "value"),
     )
 
 
@@ -651,7 +651,7 @@ def _rank_params_schema(
             ),
             "metric": _described_schema(
                 _nullable_enum_schema(metric_columns),
-                "Field to compute the statistic on. Use null when fn=count.",
+                "Field to compute the statistic on. Leave null or omit it when fn=count. Any provided metric is ignored for count.",
             ),
             "direction": _described_schema(
                 {"type": "string", "enum": ["asc", "desc"]},
@@ -671,7 +671,7 @@ def _rank_params_schema(
                 "Value to match against. Single value or list (for op=in). Use null for no filter.",
             ),
         },
-        required=("fn", "metric", "direction", "limit", "by", "op", "value"),
+        required=("fn", "direction", "limit", "by", "op", "value"),
     )
 
 
@@ -1157,8 +1157,6 @@ def _render_atomic_tool_source(
         "async def _run_calc(conn, meta: dict[str, Any], fn: str, metric: Any, by: Any, op: Any, value: Any) -> Any:",
         "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
         "    if fn == 'count':",
-        "        if metric is not None:",
-        '            raise ValueError("metric must be null when fn=count")',
         "        metric_name = None",
         "    else:",
         "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",
@@ -1190,8 +1188,6 @@ def _render_atomic_tool_source(
         "async def _run_rank(conn, meta: dict[str, Any], fn: str, metric: Any, direction: str, limit: int, by: Any, op: Any, value: Any, shuffle_seed: Any) -> list[dict[str, Any]]:",
         "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
         "    if fn == 'count':",
-        "        if metric is not None:",
-        '            raise ValueError("metric must be null when fn=count")',
         "        metric_name = None",
         "    else:",
         "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",
@@ -1252,13 +1248,13 @@ def _render_tool_function(tool: AtomicToolDefinition) -> list[str]:
         ]
     if tool.family is AtomicToolFamily.CALC:
         return [
-            f"async def {tool.name}(conn, fn, metric, by, op, value):",
+            f"async def {tool.name}(conn, fn, metric=None, by=None, op=None, value=None):",
             f"    meta = {meta_literal}",
             "    return await _run_calc(conn, meta, fn, metric, by, op, value)",
             "",
         ]
     return [
-        f"async def {tool.name}(conn, fn, metric, direction, limit, by, op, value, _shuffle_seed=None):",
+        f"async def {tool.name}(conn, fn, metric=None, direction='desc', limit=1, by=None, op=None, value=None, _shuffle_seed=None):",
         f"    meta = {meta_literal}",
         "    return await _run_rank(conn, meta, fn, metric, direction, limit, by, op, value, _shuffle_seed)",
         "",
