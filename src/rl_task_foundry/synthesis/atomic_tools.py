@@ -606,31 +606,38 @@ def _calc_params_schema(
 ) -> dict[str, Any]:
     metric_columns = [column.column_name for column in _numeric_columns(table)]
     filter_columns = [column.column_name for column in _find_columns(graph, table)]
-    return _object_schema(
-        {
-            "fn": _described_schema(
-                {"type": "string", "enum": list(allowed_fns)},
-                "Statistic to compute: count, sum, avg, min, or max.",
-            ),
-            "metric": _described_schema(
-                _nullable_enum_schema(metric_columns),
-                "Field to compute the statistic on. Leave null or omit it when fn=count. Any provided metric is ignored for count.",
-            ),
-            "by": _described_schema(
-                _nullable_enum_schema(filter_columns),
-                "Field to filter on. Use null for no filter.",
-            ),
-            "op": _described_schema(
-                _nullable_enum_schema(_CALC_FILTER_OPS),
-                "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
-            ),
-            "value": _described_schema(
-                _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
-                "Value to match against. Single value or list (for op=in). Use null for no filter.",
-            ),
-        },
-        required=("fn", "by", "op", "value"),
-    )
+    properties = {
+        "fn": _described_schema(
+            {"type": "string", "enum": list(allowed_fns)},
+            "Statistic to compute: count, sum, avg, min, or max.",
+        ),
+        "metric": _described_schema(
+            _nullable_enum_schema(metric_columns),
+            "Field to compute the statistic on. Omit it or leave it null when fn=count.",
+        ),
+        "by": _described_schema(
+            _nullable_enum_schema(filter_columns),
+            "Field to filter on. Use null for no filter.",
+        ),
+        "op": _described_schema(
+            _nullable_enum_schema(_CALC_FILTER_OPS),
+            "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
+        ),
+        "value": _described_schema(
+            _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
+            "Value to match against. Single value or list (for op=in). Use null for no filter.",
+        ),
+    }
+    metric_fns = [fn for fn in allowed_fns if fn != "count"]
+    schema = _object_schema(properties, required=("fn", "by", "op", "value"))
+    if metric_columns and metric_fns:
+        schema["if"] = {"properties": {"fn": {"const": "count"}}}
+        schema["then"] = {"properties": {"metric": {"type": "null"}}}
+        schema["else"] = {
+            "required": ["metric"],
+            "properties": {"metric": {"type": "string", "enum": metric_columns}},
+        }
+    return schema
 
 
 def _rank_params_schema(
@@ -643,36 +650,46 @@ def _rank_params_schema(
 ) -> dict[str, Any]:
     metric_columns = [column.column_name for column in _numeric_columns(table)]
     filter_columns = [column.column_name for column in _find_columns(graph, table)]
-    return _object_schema(
-        {
-            "fn": _described_schema(
-                {"type": "string", "enum": list(allowed_fns)},
-                "Statistic to compute: count, sum, avg, min, or max.",
-            ),
-            "metric": _described_schema(
-                _nullable_enum_schema(metric_columns),
-                "Field to compute the statistic on. Leave null or omit it when fn=count. Any provided metric is ignored for count.",
-            ),
-            "direction": _described_schema(
-                {"type": "string", "enum": ["asc", "desc"]},
-                "Sort order: asc (smallest first) or desc (largest first).",
-            ),
-            "limit": _limit_param_schema(max_items=max_items),
-            "by": _described_schema(
-                _nullable_enum_schema(filter_columns),
-                "Field to filter on. Use null for no filter.",
-            ),
-            "op": _described_schema(
-                _nullable_enum_schema(_CALC_FILTER_OPS),
-                "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
-            ),
-            "value": _described_schema(
-                _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
-                "Value to match against. Single value or list (for op=in). Use null for no filter.",
-            ),
-        },
+    properties = {
+        "fn": _described_schema(
+            {"type": "string", "enum": list(allowed_fns)},
+            "Statistic to compute: count, sum, avg, min, or max.",
+        ),
+        "metric": _described_schema(
+            _nullable_enum_schema(metric_columns),
+            "Field to compute the statistic on. Omit it or leave it null when fn=count.",
+        ),
+        "direction": _described_schema(
+            {"type": "string", "enum": ["asc", "desc"]},
+            "Sort order: asc (smallest first) or desc (largest first).",
+        ),
+        "limit": _limit_param_schema(max_items=max_items),
+        "by": _described_schema(
+            _nullable_enum_schema(filter_columns),
+            "Field to filter on. Use null for no filter.",
+        ),
+        "op": _described_schema(
+            _nullable_enum_schema(_CALC_FILTER_OPS),
+            "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
+        ),
+        "value": _described_schema(
+            _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
+            "Value to match against. Single value or list (for op=in). Use null for no filter.",
+        ),
+    }
+    metric_fns = [fn for fn in allowed_fns if fn != "count"]
+    schema = _object_schema(
+        properties,
         required=("fn", "direction", "limit", "by", "op", "value"),
     )
+    if metric_columns and metric_fns:
+        schema["if"] = {"properties": {"fn": {"const": "count"}}}
+        schema["then"] = {"properties": {"metric": {"type": "null"}}}
+        schema["else"] = {
+            "required": ["metric"],
+            "properties": {"metric": {"type": "string", "enum": metric_columns}},
+        }
+    return schema
 
 
 def _object_schema(
@@ -1157,6 +1174,8 @@ def _render_atomic_tool_source(
         "async def _run_calc(conn, meta: dict[str, Any], fn: str, metric: Any, by: Any, op: Any, value: Any) -> Any:",
         "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
         "    if fn == 'count':",
+        "        if metric is not None:",
+        '            raise ValueError("metric must be omitted when fn=count")',
         "        metric_name = None",
         "    else:",
         "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",
@@ -1188,6 +1207,8 @@ def _render_atomic_tool_source(
         "async def _run_rank(conn, meta: dict[str, Any], fn: str, metric: Any, direction: str, limit: int, by: Any, op: Any, value: Any, shuffle_seed: Any) -> list[dict[str, Any]]:",
         "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
         "    if fn == 'count':",
+        "        if metric is not None:",
+        '            raise ValueError("metric must be omitted when fn=count")',
         "        metric_name = None",
         "    else:",
         "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",

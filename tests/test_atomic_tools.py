@@ -350,7 +350,7 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
         "async def rank_customer_by_tier(conn, fn, metric=None, direction='desc', limit=1, by=None, op=None, value=None, _shuffle_seed=None):"
         in bundle.source
     )
-    assert 'raise ValueError("metric must be null when fn=count")' not in bundle.source
+    assert 'raise ValueError("metric must be omitted when fn=count")' in bundle.source
     assert "MAX_BATCH_VALUES = 128" in bundle.source
     assert "MAX_BOUNDED_RESULT_LIMIT = 100" in bundle.source
     assert "FLOAT_PRECISION = 2" in bundle.source
@@ -402,16 +402,24 @@ def test_atomic_tool_params_follow_family_patterns() -> None:
     ]
 
     calc_schema = tool_by_name["calc_order"].params_schema
+    assert calc_schema["type"] == "object"
     assert calc_schema["required"] == ["fn", "by", "op", "value"]
     assert calc_schema["properties"]["fn"]["enum"] == ["count", "sum", "avg", "min", "max"]
-    assert calc_schema["properties"]["metric"]["anyOf"][0]["enum"] == ["order_id", "customer_id", "total_amount"]
-    assert "Leave null or omit it when fn=count." in calc_schema["properties"]["metric"]["description"]
+    assert calc_schema["if"] == {"properties": {"fn": {"const": "count"}}}
+    assert calc_schema["then"] == {"properties": {"metric": {"type": "null"}}}
+    assert calc_schema["else"]["required"] == ["metric"]
+    assert calc_schema["else"]["properties"]["metric"]["enum"] == ["order_id", "customer_id", "total_amount"]
 
     rank_schema = tool_by_name["rank_order_by_customer_id"].params_schema
+    assert rank_schema["type"] == "object"
     assert rank_schema["required"] == ["fn", "direction", "limit", "by", "op", "value"]
+    assert rank_schema["properties"]["fn"]["enum"] == ["count", "sum", "avg", "min", "max"]
     assert rank_schema["properties"]["direction"]["enum"] == ["asc", "desc"]
     assert rank_schema["properties"]["limit"]["maximum"] == 100
-    assert "Leave null or omit it when fn=count." in rank_schema["properties"]["metric"]["description"]
+    assert rank_schema["if"] == {"properties": {"fn": {"const": "count"}}}
+    assert rank_schema["then"] == {"properties": {"metric": {"type": "null"}}}
+    assert rank_schema["else"]["required"] == ["metric"]
+    assert rank_schema["else"]["properties"]["metric"]["enum"] == ["order_id", "customer_id", "total_amount"]
 
 
 def test_atomic_tool_definition_sql_is_documented_as_display_only() -> None:
@@ -499,10 +507,12 @@ def test_calc_and_rank_filter_fields_follow_graph_foreign_keys_not_column_flags(
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(graph, db_id="sakila")
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
-    calc_by_enum = tool_by_name["calc_order"].params_schema["properties"]["by"]["anyOf"][0]["enum"]
-    rank_by_enum = tool_by_name["rank_order_by_parent_id"].params_schema["properties"]["by"]["anyOf"][0]["enum"]
-    calc_value_variants = tool_by_name["calc_order"].params_schema["properties"]["value"]["anyOf"]
-    rank_value_variants = tool_by_name["rank_order_by_parent_id"].params_schema["properties"]["value"]["anyOf"]
+    calc_schema = tool_by_name["calc_order"].params_schema
+    rank_schema = tool_by_name["rank_order_by_parent_id"].params_schema
+    calc_by_enum = calc_schema["properties"]["by"]["anyOf"][0]["enum"]
+    rank_by_enum = rank_schema["properties"]["by"]["anyOf"][0]["enum"]
+    calc_value_variants = calc_schema["properties"]["value"]["anyOf"]
+    rank_value_variants = rank_schema["properties"]["value"]["anyOf"]
 
     assert "parent_id" in calc_by_enum
     assert "parent_id" in rank_by_enum
