@@ -121,8 +121,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Calling submit_draft without anchor_entity is always wrong." not in instructions
     assert "Do not call submit_draft without anchor_entity." in instructions
     assert "Do not write SQL, draft SQL, or include SQL queries in the submission." in instructions
-    assert "label_summary" in instructions
-    assert "explicitly includes the selected topic phrase" in instructions
+    assert "label_summary" not in instructions
     assert "anchor_entity must be a flat JSON object" in instructions
     assert "question must already be the full user-facing prompt in this exact shape" in instructions
     assert "The JSON inside the <entity> block must exactly match anchor_entity" in instructions

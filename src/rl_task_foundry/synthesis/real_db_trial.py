@@ -154,6 +154,14 @@ class RealDbTrialRunner:
             flow_kind="real_db_trial",
             flow_id=flow_id,
         )
+        phase_monitor.emit(
+            phase="trial",
+            status="started",
+            expected_contract={"db_id": db_id, "requested_topic": topic},
+            actual_data={"output_root": output_root},
+            checks={"debug_root_ready": debug_root.exists()},
+            diagnostics={},
+        )
         runtime = self._synthesis_runtime_for_trial(debug_traces_dir, phase_monitor)
         try:
             draft = await runtime.synthesize_environment_draft(
@@ -161,6 +169,23 @@ class RealDbTrialRunner:
                 requested_topic=topic,
             )
         except SynthesisArtifactGenerationError as exc:
+            phase_monitor.emit(
+                phase="synthesis",
+                status="failed",
+                expected_contract={"accepted_draft_required": True},
+                actual_data={"db_id": db_id, "requested_topic": topic},
+                checks={"accepted_draft_present": False},
+                diagnostics={
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "attempt_outcomes": [attempt.outcome.value for attempt in exc.attempts],
+                    "error_codes": list(
+                        exc.last_artifact_diagnostics.error_codes
+                        if exc.last_artifact_diagnostics is not None
+                        else ()
+                    ),
+                },
+            )
             summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
@@ -186,6 +211,19 @@ class RealDbTrialRunner:
             phase_monitor.close()
             return summary
         except SynthesisPhaseExecutionError as exc:
+            phase_monitor.emit(
+                phase="synthesis",
+                status="failed",
+                expected_contract={"accepted_draft_required": True},
+                actual_data={"db_id": db_id, "requested_topic": topic},
+                checks={"accepted_draft_present": False},
+                diagnostics={
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "phase": exc.phase,
+                    "backend_failures": list(_encode_backend_failures(exc.backend_failures)),
+                },
+            )
             summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
@@ -207,6 +245,18 @@ class RealDbTrialRunner:
             phase_monitor.close()
             return summary
         except SynthesisProviderUnavailableError as exc:
+            phase_monitor.emit(
+                phase="synthesis",
+                status="failed",
+                expected_contract={"accepted_draft_required": True},
+                actual_data={"db_id": db_id, "requested_topic": topic},
+                checks={"accepted_draft_present": False},
+                diagnostics={
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "phase": exc.phase,
+                },
+            )
             summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
@@ -227,6 +277,17 @@ class RealDbTrialRunner:
             phase_monitor.close()
             return summary
         except SynthesisRuntimeError as exc:
+            phase_monitor.emit(
+                phase="synthesis",
+                status="failed",
+                expected_contract={"accepted_draft_required": True},
+                actual_data={"db_id": db_id, "requested_topic": topic},
+                checks={"accepted_draft_present": False},
+                diagnostics={
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
             summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,

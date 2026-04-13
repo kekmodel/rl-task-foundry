@@ -22,7 +22,6 @@ from rl_task_foundry.synthesis.contracts import (
     flatten_difficulty_vector,
     is_person_like_identifier,
     normalize_words,
-    topic_tokens,
 )
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.prompts import difficulty_axis_feedback
@@ -54,7 +53,6 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
     QUESTION_BODY_REQUIRED = "question_body_required"
     CONSTRAINT_SUMMARY_REQUIRED = "constraint_summary_required"
-    LABEL_SUMMARY_REQUIRED = "label_summary_required"
     PLACEHOLDER_TOKENS_NOT_ALLOWED = "placeholder_tokens_not_allowed"
     QUESTION_INTERNAL_SCHEMA_LEAK = "question_internal_schema_leak"
     QUESTION_RAW_IDENTIFIER_LEAK = "question_raw_identifier_leak"
@@ -75,7 +73,6 @@ class SubmitDraftErrorCode(StrEnum):
     LABEL_IDENTIFIER_CHAIN_FORBIDDEN = "label_identifier_chain_forbidden"
     LABEL_OPAQUE_IDENTIFIER_FORBIDDEN = "label_opaque_identifier_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
-    SELECTED_TOPIC_MISALIGNED = "selected_topic_misaligned"
     DIFFICULTY_WEAKENED = "difficulty_weakened"
     REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED = "required_difficulty_axis_not_strengthened"
     REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED = "required_difficulty_axis_not_relaxed"
@@ -116,7 +113,6 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_OPAQUE_IDENTIFIER_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
-        SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED,
         SubmitDraftErrorCode.DIFFICULTY_WEAKENED,
         SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED,
         SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED,
@@ -186,10 +182,6 @@ class SubmitDraftPayload(StrictModel):
         min_length=1,
         description="List of grounded hard constraints or tie-break rules expressed in plain language.",
     )
-    label_summary: str = Field(
-        min_length=1,
-        description="Short English summary of why the canonical answer is grounded and unique.",
-    )
 
     @field_validator("canonical_answer_json")
     @classmethod
@@ -203,7 +195,7 @@ class SubmitDraftPayload(StrictModel):
             raise ValueError("canonical_answer_json must be a valid JSON string") from exc
         return _ParsedCanonicalAnswerJson(normalized, parsed=parsed)
 
-    @field_validator("topic", "question", "label_summary")
+    @field_validator("topic", "question")
     @classmethod
     def _validate_non_blank_text(cls, value: str) -> str:
         normalized = value.strip()
@@ -385,18 +377,15 @@ def _monitor_label_data(
             "canonical_answer_root_type": None,
             "canonical_answer_slot_count": None,
             "canonical_answer_field_names": [],
-            "label_summary": None,
             "constraint_summary": [],
         }
 
     if isinstance(payload, SubmitDraftPayload):
         canonical_answer = payload.canonical_answer
-        label_summary = payload.label_summary
         constraint_summary = _constraint_summary_payload(payload.constraint_summary)
     else:
         canonical_answer = None
         raw_canonical = payload.get("canonical_answer_json")
-        label_summary = payload.get("label_summary")
         raw_constraints = payload.get("constraint_summary")
         constraint_summary = (
             _preview_runtime_payload(raw_constraints, config=config)
@@ -429,7 +418,6 @@ def _monitor_label_data(
             if canonical_answer is not None
             else None
         ),
-        "label_summary": label_summary,
         "constraint_summary": constraint_summary,
     }
 
@@ -477,11 +465,6 @@ def _label_change_summary(
         ),
         "constraint_count_delta": (
             len(current_constraint_summary) - len(previous_constraint_summary)
-            if previous is not None
-            else None
-        ),
-        "label_summary_changed": (
-            previous.get("label_summary") != current.get("label_summary")
             if previous is not None
             else None
         ),
@@ -1047,22 +1030,6 @@ def _split_entity_wrapped_prompt(
     return anchor_entity, body, None
 
 
-def _label_summary_matches_selected_topic(
-    *,
-    selected_topic: str,
-    label_summary: str,
-    min_token_length: int,
-) -> bool:
-    selected_topic_tokens = topic_tokens(
-        selected_topic,
-        min_token_length=min_token_length,
-    )
-    if not selected_topic_tokens:
-        return True
-    normalized_summary = normalize_words(label_summary, lowercase=True)
-    return all(token in normalized_summary for token in selected_topic_tokens)
-
-
 def _person_like_anchor_aliases(anchor_entity: dict[str, object]) -> tuple[str, ...]:
     aliases: list[str] = []
     for raw_key in anchor_entity:
@@ -1351,7 +1318,6 @@ class SubmitDraftController:
                 "canonical_answer_json": payload.canonical_answer_json,
                 "anchor_entity": payload.anchor_entity,
                 "question": payload.question,
-                "label_summary": payload.label_summary,
                 "constraint_summary": _constraint_summary_payload(payload.constraint_summary),
             }
         )
@@ -1476,13 +1442,6 @@ class SubmitDraftController:
             )
         ):
             error_codes.append(SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE)
-        if not _label_summary_matches_selected_topic(
-            selected_topic=payload.topic,
-            label_summary=payload.label_summary,
-            min_token_length=self.config.synthesis.runtime.selected_topic_min_token_length,
-        ):
-            error_codes.append(SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED)
-
         if (
             not self.attempts
             and self.required_axis is None
@@ -1731,7 +1690,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.CONSTRAINT_SUMMARY_REQUIRED: (
                 "Rejected. constraint_summary must include at least one grounded constraint or tie-break rule."
             ),
-            SubmitDraftErrorCode.LABEL_SUMMARY_REQUIRED: "Rejected. label_summary is required.",
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. canonical_answer_json must be a valid JSON string."
             ),
@@ -1794,9 +1752,6 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
                 "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."
-            ),
-            SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED: (
-                "Rejected. label_summary must explicitly name the selected topic and keep the draft semantically centered on that topic."
             ),
             SubmitDraftErrorCode.DIFFICULTY_WEAKENED: (
                 "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."
@@ -2095,7 +2050,7 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         description=(
             "Submit a grounded RLVR task draft after inspecting real database rows with tools. "
             "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
-            "natural user-facing question, constraint summary, and label summary. "
+            "natural user-facing question, and constraint summary. "
             "Use only tool-observed evidence. Do not write SQL, do not invent hidden joins, and do not include SQL queries in the submission. "
             "Trace many relationships and interesting grounded paths with tools first, then choose one path and build a unique, verifiable label from that path. "
             "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "
@@ -2105,7 +2060,6 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "Do not call submit_draft until anchor_entity is present and final for that draft. After the first valid self anchor is established, keep that same anchor_entity across retries. "
             "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
             "The JSON inside the <entity> block must exactly match anchor_entity. "
-            "label_summary must be English, must explicitly include the selected topic phrase, and must explain why the label is grounded and unique. "
             "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "
             "Do not submit opaque identifier values such as UUIDs, hashes, encrypted tokens, or random-looking reference strings as answer labels, even if they were observed. "
             "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "

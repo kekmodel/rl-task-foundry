@@ -17,6 +17,10 @@ class JsonlFileSink:
     path: Path
     _handle: TextIO | None = field(default=None, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.touch(exist_ok=True)
+
     def write_record(self, payload: dict[str, object]) -> None:
         handle = self._ensure_handle()
         handle.write(canonical_json(payload, default=str))
@@ -38,6 +42,5 @@ class JsonlFileSink:
 
     def _ensure_handle(self) -> TextIO:
         if self._handle is None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
             self._handle = self.path.open("a", encoding="utf-8", buffering=1)
         return self._handle

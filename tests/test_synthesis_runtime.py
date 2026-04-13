@@ -27,7 +27,6 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftPayload,
     _count_semantics_present,
-    _label_summary_matches_selected_topic,
     _mentions_global_scope,
     _next_difficulty_crank_axis,
     _uses_unanchored_global_ranking,
@@ -290,7 +289,6 @@ def _accepted_payload() -> SubmitDraftPayload:
                     "summary": "배정 매장은 하나여야 한다.",
                 }
             ],
-            "label_summary": "The assignment label is grounded in customer lookup and count evidence.",
         }
     )
 
@@ -324,7 +322,6 @@ def _count_without_count_evidence_payload() -> SubmitDraftPayload:
                     "summary": "Answer must be about the anchored customer.",
                 }
             ],
-            "label_summary": "The assignment label is grounded in anchored customer evidence.",
         }
     )
 
@@ -352,7 +349,6 @@ def _ungrounded_text_payload(*, customer_id: int = 1) -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer's own records.",
                 }
             ],
-            "label_summary": "The record history label is grounded in the selected topic and anchored evidence.",
         }
     )
 
@@ -380,7 +376,6 @@ def _global_count_payload() -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer.",
                 }
             ],
-            "label_summary": "The assignment label is grounded in the selected topic and anchored customer evidence.",
         }
     )
 
@@ -408,7 +403,6 @@ def _id_chain_payload() -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer.",
                 }
             ],
-            "label_summary": "The assignment label is grounded in the selected topic and anchored payment evidence.",
         }
     )
 
@@ -436,7 +430,6 @@ def _opaque_identifier_payload() -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer.",
                 }
             ],
-            "label_summary": "The record history label is grounded in the selected topic and anchored evidence.",
         }
     )
 
@@ -459,19 +452,6 @@ def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
 
     with pytest.raises(ValidationError):
         SubmitDraftPayload.model_validate(payload)
-
-
-def test_selected_topic_matching_normalizes_word_separators() -> None:
-    assert _label_summary_matches_selected_topic(
-        selected_topic="bundle_selection",
-        label_summary="This bundle selection label is grounded in observed rows.",
-        min_token_length=3,
-    )
-    assert _label_summary_matches_selected_topic(
-        selected_topic="bundle_selection",
-        label_summary="This bundle_selection label is grounded in observed rows.",
-        min_token_length=3,
-    )
 
 
 def test_next_difficulty_crank_axis_rotates_after_two_attempts() -> None:
@@ -836,7 +816,7 @@ async def test_synthesis_runtime_close_clears_cached_tool_executors(tmp_path: Pa
 
 def test_submit_draft_payload_rejects_blank_text() -> None:
     payload = _accepted_payload().model_dump(mode="json")
-    payload["label_summary"] = "   "
+    payload["question"] = "   "
 
     with pytest.raises(ValidationError):
         SubmitDraftPayload.model_validate(payload)

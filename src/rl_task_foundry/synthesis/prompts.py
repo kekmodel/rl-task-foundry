@@ -107,7 +107,6 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
             "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
             "The JSON inside the <entity> block must exactly match anchor_entity, including multi-column primary keys when present. "
-            "Make label_summary an English explanation that explicitly includes the selected topic phrase and explains why the label is grounded and unique. "
             "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. "
             "If the label returns a count, ground that count with an explicit count or aggregate observation. "
             "For self-scoped count answers, use anchor-scoped count evidence rather than a global database total. "
