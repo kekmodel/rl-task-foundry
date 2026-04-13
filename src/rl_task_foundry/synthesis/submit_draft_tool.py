@@ -25,7 +25,6 @@ from rl_task_foundry.synthesis.contracts import (
     normalize_words,
 )
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
-from rl_task_foundry.synthesis.prompts import difficulty_axis_feedback
 
 if TYPE_CHECKING:
     from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
@@ -239,21 +238,6 @@ class SubmitDraftAttemptRecord:
     total_solver_runs: int | None = None
 
 
-def _next_difficulty_crank_axis(history: list[DifficultyAxis]) -> DifficultyAxis:
-    if not history:
-        return DifficultyAxis.SEARCH_COST
-    last_axis = history[-1]
-    repeat_count = 1
-    for axis in reversed(history[:-1]):
-        if axis != last_axis:
-            break
-        repeat_count += 1
-    if repeat_count < 2:
-        return last_axis
-    last_index = DIFFICULTY_CRANK_ORDER.index(last_axis)
-    return DIFFICULTY_CRANK_ORDER[(last_index + 1) % len(DIFFICULTY_CRANK_ORDER)]
-
-
 def _merge_strongest_difficulty_vector(
     previous: DifficultyVectorContract,
     current: DifficultyVectorContract,
@@ -277,6 +261,24 @@ def _weakened_difficulty_axes(
         if current_flat.get(axis, 0.0) < previous_value:
             weakened.append(axis.value)
     return weakened
+
+
+def _difficulty_axis_deltas(
+    *,
+    previous: DifficultyVectorContract,
+    current: DifficultyVectorContract,
+) -> tuple[list[DifficultyAxis], list[DifficultyAxis]]:
+    previous_flat = flatten_difficulty_vector(previous)
+    current_flat = flatten_difficulty_vector(current)
+    increased: list[DifficultyAxis] = []
+    decreased: list[DifficultyAxis] = []
+    for axis, previous_value in previous_flat.items():
+        current_value = current_flat.get(axis, previous_value)
+        if current_value > previous_value:
+            increased.append(axis)
+        elif current_value < previous_value:
+            decreased.append(axis)
+    return increased, decreased
 
 
 def _placeholder_tokens(payload: object) -> list[str]:
@@ -799,20 +801,6 @@ def _count_semantics_present(
     return not combined_tokens.isdisjoint(_COUNT_SEMANTIC_TOKENS)
 
 
-def _estimated_constraint_count(question_body: str | None) -> int:
-    if not question_body:
-        return 0
-    normalized = normalize_words(question_body, lowercase=True)
-    count = 0
-    if any(token in normalized for token in _TEMPORAL_CONSTRAINT_TOKENS):
-        count += 1
-    if any(token in normalized for token in ("only", "exactly", "must", "should", "tie", "unique")):
-        count += 1
-    if any(token in normalized for token in ("latest", "earliest", "highest", "lowest", "first", "last")):
-        count += 1
-    return count
-
-
 def _observed_count_evidence(tool_calls: list[dict[str, object]]) -> bool:
     for record in tool_calls:
         if _tool_call_is_count_evidence(record):
@@ -922,51 +910,17 @@ def _field_preservation_guidance(label_data: dict[str, object] | None) -> str:
 
 def _too_easy_retry_guidance(
     *,
-    axis: DifficultyAxis,
     label_data: dict[str, object] | None,
 ) -> str:
     preserve_guidance = _field_preservation_guidance(label_data)
-    shared_prefix = (
-        " Stay inside the same connected anchored neighborhood and keep the same anchored user need."
-        f"{preserve_guidance}"
-    )
-    if axis is DifficultyAxis.SEARCH_COST:
-        return (
-            f"{shared_prefix} Add exactly one more connected grounded fact or one more anchored hop on the same path before you change anything else. "
-            "Prefer extending the current readable path over starting a new path. "
-            "Do not replace the current readable path with a disconnected lookup, an id-only fallback, or a simpler global count."
-        )
-    if axis is DifficultyAxis.SOLUTION_SPACE:
-        return (
-            f"{shared_prefix} Keep the current connected path and add one more grounded slot or one more connected ordered item from that same path. "
-            "Do not throw away the current readable answer structure just to produce a different label."
-        )
     return (
-        f"{shared_prefix} Keep the current connected path and add one more grounded rule, tie-breaker, or filter on that same path. "
-        "Do not reset to a different path or simplify back to identifiers while tightening the constraints."
+        " Stay inside the same connected anchored neighborhood and keep the same anchored user need."
+        f"{preserve_guidance} Choose exactly one axis from the observed data and current label. "
+        "Use search_cost if the path is too shallow and needs one more connected grounded hop or fact. "
+        "Use solution_space if the answer needs one more grounded slot or one more connected ordered item. "
+        "Use constraint_density if the same path needs one more grounded rule, tie-breaker, or filter. "
+        "Do not replace the current readable path with a disconnected lookup, an id-only fallback, or a simpler global count."
     )
-
-
-def _axis_to_relax_for_too_hard(
-    *,
-    answer: object,
-    constraint_count: int,
-    difficulty_vector: DifficultyVectorContract,
-    constraint_density_relax_threshold: int,
-) -> DifficultyAxis:
-    if _answer_has_multi_item_collection(answer):
-        return DifficultyAxis.SOLUTION_SPACE
-    if constraint_count > constraint_density_relax_threshold:
-        return DifficultyAxis.CONSTRAINT_DENSITY
-    ranked_axes = sorted(
-        flatten_difficulty_vector(difficulty_vector).items(),
-        key=lambda item: (
-            item[1],
-            2 if item[0] is DifficultyAxis.SEARCH_COST else 1 if item[0] is DifficultyAxis.SOLUTION_SPACE else 0,
-        ),
-        reverse=True,
-    )
-    return ranked_axes[0][0]
 
 
 _ENTITY_PROMPT_RE = re.compile(
@@ -1121,10 +1075,9 @@ class SubmitDraftController:
     strongest_difficulty_vector: DifficultyVectorContract = field(
         default_factory=DifficultyVectorContract
     )
-    difficulty_crank_history: list[DifficultyAxis] = field(default_factory=list)
     required_axis: DifficultyAxis | None = None
     required_axis_mode: DifficultyAdjustmentMode | None = None
-    required_axis_reference_value: float | None = None
+    required_axis_reference_vector: DifficultyVectorContract | None = None
     last_quality_gate_status: str | None = None
     last_quality_gate_pass_rate: float | None = None
     _atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
@@ -1132,7 +1085,6 @@ class SubmitDraftController:
     _tool_call_count_at_last_submission: int = field(default=0, init=False)
     _last_label_signature: str | None = field(default=None, init=False)
     _last_label_slot_count: int | None = field(default=None, init=False)
-    _last_constraint_count: int | None = field(default=None, init=False)
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
     _last_primary_error_code: SubmitDraftErrorCode | None = field(default=None, init=False)
@@ -1330,7 +1282,7 @@ class SubmitDraftController:
             and not _mentions_global_scope(question_body)
         ):
             error_codes.append(SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE)
-        constraint_count = _estimated_constraint_count(question_body)
+        constraint_count = 0
         label_signature = canonical_json(canonical_answer, default=str)
         label_slot_count = _answer_slot_count(canonical_answer)
         blank_paths = _blank_string_paths(canonical_answer)
@@ -1438,66 +1390,27 @@ class SubmitDraftController:
         ):
             error_codes.append(SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD)
 
-        weakened_axes = _weakened_difficulty_axes(
-            previous=self.strongest_difficulty_vector,
+        reference_vector = self.required_axis_reference_vector or self.strongest_difficulty_vector
+        increased_axes, decreased_axes = _difficulty_axis_deltas(
+            previous=reference_vector,
             current=payload.difficulty_vector,
         )
-        allowed_weaken_axis = (
-            self.required_axis.value
-            if self.required_axis is not None
-            and self.required_axis_mode is DifficultyAdjustmentMode.RELAX
-            else None
-        )
-        disallowed_weakened_axes = [
-            axis for axis in weakened_axes if axis != allowed_weaken_axis
-        ]
-        if disallowed_weakened_axes:
-            error_codes.append(SubmitDraftErrorCode.DIFFICULTY_WEAKENED)
-        if (
-            self.required_axis is not None
-            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
-        ):
-            current_axis_value = getattr(payload.difficulty_vector, self.required_axis.value)
-            reference_axis_value = (
-                self.required_axis_reference_value
-                if self.required_axis_reference_value is not None
-                else getattr(self.strongest_difficulty_vector, self.required_axis.value)
-            )
-            if current_axis_value <= reference_axis_value:
+        self.required_axis = None
+        if self.required_axis_mode is None:
+            if decreased_axes:
+                error_codes.append(SubmitDraftErrorCode.DIFFICULTY_WEAKENED)
+        elif self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN:
+            if decreased_axes or len(increased_axes) != 1:
                 error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED)
-        if (
-            self.required_axis is not None
-            and self.required_axis_mode is DifficultyAdjustmentMode.RELAX
-        ):
-            current_axis_value = getattr(payload.difficulty_vector, self.required_axis.value)
-            reference_axis_value = (
-                self.required_axis_reference_value
-                if self.required_axis_reference_value is not None
-                else getattr(self.strongest_difficulty_vector, self.required_axis.value)
-            )
-            if current_axis_value >= reference_axis_value:
+            else:
+                self.required_axis = increased_axes[0]
+                if self._last_label_signature is not None and label_signature == self._last_label_signature:
+                    error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
+        elif self.required_axis_mode is DifficultyAdjustmentMode.RELAX:
+            if increased_axes or len(decreased_axes) != 1:
                 error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED)
-        if (
-            self.required_axis is not None
-            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
-            and self._last_label_signature is not None
-            and label_signature == self._last_label_signature
-        ):
-            error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
-        if (
-            self.required_axis is DifficultyAxis.SOLUTION_SPACE
-            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
-            and self._last_label_slot_count is not None
-            and label_slot_count <= self._last_label_slot_count
-        ):
-            error_codes.append(SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED)
-        if (
-            self.required_axis is DifficultyAxis.CONSTRAINT_DENSITY
-            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
-            and self._last_constraint_count is not None
-            and constraint_count <= self._last_constraint_count
-        ):
-            error_codes.append(SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED)
+            else:
+                self.required_axis = decreased_axes[0]
 
         if error_codes:
             deduped_error_codes = list(dict.fromkeys(error_codes))
@@ -1549,7 +1462,6 @@ class SubmitDraftController:
         self._tool_call_count_at_last_submission = len(self._raw_atomic_tool_calls)
         self._last_label_signature = label_signature
         self._last_label_slot_count = label_slot_count
-        self._last_constraint_count = constraint_count
         self.strongest_difficulty_vector = _merge_strongest_difficulty_vector(
             self.strongest_difficulty_vector,
             payload.difficulty_vector,
@@ -1587,14 +1499,10 @@ class SubmitDraftController:
 
         attempts_left_after = self.submissions_left() - 1
         if quality_gate_summary.status is TaskQualityGateStatus.REJECT_TOO_EASY:
-            requested_axis = _next_difficulty_crank_axis(self.difficulty_crank_history)
-            self.required_axis = requested_axis
+            self.required_axis = None
             self.required_axis_mode = DifficultyAdjustmentMode.STRENGTHEN
-            self.difficulty_crank_history.append(requested_axis)
-            strongest_axis_value = getattr(self.strongest_difficulty_vector, requested_axis.value)
-            self.required_axis_reference_value = strongest_axis_value
+            self.required_axis_reference_vector = self.strongest_difficulty_vector
             strengthening_guidance = _too_easy_retry_guidance(
-                axis=requested_axis,
                 label_data=_monitor_label_data(payload, config=self.config),
             )
             return self._record_rejection(
@@ -1602,9 +1510,10 @@ class SubmitDraftController:
                 message=(
                     "Rejected. solver pass rate "
                     f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
-                    f"Crank {requested_axis.value}. {difficulty_axis_feedback(requested_axis)} "
+                    "Choose exactly one difficulty axis yourself from the observed data and current label. "
+                    "Increase exactly one of search_cost, solution_space, or constraint_density above the previous level, and leave the other two unchanged. "
                     "Keep the same anchored user need and preserve the other two axes at least as strong as before. "
-                    f"Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that axis above {strongest_axis_value:.1f} with the smallest grounded step you can justify before resubmitting. "
+                    "Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that one axis before resubmitting. "
                     f"{strengthening_guidance} "
                     f"{max(0, attempts_left_after)} attempts left."
                 ),
@@ -1612,30 +1521,23 @@ class SubmitDraftController:
                 pass_rate=quality_gate_summary.pass_rate,
                 matched_solver_runs=quality_gate_summary.matched_solver_runs,
                 total_solver_runs=quality_gate_summary.total_solver_runs,
-                diagnostics={"requested_axis": requested_axis.value},
+                diagnostics={"requested_axis": None},
                 payload=payload,
                 search_cost_observations=search_cost_observations,
             )
 
-        requested_axis = _axis_to_relax_for_too_hard(
-            answer=canonical_answer,
-            constraint_count=constraint_count,
-            difficulty_vector=payload.difficulty_vector,
-            constraint_density_relax_threshold=(
-                self.config.synthesis.runtime.constraint_density_relax_threshold
-            ),
-        )
-        self.required_axis = requested_axis
+        self.required_axis = None
         self.required_axis_mode = DifficultyAdjustmentMode.RELAX
-        self.required_axis_reference_value = getattr(payload.difficulty_vector, requested_axis.value)
+        self.required_axis_reference_vector = payload.difficulty_vector
         return self._record_rejection(
             submission_index=submission_index,
             message=(
                 "Rejected. solver pass rate "
                 f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
                 "This draft is too hard for the configured band. "
-                f"Reduce only {requested_axis.value} by one grounded step while keeping the same anchored user need and preserving the other two axes. "
-                "Prefer the smallest simplification that keeps the task useful, such as shrinking a multi-item set to one item, removing one tie-breaker, or shortening one evidence hop before changing topic or anchor. "
+                "Choose exactly one difficulty axis yourself from the current label and observed data. "
+                "Reduce exactly one of search_cost, solution_space, or constraint_density by one grounded step, and leave the other two unchanged. "
+                "Keep the same anchored user need while simplifying only that one axis before changing topic or anchor. "
                 f"{max(0, attempts_left_after)} attempts left."
             ),
             error_codes=[SubmitDraftErrorCode.REJECT_TOO_HARD],
@@ -1644,7 +1546,7 @@ class SubmitDraftController:
             total_solver_runs=quality_gate_summary.total_solver_runs,
             diagnostics={
                 "terminal_rejection": False,
-                "requested_axis": requested_axis.value,
+                "requested_axis": None,
             },
             payload=payload,
             search_cost_observations=search_cost_observations,
@@ -1795,7 +1697,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
         ):
             primary += _too_easy_retry_guidance(
-                axis=self.required_axis or DifficultyAxis.SEARCH_COST,
                 label_data=self._last_monitored_label_data,
             )
         if error_codes and error_codes[0] is SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT:
@@ -2013,9 +1914,12 @@ class SubmitDraftController:
                 "required_axis_mode": (
                     self.required_axis_mode.value if self.required_axis_mode is not None else None
                 ),
-                "required_axis_reference_value": self.required_axis_reference_value,
+                "required_axis_reference_vector": (
+                    self.required_axis_reference_vector.model_dump(mode="json")
+                    if self.required_axis_reference_vector is not None
+                    else None
+                ),
                 "locked_anchor_entity": self._locked_anchor_entity,
-                "difficulty_crank_history": [axis.value for axis in self.difficulty_crank_history],
                 "recent_tool_calls": self._atomic_tool_calls[
                     -self.config.synthesis.runtime.diagnostic_item_limit :
                 ],

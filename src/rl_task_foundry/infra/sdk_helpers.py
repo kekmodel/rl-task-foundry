@@ -175,9 +175,12 @@ def make_sdk_tool(
         payload = json.loads(input_json) if input_json else {}
         if not isinstance(payload, dict):
             raise ValueError("Tool input must be a JSON object")
-        result = executor(payload)
-        if hasattr(result, "__await__"):
-            result = await result
+        try:
+            result = executor(payload)
+            if hasattr(result, "__await__"):
+                result = await result
+        except Exception as exc:
+            result = f"Tool error: {type(exc).__name__}: {exc}"
         if after_invoke is not None:
             callback_result = after_invoke(str(definition["name"]), payload, result)
             if hasattr(callback_result, "__await__"):

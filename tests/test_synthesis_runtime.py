@@ -18,7 +18,6 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
     AtomicToolResultMode,
 )
-from rl_task_foundry.synthesis.contracts import DifficultyAxis
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
@@ -28,7 +27,6 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftPayload,
     _count_semantics_present,
     _mentions_global_scope,
-    _next_difficulty_crank_axis,
     _ungrounded_answer_strings,
     _uses_unanchored_global_ranking,
 )
@@ -514,14 +512,6 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
     assert "constraint_summary" not in required_fields
 
 
-def test_next_difficulty_crank_axis_rotates_after_two_attempts() -> None:
-    assert _next_difficulty_crank_axis([]) is DifficultyAxis.SEARCH_COST
-    assert _next_difficulty_crank_axis([DifficultyAxis.SEARCH_COST]) is DifficultyAxis.SEARCH_COST
-    assert _next_difficulty_crank_axis(
-        [DifficultyAxis.SEARCH_COST, DifficultyAxis.SEARCH_COST]
-    ) is DifficultyAxis.SOLUTION_SPACE
-
-
 def test_count_semantics_present_does_not_match_account_substrings() -> None:
     assert not _count_semantics_present({"customer_id": 360}, "제 계정 정보를 알려주세요.")
 
@@ -839,13 +829,13 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
 
     message = await controller.submit(_too_easy_readable_payload())
 
-    assert "Crank search_cost." in message
+    assert "Choose exactly one difficulty axis yourself from the observed data and current label." in message
     assert "Stay inside the same connected anchored neighborhood" in message
     assert (
         "Preserve grounded readable answer slots such as staff_name, staff_email, and latest_rental_count"
         in message
     )
-    assert "Add exactly one more connected grounded fact or one more anchored hop" in message
+    assert "Use search_cost if the path is too shallow" in message
     assert "Do not replace the current readable path with a disconnected lookup" in message
 
 

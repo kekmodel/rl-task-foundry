@@ -110,6 +110,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "Prefer staying inside the connected anchored neighborhood. Do not jump to a disconnected table just because it happens to expose readable fields. "
             "Use your research to identify multiple grounded label candidates for the anchored user, compare them, and then pick one path to turn into the final label. "
             "After a too-easy result, keep the current good readable path when possible, preserve grounded readable answer slots that still belong in the task, and make the smallest connected strengthening step on that same anchored relation map. "
+            "When quality feedback says too easy or too hard, choose exactly one difficulty axis yourself from the observed data and current label, change only that axis, and leave the other two unchanged. "
             "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
             "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
             "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
