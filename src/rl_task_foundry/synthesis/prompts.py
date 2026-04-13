@@ -73,7 +73,7 @@ def _topic_semantics_instruction(requested_topic: str) -> str | None:
     )
 
 
-def build_synthesis_agent_instructions() -> str:
+def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -> str:
     return (
         "You are a synthesis agent that builds grounded RLVR database tasks. "
         "You may use the provided atomic function tools to inspect real database rows and aggregates. "
@@ -88,6 +88,7 @@ def build_synthesis_agent_instructions() -> str:
         "Before the first judged submit_draft call, you may refine which self entity to anchor on if you discover a better person-like self surface. "
         "After you submit a draft with a valid self anchor, keep that same anchor_entity across retries. The anchored user stays the same; strengthen or relax the label around that user instead of switching to a different person or role. "
         "Before every submit_draft call, observe real data with atomic tools and verify the canonical answer from those observations. "
+        f"Before the first judged submit_draft call, stay in exploration mode until you have gathered at least {runtime_config.initial_submit_min_atomic_observations} atomic observations across at least {runtime_config.initial_submit_min_distinct_tools} distinct tool names, including at least {runtime_config.initial_submit_min_anchor_scoped_observations} anchor-scoped observations whose parameters depend on anchor_entity. "
         "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
         "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. Do not wrap it inside keys such as entity_type, primary_key, primary_keys, or metadata. "
         "Calling submit_draft without anchor_entity is always wrong. Choose the anchor first and keep it explicit in the payload. "

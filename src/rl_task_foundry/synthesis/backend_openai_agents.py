@@ -53,10 +53,11 @@ def _build_agent(
     model: Any,
     tools: list[object],
     tool_use_behavior: Any,
+    runtime_config: SynthesisRuntimeConfig,
 ) -> Any:
     return sdk.Agent(
         name="synthesis",
-        instructions=build_synthesis_agent_instructions(),
+        instructions=build_synthesis_agent_instructions(runtime_config),
         model=model,
         tools=tools,
         output_type=None,
@@ -235,6 +236,7 @@ class OpenAIAgentsSynthesisBackend:
             model=model,
             tools=tools,
             tool_use_behavior=self._build_tool_use_behavior(sdk),
+            runtime_config=self.runtime_config,
         )
         request_input = build_synthesis_input(
             domain_name=domain_name,

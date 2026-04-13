@@ -69,6 +69,7 @@ class SubmitDraftErrorCode(StrEnum):
     GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE = "global_ranking_outside_anchor_scope"
     COUNT_LABEL_REQUIRES_COUNT_EVIDENCE = "count_label_requires_count_evidence"
     COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE = "count_label_outside_anchor_scope"
+    INITIAL_EXPLORATION_INSUFFICIENT = "initial_exploration_insufficient"
     INITIAL_LABEL_TOO_BROAD = "initial_label_too_broad"
     LABEL_SINGLE_TOOL_DERIVABLE = "label_single_tool_derivable"
     LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
@@ -109,6 +110,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE,
         SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE,
         SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE,
+        SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT,
         SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD,
         SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE,
         SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY,
@@ -915,6 +917,28 @@ def _observed_anchor_scoped_count_evidence(
     return False
 
 
+def _distinct_tool_name_count(tool_calls: list[dict[str, object]]) -> int:
+    return len(
+        {
+            str(record.get("tool_name", "")).strip()
+            for record in tool_calls
+            if str(record.get("tool_name", "")).strip()
+        }
+    )
+
+
+def _anchor_scoped_tool_call_count(
+    tool_calls: list[dict[str, object]],
+    *,
+    anchor_entity: dict[str, object],
+) -> int:
+    return sum(
+        1
+        for record in tool_calls
+        if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity)
+    )
+
+
 def _observed_anchor_readable_string_surface(
     tool_calls: list[dict[str, object]],
     *,
@@ -1297,6 +1321,25 @@ class SubmitDraftController:
             and not _observed_temporal_surface(self._raw_atomic_tool_calls)
         ):
             error_codes.append(SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED)
+        if not self.attempts:
+            atomic_observations = len(self._raw_atomic_tool_calls)
+            distinct_tool_count = _distinct_tool_name_count(self._raw_atomic_tool_calls)
+            anchor_scoped_observations = _anchor_scoped_tool_call_count(
+                self._raw_atomic_tool_calls,
+                anchor_entity=payload.anchor_entity,
+            )
+            if (
+                atomic_observations
+                < self.config.synthesis.runtime.initial_submit_min_atomic_observations
+                or distinct_tool_count
+                < self.config.synthesis.runtime.initial_submit_min_distinct_tools
+                or anchor_scoped_observations
+                < self.config.synthesis.runtime.initial_submit_min_anchor_scoped_observations
+            ):
+                error_codes.append(SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT)
+                invalid_diagnostics["atomic_observations"] = atomic_observations
+                invalid_diagnostics["distinct_tool_count"] = distinct_tool_count
+                invalid_diagnostics["anchor_scoped_observations"] = anchor_scoped_observations
         placeholder_tokens = _placeholder_tokens(
             {
                 "topic": payload.topic,
@@ -1725,6 +1768,9 @@ class SubmitDraftController:
             SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE: (
                 "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, only keep a count field if you observed a count or aggregate tool call whose parameters depend on anchor_entity. Otherwise drop the count field or gather anchored count evidence on the same user path instead of using a global total."
             ),
+            SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT: (
+                "Rejected. You tried to submit the first judged draft too early. Keep exploring the same anchored user before drafting: gather more atomic observations, use more distinct tools, and inspect more anchor-scoped evidence paths before the first submit_draft call."
+            ),
             SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD: (
                 "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."
             ),
@@ -1793,6 +1839,14 @@ class SubmitDraftController:
                 )
         if feedback_only and primary.startswith("Rejected. "):
             primary = primary.replace("Rejected. ", "Feedback. ", 1)
+        if error_codes and error_codes[0] is SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT:
+            primary = (
+                "Feedback. Do not submit yet. Before the first judged draft, keep exploring the same anchored user until you have enough grounded context: "
+                f"at least {self.config.synthesis.runtime.initial_submit_min_atomic_observations} atomic observations, "
+                f"at least {self.config.synthesis.runtime.initial_submit_min_distinct_tools} distinct tool names, and "
+                f"at least {self.config.synthesis.runtime.initial_submit_min_anchor_scoped_observations} anchor-scoped observations tied to anchor_entity. "
+                "Use that extra exploration to decide whether this path is readable, id-only, local-only, or countable before drafting."
+            )
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (

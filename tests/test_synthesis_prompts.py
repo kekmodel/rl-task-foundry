@@ -75,7 +75,7 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
 
 
 def test_synthesis_agent_instructions_describe_single_conversation_loop() -> None:
-    instructions = build_synthesis_agent_instructions()
+    instructions = build_synthesis_agent_instructions(load_config("rl_task_foundry.yaml").synthesis.runtime)
 
     assert "synthesis agent" in instructions
     assert "Build the grounded label first" in instructions
@@ -88,6 +88,9 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
     assert "After you submit a draft with a valid self anchor, keep that same anchor_entity across retries." in instructions
     assert "Before every submit_draft call" in instructions
+    assert "Before the first judged submit_draft call, stay in exploration mode until you have gathered at least" in instructions
+    assert "distinct tool names" in instructions
+    assert "anchor-scoped observations whose parameters depend on anchor_entity" in instructions
     assert "label_summary" in instructions
     assert "explicitly includes the selected topic phrase" in instructions
     assert "anchor_entity must be a flat JSON object" in instructions

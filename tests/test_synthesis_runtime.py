@@ -54,6 +54,43 @@ def _config_with_synthesis_output(tmp_path: Path):
     return config.model_copy(update={"output": output}, deep=True)
 
 
+def _seed_min_initial_exploration(
+    controller: SubmitDraftController,
+    *,
+    customer_id: int = 1,
+) -> None:
+    controller.record_atomic_tool_call(
+        tool_name="list_customer_ids",
+        params={"limit": 5},
+        result=[customer_id, customer_id + 1, customer_id + 2],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": customer_id},
+        result={"customer_id": customer_id, "store_id": 2},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_store_by_store_id",
+        params={"customer_id": customer_id},
+        result={"store_id": 2},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_payment_by_customer_id",
+        params={"customer_id": customer_id, "limit": 3},
+        result=[{"payment_id": 11}, {"payment_id": 12}],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_payment_by_id",
+        params={"payment_id": 11},
+        result={"payment_id": 11},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_ids_batch",
+        params={"ids": [customer_id, customer_id + 1]},
+        result=[{"customer_id": customer_id}, {"customer_id": customer_id + 1}],
+    )
+
+
 def _sample_graph() -> SchemaGraph:
     customer_id = ColumnProfile(
         schema_name="public",
@@ -168,14 +205,34 @@ class _FakeBackend:
         self.seen_max_turns.append(max_turns)
         assert self.bound_controller is not None
         self.bound_controller.record_atomic_tool_call(
+            tool_name="list_customer_ids",
+            params={"limit": 5},
+            result=[1, 2, 3],
+        )
+        self.bound_controller.record_atomic_tool_call(
             tool_name="get_customer_by_id",
             params={"customer_id": 1},
             result={"store_id": 1},
         )
         self.bound_controller.record_atomic_tool_call(
+            tool_name="traverse_customer_to_store_by_store_id",
+            params={"customer_id": 1},
+            result={"store_id": 1},
+        )
+        self.bound_controller.record_atomic_tool_call(
+            tool_name="traverse_customer_to_payment_by_customer_id",
+            params={"customer_id": 1, "limit": 3},
+            result=[{"payment_id": 11}, {"payment_id": 12}],
+        )
+        self.bound_controller.record_atomic_tool_call(
             tool_name="count_customer",
             params={},
             result=5,
+        )
+        self.bound_controller.record_atomic_tool_call(
+            tool_name="get_payment_by_id",
+            params={"payment_id": 11},
+            result={"payment_id": 11},
         )
         if self.reject_payload is not None:
             await self.bound_controller.submit(self.reject_payload)
@@ -475,6 +532,39 @@ async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_requires_more_first_submit_exploration(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_name": "Alice"},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_store_by_store_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+
+    message = await controller.submit(_accepted_payload())
+
+    assert "Do not submit yet" in message
+    assert "at least 6 atomic observations" in message
+    assert "at least 4 distinct tool names" in message
+    assert "at least 3 anchor-scoped observations" in message
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_mixed_count_label_without_count_evidence(
     tmp_path: Path,
 ) -> None:
@@ -514,11 +604,7 @@ async def test_submit_draft_keeps_locked_self_anchor_across_feedback_retries(
         max_submissions=3,
         self_anchor_surface_names=("get_customer_by_id",),
     )
-    controller.record_atomic_tool_call(
-        tool_name="get_customer_by_id",
-        params={"customer_id": 1},
-        result={"customer_id": 1, "store_id": 2},
-    )
+    _seed_min_initial_exploration(controller)
 
     first = await controller.submit(_ungrounded_text_payload(customer_id=1))
     second = await controller.submit(_ungrounded_text_payload(customer_id=2))
@@ -543,11 +629,7 @@ async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings
         max_submissions=3,
         self_anchor_surface_names=("get_customer_by_id",),
     )
-    controller.record_atomic_tool_call(
-        tool_name="get_customer_by_id",
-        params={"customer_id": 1},
-        result={"customer_id": 1, "store_id": 2},
-    )
+    _seed_min_initial_exploration(controller)
 
     message = await controller.submit(_ungrounded_text_payload())
 
@@ -600,6 +682,7 @@ async def test_submit_draft_calls_out_id_only_identifier_chain_path(
         build_draft=lambda payload: payload,
         max_submissions=3,
     )
+    _seed_min_initial_exploration(controller)
     controller.record_atomic_tool_call(
         tool_name="traverse_customer_to_rental_by_customer_id",
         params={"customer_id": 1, "limit": 3},
