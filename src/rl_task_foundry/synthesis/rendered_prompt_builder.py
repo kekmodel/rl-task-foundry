@@ -29,11 +29,18 @@ def build_rendered_user_prompt(
         indent=2,
         sort_keys=True,
     )
+    normalized_question = task.question.strip()
+    if normalized_question.startswith("<entity>\n"):
+        return (
+            f"{normalized_question}\n\n"
+            "# Submit Result Format\n"
+            f"{submit_schema_text}"
+        )
     return (
         "<entity>\n"
         f"{entity_block}\n"
         "</entity>\n\n"
-        f"{task.question.strip()}\n\n"
+        f"{normalized_question}\n\n"
         "# Submit Result Format\n"
         f"{submit_schema_text}"
     )

@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -27,8 +28,39 @@ from rl_task_foundry.synthesis.runtime import (
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftPayload,
+    _label_summary_matches_selected_topic,
     _next_difficulty_crank_axis,
+    build_submit_draft_sdk_tool,
 )
+
+
+def _wrap_user_prompt(anchor_entity: dict[str, object], body: str) -> str:
+    return (
+        "<entity>\n"
+        f"{json.dumps(anchor_entity, ensure_ascii=False, sort_keys=True)}\n"
+        "</entity>\n\n"
+        f"{body}"
+    )
+
+
+def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
+    payload = SubmitDraftPayload.model_validate(_accepted_payload().model_dump(mode="json"))
+    cached_answer = payload.canonical_answer
+
+    with patch("rl_task_foundry.synthesis.submit_draft_tool.json.loads") as mocked_loads:
+        assert payload.canonical_answer == cached_answer
+        mocked_loads.assert_not_called()
+
+
+def test_selected_topic_matching_normalizes_word_separators() -> None:
+    assert _label_summary_matches_selected_topic(
+        selected_topic="bundle_selection",
+        label_summary="This bundle selection label is grounded in observed rows.",
+    )
+    assert _label_summary_matches_selected_topic(
+        selected_topic="bundle_selection",
+        label_summary="This bundle_selection label is grounded in observed rows.",
+    )
 
 
 def _config_with_synthesis_output(tmp_path: Path):
@@ -186,16 +218,21 @@ class _FakeBackend:
 
 
 def _accepted_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
     return SubmitDraftPayload.model_validate(
         {
+            "topic": "assignment",
             "canonical_answer_json": '{"store_id": 1, "customer_count": 5}',
-            "anchor_entity": {"customer_id": 1},
+            "anchor_entity": anchor_entity,
             "difficulty_vector": {
                 "search_cost": 2.0,
                 "solution_space": 1.0,
                 "constraint_density": 1.0,
             },
-            "question": "내가 배정된 매장의 ID와 그 매장의 전체 고객 수를 알려 주세요.",
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "내가 배정된 매장의 ID와 그 매장의 전체 고객 수를 알려 주세요.",
+            ),
             "constraint_summary": [
                 {
                     "key": "store_and_count",
@@ -327,7 +364,20 @@ async def test_synthesize_environment_draft_runs_single_agent_and_returns_accept
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
-    runtime.synthesis_backends = [_FakeBackend(accept_payload=_accepted_payload())]
+    runtime.synthesis_backends = [
+        _FakeBackend(
+            accept_payload=_accepted_payload().model_copy(
+                update={
+                    "topic": "store_assignment",
+                    "label_summary": (
+                        "This store assignment answer is grounded because the store_id comes "
+                        "from the customer lookup and the total customer count comes from a "
+                        "separate aggregate."
+                    ),
+                }
+            )
+        )
+    ]
     runtime._environment_orchestrator = _FakeEnvironmentOrchestrator(
         matched_solver_runs=2,
         total_solver_runs=4,
@@ -374,11 +424,12 @@ async def test_synthesize_environment_draft_runs_single_agent_and_returns_accept
 
     draft = await runtime.synthesize_environment_draft(
         db_id="sakila",
-        requested_topic="assignment",
+        requested_topic="payment_history",
     )
 
-    assert draft.requested_topic == "assignment"
-    assert draft.selected_topic == "assignment"
+    assert draft.requested_topic == "payment_history"
+    assert draft.selected_topic == "store_assignment"
+    assert draft.environment.topic == "store_assignment"
     assert draft.environment.status.value == "accepted"
     assert draft.environment.quality_metrics.solver_pass_rate == 0.5
     assert draft.instances[0].rendered_user_prompt.startswith("<entity>\n")
@@ -471,7 +522,10 @@ async def test_submit_draft_rejects_questions_that_leak_internal_schema_terms(
     payload = _accepted_payload().model_copy(
         update={
             "anchor_entity": {"actor_id": 107},
-            "question": "film_category 를 통해 category_id를 확인하세요.",
+            "question": _wrap_user_prompt(
+                {"actor_id": 107},
+                "film_category 를 통해 category_id를 확인하세요.",
+            ),
         }
     )
 
@@ -505,13 +559,135 @@ async def test_submit_draft_rejects_questions_that_repeat_raw_identifier_fields(
         result=5,
     )
     payload = _accepted_payload().model_copy(
-        update={"question": "customer_id 1의 store_id와 customer_count를 알려 주세요."}
+        update={
+            "question": _wrap_user_prompt(
+                {"customer_id": 1},
+                "customer_id 1의 store_id와 customer_count를 알려 주세요.",
+            )
+        }
     )
 
     message = await controller.submit(payload)
 
     assert "raw identifier field names" in message
     assert controller.attempts[-1].error_codes[0] == "question_raw_identifier_leak"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_requires_entity_wrapped_question_shape(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_customer",
+        params={},
+        result=5,
+    )
+    payload = _accepted_payload().model_copy(
+        update={"question": "내가 배정된 매장의 ID와 그 매장의 전체 고객 수를 알려 주세요."}
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Feedback. question must already be the full user prompt in this exact shape" in message
+    assert "Submission budget unchanged." in message
+    assert controller.attempts == []
+    assert controller.submissions_left() == controller.max_submissions
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_tool_backfills_anchor_entity_from_entity_block(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_synthesis_output(tmp_path)
+    runtime = SynthesisAgentRuntime(config)
+    controller = SubmitDraftController(
+        config=config,
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: runtime._build_draft_from_submission(
+            db_id="sakila",
+            requested_topic="assignment",
+            atomic_tool_bundle=_sample_atomic_tool_bundle(),
+            submission=payload,
+            schema_summary={"tables": []},
+        ),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_customer",
+        params={},
+        result=5,
+    )
+    sdk_tool = build_submit_draft_sdk_tool(controller)
+    payload = _accepted_payload().model_dump(mode="json")
+    payload.pop("anchor_entity")
+
+    message = await sdk_tool.on_invoke_tool(None, json.dumps(payload))
+
+    assert message.startswith("Accepted. solver pass rate 2/4.")
+    assert controller.accepted_draft is not None
+    assert controller.accepted_draft.instances[0].anchor_values == {"customer_id": 1}
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_requires_entity_block_to_match_anchor_entity(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_customer",
+        params={},
+        result=5,
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "question": _wrap_user_prompt(
+                {"customer_id": 999},
+                "내가 배정된 매장의 ID와 그 매장의 전체 고객 수를 알려 주세요.",
+            )
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Feedback. The JSON inside the <entity> block must exactly match anchor_entity." in message
+    assert "Submission budget unchanged." in message
+    assert controller.attempts == []
+    assert controller.submissions_left() == controller.max_submissions
 
 
 @pytest.mark.asyncio
@@ -574,10 +750,12 @@ async def test_submit_draft_requires_label_strengthening_after_too_easy(
         for line in (tmp_path / "phase_monitors.jsonl").read_text().splitlines()
     ]
     assert records[0]["actual_data"]["label_change"]["label_changed"] is None
+    assert records[0]["actual_data"]["label_axis_proxies"]["search_cost_observations"] == 2
     assert records[-1]["actual_data"]["canonical_answer_preview"] == {
         "customer_count": 5,
         "store_id": 1,
     }
+    assert records[-1]["actual_data"]["label_axis_proxies"]["search_cost_observations"] == 1
     assert records[-1]["actual_data"]["label_axis_proxies"]["solution_space_slots"] == 2
     assert records[-1]["actual_data"]["label_summary"].startswith("This assignment answer")
     assert records[-1]["actual_data"]["label_change"]["label_changed"] is False
@@ -613,7 +791,10 @@ async def test_submit_draft_rejects_raw_identifier_fields_with_korean_particles(
     )
     payload = _accepted_payload().model_copy(
         update={
-            "question": "이 payment_id를 기준으로 같은 고객의 결제 내역을 알려 주세요.",
+            "question": _wrap_user_prompt(
+                {"customer_id": 1},
+                "이 payment_id를 기준으로 같은 고객의 결제 내역을 알려 주세요.",
+            ),
             "canonical_answer_json": '{"amount":"2.99","customer_count":5}',
             "constraint_summary": [
                 {
@@ -657,7 +838,10 @@ async def test_submit_draft_rejects_questions_that_repeat_anchor_entity_literals
     payload = _accepted_payload().model_copy(
         update={
             "anchor_entity": {"staff_id": 1},
-            "question": "1번 staff가 배정된 매장의 정보를 알려 주세요.",
+            "question": _wrap_user_prompt(
+                {"staff_id": 1},
+                "1번 staff가 배정된 매장의 정보를 알려 주세요.",
+            ),
         }
     )
 
@@ -693,7 +877,10 @@ async def test_submit_draft_rejects_literal_entity_placeholder_in_question(
     payload = _accepted_payload().model_copy(
         update={
             "anchor_entity": {"film_id": 147},
-            "question": "영화 <entity>에 배정된 배우 수를 알려 주세요.",
+            "question": _wrap_user_prompt(
+                {"film_id": 147},
+                "영화 <entity>에 배정된 배우 수를 알려 주세요.",
+            ),
             "canonical_answer_json": '{"assigned_cast_count":1}',
             "label_summary": "This assignment answer is grounded in the observed assigned cast count for the requested topic.",
         }
@@ -731,13 +918,67 @@ async def test_submit_draft_rejects_labels_derivable_from_single_tool_call(
         update={
             "anchor_entity": {"store_id": 1},
             "canonical_answer_json": '[{"customer_id":1},{"customer_id":2},{"customer_id":3}]',
-            "question": "store_id 1 매장의 customer_id 목록을 알려주세요.",
+            "question": _wrap_user_prompt(
+                {"store_id": 1},
+                "store_id 1 매장의 customer_id 목록을 알려주세요.",
+            ),
         }
     )
 
     message = await controller.submit(payload)
 
     assert "single atomic tool call" in message
+    assert controller.attempts[-1].error_codes[0] == "label_single_tool_derivable"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_explains_when_single_tool_shortcut_is_global(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 450},
+        result={"customer_id": 450},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="top_staff_id_by_count_payment_desc",
+        params={"limit": 3},
+        result=[
+            {"staff_id": 1, "value": 8057},
+            {"staff_id": 2, "value": 7992},
+        ],
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"customer_id": 450},
+            "canonical_answer_json": '{"staff_id":1}',
+            "question": _wrap_user_prompt(
+                {"customer_id": 450},
+                "이 고객과 관련된 담당 직원을 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "top_staff",
+                    "kind": "ordering",
+                    "summary": "Return one staff member.",
+                }
+            ],
+            "label_summary": "This payment assignment by staff label is grounded because staff 1 appears to be the top staff member.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "single global tool call that does not depend on the anchor entity" in message
     assert controller.attempts[-1].error_codes[0] == "label_single_tool_derivable"
 
 
@@ -767,7 +1008,10 @@ async def test_submit_draft_rejects_identifier_only_labels_even_when_multi_obser
     payload = _accepted_payload().model_copy(
         update={
             "canonical_answer_json": '{"store_id": 1, "address_id": 1}',
-            "question": "내 매장의 기본 정보를 알려 주세요.",
+            "question": _wrap_user_prompt(
+                {"customer_id": 1},
+                "내 매장의 기본 정보를 알려 주세요.",
+            ),
             "label_summary": "The answer combines the customer's store and the store's address.",
         }
     )
@@ -807,7 +1051,10 @@ async def test_submit_draft_rejects_plural_identifier_outputs(
     payload = _accepted_payload().model_copy(
         update={
             "anchor_entity": {"payment_id": 800},
-            "question": "같은 고객의 결제 두 건을 시간 순서대로 알려 주세요.",
+            "question": _wrap_user_prompt(
+                {"payment_id": 800},
+                "같은 고객의 결제 두 건을 시간 순서대로 알려 주세요.",
+            ),
             "canonical_answer_json": '{"payment_ids":[783,806]}',
             "constraint_summary": [
                 {
@@ -827,7 +1074,55 @@ async def test_submit_draft_rejects_plural_identifier_outputs(
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_rejects_label_summaries_that_do_not_name_requested_topic(
+async def test_submit_draft_rejects_answers_that_repeat_anchor_entity(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_film_by_id",
+        params={"film_id": 508},
+        result={"film_id": 508},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_inventory_by_film_id_eq",
+        params={"value": 508},
+        result=3,
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"film_id": 508},
+            "canonical_answer_json": '{"film_id":508,"inventory_count":3}',
+            "question": _wrap_user_prompt(
+                {"film_id": 508},
+                "이 영화와 연결된 재고 수를 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "inventory_count",
+                    "kind": "cardinality",
+                    "summary": "Return the total inventory count linked to the anchored film.",
+                }
+            ],
+            "label_summary": "This inventory assignment label is grounded in the anchored film and its observed inventory count.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Do not repeat anchor_entity fields inside the canonical answer" in message
+    assert controller.attempts[-1].error_codes[0] == "label_repeats_anchor_entity"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_label_summaries_that_do_not_name_selected_topic(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -853,15 +1148,18 @@ async def test_submit_draft_rejects_label_summaries_that_do_not_name_requested_t
         update={
             "anchor_entity": {"payment_id": 10},
             "canonical_answer_json": '{"payment_amount": "4.99", "rental_id": 20}',
-            "question": "결제 하나를 따라가서 연결된 대여 정보를 알려 주세요.",
+            "question": _wrap_user_prompt(
+                {"payment_id": 10},
+                "결제 하나를 따라가서 연결된 대여 정보를 알려 주세요.",
+            ),
             "label_summary": "The answer is grounded in observed payment and rental rows.",
         }
     )
 
     message = await controller.submit(payload)
 
-    assert "label_summary must explicitly name the requested topic" in message
-    assert controller.attempts[-1].error_codes == ("requested_topic_misaligned",)
+    assert "label_summary must explicitly name the selected topic" in message
+    assert controller.attempts[-1].error_codes == ("selected_topic_misaligned",)
 
 
 @pytest.mark.asyncio
@@ -891,14 +1189,17 @@ async def test_submit_draft_rejects_string_values_not_grounded_in_tool_results(
         update={
             "anchor_entity": {"store_id": 1},
             "canonical_answer_json": '{"staff_name":"Staff #1","store_id":1}',
-            "question": "이 매장의 담당자와 매장 정보를 알려 주세요.",
+            "question": _wrap_user_prompt(
+                {"store_id": 1},
+                "이 매장의 담당자와 매장 정보를 알려 주세요.",
+            ),
         }
     )
 
     message = await controller.submit(payload)
 
     assert "not directly grounded in the observed tool results" in message
-    assert controller.attempts[-1].error_codes[0] == "label_values_not_grounded"
+    assert "label_values_not_grounded" in controller.attempts[-1].error_codes
 
 
 @pytest.mark.asyncio
@@ -928,7 +1229,10 @@ async def test_submit_draft_rejects_blank_string_values_in_canonical_answer(
         update={
             "anchor_entity": {"film_id": 292},
             "canonical_answer_json": '{"film_title":"","assigned_cast_count":8}',
-            "question": "기준 영화에 배정된 배우는 모두 몇 명인가요?",
+            "question": _wrap_user_prompt(
+                {"film_id": 292},
+                "기준 영화에 배정된 배우는 모두 몇 명인가요?",
+            ),
             "label_summary": "This assignment answer is grounded in the observed film and assigned cast count.",
         }
     )
@@ -1040,4 +1344,6 @@ def test_reject_invalid_payload_explains_flat_anchor_entity_requirement(tmp_path
         error=exc_info.value,
     )
 
-    assert "flat JSON object mapping primary-key field names to scalar values" in message
+    assert "Feedback. anchor_entity must be a flat JSON object mapping one or more primary-key field names to scalar values" in message
+    assert "Submission budget unchanged." in message
+    assert controller.attempts == []

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, ValidationError, field_validator
@@ -17,6 +18,8 @@ from rl_task_foundry.synthesis.contracts import (
     InstanceSpaceContract,
     StrictModel,
     flatten_difficulty_vector,
+    normalize_words,
+    topic_tokens,
 )
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 
@@ -33,8 +36,75 @@ _FORBIDDEN_PLACEHOLDER_TOKENS = (
     "replace_with_real_",
 )
 
+class SubmitDraftErrorCode(StrEnum):
+    NO_NEW_GROUNDED_OBSERVATION = "no_new_grounded_observation"
+    TOPIC_REQUIRED = "topic_required"
+    ANCHOR_ENTITY_REQUIRED = "anchor_entity_required"
+    ANCHOR_ENTITY_SCALAR_MAP_REQUIRED = "anchor_entity_scalar_map_required"
+    CANONICAL_ANSWER_JSON_REQUIRED = "canonical_answer_json_required"
+    CANONICAL_ANSWER_JSON_INVALID = "canonical_answer_json_invalid"
+    DIFFICULTY_VECTOR_REQUIRED = "difficulty_vector_required"
+    QUESTION_REQUIRED = "question_required"
+    QUESTION_ENTITY_BLOCK_REQUIRED = "question_entity_block_required"
+    QUESTION_ENTITY_BLOCK_INVALID_JSON = "question_entity_block_invalid_json"
+    QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
+    QUESTION_BODY_REQUIRED = "question_body_required"
+    CONSTRAINT_SUMMARY_REQUIRED = "constraint_summary_required"
+    INSTANCE_SPACE_REQUIRED = "instance_space_required"
+    LABEL_SUMMARY_REQUIRED = "label_summary_required"
+    PLACEHOLDER_TOKENS_NOT_ALLOWED = "placeholder_tokens_not_allowed"
+    QUESTION_INTERNAL_SCHEMA_LEAK = "question_internal_schema_leak"
+    QUESTION_RAW_IDENTIFIER_LEAK = "question_raw_identifier_leak"
+    QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN = "question_entity_placeholder_forbidden"
+    QUESTION_ANCHOR_ENTITY_LEAK = "question_anchor_entity_leak"
+    LABEL_SINGLE_TOOL_DERIVABLE = "label_single_tool_derivable"
+    LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
+    LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
+    LABEL_IDENTIFIER_CHAIN_FORBIDDEN = "label_identifier_chain_forbidden"
+    LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
+    SELECTED_TOPIC_MISALIGNED = "selected_topic_misaligned"
+    DIFFICULTY_WEAKENED = "difficulty_weakened"
+    REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED = "required_difficulty_axis_not_strengthened"
+    REQUIRED_LABEL_AXIS_NOT_STRENGTHENED = "required_label_axis_not_strengthened"
+    LABEL_NOT_STRENGTHENED = "label_not_strengthened"
+    SUBMIT_PAYLOAD_INVALID = "submit_payload_invalid"
+    DRAFT_VALIDATION_FAILED = "draft_validation_failed"
+    REJECT_TOO_EASY = "reject_too_easy"
+    REJECT_TOO_HARD = "reject_too_hard"
+
+
+_FEEDBACK_ONLY_ERROR_CODES = frozenset(
+    {
+        SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED,
+        SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED,
+        SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED,
+        SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON,
+        SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH,
+        SubmitDraftErrorCode.QUESTION_BODY_REQUIRED,
+    }
+)
+
+
+class _ParsedCanonicalAnswerJson(str):
+    __slots__ = ("parsed",)
+
+    def __new__(cls, value: str, *, parsed: object) -> _ParsedCanonicalAnswerJson:
+        instance = str.__new__(cls, value)
+        instance.parsed = parsed
+        return instance
+
+
+def _error_code_values(
+    codes: list[SubmitDraftErrorCode] | tuple[SubmitDraftErrorCode, ...],
+) -> list[str]:
+    return [code.value for code in codes]
+
 
 class SubmitDraftPayload(StrictModel):
+    topic: str = Field(
+        min_length=1,
+        description="Selected topic string derived from the grounded label and evidence.",
+    )
     canonical_answer_json: str = Field(
         min_length=1,
         description="Canonical answer as a JSON string. This is the exact label used for EM scoring.",
@@ -52,7 +122,11 @@ class SubmitDraftPayload(StrictModel):
     )
     question: str = Field(
         min_length=1,
-        description="Natural user-facing request in the configured task language. Do not mention internal tool paths.",
+        description=(
+            "Full user-facing prompt in the configured task language, starting with "
+            "<entity> ... </entity> on its own lines, followed by a blank line and the natural user request body. "
+            "The entity block must exactly match anchor_entity."
+        ),
     )
     constraint_summary: list["SubmitConstraintSummaryItem"] = Field(
         min_length=1,
@@ -73,12 +147,12 @@ class SubmitDraftPayload(StrictModel):
         if not normalized:
             raise ValueError("canonical_answer_json must not be blank")
         try:
-            json.loads(normalized)
+            parsed = json.loads(normalized)
         except json.JSONDecodeError as exc:
             raise ValueError("canonical_answer_json must be a valid JSON string") from exc
-        return normalized
+        return _ParsedCanonicalAnswerJson(normalized, parsed=parsed)
 
-    @field_validator("question", "label_summary")
+    @field_validator("topic", "question", "label_summary")
     @classmethod
     def _validate_non_blank_text(cls, value: str) -> str:
         normalized = value.strip()
@@ -89,16 +163,14 @@ class SubmitDraftPayload(StrictModel):
     @field_validator("anchor_entity")
     @classmethod
     def _validate_anchor_entity(cls, value: dict[str, object]) -> dict[str, object]:
-        if not value:
-            raise ValueError("anchor_entity must contain at least one primary-key value")
-        normalized: dict[str, object] = {}
-        for raw_key, raw_value in value.items():
-            if not isinstance(raw_key, str) or not raw_key.strip():
-                raise ValueError("anchor_entity keys must be non-empty strings")
-            if raw_value is None or isinstance(raw_value, (dict, list)):
-                raise ValueError("anchor_entity values must be scalar JSON values")
-            normalized[raw_key.strip()] = raw_value
-        return normalized
+        return _normalize_anchor_entity_map(value)
+
+    @property
+    def canonical_answer(self) -> object:
+        value = self.canonical_answer_json
+        if isinstance(value, _ParsedCanonicalAnswerJson):
+            return value.parsed
+        return json.loads(value)
 
 
 class SubmitConstraintSummaryItem(StrictModel):
@@ -120,6 +192,19 @@ class SubmitConstraintSummaryItem(StrictModel):
 
 
 SubmitDraftPayload.model_rebuild()
+
+
+def _normalize_anchor_entity_map(value: dict[str, object]) -> dict[str, object]:
+    if not value:
+        raise ValueError("anchor_entity must contain at least one primary-key value")
+    normalized: dict[str, object] = {}
+    for raw_key, raw_value in value.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise ValueError("anchor_entity keys must be non-empty strings")
+        if raw_value is None or isinstance(raw_value, (dict, list)):
+            raise ValueError("anchor_entity values must be scalar JSON values")
+        normalized[raw_key.strip()] = raw_value
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,17 +261,23 @@ def _weakened_difficulty_axes(
 def _difficulty_axis_hint(axis: DifficultyAxis) -> str:
     if axis is DifficultyAxis.SEARCH_COST:
         return (
-            "Increase search_cost by requiring a longer evidence path, a deeper join chain, "
-            "or more grounded exploration before the final answer is obvious."
+            "Strengthen the label through search_cost. Change the label so it depends on a longer grounded evidence path. "
+            "A good next step is to add one more linked entity, require one more lookup before the label is fixed, "
+            "or combine facts from a deeper chain instead of reading one obvious record. "
+            "Do not spend the extra hop on echoing the anchor id or on whichever related row happened to appear first in exploration results. "
+            "If you need one related row among many, define a grounded ordering or tie-breaker that you can explain naturally to the user. "
+            "Prefer a local ordering inside the anchored scope before jumping to a global ranking over the whole database."
         )
     if axis is DifficultyAxis.SOLUTION_SPACE:
         return (
-            "Increase solution_space by asking for a larger or ordered answer set, more answer fields, "
-            "or a choice among multiple grounded candidates."
+            "Strengthen the label through solution_space. Change the label so it is larger or less immediately determined. "
+            "A good next step is to return more answer fields, return an ordered set instead of one scalar, "
+            "or choose among several grounded candidates with an explicit tie-breaker."
         )
     return (
-        "Increase constraint_density by adding more hard conditions, stronger tie-breakers, "
-        "or tighter grounded constraints that reduce the valid answer set."
+        "Strengthen the label through constraint_density. Change the label by adding one more hard grounded rule. "
+        "A good next step is to add a uniqueness rule, a stricter ordering rule, a tighter filter, "
+        "or another grounded condition that removes valid answers."
     )
 
 
@@ -209,15 +300,12 @@ def _preview_payload(value: object) -> object:
 
 
 def _constraint_summary_payload(
-    items: list[object],
+    items: list[SubmitConstraintSummaryItem | dict[str, object]],
 ) -> list[dict[str, object]]:
-    payload: list[dict[str, object]] = []
-    for item in items:
-        if hasattr(item, "model_dump"):
-            payload.append(item.model_dump(mode="json"))
-        elif isinstance(item, dict):
-            payload.append({str(key): value for key, value in item.items()})
-    return payload
+    return [
+        SubmitConstraintSummaryItem.model_validate(item).model_dump(mode="json")
+        for item in items
+    ]
 
 
 def _stable_json(value: object) -> str:
@@ -274,10 +362,11 @@ def _monitor_label_data(
         }
 
     if isinstance(payload, SubmitDraftPayload):
-        raw_canonical = payload.canonical_answer_json
+        canonical_answer = payload.canonical_answer
         label_summary = payload.label_summary
         constraint_summary = _constraint_summary_payload(payload.constraint_summary)
     else:
+        canonical_answer = None
         raw_canonical = payload.get("canonical_answer_json")
         label_summary = payload.get("label_summary")
         raw_constraints = payload.get("constraint_summary")
@@ -286,13 +375,11 @@ def _monitor_label_data(
             if isinstance(raw_constraints, list)
             else []
         )
-
-    canonical_answer: object | None = None
-    if isinstance(raw_canonical, str):
-        try:
-            canonical_answer = json.loads(raw_canonical)
-        except json.JSONDecodeError:
-            canonical_answer = raw_canonical
+        if isinstance(raw_canonical, str):
+            try:
+                canonical_answer = json.loads(raw_canonical)
+            except json.JSONDecodeError:
+                canonical_answer = raw_canonical
 
     snapshot = (
         _monitor_answer_snapshot(canonical_answer)
@@ -416,14 +503,35 @@ def _is_single_tool_derivable(answer: object, result: object) -> bool:
     return False
 
 
-def _single_tool_derivation_source(
+def _single_tool_derivation_record(
     answer: object,
     tool_calls: list[dict[str, object]],
-) -> str | None:
+) -> dict[str, object] | None:
     for record in tool_calls:
         if _is_single_tool_derivable(answer, record.get("result")):
-            return str(record.get("tool_name", "unknown_tool"))
+            return record
     return None
+
+
+def _value_tree_contains_scalar(value: object, target: object) -> bool:
+    if value == target:
+        return True
+    if isinstance(value, dict):
+        return any(_value_tree_contains_scalar(item, target) for item in value.values())
+    if isinstance(value, list):
+        return any(_value_tree_contains_scalar(item, target) for item in value)
+    return False
+
+
+def _tool_call_depends_on_anchor_entity(
+    record: dict[str, object],
+    *,
+    anchor_entity: dict[str, object],
+) -> bool:
+    params = record.get("params")
+    if not isinstance(params, dict):
+        return False
+    return any(_value_tree_contains_scalar(params, value) for value in anchor_entity.values())
 
 
 def _answer_uses_only_identifier_fields(answer: object) -> bool:
@@ -436,6 +544,24 @@ def _answer_uses_only_identifier_fields(answer: object) -> bool:
         return _keys_are_identifier_only(answer)
     if isinstance(answer, list) and answer and all(isinstance(item, dict) for item in answer):
         return all(_keys_are_identifier_only(item) for item in answer)
+    return False
+
+
+def _answer_repeats_anchor_entity(
+    answer: object,
+    *,
+    anchor_entity: dict[str, object],
+) -> bool:
+    if not anchor_entity:
+        return False
+
+    def _contains_anchor(mapping: dict[str, object]) -> bool:
+        return all(mapping.get(key) == value for key, value in anchor_entity.items())
+
+    if isinstance(answer, dict):
+        return _contains_anchor(answer)
+    if isinstance(answer, list) and answer and all(isinstance(item, dict) for item in answer):
+        return all(_contains_anchor(item) for item in answer)
     return False
 
 
@@ -471,15 +597,14 @@ def _collect_answer_strings(value: object, *, sink: list[str]) -> None:
 
 
 def _blank_string_paths(value: object, *, path: str = "$") -> list[str]:
+    blank_paths: list[str] = []
     if isinstance(value, str):
         return [path] if not value.strip() else []
     if isinstance(value, dict):
-        blank_paths: list[str] = []
         for key, item in value.items():
             blank_paths.extend(_blank_string_paths(item, path=f"{path}.{key}"))
         return blank_paths
     if isinstance(value, list):
-        blank_paths: list[str] = []
         for index, item in enumerate(value):
             blank_paths.extend(_blank_string_paths(item, path=f"{path}[{index}]"))
         return blank_paths
@@ -528,22 +653,42 @@ def _contains_entity_placeholder_token(text: str) -> bool:
     return "<entity>" in lowered or "&lt;entity&gt;" in lowered
 
 
-def _normalize_topic_phrase(value: str) -> str:
-    return re.sub(r"[_\-\s]+", " ", value.strip().lower()).strip()
+_ENTITY_PROMPT_RE = re.compile(
+    r"\A<entity>\n(?P<entity_json>.+?)\n</entity>\n\n(?P<body>.+)\Z",
+    re.DOTALL,
+)
 
-def _label_summary_matches_requested_topic(*, requested_topic: str, label_summary: str) -> bool:
-    normalized_topic = _normalize_topic_phrase(requested_topic)
-    if not normalized_topic:
+
+def _split_entity_wrapped_prompt(
+    value: str,
+) -> tuple[dict[str, object] | None, str | None, SubmitDraftErrorCode | None]:
+    normalized = value.strip()
+    match = _ENTITY_PROMPT_RE.match(normalized)
+    if match is None:
+        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED
+    entity_json = match.group("entity_json").strip()
+    try:
+        parsed_entity = json.loads(entity_json)
+    except json.JSONDecodeError:
+        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON
+    if not isinstance(parsed_entity, dict):
+        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON
+    try:
+        anchor_entity = _normalize_anchor_entity_map(parsed_entity)
+    except ValueError:
+        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON
+    body = match.group("body").strip()
+    if not body:
+        return anchor_entity, None, SubmitDraftErrorCode.QUESTION_BODY_REQUIRED
+    return anchor_entity, body, None
+
+
+def _label_summary_matches_selected_topic(*, selected_topic: str, label_summary: str) -> bool:
+    selected_topic_tokens = topic_tokens(selected_topic)
+    if not selected_topic_tokens:
         return True
-    topic_tokens = [
-        token
-        for token in re.findall(r"[a-z0-9]+", normalized_topic)
-        if len(token) >= 3
-    ]
-    if not topic_tokens:
-        return True
-    lowered_summary = label_summary.lower()
-    return all(token in lowered_summary for token in topic_tokens)
+    normalized_summary = normalize_words(label_summary, lowercase=True)
+    return all(token in normalized_summary for token in selected_topic_tokens)
 
 
 def _question_repeats_anchor_entity(
@@ -563,7 +708,7 @@ def _question_repeats_anchor_entity(
             base_key = base_key[:-3]
         if not base_key:
             continue
-        key_pattern = re.escape(re.sub(r"[_\-\s]+", " ", base_key))
+        key_pattern = re.escape(normalize_words(base_key, lowercase=True))
         value = str(raw_value).strip().lower()
         if not value:
             continue
@@ -602,6 +747,7 @@ class SubmitDraftController:
     _last_label_slot_count: int | None = field(default=None, init=False)
     _last_constraint_count: int | None = field(default=None, init=False)
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
+    _feedback_events: int = field(default=0, init=False)
 
     def submissions_left(self) -> int:
         return max(0, self.max_submissions - len(self.attempts))
@@ -634,26 +780,35 @@ class SubmitDraftController:
         if self.submissions_left() <= 0:
             return "Budget exhausted. No more attempts."
 
-        error_codes: list[str] = []
+        error_codes: list[SubmitDraftErrorCode] = []
         for error_item in error.errors():
             location = tuple(str(part) for part in error_item.get("loc", ()))
             error_type = str(error_item.get("type", ""))
             if error_type == "missing" and len(location) == 1:
-                error_codes.append(f"{location[0]}_required")
+                required_code = getattr(
+                    SubmitDraftErrorCode,
+                    f"{location[0].upper()}_REQUIRED",
+                    SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID,
+                )
+                error_codes.append(required_code)
             elif location == ("canonical_answer_json",):
-                error_codes.append("canonical_answer_json_invalid")
+                error_codes.append(SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID)
             elif location == ("constraint_summary",):
-                error_codes.append("constraint_summary_required")
+                error_codes.append(SubmitDraftErrorCode.CONSTRAINT_SUMMARY_REQUIRED)
             elif location == ("anchor_entity",):
                 if error_type == "value_error":
-                    error_codes.append("anchor_entity_scalar_map_required")
+                    error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED)
                 else:
-                    error_codes.append("anchor_entity_required")
+                    error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
             else:
-                error_codes.append("submit_payload_invalid")
+                error_codes.append(SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID)
         raw_question = parsed.get("question")
-        if isinstance(raw_question, str) and _contains_raw_identifier_token(raw_question):
-            error_codes.append("question_raw_identifier_leak")
+        if isinstance(raw_question, str):
+            _, question_body, prompt_error = _split_entity_wrapped_prompt(raw_question)
+            if prompt_error is not None:
+                error_codes.append(prompt_error)
+            elif question_body is not None and _contains_raw_identifier_token(question_body):
+                error_codes.append(SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK)
         raw_canonical = parsed.get("canonical_answer_json")
         if isinstance(raw_canonical, str):
             try:
@@ -661,13 +816,38 @@ class SubmitDraftController:
             except json.JSONDecodeError:
                 raw_answer = None
             if raw_answer is not None and _answer_uses_only_identifier_fields(raw_answer):
-                error_codes.append("label_identifier_chain_forbidden")
-        deduped_error_codes = list(dict.fromkeys(error_codes)) or ["submit_payload_invalid"]
+                error_codes.append(SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN)
+        deduped_error_codes = list(dict.fromkeys(error_codes)) or [
+            SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID
+        ]
+        search_cost_observations = (
+            len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
+        )
+        if all(error_code in _FEEDBACK_ONLY_ERROR_CODES for error_code in deduped_error_codes):
+            return self._record_feedback(
+                message=self._invalid_submission_message(
+                    deduped_error_codes,
+                    feedback_only=True,
+                ),
+                error_codes=deduped_error_codes,
+                payload=parsed,
+                search_cost_observations=search_cost_observations,
+                diagnostics={
+                    "validation_errors": [
+                        {
+                            "loc": [str(part) for part in error_item.get("loc", ())],
+                            "type": str(error_item.get("type", "")),
+                        }
+                        for error_item in error.errors()
+                    ]
+                },
+            )
         return self._record_rejection(
             submission_index=len(self.attempts) + 1,
             message=self._invalid_submission_message(deduped_error_codes),
             error_codes=deduped_error_codes,
             payload=parsed,
+            search_cost_observations=search_cost_observations,
             diagnostics={
                 "validation_errors": [
                     {
@@ -686,15 +866,19 @@ class SubmitDraftController:
             return "Budget exhausted. No more attempts."
 
         submission_index = len(self.attempts) + 1
-        error_codes: list[str] = []
+        error_codes: list[SubmitDraftErrorCode] = []
         invalid_diagnostics: dict[str, object] = {}
+        search_cost_observations = (
+            len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
+        )
 
         if len(self._atomic_tool_calls) <= self._tool_call_count_at_last_submission:
-            error_codes.append("no_new_grounded_observation")
+            error_codes.append(SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION)
         if not payload.anchor_entity:
-            error_codes.append("anchor_entity_required")
+            error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
         placeholder_tokens = _placeholder_tokens(
             {
+                "topic": payload.topic,
                 "canonical_answer_json": payload.canonical_answer_json,
                 "anchor_entity": payload.anchor_entity,
                 "question": payload.question,
@@ -704,95 +888,128 @@ class SubmitDraftController:
             }
         )
         if placeholder_tokens:
-            error_codes.append("placeholder_tokens_not_allowed")
-        try:
-            canonical_answer = json.loads(payload.canonical_answer_json)
-        except json.JSONDecodeError:
-            canonical_answer = None
+            error_codes.append(SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED)
+        canonical_answer = payload.canonical_answer
+        prompt_anchor_entity, question_body, prompt_error = _split_entity_wrapped_prompt(
+            payload.question
+        )
+        if prompt_error is not None:
+            error_codes.append(prompt_error)
+        elif prompt_anchor_entity != payload.anchor_entity:
+            error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH)
         label_signature: str | None = None
         label_slot_count: int | None = None
         constraint_count = len(payload.constraint_summary)
-        if canonical_answer is not None:
-            label_signature = _stable_json(canonical_answer)
-            label_slot_count = _answer_slot_count(canonical_answer)
-            blank_paths = _blank_string_paths(canonical_answer)
-            if blank_paths:
-                error_codes.append("label_blank_string_forbidden")
-                invalid_diagnostics["blank_string_paths"] = blank_paths[:5]
-            derivation_tool = _single_tool_derivation_source(
-                canonical_answer,
-                self._raw_atomic_tool_calls,
+        label_signature = _stable_json(canonical_answer)
+        label_slot_count = _answer_slot_count(canonical_answer)
+        blank_paths = _blank_string_paths(canonical_answer)
+        if blank_paths:
+            error_codes.append(SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN)
+            invalid_diagnostics["blank_string_paths"] = blank_paths[:5]
+        derivation_record = _single_tool_derivation_record(
+            canonical_answer,
+            self._raw_atomic_tool_calls,
+        )
+        if derivation_record is not None:
+            error_codes.append(SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE)
+            invalid_diagnostics["single_tool_name"] = str(
+                derivation_record.get("tool_name", "unknown_tool")
             )
-            if derivation_tool is not None:
-                error_codes.append("label_single_tool_derivable")
-                invalid_diagnostics["single_tool_name"] = derivation_tool
-            ungrounded_strings = _ungrounded_answer_strings(
-                canonical_answer,
-                self._raw_atomic_tool_calls,
+            invalid_diagnostics["single_tool_scope"] = (
+                "anchor_scoped"
+                if _tool_call_depends_on_anchor_entity(
+                    derivation_record,
+                    anchor_entity=payload.anchor_entity,
+                )
+                else "global"
             )
-            if ungrounded_strings:
-                error_codes.append("label_values_not_grounded")
-                invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[:5]
-        question_lower = payload.question.lower()
-        if _contains_entity_placeholder_token(question_lower):
-            error_codes.append("question_entity_placeholder_forbidden")
-        if _contains_raw_identifier_token(question_lower):
-            error_codes.append("question_raw_identifier_leak")
-        if _question_repeats_anchor_entity(
-            payload.question,
-            anchor_entity=payload.anchor_entity,
-        ):
-            error_codes.append("question_anchor_entity_leak")
-        if any(token in question_lower for token in self.forbidden_question_tokens):
-            error_codes.append("question_internal_schema_leak")
-        if canonical_answer is not None and _answer_uses_only_identifier_fields(canonical_answer):
-            error_codes.append("label_identifier_chain_forbidden")
-        if not _label_summary_matches_requested_topic(
-            requested_topic=self.requested_topic,
+        if _answer_repeats_anchor_entity(canonical_answer, anchor_entity=payload.anchor_entity):
+            error_codes.append(SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY)
+        ungrounded_strings = _ungrounded_answer_strings(
+            canonical_answer,
+            self._raw_atomic_tool_calls,
+        )
+        if ungrounded_strings:
+            error_codes.append(SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED)
+            invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[:5]
+        if question_body is not None:
+            question_lower = question_body.lower()
+            if _contains_entity_placeholder_token(question_lower):
+                error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN)
+            if _contains_raw_identifier_token(question_lower):
+                error_codes.append(SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK)
+            if _question_repeats_anchor_entity(
+                question_body,
+                anchor_entity=payload.anchor_entity,
+            ):
+                error_codes.append(SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK)
+            if any(token in question_lower for token in self.forbidden_question_tokens):
+                error_codes.append(SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK)
+        if _answer_uses_only_identifier_fields(canonical_answer):
+            error_codes.append(SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN)
+        if not _label_summary_matches_selected_topic(
+            selected_topic=payload.topic,
             label_summary=payload.label_summary,
         ):
-            error_codes.append("requested_topic_misaligned")
+            error_codes.append(SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED)
 
         weakened_axes = _weakened_difficulty_axes(
             previous=self.strongest_difficulty_vector,
             current=payload.difficulty_vector,
         )
         if weakened_axes:
-            error_codes.append("difficulty_weakened")
+            error_codes.append(SubmitDraftErrorCode.DIFFICULTY_WEAKENED)
         if self.required_axis is not None:
             current_axis_value = getattr(payload.difficulty_vector, self.required_axis.value)
             strongest_axis_value = getattr(
                 self.strongest_difficulty_vector, self.required_axis.value
             )
             if current_axis_value <= strongest_axis_value:
-                error_codes.append("required_difficulty_axis_not_strengthened")
+                error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED)
         if (
             self.required_axis is not None
             and label_signature is not None
             and self._last_label_signature is not None
             and label_signature == self._last_label_signature
         ):
-            error_codes.append("label_not_strengthened")
+            error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
         if (
             self.required_axis is DifficultyAxis.SOLUTION_SPACE
             and label_slot_count is not None
             and self._last_label_slot_count is not None
             and label_slot_count <= self._last_label_slot_count
         ):
-            error_codes.append("required_label_axis_not_strengthened")
+            error_codes.append(SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED)
         if (
             self.required_axis is DifficultyAxis.CONSTRAINT_DENSITY
             and self._last_constraint_count is not None
             and constraint_count <= self._last_constraint_count
         ):
-            error_codes.append("required_label_axis_not_strengthened")
+            error_codes.append(SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED)
 
         if error_codes:
+            deduped_error_codes = list(dict.fromkeys(error_codes))
+            if all(error_code in _FEEDBACK_ONLY_ERROR_CODES for error_code in deduped_error_codes):
+                return self._record_feedback(
+                    message=self._invalid_submission_message(
+                        deduped_error_codes,
+                        feedback_only=True,
+                        diagnostics=invalid_diagnostics or None,
+                    ),
+                    error_codes=deduped_error_codes,
+                    payload=payload,
+                    search_cost_observations=search_cost_observations,
+                    diagnostics=invalid_diagnostics or None,
+                )
             return self._record_rejection(
                 submission_index=submission_index,
-                message=self._invalid_submission_message(error_codes),
-                error_codes=error_codes,
+                message=self._invalid_submission_message(
+                    deduped_error_codes,
+                    diagnostics=invalid_diagnostics or None,
+                ),
+                error_codes=deduped_error_codes,
                 payload=payload,
+                search_cost_observations=search_cost_observations,
                 diagnostics=invalid_diagnostics or None,
             )
 
@@ -802,8 +1019,9 @@ class SubmitDraftController:
             return self._record_rejection(
                 submission_index=submission_index,
                 message=f"Rejected. Invalid draft: {type(exc).__name__}: {exc}",
-                error_codes=["draft_validation_failed"],
+                error_codes=[SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED],
                 payload=payload,
+                search_cost_observations=search_cost_observations,
             )
 
         rollout_summary = await self.environment_orchestrator.run_draft(draft)
@@ -847,6 +1065,7 @@ class SubmitDraftController:
                 pass_rate=quality_gate_summary.pass_rate,
                 matched_solver_runs=quality_gate_summary.matched_solver_runs,
                 total_solver_runs=quality_gate_summary.total_solver_runs,
+                search_cost_observations=search_cost_observations,
                 diagnostics={},
             )
             return (
@@ -869,12 +1088,13 @@ class SubmitDraftController:
                     f"Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that axis above {strongest_axis_value:.1f} with the smallest grounded step you can justify before resubmitting. "
                     f"{max(0, attempts_left_after)} attempts left."
                 ),
-                error_codes=["reject_too_easy"],
+                error_codes=[SubmitDraftErrorCode.REJECT_TOO_EASY],
                 pass_rate=quality_gate_summary.pass_rate,
                 matched_solver_runs=quality_gate_summary.matched_solver_runs,
                 total_solver_runs=quality_gate_summary.total_solver_runs,
                 diagnostics={"requested_axis": requested_axis.value},
                 payload=payload,
+                search_cost_observations=search_cost_observations,
             )
 
         self.max_submissions = len(self.attempts) + 1
@@ -885,88 +1105,129 @@ class SubmitDraftController:
                 f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
                 "This draft is too hard for the configured band."
             ),
-            error_codes=["reject_too_hard"],
+            error_codes=[SubmitDraftErrorCode.REJECT_TOO_HARD],
             pass_rate=quality_gate_summary.pass_rate,
             matched_solver_runs=quality_gate_summary.matched_solver_runs,
             total_solver_runs=quality_gate_summary.total_solver_runs,
             diagnostics={"terminal_rejection": True},
             payload=payload,
+            search_cost_observations=search_cost_observations,
         )
 
-    def _invalid_submission_message(self, error_codes: list[str]) -> str:
+    def _invalid_submission_message(
+        self,
+        error_codes: list[SubmitDraftErrorCode],
+        *,
+        feedback_only: bool = False,
+        diagnostics: dict[str, object] | None = None,
+    ) -> str:
         message_map = {
-            "no_new_grounded_observation": (
+            SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION: (
                 "Rejected. Observe more real database facts with atomic tools before resubmitting."
             ),
-            "anchor_entity_required": "Rejected. anchor_entity must contain at least one primary-key value.",
-            "anchor_entity_scalar_map_required": (
-                "Rejected. anchor_entity must be a flat JSON object mapping primary-key field names to scalar values, for example {\"<pk_name>\": 123}. Do not nest it under entity_type, primary_key, or primary_keys."
+            SubmitDraftErrorCode.TOPIC_REQUIRED: "Rejected. topic is required.",
+            SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED: "Rejected. anchor_entity must contain at least one primary-key value.",
+            SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED: (
+                "Rejected. anchor_entity must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. Do not nest it under entity_type, primary_key, or primary_keys."
             ),
-            "canonical_answer_json_required": "Rejected. canonical_answer_json is required.",
-            "difficulty_vector_required": "Rejected. difficulty_vector is required.",
-            "question_required": "Rejected. question is required.",
-            "constraint_summary_required": (
+            SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_REQUIRED: "Rejected. canonical_answer_json is required.",
+            SubmitDraftErrorCode.DIFFICULTY_VECTOR_REQUIRED: "Rejected. difficulty_vector is required.",
+            SubmitDraftErrorCode.QUESTION_REQUIRED: "Rejected. question is required.",
+            SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED: (
+                "Rejected. question must already be the full user prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request."
+            ),
+            SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON: (
+                "Rejected. The <entity> block must contain a valid flat JSON object with one or more primary-key fields."
+            ),
+            SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH: (
+                "Rejected. The JSON inside the <entity> block must exactly match anchor_entity."
+            ),
+            SubmitDraftErrorCode.QUESTION_BODY_REQUIRED: (
+                "Rejected. After the <entity> block, include a natural user request body."
+            ),
+            SubmitDraftErrorCode.CONSTRAINT_SUMMARY_REQUIRED: (
                 "Rejected. constraint_summary must include at least one grounded constraint or tie-break rule."
             ),
-            "instance_space_required": "Rejected. instance_space is required.",
-            "label_summary_required": "Rejected. label_summary is required.",
-            "canonical_answer_json_invalid": (
+            SubmitDraftErrorCode.INSTANCE_SPACE_REQUIRED: "Rejected. instance_space is required.",
+            SubmitDraftErrorCode.LABEL_SUMMARY_REQUIRED: "Rejected. label_summary is required.",
+            SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. canonical_answer_json must be a valid JSON string."
             ),
-            "placeholder_tokens_not_allowed": (
+            SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED: (
                 "Rejected. Replace every placeholder token with grounded names and values from the current database."
             ),
-            "question_internal_schema_leak": (
+            SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK: (
                 "Rejected. Rewrite the user-facing question without raw table names, join-table names, or SQL keywords."
             ),
-            "question_raw_identifier_leak": (
+            SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK: (
                 "Rejected. Rewrite the user-facing question without raw identifier field names such as <entity>_id. Keep identifiers only inside anchor_entity."
             ),
-            "question_entity_placeholder_forbidden": (
-                "Rejected. Rewrite the user-facing question without the literal <entity> token. The runtime already renders the entity block separately."
+            SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN: (
+                "Rejected. Do not repeat the literal <entity> token inside the user-request body. Use it only once as the required XML entity block at the top."
             ),
-            "question_anchor_entity_leak": (
-                "Rejected. Rewrite the user-facing question without repeating the raw anchor entity id. Keep the raw anchor only inside the entity block and refer to it naturally in the question."
+            SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK: (
+                "Rejected. Rewrite the user-request body without repeating the raw anchor entity id. Keep the raw anchor only inside the entity block and refer to it naturally in the request."
             ),
-            "label_single_tool_derivable": (
-                "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations."
+            SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE: (
+                "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations. A one-hop foreign-key lookup that only returns identifiers is still too weak."
             ),
-            "label_blank_string_forbidden": (
-                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
+            SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY: (
+                "Rejected. Do not repeat anchor_entity fields inside the canonical answer. The entity block already provides that grounding, so use the answer slots for new grounded information."
             ),
-            "label_identifier_chain_forbidden": (
-                "Rejected. The canonical answer is only a chain of internal identifier fields. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
+            SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
+                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
             ),
-            "label_values_not_grounded": (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Only use business strings you actually observed. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
+            SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN: (
+                "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
             ),
-            "requested_topic_misaligned": (
-                "Rejected. label_summary must explicitly name the requested topic and keep the draft semantically centered on that topic."
+            SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
+                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
             ),
-            "difficulty_weakened": (
+            SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED: (
+                "Rejected. label_summary must explicitly name the selected topic and keep the draft semantically centered on that topic."
+            ),
+            SubmitDraftErrorCode.DIFFICULTY_WEAKENED: (
                 "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."
             ),
-            "required_difficulty_axis_not_strengthened": (
+            SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED: (
                 "Rejected. The requested difficulty axis was not strengthened."
             ),
-            "required_label_axis_not_strengthened": (
+            SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED: (
                 "Rejected. Strengthen the label itself along the requested axis by one grounded step before resubmitting."
             ),
-            "label_not_strengthened": (
+            SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED: (
                 "Rejected. After a too-easy result, do not resubmit the same label. Strengthen the canonical answer itself with a new grounded step."
             ),
-            "submit_payload_invalid": (
+            SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. submit_draft arguments did not match the required schema."
             ),
-            "draft_validation_failed": "Rejected. The submitted draft could not be validated.",
+            SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED: "Rejected. The submitted draft could not be validated.",
         }
         primary = message_map.get(error_codes[0], "Rejected. Fix the draft and resubmit.")
+        if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE:
+            if (
+                diagnostics is not None
+                and diagnostics.get("single_tool_scope") == "global"
+            ):
+                primary = (
+                    "Rejected. The canonical answer can be recovered from a single global tool call that does not depend on the anchor entity. "
+                    "Keep the label anchored to the selected entity and combine multiple anchored observations."
+                )
+        if feedback_only and primary.startswith("Rejected. "):
+            primary = primary.replace("Rejected. ", "Feedback. ", 1)
         additional_messages: list[str] = []
         for error_code in error_codes[1:3]:
             extra = message_map.get(error_code)
             if extra is None:
                 continue
-            additional_messages.append(extra.removeprefix("Rejected. ").strip())
+            extra_text = extra.removeprefix("Rejected. ").strip()
+            if extra.startswith("Feedback. "):
+                extra_text = extra.removeprefix("Feedback. ").strip()
+            additional_messages.append(extra_text)
+        if feedback_only:
+            if additional_messages:
+                return f"{primary} Also fix: {' '.join(additional_messages)} Submission budget unchanged."
+            return f"{primary} Submission budget unchanged."
         attempts_left_after = self.submissions_left() - 1
         if additional_messages:
             return (
@@ -975,25 +1236,47 @@ class SubmitDraftController:
             )
         return f"{primary} {max(0, attempts_left_after)} attempts left."
 
+    def _record_feedback(
+        self,
+        *,
+        message: str,
+        error_codes: list[SubmitDraftErrorCode],
+        payload: SubmitDraftPayload | dict[str, object] | None = None,
+        search_cost_observations: int | None = None,
+        diagnostics: dict[str, object] | None = None,
+    ) -> str:
+        self._feedback_events += 1
+        self._emit_monitor(
+            status="feedback",
+            payload=payload,
+            pass_rate=None,
+            matched_solver_runs=None,
+            total_solver_runs=None,
+            search_cost_observations=search_cost_observations,
+            diagnostics={"error_codes": _error_code_values(error_codes), **(diagnostics or {})},
+        )
+        return message
+
     def _record_rejection(
         self,
         *,
         submission_index: int,
         message: str,
-        error_codes: list[str],
+        error_codes: list[SubmitDraftErrorCode],
         payload: SubmitDraftPayload | None = None,
         pass_rate: float | None = None,
         matched_solver_runs: int | None = None,
         total_solver_runs: int | None = None,
+        search_cost_observations: int | None = None,
         diagnostics: dict[str, object] | None = None,
     ) -> str:
         attempts_left_after = self.submissions_left() - 1
         self.attempts.append(
             SubmitDraftAttemptRecord(
                 index=submission_index,
-                outcome=error_codes[0] if error_codes else "rejected",
+                outcome=error_codes[0].value if error_codes else "rejected",
                 message=message,
-                error_codes=tuple(error_codes),
+                error_codes=tuple(_error_code_values(error_codes)),
                 pass_rate=pass_rate,
                 matched_solver_runs=matched_solver_runs,
                 total_solver_runs=total_solver_runs,
@@ -1006,7 +1289,8 @@ class SubmitDraftController:
             pass_rate=pass_rate,
             matched_solver_runs=matched_solver_runs,
             total_solver_runs=total_solver_runs,
-            diagnostics={"error_codes": error_codes, **(diagnostics or {})},
+            search_cost_observations=search_cost_observations,
+            diagnostics={"error_codes": _error_code_values(error_codes), **(diagnostics or {})},
         )
         if attempts_left_after <= 0:
             return f"{message} Budget exhausted. No more attempts."
@@ -1020,6 +1304,7 @@ class SubmitDraftController:
         pass_rate: float | None,
         matched_solver_runs: int | None,
         total_solver_runs: int | None,
+        search_cost_observations: int | None,
         diagnostics: dict[str, object],
     ) -> None:
         if self.phase_monitor is None:
@@ -1033,11 +1318,18 @@ class SubmitDraftController:
             phase="submit_draft",
             status=status,
             expected_contract={
-                "requested_topic": self.requested_topic,
+                "requested_topic_hint": self.requested_topic,
                 "max_submissions": self.max_submissions,
             },
             actual_data={
-                "submission_index": len(self.attempts),
+                "submission_index": len(self.attempts) + self._feedback_events,
+                "selected_topic": (
+                    payload.topic
+                    if isinstance(payload, SubmitDraftPayload)
+                    else payload.get("topic")
+                    if isinstance(payload, dict)
+                    else None
+                ),
                 "question": (
                     payload.question
                     if isinstance(payload, SubmitDraftPayload)
@@ -1061,7 +1353,9 @@ class SubmitDraftController:
                 ),
                 **label_data,
                 "label_axis_proxies": {
-                    "search_cost_observations": len(self._raw_atomic_tool_calls)
+                    "search_cost_observations": search_cost_observations
+                    if search_cost_observations is not None
+                    else len(self._raw_atomic_tool_calls)
                     - self._tool_call_count_at_last_submission,
                     "solution_space_slots": label_data["canonical_answer_slot_count"],
                     "constraint_density_constraints": (
@@ -1096,6 +1390,12 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         parsed = json.loads(input_json) if input_json else {}
+        if "anchor_entity" not in parsed:
+            raw_question = parsed.get("question")
+            if isinstance(raw_question, str):
+                parsed_anchor_entity, _, prompt_error = _split_entity_wrapped_prompt(raw_question)
+                if prompt_error is None and parsed_anchor_entity is not None:
+                    parsed["anchor_entity"] = parsed_anchor_entity
         try:
             payload = SubmitDraftPayload.model_validate(parsed)
         except ValidationError as exc:
@@ -1106,11 +1406,14 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         name="submit_draft",
         description=(
             "Submit a grounded RLVR task draft after inspecting real database rows. "
-            "Include the canonical answer JSON, anchor entity, declared difficulty vector, "
+            "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
             "natural user-facing question, constraint summary, instance space, and label summary. "
-            "anchor_entity is mandatory and must be a flat JSON object mapping primary-key field names to scalar values, for example {\"<pk_name>\": 123}. "
+            "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "
+            "anchor_entity is mandatory and must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
             "Do not call submit_draft until anchor_entity is present and final for that draft. "
-            "label_summary must be English, must explicitly include the requested topic phrase, and must explain why the label is grounded and unique. "
+            "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
+            "The JSON inside the <entity> block must exactly match anchor_entity. "
+            "label_summary must be English, must explicitly include the selected topic phrase, and must explain why the label is grounded and unique. "
             "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "
             "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "
             "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "

@@ -63,6 +63,33 @@ def test_build_rendered_user_prompt_uses_entity_block_and_auto_schema() -> None:
     assert '"city"' in prompt
 
 
+def test_build_rendered_user_prompt_does_not_duplicate_prebuilt_entity_block() -> None:
+    task = TaskContract(
+        question='<entity>\n{"customer_id": 148}\n</entity>\n\n고객의 배정 상태를 알려 주세요.',
+        topic="assignment",
+        output_schema=OutputSchemaContract(
+            root=OutputFieldContract(
+                name="answer",
+                type=OutputFieldType.OBJECT,
+                fields=[
+                    OutputFieldContract(name="store_id", type=OutputFieldType.INT),
+                ],
+            ),
+            primary_output_format="json_object",
+        ),
+    )
+
+    prompt = build_rendered_user_prompt(
+        task,
+        anchor_entity={"customer_id": 148},
+        canonical_answer={"store_id": 1},
+    )
+
+    assert prompt.count("<entity>") == 1
+    assert prompt.startswith('<entity>\n{"customer_id": 148}\n</entity>\n\n')
+    assert "\n\n# Submit Result Format\n" in prompt
+
+
 def test_synthesis_rendered_prompt_builder_module_has_zero_legacy_imports() -> None:
     from rl_task_foundry.synthesis import rendered_prompt_builder as builder_module
 

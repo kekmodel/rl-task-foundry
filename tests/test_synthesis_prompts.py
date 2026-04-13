@@ -45,7 +45,7 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     )
 
     assert "# Domain" in prompt
-    assert "# Requested Topic" in prompt
+    assert "# Topic Hint" in prompt
     assert "# Topic Semantics" in prompt
     assert "# Schema Orientation" in prompt
     assert "# Tool Surface Hints" in prompt
@@ -57,9 +57,10 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "traverse_customer_to_order_by_customer_id: readable fields=['status', 'total_amount']" in prompt
     assert "Use text answer fields only from surfaces that already expose readable non-identifier fields" in prompt
     assert "Korean" in prompt
-    assert "Stay semantically tight to the requested topic: record history" in prompt
-    assert "Use the plain-language meaning of that topic as the semantic center" in prompt
-    assert "Keep the final answer centered on readable business-facing values" in prompt
+    assert "Coverage hint: record history" in prompt
+    assert "Treat this as a soft planning hint" in prompt
+    assert "choose the topic string that best describes that label" in prompt
+    assert "ignore the hint and choose a better grounded topic" in prompt
     assert "Previous Phase Outputs" not in prompt
     assert "Grounded Evidence" not in prompt
     assert "Recent Memory" not in prompt
@@ -71,22 +72,33 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     instructions = build_synthesis_agent_instructions()
 
     assert "synthesis agent" in instructions
-    assert "requested topic is fixed" in instructions
+    assert "Build the grounded label first" in instructions
+    assert "requested topic is only a soft coverage hint" in instructions
+    assert "If the hint would force an id-only, trivial, or weak label" in instructions
     assert "Before every submit_draft call" in instructions
     assert "label_summary" in instructions
-    assert "explicitly includes the requested topic phrase" in instructions
+    assert "explicitly includes the selected topic phrase" in instructions
     assert "anchor_entity must be a flat JSON object" in instructions
+    assert "question must already be the full user-facing prompt in this exact shape" in instructions
+    assert "The JSON inside the <entity> block must exactly match anchor_entity" in instructions
     assert "Only use names, titles, labels, statuses" in instructions
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
     assert "Before choosing text answer fields such as names, titles, labels, or statuses" in instructions
     assert "If the observed surface is id-only" in instructions
+    assert "Do not copy anchor_entity fields into the canonical answer" in instructions
+    assert "prefer local grounded orderings inside the anchored scope" in instructions
     assert "Single-call labels are forbidden." in instructions
     assert "requires combining at least two distinct grounded observations" in instructions
-    assert "Do not literally include the token <entity>" in instructions
+    assert "Do not base the label on whichever related row happened to appear first" in instructions
     assert "Do not repeat the raw anchor entity key or raw anchor entity id" in instructions
     assert "Do not repeat raw identifier field names" in instructions
     assert "only chains of internal *_id fields" in instructions
     assert "Do not mention raw table names" in instructions
+    assert "When you strengthen search_cost" in instructions
+    assert "When you strengthen solution_space" in instructions
+    assert "When you strengthen constraint_density" in instructions
+    assert "ways to change the label itself" in instructions
+    assert "do not keep the same label and only rewrite the question" in instructions
     assert "keep working inside the same conversation" in instructions
     assert "Calling submit_draft without anchor_entity is always wrong." in instructions
     assert "A rejection is not the end of the task." in instructions
@@ -115,6 +127,7 @@ def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules(
     )
 
     assert "# Topic Semantics" in prompt
-    assert "Stay semantically tight to the requested topic: payment history" in prompt
-    assert "Use the plain-language meaning of that topic as the semantic center" in prompt
-    assert "Keep the final answer centered on readable business-facing values" in prompt
+    assert "Coverage hint: payment history" in prompt
+    assert "Treat this as a soft planning hint" in prompt
+    assert "choose the topic string that best describes that label" in prompt
+    assert "ignore the hint and choose a better grounded topic" in prompt

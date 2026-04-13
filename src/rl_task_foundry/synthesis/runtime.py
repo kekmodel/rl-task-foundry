@@ -535,7 +535,6 @@ class SynthesisAgentRuntime:
         accepted_draft = controller.accepted_draft.model_copy(
             update={
                 "schema_summary": schema_summary,
-                "selected_topic": requested_topic,
                 "generation_attempts": self._generation_attempts_from_submit_records(
                     controller=controller,
                     provider=conversation_result.provider,
@@ -553,6 +552,7 @@ class SynthesisAgentRuntime:
             },
             actual_data={
                 "env_id": accepted_draft.environment.env_id,
+                "selected_topic": accepted_draft.selected_topic,
                 "final_output_text": conversation_result.final_output_text,
                 "turn_count": conversation_result.turn_count,
                 "tool_call_count": len(conversation_result.tool_calls),
@@ -797,7 +797,8 @@ class SynthesisAgentRuntime:
         submission: SubmitDraftPayload,
         schema_summary: dict[str, object],
     ) -> SynthesisEnvironmentDraft:
-        canonical_input = json.loads(submission.canonical_answer_json)
+        selected_topic = normalize_topic(submission.topic)
+        canonical_input = submission.canonical_answer
         output_schema = extract_output_schema_from_canonical(canonical_input)
         normalized_constraints = [
             ConstraintSummaryItem(
@@ -814,7 +815,7 @@ class SynthesisAgentRuntime:
         ]
         task = TaskContract(
             question=submission.question,
-            topic=requested_topic,
+            topic=selected_topic,
             output_schema=output_schema,
             constraint_summary=normalized_constraints,
             difficulty_vector=submission.difficulty_vector,
@@ -827,14 +828,14 @@ class SynthesisAgentRuntime:
         ) = self._materialize_instances_and_canonical_answers(
             task=task,
             instance_space=submission.instance_space,
-            canonical_answer_json=submission.canonical_answer_json,
+            canonical_answer_input=canonical_input,
             anchor_entity=submission.anchor_entity,
         )
         materialized_at = datetime.now(timezone.utc)
         environment = self._materialize_environment(
             atomic_tool_bundle=atomic_tool_bundle,
             db_id=db_id,
-            requested_topic=requested_topic,
+            requested_topic=selected_topic,
             created_at=materialized_at,
             materialized_cross_instance_set=materialized_cross_instance_set,
             task=task,
@@ -845,7 +846,7 @@ class SynthesisAgentRuntime:
             db_id=db_id,
             requested_topic=requested_topic,
             schema_summary=schema_summary,
-            selected_topic=requested_topic,
+            selected_topic=selected_topic,
             environment=environment,
             atomic_tool_bundle=atomic_tool_bundle,
             instances=instances,
@@ -1024,17 +1025,16 @@ class SynthesisAgentRuntime:
         *,
         task: TaskContract,
         instance_space: InstanceSpaceContract,
-        canonical_answer_json: str,
+        canonical_answer_input: object,
         anchor_entity: dict[str, object],
     ) -> tuple[
         list[MaterializedInstanceRecord],
         list[MaterializedCanonicalAnswerRecord],
         CrossInstanceSet,
     ]:
-        canonical_input = json.loads(canonical_answer_json)
         canonical_answer = canonicalize_output(
             task.output_schema,
-            canonical_input,
+            canonical_answer_input,
         )
         canonical_answer_json = canonical_json(canonical_answer)
         label_signature = self._signature_for_text(canonical_answer_json)

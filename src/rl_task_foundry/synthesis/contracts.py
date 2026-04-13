@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -36,6 +37,9 @@ class CategoryTaxonomy:
     OTHER = TopicName("other")
 
 
+_WORD_SEPARATOR_RE = re.compile(r"[_\-\s]+")
+
+
 def normalize_topic(value: object) -> str:
     if isinstance(value, TopicName):
         return str(value)
@@ -44,6 +48,22 @@ def normalize_topic(value: object) -> str:
         if normalized:
             return normalized
     raise ValueError("topic must be a non-empty string")
+
+
+def normalize_words(value: str, *, lowercase: bool = False) -> str:
+    normalized = _WORD_SEPARATOR_RE.sub(" ", value).strip()
+    if lowercase:
+        return normalized.lower()
+    return normalized
+
+
+def topic_phrase(value: object, *, lowercase: bool = False) -> str:
+    return normalize_words(normalize_topic(value), lowercase=lowercase)
+
+
+def topic_tokens(value: object) -> tuple[str, ...]:
+    normalized = topic_phrase(value, lowercase=True)
+    return tuple(token for token in re.findall(r"[a-z0-9]+", normalized) if len(token) >= 3)
 
 
 class DifficultyAxis(StrEnum):
