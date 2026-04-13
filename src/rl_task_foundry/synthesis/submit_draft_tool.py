@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, field_validator
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.synthesis.contracts import (
@@ -40,6 +40,7 @@ class SubmitDraftPayload(StrictModel):
         description="Canonical answer as a JSON string. This is the exact label used for EM scoring.",
     )
     anchor_entity: dict[str, object] = Field(
+        min_length=1,
         description=(
             "Mandatory anchor entity with at least one real primary-key value from the current database. "
             'Example: {"customer_id": 148} or {"store_id": 1}. Never omit this field.'
@@ -53,7 +54,7 @@ class SubmitDraftPayload(StrictModel):
         description="Natural user-facing request in the configured task language. Do not mention internal tool paths.",
     )
     constraint_summary: list["SubmitConstraintSummaryItem"] = Field(
-        default_factory=list,
+        min_length=1,
         description="List of grounded hard constraints or tie-break rules expressed in plain language.",
     )
     instance_space: InstanceSpaceContract = Field(
@@ -64,12 +65,57 @@ class SubmitDraftPayload(StrictModel):
         description="Short English summary of why the canonical answer is grounded and unique.",
     )
 
+    @field_validator("canonical_answer_json")
+    @classmethod
+    def _validate_canonical_answer_json(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("canonical_answer_json must not be blank")
+        try:
+            json.loads(normalized)
+        except json.JSONDecodeError as exc:
+            raise ValueError("canonical_answer_json must be a valid JSON string") from exc
+        return normalized
+
+    @field_validator("question", "label_summary")
+    @classmethod
+    def _validate_non_blank_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("text fields must not be blank")
+        return normalized
+
+    @field_validator("anchor_entity")
+    @classmethod
+    def _validate_anchor_entity(cls, value: dict[str, object]) -> dict[str, object]:
+        if not value:
+            raise ValueError("anchor_entity must contain at least one primary-key value")
+        normalized: dict[str, object] = {}
+        for raw_key, raw_value in value.items():
+            if not isinstance(raw_key, str) or not raw_key.strip():
+                raise ValueError("anchor_entity keys must be non-empty strings")
+            if raw_value is None or isinstance(raw_value, (dict, list)):
+                raise ValueError("anchor_entity values must be scalar JSON values")
+            normalized[raw_key.strip()] = raw_value
+        return normalized
+
 
 class SubmitConstraintSummaryItem(StrictModel):
-    key: str = Field(description="Stable identifier for this constraint.")
-    kind: str = Field(description="Constraint kind such as ordering, uniqueness, membership, or other.")
-    summary: str = Field(description="Natural-language summary of the constraint.")
+    key: str = Field(min_length=1, description="Stable identifier for this constraint.")
+    kind: str = Field(
+        min_length=1,
+        description="Constraint kind such as ordering, uniqueness, membership, or other.",
+    )
+    summary: str = Field(min_length=1, description="Natural-language summary of the constraint.")
     hard: bool = Field(default=True, description="Whether this constraint is mandatory.")
+
+    @field_validator("key", "kind", "summary")
+    @classmethod
+    def _validate_non_blank_constraint_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("constraint fields must not be blank")
+        return normalized
 
 
 SubmitDraftPayload.model_rebuild()
@@ -384,6 +430,10 @@ class SubmitDraftController:
             error_type = str(error_item.get("type", ""))
             if error_type == "missing" and len(location) == 1:
                 error_codes.append(f"{location[0]}_required")
+            elif location == ("canonical_answer_json",):
+                error_codes.append("canonical_answer_json_invalid")
+            elif location == ("constraint_summary",):
+                error_codes.append("constraint_summary_required")
             elif location == ("anchor_entity",):
                 error_codes.append("anchor_entity_required")
             else:
@@ -602,8 +652,14 @@ class SubmitDraftController:
             "canonical_answer_json_required": "Rejected. canonical_answer_json is required.",
             "difficulty_vector_required": "Rejected. difficulty_vector is required.",
             "question_required": "Rejected. question is required.",
+            "constraint_summary_required": (
+                "Rejected. constraint_summary must include at least one grounded constraint or tie-break rule."
+            ),
             "instance_space_required": "Rejected. instance_space is required.",
             "label_summary_required": "Rejected. label_summary is required.",
+            "canonical_answer_json_invalid": (
+                "Rejected. canonical_answer_json must be a valid JSON string."
+            ),
             "placeholder_tokens_not_allowed": (
                 "Rejected. Replace every placeholder token with grounded names and values from the current database."
             ),
@@ -752,8 +808,9 @@ class SubmitDraftController:
 
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     from agents import FunctionTool
+    from agents.strict_schema import ensure_strict_json_schema
 
-    params_json_schema = SubmitDraftPayload.model_json_schema()
+    params_json_schema = ensure_strict_json_schema(SubmitDraftPayload.model_json_schema())
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         parsed = json.loads(input_json) if input_json else {}
@@ -776,9 +833,10 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "
             "For assignment tasks, make the assignee relation explicit and use human-readable assignee attributes when possible. "
             "If the candidate assignee surface only exposes opaque ids in tool results, choose a different assignment relation instead of centering the task on that entity. "
-            "After any rejection, make at least one new atomic tool call before calling submit_draft again."
+            "After any rejection, make at least one new atomic tool call before calling submit_draft again. "
+            "All submit_draft arguments are schema-validated; missing required fields and invalid canonical_answer_json values are rejected automatically."
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
-        strict_json_schema=False,
+        strict_json_schema=True,
     )

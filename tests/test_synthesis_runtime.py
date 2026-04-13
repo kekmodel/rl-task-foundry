@@ -211,6 +211,45 @@ def _accepted_payload() -> SubmitDraftPayload:
     )
 
 
+def test_submit_draft_payload_schema_requires_nonempty_anchor_and_constraints() -> None:
+    schema = SubmitDraftPayload.model_json_schema()
+
+    assert "constraint_summary" in schema["required"]
+    assert schema["properties"]["anchor_entity"]["minProperties"] == 1
+    assert schema["properties"]["constraint_summary"]["minItems"] == 1
+
+
+def test_submit_draft_payload_rejects_invalid_canonical_answer_json() -> None:
+    payload = _accepted_payload().model_dump(mode="json")
+    payload["canonical_answer_json"] = "not json"
+
+    with pytest.raises(ValidationError, match="valid JSON string"):
+        SubmitDraftPayload.model_validate(payload)
+
+
+def test_reject_invalid_payload_reports_constraint_summary_requirement(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=0,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=1,
+    )
+    payload = _accepted_payload().model_dump(mode="json")
+    payload.pop("constraint_summary")
+
+    with pytest.raises(ValidationError) as exc_info:
+        SubmitDraftPayload.model_validate(payload)
+
+    message = controller.reject_invalid_payload(parsed=payload, error=exc_info.value)
+
+    assert "constraint_summary must include at least one grounded constraint" in message
+    assert "Budget exhausted. No more attempts." in message
+
+
 @pytest.mark.asyncio
 async def test_synthesize_environment_draft_runs_single_agent_and_returns_accepted_draft(
     tmp_path: Path,
