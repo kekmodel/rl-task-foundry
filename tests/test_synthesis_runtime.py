@@ -575,6 +575,44 @@ async def test_submit_draft_rejects_questions_that_repeat_anchor_entity_literals
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_literal_entity_placeholder_in_question(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_film_by_id",
+        params={"film_id": 147},
+        result={"film_id": 147},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_film_to_film_actor_by_film_id",
+        params={"film_id": 147, "limit": 5},
+        result=[{"actor_id": 9, "film_id": 147}],
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"film_id": 147},
+            "question": "영화 <entity>에 배정된 배우 수를 알려 주세요.",
+            "canonical_answer_json": '{"assigned_cast_count":1}',
+            "label_summary": "This assignment answer is grounded in the observed assigned cast count for the requested topic.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "literal <entity> token" in message
+    assert controller.attempts[-1].error_codes[0] == "question_entity_placeholder_forbidden"
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_labels_derivable_from_single_tool_call(
     tmp_path: Path,
 ) -> None:
@@ -805,6 +843,7 @@ async def test_submit_draft_rejects_blank_string_values_in_canonical_answer(
     message = await controller.submit(payload)
 
     assert "contains blank string fields" in message
+    assert "switch to counts, dates, amounts, statuses, ordering" in message
     assert controller.attempts[-1].error_codes[0] == "label_blank_string_forbidden"
 
 
@@ -882,3 +921,30 @@ def test_reject_invalid_payload_preserves_detail_when_budget_exhausts(tmp_path: 
 
     assert "canonical_answer_json is required" in message
     assert "Budget exhausted. No more attempts." in message
+
+
+def test_reject_invalid_payload_explains_flat_anchor_entity_requirement(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=0,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: payload,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        SubmitDraftPayload.model_validate(
+            {
+                **_accepted_payload().model_dump(mode="json"),
+                "anchor_entity": {"entity_type": "film", "primary_key": {"film_id": 1}},
+            }
+        )
+
+    message = controller.reject_invalid_payload(
+        parsed={"anchor_entity": {"entity_type": "film", "primary_key": {"film_id": 1}}},
+        error=exc_info.value,
+    )
+
+    assert "flat JSON object mapping primary-key field names to scalar values" in message

@@ -42,8 +42,9 @@ class SubmitDraftPayload(StrictModel):
     anchor_entity: dict[str, object] = Field(
         min_length=1,
         description=(
-            "Mandatory anchor entity with at least one real primary-key value from the current database. "
-            "Never omit this field."
+            "Mandatory anchor entity as a flat JSON object from primary-key field name to scalar value, "
+            'for example {"<pk_name>": 123}. Never omit this field and do not nest it under keys such as '
+            "entity_type, primary_key, primary_keys, or metadata."
         )
     )
     difficulty_vector: DifficultyVectorContract = Field(
@@ -375,6 +376,11 @@ def _contains_raw_identifier_token(text: str) -> bool:
     return _IDENTIFIER_FIELD_TOKEN_RE.search(text.lower()) is not None
 
 
+def _contains_entity_placeholder_token(text: str) -> bool:
+    lowered = text.lower()
+    return "<entity>" in lowered or "&lt;entity&gt;" in lowered
+
+
 def _normalize_topic_phrase(value: str) -> str:
     return re.sub(r"[_\-\s]+", " ", value.strip().lower()).strip()
 
@@ -488,7 +494,10 @@ class SubmitDraftController:
             elif location == ("constraint_summary",):
                 error_codes.append("constraint_summary_required")
             elif location == ("anchor_entity",):
-                error_codes.append("anchor_entity_required")
+                if error_type == "value_error":
+                    error_codes.append("anchor_entity_scalar_map_required")
+                else:
+                    error_codes.append("anchor_entity_required")
             else:
                 error_codes.append("submit_payload_invalid")
         raw_question = parsed.get("question")
@@ -569,6 +578,8 @@ class SubmitDraftController:
                 error_codes.append("label_values_not_grounded")
                 invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[:5]
         question_lower = payload.question.lower()
+        if _contains_entity_placeholder_token(question_lower):
+            error_codes.append("question_entity_placeholder_forbidden")
         if _contains_raw_identifier_token(question_lower):
             error_codes.append("question_raw_identifier_leak")
         if _question_repeats_anchor_entity(
@@ -709,6 +720,9 @@ class SubmitDraftController:
                 "Rejected. Observe more real database facts with atomic tools before resubmitting."
             ),
             "anchor_entity_required": "Rejected. anchor_entity must contain at least one primary-key value.",
+            "anchor_entity_scalar_map_required": (
+                "Rejected. anchor_entity must be a flat JSON object mapping primary-key field names to scalar values, for example {\"<pk_name>\": 123}. Do not nest it under entity_type, primary_key, or primary_keys."
+            ),
             "canonical_answer_json_required": "Rejected. canonical_answer_json is required.",
             "difficulty_vector_required": "Rejected. difficulty_vector is required.",
             "question_required": "Rejected. question is required.",
@@ -729,6 +743,9 @@ class SubmitDraftController:
             "question_raw_identifier_leak": (
                 "Rejected. Rewrite the user-facing question without raw identifier field names such as <entity>_id. Keep identifiers only inside anchor_entity."
             ),
+            "question_entity_placeholder_forbidden": (
+                "Rejected. Rewrite the user-facing question without the literal <entity> token. The runtime already renders the entity block separately."
+            ),
             "question_anchor_entity_leak": (
                 "Rejected. Rewrite the user-facing question without repeating the raw anchor entity id. Keep the raw anchor only inside the entity block and refer to it naturally in the question."
             ),
@@ -736,13 +753,13 @@ class SubmitDraftController:
                 "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations."
             ),
             "label_blank_string_forbidden": (
-                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value."
+                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
             ),
             "label_identifier_chain_forbidden": (
                 "Rejected. The canonical answer is only a chain of internal identifier fields. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
             ),
             "label_values_not_grounded": (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Only use business strings you actually observed."
+                "Rejected. Some label values were not directly grounded in the observed tool results. Only use business strings you actually observed. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
             ),
             "requested_topic_misaligned": (
                 "Rejected. label_summary must explicitly name the requested topic and keep the draft semantically centered on that topic."
@@ -888,7 +905,7 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "Submit a grounded RLVR task draft after inspecting real database rows. "
             "Include the canonical answer JSON, anchor entity, declared difficulty vector, "
             "natural user-facing question, constraint summary, instance space, and label summary. "
-            "anchor_entity is mandatory and must include at least one real primary-key value. "
+            "anchor_entity is mandatory and must be a flat JSON object mapping primary-key field names to scalar values, for example {\"<pk_name>\": 123}. "
             "Do not call submit_draft until anchor_entity is present and final for that draft. "
             "label_summary must be English, must explicitly include the requested topic phrase, and must explain why the label is grounded and unique. "
             "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "

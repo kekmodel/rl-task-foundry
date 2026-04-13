@@ -41,17 +41,21 @@ def build_synthesis_agent_instructions() -> str:
         "You may change the anchor entity when you need a better grounded task. "
         "Before every submit_draft call, observe real data with atomic tools and verify the canonical answer from those observations. "
         "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
+        "anchor_entity must be a flat JSON object from primary-key field name to scalar value, for example {\"<pk_name>\": 123}. Do not wrap it inside keys such as entity_type, primary_key, primary_keys, or metadata. "
         "Calling submit_draft without anchor_entity is always wrong. Choose the anchor first and keep it explicit in the payload. "
         "When you call submit_draft, include all required arguments: canonical_answer_json, anchor_entity, difficulty_vector, question, constraint_summary, instance_space, and label_summary. "
         "Do not guess hidden values. "
         "Make label_summary an English explanation that explicitly includes the requested topic phrase and explains why the label is grounded and unique. "
         "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. Do not invent placeholders such as Unknown or Entity #1. "
         "Do not submit blank or placeholder string fields in the canonical answer. Every answer field must carry a grounded, non-empty value. "
+        "Before choosing text answer fields such as names, titles, labels, or statuses, confirm that the observed tool results for the chosen surface actually expose those readable fields. "
+        "If the observed surface is id-only, do not ask for unreadable text fields from it. Switch to grounded counts, dates, amounts, statuses, ordering, or choose a different anchor or related entity whose observed rows expose readable fields. "
         "Avoid trivial tasks such as returning a single foreign key or a raw count when richer grounded tasks are possible. "
         "Prefer multi-field answers, ordered answer sets, explicit tie-breakers, or tasks that require combining multiple grounded facts. "
         "Single-call labels are forbidden. If one atomic tool call already returns the full label, or a direct projection of the full label, do not submit that task. "
         "Keep exploring until the label requires combining at least two distinct grounded observations. "
         "Do not reveal internal tool paths in the user-facing question. "
+        "Do not literally include the token <entity> in the user-facing question. The runtime will render the entity block separately. "
         "Do not repeat the raw anchor entity key or raw anchor entity id inside the user-facing question; the <entity> block already provides that grounding. Refer to the anchor naturally with a domain-appropriate phrase instead of the raw identifier. "
         "Do not repeat raw identifier field names such as <entity>_id in the user-facing question; keep identifiers only inside anchor_entity. "
         "Do not mention raw table names, bridge-table names, or SQL keywords such as JOIN, LIMIT, SELECT, or ORDER BY in the user-facing question. "
@@ -99,9 +103,11 @@ def build_synthesis_input(
         sections.append("# Schema Orientation\n" + "\n".join(schema_lines))
 
     tool_surface_lines: list[str] = []
-    point_lookups = tool_surface_summary.get("point_lookups")
-    if isinstance(point_lookups, list):
-        for item in point_lookups[:12]:
+    surfaces = tool_surface_summary.get("entity_surfaces")
+    if not isinstance(surfaces, list):
+        surfaces = tool_surface_summary.get("point_lookups")
+    if isinstance(surfaces, list):
+        for item in surfaces[:16]:
             if not isinstance(item, dict):
                 continue
             tool_name = str(item.get("tool_name") or "")
@@ -117,6 +123,9 @@ def build_synthesis_input(
                 tool_surface_lines.append(
                     f"- {tool_name}: readable fields=[] (id-only surface)"
                 )
+        tool_surface_lines.append(
+            "- Use text answer fields only from surfaces that already expose readable non-identifier fields. If a surface is id-only, prefer counts, dates, amounts, statuses, ordering, or a different anchor."
+        )
     if tool_surface_lines:
         sections.append("# Tool Surface Hints\n" + "\n".join(tool_surface_lines))
 

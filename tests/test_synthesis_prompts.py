@@ -27,7 +27,7 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
             ],
         },
         tool_surface_summary={
-            "point_lookups": [
+            "entity_surfaces": [
                 {
                     "tool_name": "get_customer_by_id",
                     "readable_fields": ["first_name", "last_name"],
@@ -35,6 +35,10 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
                 {
                     "tool_name": "get_staff_by_id",
                     "readable_fields": [],
+                },
+                {
+                    "tool_name": "traverse_customer_to_order_by_customer_id",
+                    "readable_fields": ["status", "total_amount"],
                 },
             ]
         },
@@ -50,6 +54,8 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "public.rental" in prompt
     assert "get_customer_by_id: readable fields=['first_name', 'last_name']" in prompt
     assert "get_staff_by_id: readable fields=[] (id-only surface)" in prompt
+    assert "traverse_customer_to_order_by_customer_id: readable fields=['status', 'total_amount']" in prompt
+    assert "Use text answer fields only from surfaces that already expose readable non-identifier fields" in prompt
     assert "Korean" in prompt
     assert "Stay semantically tight to the requested topic: record history" in prompt
     assert "Use the plain-language meaning of that topic as the semantic center" in prompt
@@ -69,10 +75,14 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Before every submit_draft call" in instructions
     assert "label_summary" in instructions
     assert "explicitly includes the requested topic phrase" in instructions
+    assert "anchor_entity must be a flat JSON object" in instructions
     assert "Only use names, titles, labels, statuses" in instructions
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
+    assert "Before choosing text answer fields such as names, titles, labels, or statuses" in instructions
+    assert "If the observed surface is id-only" in instructions
     assert "Single-call labels are forbidden." in instructions
     assert "requires combining at least two distinct grounded observations" in instructions
+    assert "Do not literally include the token <entity>" in instructions
     assert "Do not repeat the raw anchor entity key or raw anchor entity id" in instructions
     assert "Do not repeat raw identifier field names" in instructions
     assert "only chains of internal *_id fields" in instructions
@@ -101,7 +111,7 @@ def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules(
                 }
             ],
         },
-        tool_surface_summary={"point_lookups": []},
+        tool_surface_summary={"entity_surfaces": []},
     )
 
     assert "# Topic Semantics" in prompt

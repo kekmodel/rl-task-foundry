@@ -319,28 +319,37 @@ def summarize_schema_graph(graph: SchemaGraph, *, max_tables: int = 32) -> dict[
 def summarize_atomic_tool_surface(
     bundle: AtomicToolBundle,
     *,
-    max_point_lookups: int = 16,
+    max_entity_surfaces: int = 24,
 ) -> dict[str, object]:
-    point_lookups: list[dict[str, object]] = []
+    entity_surfaces: list[dict[str, object]] = []
     for tool in bundle.tools:
-        if tool.family is not AtomicToolFamily.T1_POINT_LOOKUP:
-            continue
-        if not tool.name.startswith("get_") or not tool.name.endswith("_by_id"):
+        if tool.family not in {
+            AtomicToolFamily.T1_POINT_LOOKUP,
+            AtomicToolFamily.T4_FK_TRAVERSAL,
+        }:
             continue
         properties = tool.returns_schema.get("properties", {})
+        if not isinstance(properties, dict):
+            items = tool.returns_schema.get("items")
+            if isinstance(items, dict):
+                properties = items.get("properties", {})
         if not isinstance(properties, dict):
             continue
         field_names = [str(key) for key in properties.keys()]
         readable_fields = [name for name in field_names if not name.endswith("_id")]
-        point_lookups.append(
+        entity_surfaces.append(
             {
                 "tool_name": tool.name,
+                "family": tool.family.value,
                 "field_names": field_names,
                 "readable_fields": readable_fields,
                 "id_only": len(readable_fields) == 0,
             }
         )
-    return {"point_lookups": point_lookups[:max_point_lookups]}
+    return {
+        "entity_surfaces": entity_surfaces[:max_entity_surfaces],
+        "point_lookups": entity_surfaces[:max_entity_surfaces],
+    }
 
 
 def forbidden_question_tokens(schema_summary: dict[str, object]) -> frozenset[str]:
