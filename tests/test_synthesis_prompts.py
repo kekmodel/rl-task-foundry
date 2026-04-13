@@ -96,6 +96,8 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not manufacture readable labels by wrapping an id in generic words" in instructions
     assert "If the label returns a count, ground that count with an explicit count or aggregate observation." in instructions
     assert "Do not copy anchor_entity fields into the canonical answer" in instructions
+    assert "Before the first judged submit_draft call, start with the smallest non-trivial anchored label" in instructions
+    assert "Do not start with a multi-item set, top-few list, or paired bundle" in instructions
     assert "prefer local grounded orderings inside the anchored scope" in instructions
     assert "Single-call labels are forbidden." in instructions
     assert "requires combining at least two distinct grounded observations" in instructions
@@ -115,6 +117,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "ways to change the label itself" in instructions
     assert "do not keep the same label and only rewrite the question" in instructions
     assert "keep working inside the same conversation" in instructions
+    assert "keep the same anchored user need and fix the smallest failing part first" in instructions
+    assert "Do not reset to a different topic, a different anchor, or a simpler scalar count" in instructions
+    assert "prefer replacing those slots with grounded business-facing values on the same anchored evidence path" in instructions
+    assert "use anchor-scoped count evidence rather than a global database total" in instructions
+    assert "If submit_draft says the draft is too hard, keep the same anchored user need and reduce only one difficulty axis" in instructions
     assert "Calling submit_draft without anchor_entity is always wrong." in instructions
     assert "A rejection is not the end of the task." in instructions
     assert "smallest grounded step" in instructions

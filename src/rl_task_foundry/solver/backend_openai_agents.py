@@ -68,8 +68,8 @@ def _extract_tool_calls(
     return tool_calls
 
 
-def _trace_stub(kind: str, task_id: str, solver_id: str, replica_index: int) -> str:
-    return f"memory://{kind}/{task_id}/{solver_id}/replica-{replica_index}"
+def _trace_stub(kind: str, task_id: str, solver_id: str) -> str:
+    return f"memory://{kind}/{task_id}/{solver_id}"
 
 
 def _is_successful_submission(output: Any) -> bool:
@@ -270,13 +270,13 @@ class OpenAIAgentsSolverBackend:
 
         return _finalize_on_submit
 
-    def _build_session(self, sdk: SimpleNamespace, task_id: str, replica_index: int) -> Any | None:
+    def _build_session(self, sdk: SimpleNamespace, task_id: str) -> Any | None:
         if not self.runtime_config.sdk_sessions_enabled:
             return None
         if self.solver_config.memory_mode == "none":
             return None
 
-        session_id = f"{task_id}:{self.solver_config.solver_id}:{replica_index}"
+        session_id = f"{task_id}:{self.solver_config.solver_id}"
         db_path: str | Path = ":memory:"
         if self.session_db_path is not None:
             self.session_db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -287,18 +287,17 @@ class OpenAIAgentsSolverBackend:
         self,
         kind: str,
         task_id: str,
-        replica_index: int,
         payload: dict[str, Any],
     ) -> str:
         if self.artifact_writer is not None:
             return self.artifact_writer(kind, payload)
         if self.traces_dir is None:
-            return _trace_stub(kind, task_id, self.solver_config.solver_id, replica_index)
+            return _trace_stub(kind, task_id, self.solver_config.solver_id)
         return _write_json_artifact(
             traces_dir=self.traces_dir,
             created_dirs=self._created_artifact_dirs,
             kind=kind,
-            filename=f"{task_id}__{self.solver_config.solver_id}__replica_{replica_index}.json",
+            filename=f"{task_id}__{self.solver_config.solver_id}.json",
             payload=payload,
         )
 
@@ -308,7 +307,7 @@ class OpenAIAgentsSolverBackend:
             raise TypeError("solver runtime requires SolverEpisodeInput")
         return input_item.task_id, input_item.rendered_user_prompt
 
-    async def run(self, episode: SolverEpisodeInput, *, replica_index: int) -> SolverResult:
+    async def run(self, episode: SolverEpisodeInput) -> SolverResult:
         sdk = self._sdk_components()
         # For non-OpenAI providers we default tracing off to avoid accidental export attempts.
         sdk.set_tracing_disabled(
@@ -331,7 +330,7 @@ class OpenAIAgentsSolverBackend:
             ),
             reset_tool_choice=False,
         )
-        session = self._build_session(sdk, task_id, replica_index)
+        session = self._build_session(sdk, task_id)
 
         started_at = perf_counter()
         try:
@@ -347,11 +346,9 @@ class OpenAIAgentsSolverBackend:
             transcript_ref = self._write_artifact(
                 "transcripts",
                 task_id,
-                replica_index,
                 {
                     "task_id": task_id,
                     "solver_id": self.solver_config.solver_id,
-                    "replica_index": replica_index,
                     "input_items": [{"role": "user", "content": rendered_user_prompt}],
                     "final_output": raw_output_text,
                     "error": {
@@ -363,11 +360,9 @@ class OpenAIAgentsSolverBackend:
             tool_trace_ref = self._write_artifact(
                 "tool_traces",
                 task_id,
-                replica_index,
                 {
                     "task_id": task_id,
                     "solver_id": self.solver_config.solver_id,
-                    "replica_index": replica_index,
                     "run_items": [],
                     "tool_calls": [],
                     "error": {
@@ -381,7 +376,6 @@ class OpenAIAgentsSolverBackend:
                 solver_id=self.solver_config.solver_id,
                 provider=self.solver_config.provider,
                 model=self.solver_config.model,
-                replica_index=replica_index,
                 transcript_ref=transcript_ref,
                 tool_trace_ref=tool_trace_ref,
                 raw_output_text=raw_output_text,
@@ -409,11 +403,9 @@ class OpenAIAgentsSolverBackend:
         transcript_ref = self._write_artifact(
             "transcripts",
             task_id,
-            replica_index,
             {
                 "task_id": task_id,
                 "solver_id": self.solver_config.solver_id,
-                "replica_index": replica_index,
                 "input_items": run_result.to_input_list(mode="preserve_all"),
                 "final_output": raw_output_text,
             },
@@ -421,11 +413,9 @@ class OpenAIAgentsSolverBackend:
         tool_trace_ref = self._write_artifact(
             "tool_traces",
             task_id,
-            replica_index,
             {
                 "task_id": task_id,
                 "solver_id": self.solver_config.solver_id,
-                "replica_index": replica_index,
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", [])],
                 "tool_calls": _extract_tool_calls(
                     run_result,
@@ -445,7 +435,6 @@ class OpenAIAgentsSolverBackend:
             solver_id=self.solver_config.solver_id,
             provider=self.solver_config.provider,
             model=self.solver_config.model,
-            replica_index=replica_index,
             transcript_ref=transcript_ref,
             tool_trace_ref=tool_trace_ref,
             raw_output_text=raw_output_text,

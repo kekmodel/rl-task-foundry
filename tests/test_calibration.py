@@ -6,8 +6,8 @@ from rl_task_foundry.calibration.runner import calibration_decision
 def test_safe_early_stop_respects_upper_and_lower_bounds():
     assert (
         safe_early_stop(
-            total_replicas=6,
-            completed_replicas=5,
+            total_solver_runs=6,
+            completed_solver_runs=5,
             passes_so_far=0,
             lower_bound=0.2,
             upper_bound=0.8,
@@ -16,8 +16,8 @@ def test_safe_early_stop_respects_upper_and_lower_bounds():
     )
     assert (
         safe_early_stop(
-            total_replicas=6,
-            completed_replicas=5,
+            total_solver_runs=6,
+            completed_solver_runs=5,
             passes_so_far=5,
             lower_bound=0.2,
             upper_bound=0.8,
@@ -26,8 +26,8 @@ def test_safe_early_stop_respects_upper_and_lower_bounds():
     )
     assert (
         safe_early_stop(
-            total_replicas=4,
-            completed_replicas=4,
+            total_solver_runs=4,
+            completed_solver_runs=4,
             passes_so_far=2,
             lower_bound=0.2,
             upper_bound=0.8,
@@ -44,7 +44,7 @@ def test_clopper_pearson_interval_and_ci_decision():
     results = [False, False, False, False, False]
     assert (
         calibration_decision(
-            total_replicas=6,
+            total_solver_runs=6,
             results=results,
             band=band,
             ci_alpha=0.1,

@@ -1,4 +1,4 @@
-# Reward and Environment Runtime
+# Reward and Task Runtime
 
 ## Label Truth
 
@@ -22,7 +22,7 @@ Flow:
 
 ## Environment Server
 
-The environment server is a stateless Gym-style runtime consumer for synthesized environments.
+The environment server is a stateless Gym-style runtime consumer for synthesized task bundles.
 
 ### Infrastructure
 
@@ -38,7 +38,7 @@ Recommended Docker Compose components:
 
 - `GET /health`
 - `POST /reset`
-  - request: `{env_id, instance_id}`
+  - request: `{task_id}`
   - response: `{episode_id, observation, info}`
 - `POST /step`
   - request: `{episode_id, tool_name, params}`
@@ -60,7 +60,7 @@ Recommended Docker Compose components:
 
 | Situation | HTTP | Action |
 | --- | --- | --- |
-| `sql_error` | `500` | discard the episode, mark the environment unhealthy |
+| `sql_error` | `500` | discard the episode, mark the task unhealthy |
 | Redis outage | `500` | discard the episode |
 | `invalid_episode` | `404` | discard the episode |
 | DB connection failure | `503` | discard the episode |
@@ -75,7 +75,7 @@ Redis state shape:
 
 ```text
 key:   episode:{episode_id}
-value: {env_id, instance_id, canonical_answer, output_schema, max_turns, current_turn}
+value: {task_id, canonical_answer, output_schema, max_turns, current_turn}
 ttl:   configurable
 ```
 

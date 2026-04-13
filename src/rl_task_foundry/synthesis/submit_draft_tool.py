@@ -15,10 +15,10 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
+    AnchorQueryContract,
     DIFFICULTY_CRANK_ORDER,
     DifficultyAxis,
     DifficultyVectorContract,
-    InstanceSpaceContract,
     StrictModel,
     flatten_difficulty_vector,
     is_person_like_identifier,
@@ -29,8 +29,8 @@ from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.prompts import difficulty_axis_feedback
 
 if TYPE_CHECKING:
-    from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentOrchestrator
-    from rl_task_foundry.synthesis.runtime import SynthesisEnvironmentDraft
+    from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
+    from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
 
 
 _FORBIDDEN_PLACEHOLDER_TOKENS = (
@@ -55,7 +55,7 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
     QUESTION_BODY_REQUIRED = "question_body_required"
     CONSTRAINT_SUMMARY_REQUIRED = "constraint_summary_required"
-    INSTANCE_SPACE_REQUIRED = "instance_space_required"
+    ANCHOR_QUERY_REQUIRED = "anchor_query_required"
     LABEL_SUMMARY_REQUIRED = "label_summary_required"
     PLACEHOLDER_TOKENS_NOT_ALLOWED = "placeholder_tokens_not_allowed"
     QUESTION_INTERNAL_SCHEMA_LEAK = "question_internal_schema_leak"
@@ -67,6 +67,8 @@ class SubmitDraftErrorCode(StrEnum):
     TEMPORAL_ORDERING_NOT_GROUNDED = "temporal_ordering_not_grounded"
     GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE = "global_ranking_outside_anchor_scope"
     COUNT_LABEL_REQUIRES_COUNT_EVIDENCE = "count_label_requires_count_evidence"
+    COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE = "count_label_outside_anchor_scope"
+    INITIAL_LABEL_TOO_BROAD = "initial_label_too_broad"
     LABEL_SINGLE_TOOL_DERIVABLE = "label_single_tool_derivable"
     LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
@@ -75,6 +77,8 @@ class SubmitDraftErrorCode(StrEnum):
     SELECTED_TOPIC_MISALIGNED = "selected_topic_misaligned"
     DIFFICULTY_WEAKENED = "difficulty_weakened"
     REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED = "required_difficulty_axis_not_strengthened"
+    REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED = "required_difficulty_axis_not_relaxed"
+    SEARCH_COST_IDENTIFIER_SHORTCUT_FORBIDDEN = "search_cost_identifier_shortcut_forbidden"
     REQUIRED_LABEL_AXIS_NOT_STRENGTHENED = "required_label_axis_not_strengthened"
     LABEL_NOT_STRENGTHENED = "label_not_strengthened"
     SUBMIT_PAYLOAD_INVALID = "submit_payload_invalid"
@@ -85,16 +89,43 @@ class SubmitDraftErrorCode(StrEnum):
 
 _FEEDBACK_ONLY_ERROR_CODES = frozenset(
     {
+        SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION,
         SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED,
         SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED,
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED,
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON,
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH,
         SubmitDraftErrorCode.QUESTION_BODY_REQUIRED,
+        SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK,
+        SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK,
+        SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN,
+        SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK,
         SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED,
         SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED,
+        SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED,
+        SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE,
+        SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE,
+        SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE,
+        SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD,
+        SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE,
+        SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY,
+        SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
+        SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN,
+        SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
+        SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED,
+        SubmitDraftErrorCode.DIFFICULTY_WEAKENED,
+        SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED,
+        SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED,
+        SubmitDraftErrorCode.SEARCH_COST_IDENTIFIER_SHORTCUT_FORBIDDEN,
+        SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED,
+        SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
     }
 )
+
+
+class DifficultyAdjustmentMode(StrEnum):
+    STRENGTHEN = "strengthen"
+    RELAX = "relax"
 
 
 class _ParsedCanonicalAnswerJson(str):
@@ -151,8 +182,8 @@ class SubmitDraftPayload(StrictModel):
         min_length=1,
         description="List of grounded hard constraints or tie-break rules expressed in plain language.",
     )
-    instance_space: InstanceSpaceContract = Field(
-        description="Anchor query and sampling plan used to materialize runtime instances."
+    anchor_query: AnchorQueryContract = Field(
+        description="Grounded SQL query that resolves the anchor entity values used for this task."
     )
     label_summary: str = Field(
         min_length=1,
@@ -518,10 +549,20 @@ def _answer_uses_only_identifier_fields(answer: object) -> bool:
             return False
         return all(isinstance(key, str) and _is_identifier_field_name(key) for key in mapping)
 
+    def _is_identifier_only_tree(value: object) -> bool:
+        if isinstance(value, dict):
+            if _keys_are_identifier_only(value):
+                return True
+            child_values = list(value.values())
+            return bool(child_values) and all(_is_identifier_only_tree(item) for item in child_values)
+        if isinstance(value, list):
+            return bool(value) and all(_is_identifier_only_tree(item) for item in value)
+        return False
+
     if isinstance(answer, dict):
-        return _keys_are_identifier_only(answer)
+        return _is_identifier_only_tree(answer)
     if isinstance(answer, list) and answer and all(isinstance(item, dict) for item in answer):
-        return all(_keys_are_identifier_only(item) for item in answer)
+        return _is_identifier_only_tree(answer)
     return False
 
 
@@ -772,6 +813,51 @@ def _observed_count_evidence(tool_calls: list[dict[str, object]]) -> bool:
     return False
 
 
+def _observed_anchor_scoped_count_evidence(
+    tool_calls: list[dict[str, object]],
+    *,
+    anchor_entity: dict[str, object],
+) -> bool:
+    for record in tool_calls:
+        tool_name = str(record.get("tool_name", ""))
+        if not tool_name.startswith("count_"):
+            continue
+        if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
+            return True
+    return False
+
+
+def _answer_has_multi_item_collection(value: object) -> bool:
+    if isinstance(value, list):
+        if len(value) > 1:
+            return True
+        return any(_answer_has_multi_item_collection(item) for item in value)
+    if isinstance(value, dict):
+        return any(_answer_has_multi_item_collection(item) for item in value.values())
+    return False
+
+
+def _axis_to_relax_for_too_hard(
+    *,
+    answer: object,
+    constraint_count: int,
+    difficulty_vector: DifficultyVectorContract,
+) -> DifficultyAxis:
+    if _answer_has_multi_item_collection(answer):
+        return DifficultyAxis.SOLUTION_SPACE
+    if constraint_count > 2:
+        return DifficultyAxis.CONSTRAINT_DENSITY
+    ranked_axes = sorted(
+        flatten_difficulty_vector(difficulty_vector).items(),
+        key=lambda item: (
+            item[1],
+            2 if item[0] is DifficultyAxis.SEARCH_COST else 1 if item[0] is DifficultyAxis.SOLUTION_SPACE else 0,
+        ),
+        reverse=True,
+    )
+    return ranked_axes[0][0]
+
+
 _ENTITY_PROMPT_RE = re.compile(
     r"\A<entity>\n(?P<entity_json>.+?)\n</entity>\n\n(?P<body>.+)\Z",
     re.DOTALL,
@@ -921,19 +1007,21 @@ def _anchor_entity_patterns(
 class SubmitDraftController:
     config: AppConfig
     requested_topic: str
-    environment_orchestrator: EnvironmentOrchestrator
+    solver_orchestrator: SolverOrchestrator
     build_draft: Any
     phase_monitor: PipelinePhaseMonitorLogger | None = None
     max_submissions: int = 5
     forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
     self_anchor_surface_names: tuple[str, ...] = ()
-    accepted_draft: SynthesisEnvironmentDraft | None = None
+    accepted_draft: SynthesisTaskDraft | None = None
     attempts: list[SubmitDraftAttemptRecord] = field(default_factory=list)
     strongest_difficulty_vector: DifficultyVectorContract = field(
         default_factory=DifficultyVectorContract
     )
     difficulty_crank_history: list[DifficultyAxis] = field(default_factory=list)
     required_axis: DifficultyAxis | None = None
+    required_axis_mode: DifficultyAdjustmentMode | None = None
+    required_axis_reference_value: float | None = None
     last_quality_gate_status: str | None = None
     last_quality_gate_pass_rate: float | None = None
     _atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
@@ -944,6 +1032,8 @@ class SubmitDraftController:
     _last_constraint_count: int | None = field(default=None, init=False)
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
+    _last_primary_error_code: SubmitDraftErrorCode | None = field(default=None, init=False)
+    _consecutive_primary_error_count: int = field(default=0, init=False)
 
     def submissions_left(self) -> int:
         return max(0, self.max_submissions - len(self.attempts))
@@ -1090,7 +1180,7 @@ class SubmitDraftController:
                 "question": payload.question,
                 "label_summary": payload.label_summary,
                 "constraint_summary": _constraint_summary_payload(payload.constraint_summary),
-                "instance_space": payload.instance_space.model_dump(mode="json"),
+                "anchor_query": payload.anchor_query.model_dump(mode="json"),
             }
         )
         if placeholder_tokens:
@@ -1178,39 +1268,86 @@ class SubmitDraftController:
             and not _observed_count_evidence(self._raw_atomic_tool_calls)
         ):
             error_codes.append(SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE)
+        if (
+            question_body is not None
+            and _count_semantics_present(canonical_answer, payload.constraint_summary)
+            and _observed_count_evidence(self._raw_atomic_tool_calls)
+            and not _mentions_global_scope(question_body, payload.constraint_summary)
+            and not _observed_anchor_scoped_count_evidence(
+                self._raw_atomic_tool_calls,
+                anchor_entity=payload.anchor_entity,
+            )
+        ):
+            error_codes.append(SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE)
         if not _label_summary_matches_selected_topic(
             selected_topic=payload.topic,
             label_summary=payload.label_summary,
         ):
             error_codes.append(SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED)
 
+        if (
+            not self.attempts
+            and self.required_axis is None
+            and _answer_has_multi_item_collection(canonical_answer)
+        ):
+            error_codes.append(SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD)
+
         weakened_axes = _weakened_difficulty_axes(
             previous=self.strongest_difficulty_vector,
             current=payload.difficulty_vector,
         )
-        if weakened_axes:
+        allowed_weaken_axis = (
+            self.required_axis.value
+            if self.required_axis is not None
+            and self.required_axis_mode is DifficultyAdjustmentMode.RELAX
+            else None
+        )
+        disallowed_weakened_axes = [
+            axis for axis in weakened_axes if axis != allowed_weaken_axis
+        ]
+        if disallowed_weakened_axes:
             error_codes.append(SubmitDraftErrorCode.DIFFICULTY_WEAKENED)
-        if self.required_axis is not None:
+        if (
+            self.required_axis is not None
+            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
+        ):
             current_axis_value = getattr(payload.difficulty_vector, self.required_axis.value)
-            strongest_axis_value = getattr(
-                self.strongest_difficulty_vector, self.required_axis.value
+            reference_axis_value = (
+                self.required_axis_reference_value
+                if self.required_axis_reference_value is not None
+                else getattr(self.strongest_difficulty_vector, self.required_axis.value)
             )
-            if current_axis_value <= strongest_axis_value:
+            if current_axis_value <= reference_axis_value:
                 error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED)
         if (
             self.required_axis is not None
+            and self.required_axis_mode is DifficultyAdjustmentMode.RELAX
+        ):
+            current_axis_value = getattr(payload.difficulty_vector, self.required_axis.value)
+            reference_axis_value = (
+                self.required_axis_reference_value
+                if self.required_axis_reference_value is not None
+                else getattr(self.strongest_difficulty_vector, self.required_axis.value)
+            )
+            if current_axis_value >= reference_axis_value:
+                error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED)
+        if (
+            self.required_axis is not None
+            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
             and self._last_label_signature is not None
             and label_signature == self._last_label_signature
         ):
             error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
         if (
             self.required_axis is DifficultyAxis.SOLUTION_SPACE
+            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
             and self._last_label_slot_count is not None
             and label_slot_count <= self._last_label_slot_count
         ):
             error_codes.append(SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED)
         if (
             self.required_axis is DifficultyAxis.CONSTRAINT_DENSITY
+            and self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN
             and self._last_constraint_count is not None
             and constraint_count <= self._last_constraint_count
         ):
@@ -1253,9 +1390,9 @@ class SubmitDraftController:
                 search_cost_observations=search_cost_observations,
             )
 
-        rollout_summary = await self.environment_orchestrator.run_draft(draft)
-        from rl_task_foundry.pipeline.environment_orchestrator import (
-            EnvironmentQualityGateStatus,
+        rollout_summary = await self.solver_orchestrator.run_draft(draft)
+        from rl_task_foundry.pipeline.solver_orchestrator import (
+            TaskQualityGateStatus,
             evaluate_rollout_summary,
         )
         from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
@@ -1272,7 +1409,7 @@ class SubmitDraftController:
             payload.difficulty_vector,
         )
 
-        if quality_gate_summary.status is EnvironmentQualityGateStatus.ACCEPT:
+        if quality_gate_summary.status is TaskQualityGateStatus.ACCEPT:
             accepted_draft = accepted_draft_with_quality_metrics(
                 draft,
                 quality_gate_summary=quality_gate_summary,
@@ -1303,17 +1440,20 @@ class SubmitDraftController:
             )
 
         attempts_left_after = self.submissions_left() - 1
-        if quality_gate_summary.status is EnvironmentQualityGateStatus.REJECT_TOO_EASY:
+        if quality_gate_summary.status is TaskQualityGateStatus.REJECT_TOO_EASY:
             requested_axis = _next_difficulty_crank_axis(self.difficulty_crank_history)
             self.required_axis = requested_axis
+            self.required_axis_mode = DifficultyAdjustmentMode.STRENGTHEN
             self.difficulty_crank_history.append(requested_axis)
             strongest_axis_value = getattr(self.strongest_difficulty_vector, requested_axis.value)
+            self.required_axis_reference_value = strongest_axis_value
             return self._record_rejection(
                 submission_index=submission_index,
                 message=(
                     "Rejected. solver pass rate "
                     f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
                     f"Crank {requested_axis.value}. {difficulty_axis_feedback(requested_axis)} "
+                    "Keep the same anchored user need and preserve the other two axes at least as strong as before. "
                     f"Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that axis above {strongest_axis_value:.1f} with the smallest grounded step you can justify before resubmitting. "
                     f"{max(0, attempts_left_after)} attempts left."
                 ),
@@ -1326,19 +1466,32 @@ class SubmitDraftController:
                 search_cost_observations=search_cost_observations,
             )
 
-        self.max_submissions = len(self.attempts) + 1
+        requested_axis = _axis_to_relax_for_too_hard(
+            answer=canonical_answer,
+            constraint_count=constraint_count,
+            difficulty_vector=payload.difficulty_vector,
+        )
+        self.required_axis = requested_axis
+        self.required_axis_mode = DifficultyAdjustmentMode.RELAX
+        self.required_axis_reference_value = getattr(payload.difficulty_vector, requested_axis.value)
         return self._record_rejection(
             submission_index=submission_index,
             message=(
                 "Rejected. solver pass rate "
                 f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
-                "This draft is too hard for the configured band."
+                "This draft is too hard for the configured band. "
+                f"Reduce only {requested_axis.value} by one grounded step while keeping the same anchored user need and preserving the other two axes. "
+                "Prefer the smallest simplification that keeps the task useful, such as shrinking a multi-item set to one item, removing one tie-breaker, or shortening one evidence hop before changing topic or anchor. "
+                f"{max(0, attempts_left_after)} attempts left."
             ),
             error_codes=[SubmitDraftErrorCode.REJECT_TOO_HARD],
             pass_rate=quality_gate_summary.pass_rate,
             matched_solver_runs=quality_gate_summary.matched_solver_runs,
             total_solver_runs=quality_gate_summary.total_solver_runs,
-            diagnostics={"terminal_rejection": True},
+            diagnostics={
+                "terminal_rejection": False,
+                "requested_axis": requested_axis.value,
+            },
             payload=payload,
             search_cost_observations=search_cost_observations,
         )
@@ -1377,7 +1530,7 @@ class SubmitDraftController:
             SubmitDraftErrorCode.CONSTRAINT_SUMMARY_REQUIRED: (
                 "Rejected. constraint_summary must include at least one grounded constraint or tie-break rule."
             ),
-            SubmitDraftErrorCode.INSTANCE_SPACE_REQUIRED: "Rejected. instance_space is required.",
+            SubmitDraftErrorCode.ANCHOR_QUERY_REQUIRED: "Rejected. anchor_query is required.",
             SubmitDraftErrorCode.LABEL_SUMMARY_REQUIRED: "Rejected. label_summary is required.",
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. canonical_answer_json must be a valid JSON string."
@@ -1412,6 +1565,12 @@ class SubmitDraftController:
             SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE: (
                 "Rejected. A count-like label needs explicit count evidence. Do not infer a total from the first sampled rows you happened to inspect; use a grounded count or aggregate observation for that anchored scope."
             ),
+            SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE: (
+                "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, use a count or aggregate tool call that depends on anchor_entity instead of a global total."
+            ),
+            SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD: (
+                "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."
+            ),
             SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE: (
                 "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations. A one-hop foreign-key lookup that only returns identifiers is still too weak."
             ),
@@ -1422,10 +1581,10 @@ class SubmitDraftController:
                 "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
             ),
             SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN: (
-                "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead."
+                "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead. If the current hinted topic keeps forcing id-only answers, choose a better grounded topic for the same anchored user need before resubmitting."
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
+                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, choose a different anchor with readable fields, or choose a better grounded topic for the same anchored user need."
             ),
             SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED: (
                 "Rejected. label_summary must explicitly name the selected topic and keep the draft semantically centered on that topic."
@@ -1435,6 +1594,9 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED: (
                 "Rejected. The requested difficulty axis was not strengthened."
+            ),
+            SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED: (
+                "Rejected. The requested difficulty axis was not reduced. Keep the same anchored user need and simplify only that axis by one grounded step."
             ),
             SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED: (
                 "Rejected. Strengthen the label itself along the requested axis by one grounded step before resubmitting."
@@ -1459,6 +1621,23 @@ class SubmitDraftController:
                 )
         if feedback_only and primary.startswith("Rejected. "):
             primary = primary.replace("Rejected. ", "Feedback. ", 1)
+        preserve_guidance = ""
+        if self._last_monitored_label_data is not None:
+            preserve_guidance = (
+                " Keep the same anchored user need and fix only the failing part when possible. "
+                "Do not reset to a different topic, a different anchor, or a simpler global count just to satisfy this feedback."
+            )
+        escalation_guidance = ""
+        if (
+            error_codes
+            and error_codes[0] is self._last_primary_error_code
+            and self._consecutive_primary_error_count >= 2
+        ):
+            escalation_guidance = (
+                " You have repeated the same failure multiple times. Abandon this label family and pivot: "
+                "make new atomic tool calls on a different anchored evidence path, or choose a different grounded topic for the same anchored user need. "
+                "Do not resubmit another small variant of the same id-only, single-call, or ungrounded answer."
+            )
         additional_messages: list[str] = []
         for error_code in error_codes[1:3]:
             extra = message_map.get(error_code)
@@ -1470,15 +1649,22 @@ class SubmitDraftController:
             additional_messages.append(extra_text)
         if feedback_only:
             if additional_messages:
-                return f"{primary} Also fix: {' '.join(additional_messages)} Submission budget unchanged."
-            return f"{primary} Submission budget unchanged."
+                return (
+                    f"{primary}{preserve_guidance}{escalation_guidance} Also fix: {' '.join(additional_messages)} "
+                    "Make another atomic tool call if needed, then call submit_draft again. Do not stop with plain text. "
+                    "Submission budget unchanged."
+                )
+            return (
+                f"{primary}{preserve_guidance}{escalation_guidance} Make another atomic tool call if needed, then call submit_draft again. "
+                "Do not stop with plain text. Submission budget unchanged."
+            )
         attempts_left_after = self.submissions_left() - 1
         if additional_messages:
             return (
-                f"{primary} Also fix: {' '.join(additional_messages)} "
+                f"{primary}{preserve_guidance}{escalation_guidance} Also fix: {' '.join(additional_messages)} "
                 f"{max(0, attempts_left_after)} attempts left."
             )
-        return f"{primary} {max(0, attempts_left_after)} attempts left."
+        return f"{primary}{preserve_guidance}{escalation_guidance} {max(0, attempts_left_after)} attempts left."
 
     def _record_feedback(
         self,
@@ -1489,6 +1675,7 @@ class SubmitDraftController:
         search_cost_observations: int | None = None,
         diagnostics: dict[str, object] | None = None,
     ) -> str:
+        self._update_primary_error_state(error_codes)
         self._feedback_events += 1
         self._emit_monitor(
             status="feedback",
@@ -1514,6 +1701,7 @@ class SubmitDraftController:
         search_cost_observations: int | None = None,
         diagnostics: dict[str, object] | None = None,
     ) -> str:
+        self._update_primary_error_state(error_codes)
         attempts_left_after = self.submissions_left() - 1
         self.attempts.append(
             SubmitDraftAttemptRecord(
@@ -1539,6 +1727,21 @@ class SubmitDraftController:
         if attempts_left_after <= 0:
             return f"{message} Budget exhausted. No more attempts."
         return message
+
+    def _update_primary_error_state(
+        self,
+        error_codes: list[SubmitDraftErrorCode],
+    ) -> None:
+        if not error_codes:
+            self._last_primary_error_code = None
+            self._consecutive_primary_error_count = 0
+            return
+        primary = error_codes[0]
+        if primary is self._last_primary_error_code:
+            self._consecutive_primary_error_count += 1
+        else:
+            self._last_primary_error_code = primary
+            self._consecutive_primary_error_count = 1
 
     def _emit_monitor(
         self,
@@ -1619,6 +1822,10 @@ class SubmitDraftController:
             },
             diagnostics={
                 "required_axis": self.required_axis.value if self.required_axis is not None else None,
+                "required_axis_mode": (
+                    self.required_axis_mode.value if self.required_axis_mode is not None else None
+                ),
+                "required_axis_reference_value": self.required_axis_reference_value,
                 "difficulty_crank_history": [axis.value for axis in self.difficulty_crank_history],
                 "recent_tool_calls": self._atomic_tool_calls[-5:],
                 **diagnostics,

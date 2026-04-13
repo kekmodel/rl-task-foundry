@@ -52,6 +52,7 @@ def _build_agent(
     *,
     model: Any,
     tools: list[object],
+    tool_use_behavior: Any,
 ) -> Any:
     return sdk.Agent(
         name="synthesis",
@@ -59,7 +60,12 @@ def _build_agent(
         model=model,
         tools=tools,
         output_type=None,
-        model_settings=sdk.ModelSettings(parallel_tool_calls=False),
+        tool_use_behavior=tool_use_behavior,
+        model_settings=sdk.ModelSettings(
+            parallel_tool_calls=False,
+            tool_choice="required",
+        ),
+        reset_tool_choice=False,
     )
 
 
@@ -91,7 +97,7 @@ class OpenAIAgentsSynthesisBackend:
 
     def _sdk_components(self) -> SimpleNamespace:
         if self._sdk is None:
-            self._sdk = _shared_load_sdk_components()
+            self._sdk = _shared_load_sdk_components(include_tools_to_final_output=True)
         return self._sdk
 
     def _build_model(self, sdk: SimpleNamespace) -> Any:
@@ -165,6 +171,25 @@ class OpenAIAgentsSynthesisBackend:
         sdk_tools.append(build_submit_draft_sdk_tool(self.submit_draft_controller))
         return sdk_tools
 
+    @staticmethod
+    def _build_tool_use_behavior(sdk: SimpleNamespace) -> Any:
+        def _finalize_on_submit(_context_wrapper: Any, tool_results: list[Any]) -> Any:
+            for tool_result in tool_results:
+                if getattr(getattr(tool_result, "tool", None), "name", None) != "submit_draft":
+                    continue
+                output = getattr(tool_result, "output", None)
+                if not isinstance(output, str):
+                    continue
+                normalized = output.strip()
+                if normalized.startswith("Accepted.") or "Budget exhausted. No more attempts." in normalized:
+                    return sdk.ToolsToFinalOutputResult(
+                        is_final_output=True,
+                        final_output=normalized,
+                    )
+            return sdk.ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+
+        return _finalize_on_submit
+
     def _write_artifact(
         self,
         *,
@@ -205,7 +230,12 @@ class OpenAIAgentsSynthesisBackend:
             )
         model = self._build_model(sdk)
         tools = self._build_tools()
-        agent = _build_agent(sdk, model=model, tools=tools)
+        agent = _build_agent(
+            sdk,
+            model=model,
+            tools=tools,
+            tool_use_behavior=self._build_tool_use_behavior(sdk),
+        )
         request_input = build_synthesis_input(
             domain_name=domain_name,
             scenario_description=scenario_description,

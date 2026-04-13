@@ -6,17 +6,18 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from rl_task_foundry.cli import app
-from rl_task_foundry.infra.storage import bootstrap_run_db, connect_run_db, record_accepted_example, record_event, record_run, record_task, record_verification_result
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
-from rl_task_foundry.synthesis.environment_registry import (
-    DifficultyBand,
-    EnvironmentRegistryCoverageEntry,
-    EnvironmentRegistryRecord,
-    EnvironmentRegistrySnapshot,
-    SemanticDedupCandidate,
+from rl_task_foundry.infra.storage import (
+    bootstrap_run_db,
+    connect_run_db,
+    record_accepted_example,
+    record_event,
+    record_run,
+    record_task,
+    record_verification_result,
 )
-from rl_task_foundry.synthesis.contracts import EnvironmentStatus
-from rl_task_foundry.synthesis.proof_environment import ProofEnvironmentRunSummary
+from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
+from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, TaskBundleStatus
+from rl_task_foundry.synthesis.proof_environment import ProofTaskRunSummary
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialStatus,
     RealDbTrialSummary,
@@ -26,21 +27,27 @@ from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunSummary,
     SynthesisRegistryStepSummary,
 )
-from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
-from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryCommitStatus
-from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisSchedulerDecision,
     SynthesisSelectionStatus,
 )
-from tests.test_synthesis_environment_registry import _sample_draft
+from rl_task_foundry.synthesis.task_registry import (
+    DifficultyBand,
+    SemanticDedupCandidate,
+    TaskRegistryCommitStatus,
+    TaskRegistryCoverageEntry,
+    TaskRegistryRecord,
+    TaskRegistrySnapshot,
+    TaskRegistryWriter,
+)
+from tests.test_synthesis_task_registry import _sample_draft
 
 
 def test_cli_validate_config_command():
     result = CliRunner().invoke(app, ["validate-config"])
     normalized = result.stdout.replace("\n", "")
     assert result.exit_code == 0
-    assert "solver_replicas=6" in normalized
+    assert "total_solver_runs=6" in normalized
     assert "composer=codex_oauth/gpt-5.4-mini" in normalized
     assert (
         "atomic_tools=max_tool_count=256,bounded_result_limit=100,"
@@ -63,14 +70,7 @@ def test_cli_validate_config_command():
 def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(
-        json.dumps(
-            [
-                {
-                    "db_id": "sakila",
-                    "categories": ["assignment"],
-                }
-            ]
-        ),
+        json.dumps([{"db_id": "sakila", "categories": ["assignment"]}]),
         encoding="utf-8",
     )
     captured: dict[str, object] = {}
@@ -92,30 +92,30 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                 initially_processed_pairs=0,
                 processed_pairs_after_run=1,
                 generated_drafts=1,
-                quality_accepted_envs=1,
-                quality_rejected_envs=0,
-                registry_committed_envs=1,
-                registry_duplicate_envs=0,
+                quality_accepted_tasks=1,
+                quality_rejected_tasks=0,
+                registry_committed_tasks=1,
+                registry_duplicate_tasks=0,
                 remaining_pairs=0,
                 flow_id="flow_registry_test",
                 phase_monitor_log_path=Path("artifacts/phase_monitors.jsonl"),
-                generated_env_ids=["env_assignment_deadbeef"],
-                committed_env_ids=["env_assignment_deadbeef"],
-                duplicate_env_ids=[],
-                registry_root_dir=Path("artifacts/environments"),
-                registry_index_db_path=Path("artifacts/environment_registry.db"),
+                generated_task_ids=["task_assignment_deadbeef"],
+                committed_task_ids=["task_assignment_deadbeef"],
+                duplicate_task_ids=[],
+                registry_root_dir=Path("artifacts/tasks"),
+                registry_index_db_path=Path("artifacts/task_registry.db"),
                 steps=[
                     SynthesisRegistryStepSummary(
                         decision=SynthesisSchedulerDecision(
                             status=SynthesisSelectionStatus.READY,
                             db_id="sakila",
-                            category=CategoryTaxonomy.ASSIGNMENT,
-                            reason="selected next available db/category pair",
+                            topic=CategoryTaxonomy.ASSIGNMENT,
+                            reason="selected next available db/topic pair",
                         ),
-                        draft_env_id="env_assignment_deadbeef",
+                        draft_task_id="task_assignment_deadbeef",
                         draft_created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
-                        registry_status=EnvironmentRegistryCommitStatus.COMMITTED,
-                        registry_env_id="env_assignment_deadbeef",
+                        registry_status=TaskRegistryCommitStatus.COMMITTED,
+                        registry_task_id="task_assignment_deadbeef",
                     )
                 ],
             )
@@ -142,10 +142,10 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert "outcome=completed_all" in result.stdout
     assert "checkpoint_namespace=cli_registry_test" in result.stdout
     assert "generated_drafts=1" in result.stdout
-    assert "quality_accepted_envs=1" in result.stdout
-    assert "quality_rejected_envs=0" in result.stdout
-    assert "registry_committed_envs=1" in result.stdout
-    assert "registry_duplicate_envs=0" in result.stdout
+    assert "quality_accepted_tasks=1" in result.stdout
+    assert "quality_rejected_tasks=0" in result.stdout
+    assert "registry_committed_tasks=1" in result.stdout
+    assert "registry_duplicate_tasks=0" in result.stdout
     assert "remaining_pairs=0" in result.stdout
     assert "flow_id=flow_registry_test" in result.stdout
     assert "phase_monitor_log_path=artifacts/phase_monitors.jsonl" in result.stdout
@@ -155,18 +155,18 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert captured["closed"] is True
 
 
-def test_cli_run_proof_environment_reports_summary(monkeypatch, tmp_path) -> None:
+def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
 
     @dataclass
     class _DummyProofRunner:
         _config: object
 
-        async def run(self, output_dir: Path) -> ProofEnvironmentRunSummary:
+        async def run(self, output_dir: Path) -> ProofTaskRunSummary:
             captured["output_dir"] = output_dir
-            return ProofEnvironmentRunSummary(
+            return ProofTaskRunSummary(
                 db_id="proof_trip_fixture",
-                env_id="env_proof_trip_fixture_itinerary_v1",
+                task_id="task_proof_trip_fixture_itinerary_v1",
                 fixture_sql_root=output_dir / "fixture_db",
                 quality_gate_status="accept",
                 flow_id="flow_proof_test",
@@ -174,23 +174,23 @@ def test_cli_run_proof_environment_reports_summary(monkeypatch, tmp_path) -> Non
                 solver_pass_rate=0.5,
                 solver_ci_low=0.2,
                 solver_ci_high=0.8,
-                registry_status=EnvironmentRegistryCommitStatus.COMMITTED,
-                registry_env_id="env_proof_trip_fixture_itinerary_v1",
+                registry_status=TaskRegistryCommitStatus.COMMITTED,
+                registry_task_id="task_proof_trip_fixture_itinerary_v1",
                 bundle_root=output_dir / "bundle",
             )
 
         async def close(self) -> None:
             captured["closed"] = True
 
-    monkeypatch.setattr("rl_task_foundry.cli.ProofEnvironmentRunner", _DummyProofRunner)
+    monkeypatch.setattr("rl_task_foundry.cli.ProofTaskRunner", _DummyProofRunner)
 
     output_dir = tmp_path / "proof_output"
-    result = CliRunner().invoke(app, ["run-proof-environment", str(output_dir)])
+    result = CliRunner().invoke(app, ["run-proof-task", str(output_dir)])
 
     assert result.exit_code == 0
-    assert "proof environment run complete" in result.stdout
+    assert "proof task run complete" in result.stdout
     assert "db_id=proof_trip_fixture" in result.stdout
-    assert "env_id=env_proof_trip_fixture_itinerary_v1" in result.stdout
+    assert "task_id=task_proof_trip_fixture_itinerary_v1" in result.stdout
     assert "quality_gate_status=accept" in result.stdout
     assert "flow_id=flow_proof_test" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
@@ -223,15 +223,15 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 summary_path=output_dir / "trial_summary.json",
                 flow_id="flow_trial_test",
                 phase_monitor_log_path=output_dir / "debug" / "phase_monitors.jsonl",
-                env_id="env_real_trial",
+                task_id="task_real_trial",
                 quality_gate_status="accept",
                 synthesis_phase=None,
                 backend_failures=(),
                 solver_pass_rate=0.5,
                 solver_ci_low=0.2,
                 solver_ci_high=0.8,
-                registry_status=EnvironmentRegistryCommitStatus.COMMITTED,
-                registry_env_id="env_real_trial",
+                registry_status=TaskRegistryCommitStatus.COMMITTED,
+                registry_task_id="task_real_trial",
                 bundle_root=output_dir / "bundle",
             )
 
@@ -243,12 +243,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     output_dir = tmp_path / "real_trial_output"
     result = CliRunner().invoke(
         app,
-        [
-            "run-real-db-trial",
-            "sakila",
-            "assignment",
-            str(output_dir),
-        ],
+        ["run-real-db-trial", "sakila", "assignment", str(output_dir)],
     )
 
     assert result.exit_code == 0
@@ -258,6 +253,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "db_id=sakila" in result.stdout
     assert "requested_topic=assignment" in result.stdout
     assert "flow_id=flow_trial_test" in result.stdout
+    assert "task_id=task_real_trial" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
     assert "summary_path=" in result.stdout
     assert captured["output_dir"] == output_dir
@@ -265,70 +261,70 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert captured["closed"] is True
 
 
-def test_cli_show_synthesis_environment_registry_reports_snapshot(monkeypatch) -> None:
+def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
     @dataclass
     class _DummyRegistry:
-        root_dir: Path = Path("artifacts/environments")
-        index_db_path: Path = Path("artifacts/environment_registry.db")
+        root_dir: Path = Path("artifacts/tasks")
+        index_db_path: Path = Path("artifacts/task_registry.db")
 
-        def snapshot(self, *, limit, db_id=None, category=None):
+        def snapshot(self, *, limit, db_id=None, topic=None):
             assert limit == 5
             assert db_id == "sakila"
-            assert category == CategoryTaxonomy.ASSIGNMENT
-            return EnvironmentRegistrySnapshot(
-                environment_count=2,
+            assert topic == CategoryTaxonomy.ASSIGNMENT
+            return TaskRegistrySnapshot(
+                task_count=2,
                 coverage=[
-                    EnvironmentRegistryCoverageEntry(
+                    TaskRegistryCoverageEntry(
                         db_id="sakila",
                         category=CategoryTaxonomy.ASSIGNMENT,
                         difficulty_band=DifficultyBand.MEDIUM,
                         count=2,
                     )
                 ],
-                recent_environments=[
-                    EnvironmentRegistryRecord(
-                        env_id="env_assignment_deadbeef",
+                recent_tasks=[
+                    TaskRegistryRecord(
+                        task_id="task_assignment_deadbeef",
                         db_id="sakila",
                         domain="service_operations",
                         category=CategoryTaxonomy.ASSIGNMENT,
                         difficulty_band=DifficultyBand.MEDIUM,
                         created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
-                        status=EnvironmentStatus.DRAFT,
+                        status=TaskBundleStatus.DRAFT,
                         generator_version="milestone-test",
                         exact_signature="sha256:deadbeef",
-                        filesystem_path=Path("artifacts/environments/env_assignment_deadbeef"),
-                        question="고객 배정을 해줘",
+                        filesystem_path=Path("artifacts/tasks/task_assignment_deadbeef"),
+                        question="내 배정을 해줘",
                     )
                 ],
             )
 
-        def semantic_dedup_candidates(self, *, limit, db_id=None, category=None):
+        def semantic_dedup_candidates(self, *, limit, db_id=None, topic=None):
             assert limit == 5
             assert db_id == "sakila"
-            assert category == CategoryTaxonomy.ASSIGNMENT
+            assert topic == CategoryTaxonomy.ASSIGNMENT
             return [
                 SemanticDedupCandidate(
-                    env_id="env_assignment_deadbeef",
+                    task_id="task_assignment_deadbeef",
                     db_id="sakila",
                     domain="service_operations",
                     category=CategoryTaxonomy.ASSIGNMENT,
                     difficulty_band=DifficultyBand.MEDIUM,
-                    question="고객 배정을 해줘",
+                    question="내 배정을 해줘",
                     constraint_summaries=("같은 고객을 중복 배정하지 않는다.",),
-                    semantic_text="question:고객 배정을 해줘",
-                    filesystem_path=Path("artifacts/environments/env_assignment_deadbeef"),
+                    semantic_text="question:내 배정을 해줘",
+                    filesystem_path=Path("artifacts/tasks/task_assignment_deadbeef"),
                 )
             ]
 
     monkeypatch.setattr(
-        "rl_task_foundry.cli.EnvironmentRegistryWriter.for_config",
+        "rl_task_foundry.cli.TaskRegistryWriter.for_config",
         lambda _config: _DummyRegistry(),
     )
 
     result = CliRunner().invoke(
         app,
         [
-            "show-synthesis-environment-registry",
+            "show-task-registry",
             "--limit",
             "5",
             "--db-id",
@@ -339,35 +335,28 @@ def test_cli_show_synthesis_environment_registry_reports_snapshot(monkeypatch) -
     )
 
     assert result.exit_code == 0
-    assert "synthesis environment registry" in result.stdout
-    assert "environment_count=2" in result.stdout
+    assert "synthesis task registry" in result.stdout
+    assert "task_count=2" in result.stdout
     assert "coverage_cells=1" in result.stdout
     assert "semantic_candidates=1" in result.stdout
     assert "coverage=sakila|assignment|medium|2" in result.stdout
-    assert "env=env_assignment_deadbeef|sakila|assignment|medium|draft" in result.stdout
+    assert "task=task_assignment_deadbeef|sakila|assignment|medium|draft" in result.stdout
 
 
 def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> None:
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(
-        json.dumps(
-            [
-                {
-                    "db_id": "sakila",
-                    "categories": ["assignment", "itinerary"],
-                }
-            ]
-        ),
+        json.dumps([{"db_id": "sakila", "categories": ["assignment", "itinerary"]}]),
         encoding="utf-8",
     )
 
     @dataclass
     class _DummyRegistry:
-        def coverage_entries(self, *, db_id=None, category=None):
+        def coverage_entries(self, *, db_id=None, topic=None):
             assert db_id is None
-            assert category is None
+            assert topic is None
             return [
-                EnvironmentRegistryCoverageEntry(
+                TaskRegistryCoverageEntry(
                     db_id="sakila",
                     category=CategoryTaxonomy.ASSIGNMENT,
                     difficulty_band=DifficultyBand.MEDIUM,
@@ -376,18 +365,13 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
             ]
 
     monkeypatch.setattr(
-        "rl_task_foundry.cli.EnvironmentRegistryWriter.for_config",
+        "rl_task_foundry.cli.TaskRegistryWriter.for_config",
         lambda _config: _DummyRegistry(),
     )
 
     result = CliRunner().invoke(
         app,
-        [
-            "plan-synthesis-coverage",
-            str(registry_path),
-            "--limit",
-            "10",
-        ],
+        ["plan-synthesis-coverage", str(registry_path), "--limit", "10"],
     )
 
     assert result.exit_code == 0
@@ -402,41 +386,35 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
     assert "cell_gap=sakila|assignment|medium|current=2|target=3|deficit=1" in result.stdout
 
 
-def test_cli_export_bundle_writes_environment_api_layout(monkeypatch, tmp_path: Path) -> None:
-    writer = EnvironmentRegistryWriter(
-        root_dir=tmp_path / "registry" / "environments",
-        index_db_path=tmp_path / "registry" / "environment_registry.db",
+def test_cli_export_bundle_writes_task_layout(monkeypatch, tmp_path: Path) -> None:
+    writer = TaskRegistryWriter(
+        root_dir=tmp_path / "registry" / "tasks",
+        index_db_path=tmp_path / "registry" / "task_registry.db",
     )
     writer.commit_draft(_sample_draft())
-    exporter = EnvironmentBundleExporter(
+    exporter = TaskBundleExporter(
         registry=writer,
         materializer=writer.atomic_tool_materializer,
     )
 
     monkeypatch.setattr(
-        "rl_task_foundry.cli.EnvironmentBundleExporter.for_config",
+        "rl_task_foundry.cli.TaskBundleExporter.for_config",
         lambda _config: exporter,
     )
 
     output_dir = tmp_path / "bundle"
-    result = CliRunner().invoke(
-        app,
-        [
-            "export-bundle",
-            str(output_dir),
-        ],
-    )
+    result = CliRunner().invoke(app, ["export-bundle", str(output_dir)])
 
     assert result.exit_code == 0
     assert "bundle exported" in result.stdout
     assert "database_count=1" in result.stdout
-    assert "environment_count=1" in result.stdout
+    assert "task_count=1" in result.stdout
     assert (output_dir / "databases" / "sakila" / "atomic_tools.py").exists()
-    env_dir = output_dir / "environments" / "env_assignment_registrytest"
-    assert (env_dir / "environment.yaml").exists()
-    assert (env_dir / "instances.jsonl").exists()
-    assert (env_dir / "canonical_answers.jsonl").exists()
-    assert not (env_dir / "audit").exists()
+    task_dir = output_dir / "tasks" / "task_assignment_registrytest"
+    assert (task_dir / "task.yaml").exists()
+    assert (task_dir / "instance.json").exists()
+    assert (task_dir / "canonical_answer.json").exists()
+
 
 def test_cli_validate_config_applies_runtime_overrides():
     result = CliRunner().invoke(
@@ -453,7 +431,9 @@ def test_cli_validate_config_applies_runtime_overrides():
     )
     assert result.exit_code == 0
     assert "composer=local_server/gpt-5.4-mini" in result.stdout
-    assert "gpt54m_replica=local_server/local-gptx4" in result.stdout
+    assert "solvers=" in result.stdout
+    assert "local_server/local-gpt" in result.stdout
+
 
 def test_cli_run_summary_reads_run_db(tmp_path):
     config_path = tmp_path / "config.yaml"

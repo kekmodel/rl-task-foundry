@@ -3,9 +3,9 @@ from pathlib import Path
 from rl_task_foundry.config import load_config
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
-from rl_task_foundry.synthesis.environment_registry import (
+from rl_task_foundry.synthesis.task_registry import (
     DifficultyBand,
-    EnvironmentRegistryCoverageEntry,
+    TaskRegistryCoverageEntry,
 )
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 
@@ -27,19 +27,19 @@ def test_synthesis_coverage_planner_builds_pair_and_cell_deficits() -> None:
             ),
         ],
         [
-            EnvironmentRegistryCoverageEntry(
+            TaskRegistryCoverageEntry(
                 db_id="sakila",
                 category=CategoryTaxonomy.ASSIGNMENT,
                 difficulty_band=DifficultyBand.LOW,
                 count=2,
             ),
-            EnvironmentRegistryCoverageEntry(
+            TaskRegistryCoverageEntry(
                 db_id="sakila",
                 category=CategoryTaxonomy.ASSIGNMENT,
                 difficulty_band=DifficultyBand.MEDIUM,
                 count=1,
             ),
-            EnvironmentRegistryCoverageEntry(
+            TaskRegistryCoverageEntry(
                 db_id="northwind",
                 category=CategoryTaxonomy.ASSIGNMENT,
                 difficulty_band=DifficultyBand.HIGH,
@@ -89,7 +89,7 @@ def test_synthesis_coverage_planner_can_track_unset_band() -> None:
             )
         ],
         [
-            EnvironmentRegistryCoverageEntry(
+            TaskRegistryCoverageEntry(
                 db_id="sakila",
                 category=CategoryTaxonomy.ASSIGNMENT,
                 difficulty_band=DifficultyBand.UNSET,

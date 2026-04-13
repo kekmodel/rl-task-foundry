@@ -9,12 +9,7 @@ import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, EnvironmentStatus
-from rl_task_foundry.synthesis.environment_registry import (
-    DifficultyBand,
-    EnvironmentRegistryCommitResult,
-    EnvironmentRegistryCommitStatus,
-)
+from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, TaskBundleStatus
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunOutcome,
@@ -23,7 +18,12 @@ from rl_task_foundry.synthesis.runner import (
 )
 from rl_task_foundry.synthesis.runtime import SynthesisCategoryStatus
 from rl_task_foundry.synthesis.scheduler import SynthesisSelectionStatus
-from tests.test_synthesis_environment_registry import _sample_draft
+from rl_task_foundry.synthesis.task_registry import (
+    DifficultyBand,
+    TaskRegistryCommitResult,
+    TaskRegistryCommitStatus,
+)
+from tests.test_synthesis_task_registry import _sample_draft
 
 
 @dataclass(slots=True)
@@ -50,17 +50,17 @@ class _FakeRuntime:
     ) -> object:
         self.synthesize_calls.append((db_id, requested_topic, graph))
         draft = _sample_draft(
-            tmp_env_id=f"env_{db_id}_{requested_topic}_{len(self.synthesize_calls)}",
+            tmp_task_id=f"task_{db_id}_{requested_topic}_{len(self.synthesize_calls)}",
             db_id=db_id,
             topic=requested_topic,
             created_at=datetime.now(timezone.utc),
         )
         return draft.model_copy(
             update={
-                "environment": draft.environment.model_copy(
+                "task_bundle": draft.task_bundle.model_copy(
                     update={
-                        "status": EnvironmentStatus.ACCEPTED,
-                        "quality_metrics": draft.environment.quality_metrics.model_copy(
+                        "status": TaskBundleStatus.ACCEPTED,
+                        "quality_metrics": draft.task_bundle.quality_metrics.model_copy(
                             update={
                                 "solver_pass_rate": 0.5,
                                 "solver_ci_low": 0.1,
@@ -80,21 +80,21 @@ class _FakeRuntime:
 class _FakeRegistry:
     root_dir: Path
     index_db_path: Path
-    commit_results: list[EnvironmentRegistryCommitResult] = field(default_factory=list)
+    commit_results: list[TaskRegistryCommitResult] = field(default_factory=list)
     committed_drafts: list[object] = field(default_factory=list)
     closed: bool = False
 
-    def commit_draft(self, draft: object) -> EnvironmentRegistryCommitResult:
+    def commit_draft(self, draft: object) -> TaskRegistryCommitResult:
         self.committed_drafts.append(draft)
         if self.commit_results:
             return self.commit_results.pop(0)
-        env_id = draft.environment.env_id
-        return EnvironmentRegistryCommitResult(
-            status=EnvironmentRegistryCommitStatus.COMMITTED,
-            env_id=env_id,
-            exact_signature=f"sha256:{env_id}",
+        task_id = draft.task_bundle.task_id
+        return TaskRegistryCommitResult(
+            status=TaskRegistryCommitStatus.COMMITTED,
+            task_id=task_id,
+            exact_signature=f"sha256:{task_id}",
             difficulty_band=DifficultyBand.UNSET,
-            filesystem_path=self.root_dir / env_id,
+            filesystem_path=self.root_dir / task_id,
         )
 
     def close(self) -> None:
@@ -147,13 +147,13 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     ]
 
     fake_registry = _FakeRegistry(
-        root_dir=tmp_path / "environments",
-        index_db_path=tmp_path / "environment_registry.db",
+        root_dir=tmp_path / "tasks",
+        index_db_path=tmp_path / "task_registry.db",
     )
     runner = SynthesisRegistryRunner(
         config,
         runtime_factory=_factory,
-        environment_registry=fake_registry,
+        task_registry=fake_registry,
     )
     try:
         summary = await runner.run_steps(
@@ -168,12 +168,12 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     assert summary.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
     assert summary.processed_pairs_after_run == 2
     assert summary.generated_drafts == 2
-    assert summary.quality_accepted_envs == 2
-    assert summary.quality_rejected_envs == 0
-    assert summary.registry_committed_envs == 2
+    assert summary.quality_accepted_tasks == 2
+    assert summary.quality_rejected_tasks == 0
+    assert summary.registry_committed_tasks == 2
     assert summary.remaining_pairs == 0
-    assert len(summary.generated_env_ids) == 2
-    assert summary.committed_env_ids == summary.generated_env_ids
+    assert len(summary.generated_task_ids) == 2
+    assert summary.committed_task_ids == summary.generated_task_ids
     assert summary.phase_monitor_log_path == tmp_path / "phase_monitors.jsonl"
     phase_monitor_lines = [
         json.loads(line)
@@ -190,9 +190,9 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     runner2 = SynthesisRegistryRunner(
         _config_with_run_db(tmp_path),
         runtime_factory=lambda _entry: pytest.fail("runtime should not be created on resume"),
-        environment_registry=_FakeRegistry(
-            root_dir=tmp_path / "environments",
-            index_db_path=tmp_path / "environment_registry.db",
+        task_registry=_FakeRegistry(
+            root_dir=tmp_path / "tasks",
+            index_db_path=tmp_path / "task_registry.db",
         ),
     )
     try:
@@ -223,13 +223,13 @@ async def test_synthesis_registry_runner_cold_start_ignores_backoff_until_runtim
         }
     )
     fake_registry = _FakeRegistry(
-        root_dir=tmp_path / "environments",
-        index_db_path=tmp_path / "environment_registry.db",
+        root_dir=tmp_path / "tasks",
+        index_db_path=tmp_path / "task_registry.db",
     )
     runner = SynthesisRegistryRunner(
         config,
         runtime_factory=lambda _entry: runtime,
-        environment_registry=fake_registry,
+        task_registry=fake_registry,
     )
     registry = [
         SynthesisDbRegistryEntry(
@@ -292,3 +292,7 @@ def test_load_synthesis_registry_supports_topics_and_legacy_categories(tmp_path:
 def test_synthesis_registry_entry_requires_topics() -> None:
     with pytest.raises(ValueError):
         SynthesisDbRegistryEntry(db_id="sakila", topics=[])
+
+
+def test_synthesis_registry_run_outcome_exposes_ready_status_name() -> None:
+    assert SynthesisSelectionStatus.READY.value == "ready"

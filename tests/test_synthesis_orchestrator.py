@@ -132,7 +132,7 @@ async def test_synthesis_orchestrator_run_next_uses_cached_runtime_per_db() -> N
 
     def _factory(entry: SynthesisDbRegistryEntry) -> _FakeRuntime:
         db_id = entry.db_id
-        runtime = _FakeRuntime(draft_result=SimpleNamespace(env_id=f"env-{db_id}"))
+        runtime = _FakeRuntime(draft_result=SimpleNamespace(task_id=f"task-{db_id}"))
         created[db_id] = runtime
         return runtime
 
@@ -156,8 +156,8 @@ async def test_synthesis_orchestrator_run_next_uses_cached_runtime_per_db() -> N
         ("sakila", CategoryTaxonomy.ASSIGNMENT, "graph-a"),
         ("sakila", CategoryTaxonomy.ASSIGNMENT, "graph-a"),
     ]
-    assert getattr(first.draft, "env_id") == "env-sakila"
-    assert getattr(second.draft, "env_id") == "env-sakila"
+    assert getattr(first.draft, "task_id") == "task-sakila"
+    assert getattr(second.draft, "task_id") == "task-sakila"
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_synthesis_orchestrator_run_next_rotates_across_dbs() -> None:
 
     def _factory(entry: SynthesisDbRegistryEntry) -> _FakeRuntime:
         db_id = entry.db_id
-        runtime = _FakeRuntime(draft_result=SimpleNamespace(env_id=f"env-{db_id}"))
+        runtime = _FakeRuntime(draft_result=SimpleNamespace(task_id=f"task-{db_id}"))
         created[db_id] = runtime
         return runtime
 
@@ -193,8 +193,8 @@ async def test_synthesis_orchestrator_run_next_rotates_across_dbs() -> None:
         "northwind",
         CategoryTaxonomy.ITINERARY,
     )
-    assert getattr(first.draft, "env_id") == "env-sakila"
-    assert getattr(second.draft, "env_id") == "env-northwind"
+    assert getattr(first.draft, "task_id") == "task-sakila"
+    assert getattr(second.draft, "task_id") == "task-northwind"
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Coverage target planning for the durable synthesis environment registry."""
+"""Coverage target planning for the durable synthesis task registry."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.synthesis.environment_registry import (
+from rl_task_foundry.synthesis.task_registry import (
     DifficultyBand,
-    EnvironmentRegistryCoverageEntry,
+    TaskRegistryCoverageEntry,
 )
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 
@@ -81,7 +81,7 @@ class SynthesisCoveragePlan:
 
 @dataclass(slots=True)
 class SynthesisCoveragePlanner:
-    """Compute per-db/category coverage deficits against the registry inventory."""
+    """Compute per-db/topic coverage deficits against the registry inventory."""
 
     target_count_per_band: int = 3
     include_unset_band: bool = False
@@ -108,7 +108,7 @@ class SynthesisCoveragePlanner:
     def build_plan(
         self,
         registry: Sequence[SynthesisDbRegistryEntry],
-        coverage_entries: Sequence[EnvironmentRegistryCoverageEntry],
+        coverage_entries: Sequence[TaskRegistryCoverageEntry],
     ) -> SynthesisCoveragePlan:
         counts = {
             (entry.db_id, entry.category, entry.difficulty_band): entry.count

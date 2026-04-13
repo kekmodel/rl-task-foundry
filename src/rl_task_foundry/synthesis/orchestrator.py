@@ -11,7 +11,7 @@ from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.synthesis.runtime import (
     SynthesisCategoryStatus,
-    SynthesisEnvironmentDraft,
+    SynthesisTaskDraft,
 )
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisDbSnapshot,
@@ -34,7 +34,7 @@ class SynthesisRuntimeHandle(Protocol):
         db_id: str,
         requested_topic: str,
         graph: SchemaGraph | None = None,
-    ) -> SynthesisEnvironmentDraft: ...
+    ) -> SynthesisTaskDraft: ...
 
     async def close(self) -> None: ...
 
@@ -75,7 +75,7 @@ class SynthesisDbRegistryEntry:
 class SynthesisOrchestrationStep:
     decision: SynthesisSchedulerDecision
     snapshots: list[SynthesisDbSnapshot] = field(default_factory=list)
-    draft: SynthesisEnvironmentDraft | None = None
+    draft: SynthesisTaskDraft | None = None
 
 
 RuntimeFactory = Callable[[SynthesisDbRegistryEntry], SynthesisRuntimeHandle]

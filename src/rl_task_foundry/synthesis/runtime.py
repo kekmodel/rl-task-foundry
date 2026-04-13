@@ -20,15 +20,13 @@ from rl_task_foundry.pipeline.provider_resilience import (
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.synthesis.contracts import (
+    AnchorQueryContract,
     ConstraintKind,
     ConstraintSummaryItem,
-    CrossInstanceSet,
     DifficultyVectorContract,
-    EnvironmentContract,
-    EnvironmentQualityMetrics,
-    EnvironmentStatus,
-    InstanceContract,
-    InstanceSpaceContract,
+    TaskBundleContract,
+    TaskQualityMetrics,
+    TaskBundleStatus,
     TopicName,
     OutputFieldContract,
     OutputFieldType,
@@ -72,9 +70,9 @@ from rl_task_foundry.synthesis.tool_runtime import (
 )
 
 CURRENT_SYNTHESIS_GENERATOR_VERSION = "milestone-3-runtime-v1"
-RUNTIME_OWNED_ENVIRONMENT_FIELDS = frozenset(
+RUNTIME_OWNED_TASK_BUNDLE_FIELDS = frozenset(
     {
-        "env_id",
+        "task_id",
         "db_id",
         "domain",
         "topic",
@@ -133,36 +131,24 @@ class SynthesisCategoryStatus(StrictModel):
     def category(self) -> TopicName:
         return TopicName(self.topic)
 
-class MaterializedInstanceRecord(StrictModel):
-    instance_id: str
-    rendered_user_prompt: str
-    params: dict[str, object] = Field(default_factory=dict)
-    anchor_values: dict[str, object] = Field(default_factory=dict)
-
-
-class MaterializedCanonicalAnswerRecord(StrictModel):
-    instance_id: str
-    canonical_answer: object
-    canonical_answer_json: str
-    label_signature: str
-
-    @property
-    def solution_fingerprint(self) -> str:
-        return self.label_signature
-
-
-class SynthesisEnvironmentDraft(StrictModel):
+class SynthesisTaskDraft(StrictModel):
     created_at: datetime
     db_id: str
     requested_topic: str
     schema_summary: dict[str, object] = Field(default_factory=dict)
     selected_topic: str
-    environment: EnvironmentContract
+    task_bundle: TaskBundleContract
     atomic_tool_bundle: AtomicToolBundle
-    instances: list[MaterializedInstanceRecord] = Field(default_factory=list)
-    canonical_answers: list[MaterializedCanonicalAnswerRecord] = Field(default_factory=list)
+    rendered_user_prompt: str
+    anchor_entity: dict[str, object] = Field(default_factory=dict)
+    canonical_answer_json: str
+    label_signature: str
     generation_attempts: list[SynthesisGenerationAttempt] = Field(default_factory=list)
     provider_status: dict[str, SynthesisProviderStatus] = Field(default_factory=dict)
+
+    @property
+    def canonical_answer(self) -> object:
+        return json.loads(self.canonical_answer_json)
 
 
 class SynthesisRuntimeError(RuntimeError):
@@ -283,7 +269,7 @@ class _CategoryFailureState:
 
 
 SynthesisCategoryStatus.model_rebuild()
-SynthesisEnvironmentDraft.model_rebuild()
+SynthesisTaskDraft.model_rebuild()
 
 
 def summarize_schema_graph(graph: SchemaGraph, *, max_tables: int = 32) -> dict[str, object]:
@@ -349,6 +335,12 @@ def summarize_atomic_tool_surface(
         entity_slug = entity_slug_from_get_tool_name(tool.name)
         if entity_slug is not None and is_person_like_identifier(entity_slug):
             self_anchor_surfaces.append(tool.name)
+    entity_surfaces.sort(
+        key=lambda item: (
+            bool(item.get("id_only")),
+            str(item.get("tool_name", "")),
+        )
+    )
     return {
         "entity_surfaces": entity_surfaces[:max_entity_surfaces],
         "self_anchor_surfaces": self_anchor_surfaces[:max_entity_surfaces],
@@ -415,7 +407,7 @@ class SynthesisAgentRuntime:
     _atomic_tool_materializer: AtomicToolMaterializer | None = field(
         default=None, init=False, repr=False
     )
-    _environment_orchestrator: object | None = field(default=None, init=False, repr=False)
+    _solver_orchestrator: object | None = field(default=None, init=False, repr=False)
     _category_state_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
@@ -446,10 +438,10 @@ class SynthesisAgentRuntime:
             for provider_name in self.config.providers
         }
         self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
-        if self._environment_orchestrator is None:
-            from rl_task_foundry.pipeline.environment_orchestrator import EnvironmentOrchestrator
+        if self._solver_orchestrator is None:
+            from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 
-            self._environment_orchestrator = EnvironmentOrchestrator(self.config)
+            self._solver_orchestrator = SolverOrchestrator(self.config)
         if self.phase_monitor is None:
             self.phase_monitor = PipelinePhaseMonitorLogger(
                 phase_monitor_log_path=default_phase_monitor_log_path(
@@ -466,7 +458,7 @@ class SynthesisAgentRuntime:
         db_id: str,
         requested_topic: str,
         graph: SchemaGraph | None = None,
-    ) -> SynthesisEnvironmentDraft:
+    ) -> SynthesisTaskDraft:
         requested_topic = normalize_topic(requested_topic)
         await self._bind_db_id(db_id)
         await self._ensure_category_available(db_id, requested_topic)
@@ -486,7 +478,7 @@ class SynthesisAgentRuntime:
         controller = SubmitDraftController(
             config=self.config,
             requested_topic=requested_topic,
-            environment_orchestrator=self._environment_orchestrator,
+            solver_orchestrator=self._solver_orchestrator,
             build_draft=lambda payload: self._build_draft_from_submission(
                 db_id=db_id,
                 requested_topic=requested_topic,
@@ -561,7 +553,7 @@ class SynthesisAgentRuntime:
                 "max_turns": self.config.synthesis.runtime.max_turns,
             },
             actual_data={
-                "env_id": accepted_draft.environment.env_id,
+                "task_id": accepted_draft.task_bundle.task_id,
                 "selected_topic": accepted_draft.selected_topic,
                 "final_output_text": conversation_result.final_output_text,
                 "turn_count": conversation_result.turn_count,
@@ -812,7 +804,7 @@ class SynthesisAgentRuntime:
         atomic_tool_bundle: AtomicToolBundle,
         submission: SubmitDraftPayload,
         schema_summary: dict[str, object],
-    ) -> SynthesisEnvironmentDraft:
+    ) -> SynthesisTaskDraft:
         selected_topic = normalize_topic(submission.topic)
         canonical_input = submission.canonical_answer
         output_schema = extract_output_schema_from_canonical(canonical_input)
@@ -837,36 +829,35 @@ class SynthesisAgentRuntime:
             difficulty_vector=submission.difficulty_vector,
             instance_parameters=dict(submission.anchor_entity),
         )
-        (
-            instances,
-            canonical_answers,
-            materialized_cross_instance_set,
-        ) = self._materialize_instances_and_canonical_answers(
-            task=task,
-            instance_space=submission.instance_space,
-            canonical_answer_input=canonical_input,
-            anchor_entity=submission.anchor_entity,
+        canonical_answer, canonical_answer_json, label_signature, rendered_user_prompt = (
+            self._materialize_task_artifacts(
+                task=task,
+                canonical_answer_input=canonical_input,
+                anchor_entity=submission.anchor_entity,
+            )
         )
         materialized_at = datetime.now(timezone.utc)
-        environment = self._materialize_environment(
+        task_bundle = self._materialize_task_bundle(
             atomic_tool_bundle=atomic_tool_bundle,
             db_id=db_id,
             requested_topic=selected_topic,
             created_at=materialized_at,
-            materialized_cross_instance_set=materialized_cross_instance_set,
             task=task,
-            instance_space=submission.instance_space,
+            anchor_query=submission.anchor_query,
         )
-        return SynthesisEnvironmentDraft(
+        del canonical_answer
+        return SynthesisTaskDraft(
             created_at=materialized_at,
             db_id=db_id,
             requested_topic=requested_topic,
             schema_summary=schema_summary,
             selected_topic=selected_topic,
-            environment=environment,
+            task_bundle=task_bundle,
             atomic_tool_bundle=atomic_tool_bundle,
-            instances=instances,
-            canonical_answers=canonical_answers,
+            rendered_user_prompt=rendered_user_prompt,
+            anchor_entity=dict(submission.anchor_entity),
+            canonical_answer_json=canonical_answer_json,
+            label_signature=label_signature,
             generation_attempts=[],
             provider_status={},
         )
@@ -975,34 +966,32 @@ class SynthesisAgentRuntime:
         self._tool_executor_cache[db_id] = resolved
         return resolved
 
-    def _materialize_environment(
+    def _materialize_task_bundle(
         self,
         *,
         atomic_tool_bundle: AtomicToolBundle,
         db_id: str,
         requested_topic: str,
         created_at: datetime,
-        materialized_cross_instance_set: CrossInstanceSet,
         task: TaskContract,
-        instance_space: InstanceSpaceContract,
-    ) -> EnvironmentContract:
+        anchor_query: AnchorQueryContract,
+    ) -> TaskBundleContract:
         task_payload = task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
         tool_signature = self._signature_for_text(atomic_tool_bundle.source)
-        env_id = self._build_env_id(
+        task_id = self._build_task_id(
             db_id=db_id,
             topic=requested_topic,
             task_signature=task_signature,
             tool_signature=tool_signature,
         )
         payload = {
-            "instance_space": instance_space.model_dump(mode="python"),
-            "cross_instance_set": materialized_cross_instance_set.model_dump(mode="python"),
+            "anchor_query": anchor_query,
             "task": task.model_dump(mode="python"),
         }
         payload.update(
             {
-                "env_id": env_id,
+                "task_id": task_id,
                 "db_id": db_id,
                 "domain": self.config.domain.name,
                 "topic": requested_topic,
@@ -1012,14 +1001,14 @@ class SynthesisAgentRuntime:
                 "generator_version": CURRENT_SYNTHESIS_GENERATOR_VERSION,
                 "tool_signature": tool_signature,
                 "task_signature": task_signature,
-                "status": EnvironmentStatus.DRAFT,
-                "quality_metrics": EnvironmentQualityMetrics().model_dump(mode="python"),
+                "status": TaskBundleStatus.DRAFT,
+                "quality_metrics": TaskQualityMetrics().model_dump(mode="python"),
                 "rollout_constraints": self._build_rollout_constraints().model_dump(
                     mode="python"
                 ),
             }
         )
-        return EnvironmentContract.model_validate(payload)
+        return TaskBundleContract.model_validate(payload)
 
     def _build_rollout_constraints(self) -> RolloutConstraintsContract:
         return RolloutConstraintsContract(
@@ -1030,55 +1019,25 @@ class SynthesisAgentRuntime:
             max_tool_rows=self.config.atomic_tools.bounded_result_limit,
         )
 
-    def _materialize_instances_and_canonical_answers(
+    def _materialize_task_artifacts(
         self,
         *,
         task: TaskContract,
-        instance_space: InstanceSpaceContract,
         canonical_answer_input: object,
         anchor_entity: dict[str, object],
-    ) -> tuple[
-        list[MaterializedInstanceRecord],
-        list[MaterializedCanonicalAnswerRecord],
-        CrossInstanceSet,
-    ]:
+    ) -> tuple[object, str, str, str]:
         canonical_answer = canonicalize_output(
             task.output_schema,
             canonical_answer_input,
         )
         canonical_answer_json = canonical_json(canonical_answer)
         label_signature = self._signature_for_text(canonical_answer_json)
-        instance_id = "instance_0001"
-        params = dict(task.instance_parameters)
-        instance = MaterializedInstanceRecord(
-            instance_id=instance_id,
-            rendered_user_prompt=build_rendered_user_prompt(
-                task,
-                anchor_entity=anchor_entity,
-                canonical_answer=canonical_answer,
-            ),
-            params=params,
-            anchor_values=dict(anchor_entity),
-        )
-        canonical_record = MaterializedCanonicalAnswerRecord(
-            instance_id=instance_id,
+        rendered_user_prompt = build_rendered_user_prompt(
+            task,
+            anchor_entity=anchor_entity,
             canonical_answer=canonical_answer,
-            canonical_answer_json=canonical_answer_json,
-            label_signature=label_signature,
         )
-        cross_instance_set = CrossInstanceSet(
-            minimum_required=1,
-            require_distinct_label_signatures=True,
-            instances=[
-                InstanceContract(
-                    instance_id=instance_id,
-                    anchor_values=dict(anchor_entity),
-                    parameter_values=params,
-                    expected_label_signature=label_signature,
-                )
-            ],
-        )
-        return [instance], [canonical_record], cross_instance_set
+        return canonical_answer, canonical_answer_json, label_signature, rendered_user_prompt
 
     async def _bind_db_id(self, db_id: str) -> None:
         async with self._bind_lock:
@@ -1100,7 +1059,7 @@ class SynthesisAgentRuntime:
         return f"sha256:{sha256(normalized.encode('utf-8')).hexdigest()}"
 
     @staticmethod
-    def _build_env_id(
+    def _build_task_id(
         *,
         db_id: str,
         topic: str,
@@ -1110,4 +1069,4 @@ class SynthesisAgentRuntime:
         digest = sha256(
             f"{db_id}|{topic}|{task_signature}|{tool_signature}".encode("utf-8")
         ).hexdigest()[:16]
-        return f"env_{topic}_{digest}"
+        return f"task_{topic}_{digest}"

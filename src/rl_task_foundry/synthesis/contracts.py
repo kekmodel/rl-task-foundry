@@ -114,7 +114,7 @@ class DifficultyAxis(StrEnum):
     CONSTRAINT_DENSITY = "constraint_density"
 
 
-class EnvironmentStatus(StrEnum):
+class TaskBundleStatus(StrEnum):
     DRAFT = "draft"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
@@ -142,12 +142,6 @@ class OutputFieldType(StrEnum):
     ENUM = "enum"
     OBJECT = "object"
     LIST = "list"
-
-
-class InstanceSamplingStrategy(StrEnum):
-    DETERMINISTIC_HASH = "deterministic_hash"
-    GRID = "grid"
-    STRATIFIED_HASH = "stratified_hash"
 
 
 class DifficultyVectorContract(StrictModel):
@@ -338,126 +332,13 @@ class AnchorQueryContract(StrictModel):
         return self
 
 
-ScalarParameterValue = str | int | float | bool
-
-
-class EnumParameterSpace(StrictModel):
-    kind: Literal["enum"] = "enum"
-    values: list[ScalarParameterValue] = Field(min_length=1)
-
-
-class IntRangeParameterSpace(StrictModel):
-    kind: Literal["int_range"] = "int_range"
-    min: int
-    max: int
-    step: int = Field(default=1, ge=1)
-
-    @model_validator(mode="after")
-    def _validate_bounds(self) -> IntRangeParameterSpace:
-        if self.min > self.max:
-            raise ValueError("int_range min must be <= max")
-        return self
-
-
-class FloatRangeParameterSpace(StrictModel):
-    kind: Literal["float_range"] = "float_range"
-    min: float
-    max: float
-    step: float = Field(default=1.0, gt=0.0)
-
-    @model_validator(mode="after")
-    def _validate_bounds(self) -> FloatRangeParameterSpace:
-        if self.min > self.max:
-            raise ValueError("float_range min must be <= max")
-        return self
-
-
-class DateRangeParameterSpace(StrictModel):
-    kind: Literal["date_range"] = "date_range"
-    start: date
-    end: date
-    step_days: int = Field(default=1, ge=1)
-
-    @model_validator(mode="after")
-    def _validate_bounds(self) -> DateRangeParameterSpace:
-        if self.start > self.end:
-            raise ValueError("date_range start must be <= end")
-        return self
-
-
-class DerivedBucketParameterSpace(StrictModel):
-    kind: Literal["derived_bucket"] = "derived_bucket"
-    source_key: str
-    buckets: list[str] = Field(min_length=1)
-
-
-ParameterSpace = Annotated[
-    EnumParameterSpace
-    | IntRangeParameterSpace
-    | FloatRangeParameterSpace
-    | DateRangeParameterSpace
-    | DerivedBucketParameterSpace,
-    Field(discriminator="kind"),
-]
-
-
-class InstanceSamplingContract(StrictModel):
-    strategy: InstanceSamplingStrategy = InstanceSamplingStrategy.DETERMINISTIC_HASH
-    seed: int = 0
-
-
-class InstanceSpaceContract(StrictModel):
-    anchor_query: AnchorQueryContract
-    parameters: dict[str, ParameterSpace] = Field(default_factory=dict)
-    sampling: InstanceSamplingContract = Field(default_factory=InstanceSamplingContract)
-    instance_count: int | None = Field(default=None, ge=1)
-
-
-class InstanceContract(StrictModel):
-    instance_id: str
-    anchor_values: dict[str, RuntimeValue] = Field(default_factory=dict)
-    parameter_values: dict[str, RuntimeValue] = Field(default_factory=dict)
-    expected_label_signature: str | None = None
-
-    @property
-    def expected_solution_fingerprint(self) -> str | None:
-        return self.expected_label_signature
-
-
-class CrossInstanceSet(StrictModel):
-    minimum_required: int = Field(default=3, ge=1)
-    require_distinct_label_signatures: bool = True
-    instances: list[InstanceContract] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_instance_ids(self) -> CrossInstanceSet:
-        instance_ids = [instance.instance_id for instance in self.instances]
-        if len(set(instance_ids)) != len(instance_ids):
-            raise ValueError("cross-instance sets must not reuse instance_id values")
-        if self.require_distinct_label_signatures:
-            fingerprints = [
-                instance.expected_label_signature
-                for instance in self.instances
-                if instance.expected_label_signature is not None
-            ]
-            if len(set(fingerprints)) != len(fingerprints):
-                raise ValueError(
-                    "cross-instance solution fingerprints must be distinct when required"
-                )
-        return self
-
-    @property
-    def require_distinct_solution_fingerprints(self) -> bool:
-        return self.require_distinct_label_signatures
-
-
-class EnvironmentQualityMetrics(StrictModel):
+class TaskQualityMetrics(StrictModel):
     solver_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_low: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_high: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def _validate_interval(self) -> EnvironmentQualityMetrics:
+    def _validate_interval(self) -> TaskQualityMetrics:
         if (self.solver_ci_low is None) != (self.solver_ci_high is None):
             raise ValueError("solver CI bounds must both be set or both be omitted")
         if (
@@ -469,8 +350,8 @@ class EnvironmentQualityMetrics(StrictModel):
         return self
 
 
-class EnvironmentContract(StrictModel):
-    env_id: str
+class TaskBundleContract(StrictModel):
+    task_id: str
     db_id: str
     domain: str
     topic: str
@@ -480,22 +361,21 @@ class EnvironmentContract(StrictModel):
     generator_version: str
     tool_signature: str
     task_signature: str
-    status: EnvironmentStatus = EnvironmentStatus.DRAFT
-    quality_metrics: EnvironmentQualityMetrics = Field(
-        default_factory=EnvironmentQualityMetrics
+    status: TaskBundleStatus = TaskBundleStatus.DRAFT
+    quality_metrics: TaskQualityMetrics = Field(
+        default_factory=TaskQualityMetrics
     )
     rollout_constraints: RolloutConstraintsContract
     task: TaskContract
-    instance_space: InstanceSpaceContract
-    cross_instance_set: CrossInstanceSet = Field(default_factory=CrossInstanceSet)
+    anchor_query: AnchorQueryContract
 
     @model_validator(mode="after")
-    def _validate_contract_consistency(self) -> EnvironmentContract:
+    def _validate_contract_consistency(self) -> TaskBundleContract:
         self.topic = normalize_topic(self.topic)
         if self.task.topic != self.topic:
-            raise ValueError("environment topic must match task topic")
+            raise ValueError("task bundle topic must match task topic")
         if self.task.difficulty_vector != self.difficulty_vector:
-            raise ValueError("environment difficulty_vector must match task difficulty_vector")
+            raise ValueError("task bundle difficulty_vector must match task difficulty_vector")
         return self
 
     @property

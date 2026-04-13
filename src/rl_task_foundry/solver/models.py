@@ -12,7 +12,6 @@ class SolverResult(StrictModel):
     solver_id: str
     provider: str
     model: str
-    replica_index: int
     transcript_ref: str
     tool_trace_ref: str
     raw_output_text: str

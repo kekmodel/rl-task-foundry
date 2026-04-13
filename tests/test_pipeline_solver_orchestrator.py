@@ -7,15 +7,15 @@ import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig, SolverModelConfig
-from rl_task_foundry.pipeline.environment_orchestrator import (
-    EnvironmentOrchestrator,
-    EnvironmentQualityGateStatus,
-    EnvironmentRolloutSummary,
+from rl_task_foundry.pipeline.solver_orchestrator import (
+    SolverOrchestrator,
+    TaskQualityGateStatus,
+    TaskRolloutSummary,
     evaluate_rollout_summary,
 )
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
-from tests.test_synthesis_environment_registry import _sample_draft
+from tests.test_synthesis_task_registry import _sample_draft
 
 
 def _config(tmp_path: Path):
@@ -34,7 +34,6 @@ def _config(tmp_path: Path):
                     solver_id="solver_a",
                     provider="codex_oauth",
                     model="gpt-5.4-mini",
-                    replicas=1,
                 )
             ]
         }
@@ -47,14 +46,13 @@ class _FakeRuntime:
         self.raw_output_text = raw_output_text
         self.seen_max_turns = seen_max_turns
 
-    async def run(self, episode, replica_index: int = 0) -> SolverResult:
-        self.seen_max_turns.append(episode.environment.rollout_constraints.max_turns)
+    async def run(self, episode) -> SolverResult:
+        self.seen_max_turns.append(episode.task_bundle.rollout_constraints.max_turns)
         return SolverResult(
             task_id=episode.task_id,
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replica_index=replica_index,
             transcript_ref="memory://transcript",
             tool_trace_ref="memory://tools",
             raw_output_text=self.raw_output_text,
@@ -74,7 +72,7 @@ class _SeedCapturingRuntime:
         self.executor = executor
         self.seen_payloads = seen_payloads
 
-    async def run(self, episode, replica_index: int = 0) -> SolverResult:
+    async def run(self, episode) -> SolverResult:
         result = self.executor({"customer_id": 1})
         if hasattr(result, "__await__"):
             result = await result
@@ -85,7 +83,6 @@ class _SeedCapturingRuntime:
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replica_index=replica_index,
             transcript_ref="memory://transcript",
             tool_trace_ref="memory://tools",
             raw_output_text=self.raw_output_text,
@@ -94,10 +91,10 @@ class _SeedCapturingRuntime:
 
 
 @pytest.mark.asyncio
-async def test_environment_orchestrator_scores_against_canonical_answer(tmp_path: Path) -> None:
+async def test_solver_orchestrator_scores_against_canonical_answer(tmp_path: Path) -> None:
     draft = _sample_draft()
     seen_max_turns: list[int] = []
-    orchestrator = EnvironmentOrchestrator(
+    orchestrator = SolverOrchestrator(
         _config(tmp_path),
         runtime_factory=lambda *_args: _FakeRuntime(
             '{"customer":"Alice","day":"2026-04-12"}',
@@ -114,11 +111,11 @@ async def test_environment_orchestrator_scores_against_canonical_answer(tmp_path
     assert summary.total_solver_runs == 1
     assert summary.matched_solver_runs == 1
     assert summary.pass_rate == 1.0
-    assert seen_max_turns == [draft.environment.rollout_constraints.max_turns]
+    assert seen_max_turns == [draft.task_bundle.rollout_constraints.max_turns]
 
 
 @pytest.mark.asyncio
-async def test_environment_orchestrator_injects_distinct_shuffle_seed_per_solver_replica(
+async def test_solver_orchestrator_injects_distinct_shuffle_seed_per_solver_run(
     tmp_path: Path,
 ) -> None:
     draft = _sample_draft()
@@ -128,8 +125,12 @@ async def test_environment_orchestrator_injects_distinct_shuffle_seed_per_solver
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replicas=2,
-        )
+        ),
+        SolverModelConfig(
+            solver_id="solver_b",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        ),
     ]
     recorded_kwargs: list[dict[str, object]] = []
 
@@ -137,9 +138,9 @@ async def test_environment_orchestrator_injects_distinct_shuffle_seed_per_solver
         recorded_kwargs.append(dict(kwargs))
         return dict(kwargs)
 
-    orchestrator = EnvironmentOrchestrator(
+    orchestrator = SolverOrchestrator(
         config,
-        runtime_factory=lambda _solver, _provider, _env, _defs, tool_executors: _SeedCapturingRuntime(
+        runtime_factory=lambda _solver, _provider, _task, _defs, tool_executors: _SeedCapturingRuntime(
             raw_output_text='{"customer":"Alice","day":"2026-04-12"}',
             executor=next(iter(tool_executors.values())),
             seen_payloads=[],
@@ -159,11 +160,11 @@ async def test_environment_orchestrator_injects_distinct_shuffle_seed_per_solver
 
 
 @pytest.mark.asyncio
-async def test_environment_orchestrator_close_clears_cached_tool_executors(
+async def test_solver_orchestrator_close_clears_cached_tool_executors(
     tmp_path: Path,
 ) -> None:
     draft = _sample_draft()
-    orchestrator = EnvironmentOrchestrator(
+    orchestrator = SolverOrchestrator(
         _config(tmp_path),
         runtime_factory=lambda *_args: _FakeRuntime(
             '{"customer":"Alice","day":"2026-04-12"}',
@@ -181,10 +182,10 @@ async def test_environment_orchestrator_close_clears_cached_tool_executors(
 
 
 @pytest.mark.asyncio
-async def test_environment_orchestrator_close_clears_solver_model_cache(
+async def test_solver_orchestrator_close_clears_solver_model_cache(
     tmp_path: Path,
 ) -> None:
-    orchestrator = EnvironmentOrchestrator(
+    orchestrator = SolverOrchestrator(
         _config(tmp_path),
         runtime_factory=lambda *_args: _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', []),
         tool_executor_factory=lambda _bundle: {"noop": lambda _kwargs: {}},
@@ -200,11 +201,10 @@ async def test_environment_orchestrator_close_clears_solver_model_cache(
 
 def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    summary = EnvironmentRolloutSummary(
-        env_id="env_assignment_registrytest",
+    summary = TaskRolloutSummary(
+        task_id="task_assignment_registrytest",
         db_id="sakila",
         planned_solver_runs=4,
-        total_instances=1,
         total_solver_runs=4,
         matched_solver_runs=2,
         runs=(),
@@ -212,11 +212,11 @@ def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> Non
 
     gate = evaluate_rollout_summary(config, summary)
 
-    assert gate.status is EnvironmentQualityGateStatus.ACCEPT
+    assert gate.status is TaskQualityGateStatus.ACCEPT
 
 
-def test_environment_orchestrator_module_has_no_legacy_imports() -> None:
-    module_path = Path("src/rl_task_foundry/pipeline/environment_orchestrator.py")
+def test_solver_orchestrator_module_has_no_legacy_imports() -> None:
+    module_path = Path("src/rl_task_foundry/pipeline/solver_orchestrator.py")
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
 
     banned_prefixes = (

@@ -1,4 +1,4 @@
-"""Export registered synthesis environments into API-server bundle layout."""
+"""Export registered task bundles into bundle layout."""
 
 from __future__ import annotations
 
@@ -8,30 +8,30 @@ from pathlib import Path
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
-from rl_task_foundry.synthesis.environment_registry import (
-    EnvironmentRegistryRecord,
-    EnvironmentRegistryWriter,
+from rl_task_foundry.synthesis.task_registry import (
+    TaskRegistryRecord,
+    TaskRegistryWriter,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class EnvironmentBundleExportSummary:
+class TaskBundleExportSummary:
     bundle_root: Path
     database_count: int
-    environment_count: int
+    task_count: int
     db_ids: tuple[str, ...]
-    env_ids: tuple[str, ...]
+    task_ids: tuple[str, ...]
 
 
 @dataclass(slots=True)
-class EnvironmentBundleExporter:
-    registry: EnvironmentRegistryWriter
+class TaskBundleExporter:
+    registry: TaskRegistryWriter
     materializer: AtomicToolMaterializer
 
     @classmethod
-    def for_config(cls, config: AppConfig) -> "EnvironmentBundleExporter":
+    def for_config(cls, config: AppConfig) -> "TaskBundleExporter":
         return cls(
-            registry=EnvironmentRegistryWriter.for_config(config),
+            registry=TaskRegistryWriter.for_config(config),
             materializer=AtomicToolMaterializer.for_config(config),
         )
 
@@ -41,49 +41,49 @@ class EnvironmentBundleExporter:
         *,
         db_id: str | None = None,
         topic: str | None = None,
-        env_id: str | None = None,
-    ) -> EnvironmentBundleExportSummary:
-        records = self._environment_records(db_id=db_id, topic=topic, env_id=env_id)
+        task_id: str | None = None,
+    ) -> TaskBundleExportSummary:
+        records = self._task_records(db_id=db_id, topic=topic, task_id=task_id)
         self._prepare_bundle_root(bundle_root)
 
         databases_dir = bundle_root / "databases"
-        environments_dir = bundle_root / "environments"
+        tasks_dir = bundle_root / "tasks"
         databases_dir.mkdir(parents=True, exist_ok=True)
-        environments_dir.mkdir(parents=True, exist_ok=True)
+        tasks_dir.mkdir(parents=True, exist_ok=True)
 
         exported_db_ids: list[str] = []
         for resolved_db_id in sorted({record.db_id for record in records}):
             self._export_database_bundle(bundle_root, resolved_db_id)
             exported_db_ids.append(resolved_db_id)
 
-        exported_env_ids: list[str] = []
-        for record in sorted(records, key=lambda item: (item.db_id, item.env_id)):
-            self._export_environment_bundle(bundle_root, record)
-            exported_env_ids.append(record.env_id)
+        exported_task_ids: list[str] = []
+        for record in sorted(records, key=lambda item: (item.db_id, item.task_id)):
+            self._export_task_bundle(bundle_root, record)
+            exported_task_ids.append(record.task_id)
 
-        return EnvironmentBundleExportSummary(
+        return TaskBundleExportSummary(
             bundle_root=bundle_root,
             database_count=len(exported_db_ids),
-            environment_count=len(exported_env_ids),
+            task_count=len(exported_task_ids),
             db_ids=tuple(exported_db_ids),
-            env_ids=tuple(exported_env_ids),
+            task_ids=tuple(exported_task_ids),
         )
 
-    def _environment_records(
+    def _task_records(
         self,
         *,
         db_id: str | None,
         topic: str | None,
-        env_id: str | None,
-    ) -> list[EnvironmentRegistryRecord]:
-        count = self.registry.environment_count(db_id=db_id, topic=topic)
-        records = self.registry.list_environments(
+        task_id: str | None,
+    ) -> list[TaskRegistryRecord]:
+        count = self.registry.task_count(db_id=db_id, topic=topic)
+        records = self.registry.list_tasks(
             limit=count,
             db_id=db_id,
             topic=topic,
         )
-        if env_id is not None:
-            records = [record for record in records if record.env_id == env_id]
+        if task_id is not None:
+            records = [record for record in records if record.task_id == task_id]
         return records
 
     @staticmethod
@@ -112,20 +112,25 @@ class EnvironmentBundleExporter:
         shutil.copy2(source_atomic_tools, target_dir / "atomic_tools.py")
         shutil.copy2(source_definitions, target_dir / "atomic_tool_definitions.json")
 
-    def _export_environment_bundle(
+    def _export_task_bundle(
         self,
         bundle_root: Path,
-        record: EnvironmentRegistryRecord,
+        record: TaskRegistryRecord,
     ) -> None:
         source_dir = record.filesystem_path
-        target_dir = bundle_root / "environments" / record.env_id
+        target_dir = bundle_root / "tasks" / record.task_id
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        self._copy_required_file(source_dir / "environment.yaml", target_dir / "environment.yaml")
-        self._copy_required_file(source_dir / "instances.jsonl", target_dir / "instances.jsonl")
+        self._copy_required_file(source_dir / "task.yaml", target_dir / "task.yaml")
+        self._copy_required_file(source_dir / "task.json", target_dir / "task.json")
         self._copy_required_file(
-            source_dir / "canonical_answers.jsonl",
-            target_dir / "canonical_answers.jsonl",
+            source_dir / "anchor_query.json",
+            target_dir / "anchor_query.json",
+        )
+        self._copy_required_file(source_dir / "instance.json", target_dir / "instance.json")
+        self._copy_required_file(
+            source_dir / "canonical_answer.json",
+            target_dir / "canonical_answer.json",
         )
 
     @staticmethod

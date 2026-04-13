@@ -9,23 +9,16 @@ from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
     ConstraintKind,
     ConstraintSummaryItem,
-    CrossInstanceSet,
-    DifficultyAxis,
     DIFFICULTY_CRANK_ORDER,
-    EnvironmentContract,
-    EnvironmentQualityMetrics,
-    EnumParameterSpace,
-    FloatRangeParameterSpace,
-    InstanceContract,
-    InstanceSamplingContract,
-    InstanceSamplingStrategy,
-    InstanceSpaceContract,
-    IntRangeParameterSpace,
+    DifficultyAxis,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
+    TaskBundleContract,
+    TaskBundleStatus,
     TaskContract,
+    TaskQualityMetrics,
     build_difficulty_vector,
 )
 
@@ -68,29 +61,15 @@ def test_output_schema_rejects_invalid_scalar_children() -> None:
         )
 
 
-def test_instance_space_supports_contract_shapes() -> None:
-    instance_space = InstanceSpaceContract(
-        anchor_query=AnchorQueryContract(
-            sql="SELECT itinerary_anchor_id, season FROM proof_anchors ORDER BY itinerary_anchor_id",
-            outputs=["itinerary_anchor_id", "season"],
-        ),
-        parameters={
-            "budget_bucket": EnumParameterSpace(values=["low", "mid", "high"]),
-            "day_count": IntRangeParameterSpace(min=2, max=4),
-        },
-        sampling=InstanceSamplingContract(
-            strategy=InstanceSamplingStrategy.DETERMINISTIC_HASH,
-            seed=17,
-        ),
-        instance_count=3,
-    )
-
-    assert instance_space.instance_count == 3
-    assert instance_space.parameters["budget_bucket"].kind == "enum"
-    assert instance_space.parameters["day_count"].kind == "int_range"
+def test_anchor_query_requires_unique_outputs() -> None:
+    with pytest.raises(ValidationError):
+        AnchorQueryContract(
+            sql="SELECT anchor_id, anchor_id FROM proof_anchors",
+            outputs=["anchor_id", "anchor_id"],
+        )
 
 
-def test_environment_contract_round_trips_without_generated_artifacts() -> None:
+def test_task_bundle_contract_round_trips_without_generated_artifacts() -> None:
     output_schema = _build_output_schema()
     difficulty_vector = build_difficulty_vector(
         search_cost=2.0,
@@ -111,8 +90,8 @@ def test_environment_contract_round_trips_without_generated_artifacts() -> None:
         difficulty_vector=difficulty_vector,
         instance_parameters={"budget_bucket": "mid"},
     )
-    contract = EnvironmentContract(
-        env_id="env_trip_fixture_v1",
+    contract = TaskBundleContract(
+        task_id="task_trip_fixture_v1",
         db_id="proof_trip_fixture",
         domain="travel",
         topic="itinerary",
@@ -122,34 +101,21 @@ def test_environment_contract_round_trips_without_generated_artifacts() -> None:
         generator_version="rewrite-v1",
         tool_signature="toolhash",
         task_signature="taskhash",
-        quality_metrics=EnvironmentQualityMetrics(),
+        status=TaskBundleStatus.DRAFT,
+        quality_metrics=TaskQualityMetrics(),
         rollout_constraints=RolloutConstraintsContract(
             max_turns=16,
             max_episode_duration_ms=80000,
             max_tool_rows=100,
         ),
         task=task,
-        instance_space=InstanceSpaceContract(
-            anchor_query=AnchorQueryContract(
-                sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
-                outputs=["anchor_id"],
-            )
-        ),
-        cross_instance_set=CrossInstanceSet(
-            instances=[
-                InstanceContract(
-                    instance_id="instance_1",
-                    expected_label_signature="sha256:a",
-                ),
-                InstanceContract(
-                    instance_id="instance_2",
-                    expected_label_signature="sha256:b",
-                ),
-            ]
+        anchor_query=AnchorQueryContract(
+            sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
+            outputs=["anchor_id"],
         ),
     )
 
-    round_tripped = EnvironmentContract.model_validate_json(contract.model_dump_json())
+    round_tripped = TaskBundleContract.model_validate_json(contract.model_dump_json())
 
     assert round_tripped.task.topic == "itinerary"
     assert round_tripped.atomic_tool_set_ref == "db://proof_trip_fixture"
@@ -157,7 +123,7 @@ def test_environment_contract_round_trips_without_generated_artifacts() -> None:
     assert round_tripped.quality_metrics.solver_pass_rate is None
 
 
-def test_environment_contract_rejects_task_topic_mismatch() -> None:
+def test_task_bundle_contract_rejects_task_topic_mismatch() -> None:
     output_schema = _build_output_schema()
     task = TaskContract(
         question="일정표를 만들어 주세요.",
@@ -167,8 +133,8 @@ def test_environment_contract_rejects_task_topic_mismatch() -> None:
     )
 
     with pytest.raises(ValidationError):
-        EnvironmentContract(
-            env_id="env_bad",
+        TaskBundleContract(
+            task_id="task_bad",
             db_id="proof_trip_fixture",
             domain="travel",
             topic="itinerary",
@@ -184,37 +150,13 @@ def test_environment_contract_rejects_task_topic_mismatch() -> None:
                 max_tool_rows=100,
             ),
             task=task,
-            instance_space=InstanceSpaceContract(
-                anchor_query=AnchorQueryContract(
-                    sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
-                    outputs=["anchor_id"],
-                )
+            anchor_query=AnchorQueryContract(
+                sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
+                outputs=["anchor_id"],
             ),
-        )
-
-
-def test_cross_instance_set_rejects_duplicate_label_signatures_when_required() -> None:
-    with pytest.raises(ValidationError):
-        CrossInstanceSet(
-            require_distinct_label_signatures=True,
-            instances=[
-                InstanceContract(
-                    instance_id="instance_a",
-                    expected_label_signature="sha256:abc",
-                ),
-                InstanceContract(
-                    instance_id="instance_b",
-                    expected_label_signature="sha256:abc",
-                ),
-            ],
         )
 
 
 def test_difficulty_crank_order_covers_every_axis_once() -> None:
     assert set(DIFFICULTY_CRANK_ORDER) == set(DifficultyAxis)
     assert len(DIFFICULTY_CRANK_ORDER) == len(set(DIFFICULTY_CRANK_ORDER))
-
-
-def test_float_range_parameter_space_rejects_invalid_bounds() -> None:
-    with pytest.raises(ValidationError):
-        FloatRangeParameterSpace(min=10.0, max=5.0)

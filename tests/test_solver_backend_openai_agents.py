@@ -13,23 +13,21 @@ from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBacke
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
-    CrossInstanceSet,
-    EnvironmentContract,
-    EnvironmentQualityMetrics,
-    EnvironmentStatus,
-    InstanceSpaceContract,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
     RolloutConstraintsContract,
+    TaskBundleContract,
+    TaskBundleStatus,
     TaskContract,
+    TaskQualityMetrics,
     build_difficulty_vector,
 )
 
 
 def _sample_episode() -> SolverEpisodeInput:
-    environment = EnvironmentContract(
-        env_id="env_assignment_solver",
+    task_bundle = TaskBundleContract(
+        task_id="task_assignment_solver",
         db_id="sakila",
         domain="customer_support",
         topic="assignment",
@@ -39,8 +37,8 @@ def _sample_episode() -> SolverEpisodeInput:
         generator_version="test-version",
         tool_signature="sha256:tool",
         task_signature="sha256:task",
-        status=EnvironmentStatus.ACCEPTED,
-        quality_metrics=EnvironmentQualityMetrics(),
+        status=TaskBundleStatus.ACCEPTED,
+        quality_metrics=TaskQualityMetrics(),
         rollout_constraints=RolloutConstraintsContract(
             max_turns=8,
             max_episode_duration_ms=40000,
@@ -63,18 +61,17 @@ def _sample_episode() -> SolverEpisodeInput:
                 primary_output_format="json_object",
             ),
         ),
-        instance_space=InstanceSpaceContract(
-            anchor_query=AnchorQueryContract(
-                sql="SELECT order_id FROM orders ORDER BY order_id",
-                outputs=["order_id"],
-            )
+        anchor_query=AnchorQueryContract(
+            sql="SELECT order_id FROM orders ORDER BY order_id",
+            outputs=["order_id"],
         ),
-        cross_instance_set=CrossInstanceSet(minimum_required=1),
     )
     return SolverEpisodeInput(
-        environment=environment,
-        instance_id="instance_0007",
+        task_bundle=task_bundle,
         rendered_user_prompt=(
+            "<entity>\n"
+            '{"order_id": 7}\n'
+            "</entity>\n\n"
             "현재 배송 상태는 무엇인가요?\n\n"
             "# Submit Result Format\n"
             '{"type":"object","properties":{"delivery_status":{"type":"string"}}}\n'
@@ -191,6 +188,7 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             Runner=FakeRunner,
             SQLiteSession=FakeSQLiteSession,
             set_tracing_disabled=lambda *, disabled: tracing_disabled.append(disabled),
+            ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
         ),
     )
 
@@ -199,7 +197,6 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replicas=1,
             memory_mode="session_only",
             summarization_mode="off",
         ),
@@ -221,9 +218,9 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
         traces_dir=tmp_path / "traces",
     )
 
-    result = await backend.run(episode, replica_index=2)
+    result = await backend.run(episode)
 
-    assert result.task_id == "env_assignment_solver__instance_0007"
+    assert result.task_id == "task_assignment_solver"
     assert result.solver_id == "solver_a"
     assert result.raw_output_text == '{"delivery_status":"IN_TRANSIT"}'
     assert result.structured_output == {"delivery_status": "IN_TRANSIT"}
@@ -243,19 +240,19 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
     assert FakeAsyncOpenAI.calls[0]["api_key"] == "dummy"
     assert FakeRunner.calls[0]["input"] == episode.rendered_user_prompt
     assert FakeRunner.calls[0]["max_turns"] == 8
-    assert FakeSQLiteSession.last_instance.session_id == "env_assignment_solver__instance_0007:solver_a:2"
+    assert FakeSQLiteSession.last_instance.session_id == "task_assignment_solver:solver_a"
 
     transcript_path = (
         tmp_path
         / "traces"
         / "transcripts"
-        / "env_assignment_solver__instance_0007__solver_a__replica_2.json"
+        / "task_assignment_solver__solver_a.json"
     )
     tool_trace_path = (
         tmp_path
         / "traces"
         / "tool_traces"
-        / "env_assignment_solver__instance_0007__solver_a__replica_2.json"
+        / "task_assignment_solver__solver_a.json"
     )
     assert result.transcript_ref == str(transcript_path)
     assert result.tool_trace_ref == str(tool_trace_path)
@@ -288,12 +285,6 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
     )
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["parallel_tool_calls"] is False
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
-    submit_tool = next(
-        tool for tool in FakeAgent.last_instance.kwargs["tools"] if getattr(tool, "name", None) == "submit_result"
-    )
-    assert submit_tool.description == (
-        "Submit your final answer as a JSON string matching the rendered prompt schema."
-    )
 
 
 @pytest.mark.asyncio
@@ -344,6 +335,7 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
             Runner=FakeRunner,
             SQLiteSession=FakeSQLiteSession,
             set_tracing_disabled=lambda *, disabled: None,
+            ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
         ),
     )
 
@@ -352,7 +344,6 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replicas=1,
             memory_mode="session_only",
             summarization_mode="off",
         ),
@@ -374,7 +365,7 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
         traces_dir=tmp_path / "traces",
     )
 
-    result = await backend.run(episode, replica_index=0)
+    result = await backend.run(episode)
 
     assert result.status == "failed"
     assert result.termination_reason == "MaxTurnsExceeded"
@@ -385,12 +376,10 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
     transcript_payload = json.loads(Path(result.transcript_ref).read_text(encoding="utf-8"))
     assert transcript_payload["error"]["type"] == "MaxTurnsExceeded"
     assert transcript_payload["error"]["detail"] == "Max turns (8) exceeded"
-    tool_trace_payload = json.loads(Path(result.tool_trace_ref).read_text(encoding="utf-8"))
-    assert tool_trace_payload["error"]["type"] == "MaxTurnsExceeded"
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_instances(
+async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backends(
     tmp_path, monkeypatch
 ):
     episode = _sample_episode()
@@ -454,7 +443,6 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_insta
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replicas=1,
             memory_mode="none",
             summarization_mode="off",
         ),
@@ -479,7 +467,6 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_insta
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replicas=1,
             memory_mode="none",
             summarization_mode="off",
         ),
@@ -500,8 +487,8 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_insta
         traces_dir=tmp_path / "traces",
     )
 
-    await backend_a.run(episode, replica_index=0)
-    await backend_b.run(episode, replica_index=1)
+    await backend_a.run(episode)
+    await backend_b.run(episode)
 
     assert len(FakeAsyncOpenAI.calls) == 1
     assert len(FakeChatModel.calls) == 1
@@ -526,7 +513,6 @@ def test_openai_agents_solver_backend_rejects_unsupported_provider():
             solver_id="solver_a",
             provider="anthropic_main",
             model="claude-opus",
-            replicas=1,
         ),
         provider_config=ProviderConfig(
             type="anthropic",
@@ -596,24 +582,6 @@ def test_tool_use_behavior_serializes_successful_submit_as_json_string():
     assert result.final_output == '{"answer_text": "{\\"store_id\\":1}", "submitted": true}'
 
 
-def test_extract_submission_output_classifies_invalid_submit():
-    submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
-        backend_module._extract_submission_output(
-            {
-                "submitted": False,
-                "error": "submit_result payload failed schema validation",
-                "details": [{"loc": ["answer_text"], "msg": "Field required"}],
-            }
-        )
-    )
-
-    assert submitted_answer_text is None
-    assert structured_output is None
-    assert status == "invalid_submit"
-    assert termination_reason == "invalid_submit_schema"
-    assert termination_metadata["error"] == "submit_result payload failed schema validation"
-
-
 def test_extract_submission_output_accepts_json_stringified_submit_payload():
     submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
         backend_module._extract_submission_output(
@@ -642,37 +610,6 @@ def test_extract_submission_output_rejects_python_repr_success_payload():
     assert termination_metadata == {}
 
 
-def test_extract_submission_output_rejects_python_repr_submit_payload():
-    submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
-        backend_module._extract_submission_output(
-            "{'submitted': False, 'error': 'submit_result payload failed schema validation', 'details': [{'loc': ['answer_text'], 'msg': 'Field required'}]}"
-        )
-    )
-
-    assert submitted_answer_text is None
-    assert structured_output is None
-    assert status == "completed"
-    assert termination_reason is None
-    assert termination_metadata == {}
-
-
-def test_extract_submission_output_keeps_non_object_json_as_raw_text_only():
-    submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
-        backend_module._extract_submission_output(
-            {
-                "submitted": True,
-                "answer_text": '["Seoul","Busan"]',
-            }
-        )
-    )
-
-    assert submitted_answer_text == '["Seoul","Busan"]'
-    assert structured_output is None
-    assert status == "completed"
-    assert termination_reason == "submitted"
-    assert termination_metadata == {}
-
-
 def test_solver_backend_write_artifact_creates_dir_once_per_kind(
     tmp_path: Path,
     monkeypatch,
@@ -682,7 +619,6 @@ def test_solver_backend_write_artifact_creates_dir_once_per_kind(
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replicas=1,
         ),
         provider_config=ProviderConfig(
             type="openai_compatible",
@@ -704,9 +640,9 @@ def test_solver_backend_write_artifact_creates_dir_once_per_kind(
 
     monkeypatch.setattr(Path, "mkdir", _recording_mkdir)
 
-    backend._write_artifact("transcripts", "task_a", 0, {"a": 1})
+    backend._write_artifact("transcripts", "task_a", {"a": 1})
     first_transcript_dir_calls = mkdir_calls.count(tmp_path / "traces" / "transcripts")
-    backend._write_artifact("transcripts", "task_a", 1, {"a": 2})
+    backend._write_artifact("transcripts", "task_a", {"a": 2})
 
     transcript_dir = tmp_path / "traces" / "transcripts"
     assert mkdir_calls.count(transcript_dir) == first_transcript_dir_calls
@@ -738,6 +674,7 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
     class FakeRunner:
         @staticmethod
         async def run(agent, input, max_turns, session=None):
+            del agent, max_turns, session
             return SimpleNamespace(
                 final_output='{"delivery_status":"IN_TRANSIT"}',
                 _current_turn=1,
@@ -764,6 +701,7 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
             Runner=FakeRunner,
             SQLiteSession=lambda *args, **kwargs: None,
             set_tracing_disabled=lambda **kwargs: None,
+            ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
         ),
     )
 
@@ -772,7 +710,6 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            replicas=1,
         ),
         provider_config=ProviderConfig(
             type="openai_compatible",
@@ -788,12 +725,12 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
     )
 
     with pytest.raises(RuntimeError, match="did not submit an answer"):
-        await backend.run(episode, replica_index=0)
+        await backend.run(episode)
 
     transcript_path = (
         tmp_path
         / "traces"
         / "transcripts"
-        / "env_assignment_solver__instance_0007__solver_a__replica_0.json"
+        / "task_assignment_solver__solver_a.json"
     )
     assert transcript_path.exists()

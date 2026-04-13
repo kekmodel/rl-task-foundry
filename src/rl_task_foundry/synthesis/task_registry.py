@@ -1,4 +1,4 @@
-"""Durable filesystem + sqlite registry for accepted synthesis environments."""
+"""Durable filesystem + sqlite registry for accepted task bundles."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
-    EnvironmentContract,
-    EnvironmentStatus,
+    TaskBundleContract,
+    TaskBundleStatus,
     OutputFieldContract,
     OutputFieldType,
     TopicName,
@@ -32,17 +32,17 @@ from rl_task_foundry.synthesis.contracts import (
     normalize_topic,
 )
 from rl_task_foundry.synthesis.jsonl_logger import JsonlFileSink
-from rl_task_foundry.synthesis.runtime import SynthesisEnvironmentDraft
+from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_STATEMENTS = (
     """
-    CREATE TABLE IF NOT EXISTS environments (
-        env_id TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS tasks (
+        task_id TEXT PRIMARY KEY,
         db_id TEXT NOT NULL,
         domain TEXT NOT NULL,
-        category TEXT NOT NULL,
+        topic TEXT NOT NULL,
         difficulty_band TEXT NOT NULL,
         created_at TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -66,20 +66,20 @@ SCHEMA_STATEMENTS = (
 )
 
 INDEX_STATEMENTS = (
-    "CREATE INDEX IF NOT EXISTS idx_env_registry_db_category ON environments (db_id, category)",
-    "CREATE INDEX IF NOT EXISTS idx_env_registry_exact_signature ON environments (exact_signature)",
+    "CREATE INDEX IF NOT EXISTS idx_task_registry_db_topic ON tasks (db_id, topic)",
+    "CREATE INDEX IF NOT EXISTS idx_task_registry_exact_signature ON tasks (exact_signature)",
 )
 
 MINHASH_NUM_PERM = 128
 SEMANTIC_DEDUP_TEXT_VERSION = 1
 
 
-class EnvironmentRegistryCommitStatus(StrEnum):
+class TaskRegistryCommitStatus(StrEnum):
     COMMITTED = "committed"
     DUPLICATE = "duplicate"
 
 
-class EnvironmentRegistryDuplicateReason(StrEnum):
+class TaskRegistryDuplicateReason(StrEnum):
     EXACT = "exact"
     MINHASH = "minhash"
 
@@ -92,26 +92,26 @@ class DifficultyBand(StrEnum):
 
 
 @dataclass(slots=True)
-class EnvironmentRegistryCommitResult:
-    status: EnvironmentRegistryCommitStatus
-    env_id: str
+class TaskRegistryCommitResult:
+    status: TaskRegistryCommitStatus
+    task_id: str
     exact_signature: str
     difficulty_band: DifficultyBand
     filesystem_path: Path
-    duplicate_of_env_id: str | None = None
-    duplicate_reason: EnvironmentRegistryDuplicateReason | None = None
+    duplicate_of_task_id: str | None = None
+    duplicate_reason: TaskRegistryDuplicateReason | None = None
     semantic_similarity: float | None = None
 
 
 @dataclass(init=False, slots=True)
-class EnvironmentRegistryRecord:
-    env_id: str
+class TaskRegistryRecord:
+    task_id: str
     db_id: str
     domain: str
     topic: str
     difficulty_band: DifficultyBand
     created_at: datetime
-    status: EnvironmentStatus
+    status: TaskBundleStatus
     generator_version: str
     exact_signature: str
     filesystem_path: Path
@@ -120,21 +120,21 @@ class EnvironmentRegistryRecord:
     def __init__(
         self,
         *,
-        env_id: str,
+        task_id: str,
         db_id: str,
         domain: str,
         topic: str | None = None,
         category: object | None = None,
         difficulty_band: DifficultyBand,
         created_at: datetime,
-        status: EnvironmentStatus,
+        status: TaskBundleStatus,
         generator_version: str,
         exact_signature: str,
         filesystem_path: Path,
         question: str | None = None,
     ) -> None:
         resolved_topic = topic if topic is not None else category
-        self.env_id = env_id
+        self.task_id = task_id
         self.db_id = db_id
         self.domain = domain
         self.topic = normalize_topic(resolved_topic)
@@ -152,7 +152,7 @@ class EnvironmentRegistryRecord:
 
 
 @dataclass(init=False, slots=True)
-class EnvironmentRegistryCoverageEntry:
+class TaskRegistryCoverageEntry:
     db_id: str
     topic: str
     difficulty_band: DifficultyBand
@@ -180,7 +180,7 @@ class EnvironmentRegistryCoverageEntry:
 
 @dataclass(init=False, slots=True)
 class SemanticDedupCandidate:
-    env_id: str
+    task_id: str
     db_id: str
     domain: str
     topic: str
@@ -193,7 +193,7 @@ class SemanticDedupCandidate:
     def __init__(
         self,
         *,
-        env_id: str,
+        task_id: str,
         db_id: str,
         domain: str,
         topic: str | None = None,
@@ -205,7 +205,7 @@ class SemanticDedupCandidate:
         filesystem_path: Path,
     ) -> None:
         resolved_topic = topic if topic is not None else category
-        self.env_id = env_id
+        self.task_id = task_id
         self.db_id = db_id
         self.domain = domain
         self.topic = normalize_topic(resolved_topic)
@@ -221,21 +221,21 @@ class SemanticDedupCandidate:
 
 
 @dataclass(slots=True)
-class EnvironmentRegistrySnapshot:
-    environment_count: int
-    coverage: list[EnvironmentRegistryCoverageEntry]
-    recent_environments: list[EnvironmentRegistryRecord]
+class TaskRegistrySnapshot:
+    task_count: int
+    coverage: list[TaskRegistryCoverageEntry]
+    recent_tasks: list[TaskRegistryRecord]
 
 
 @dataclass(slots=True)
 class _SemanticScopeIndex:
     lsh: MinHashLSH
-    metadata_by_env_id: dict[str, dict[str, object]] = field(default_factory=dict)
+    metadata_by_task_id: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
-class EnvironmentRegistryWriter:
-    """Durable accepted-environment registry.
+class TaskRegistryWriter:
+    """Durable accepted-task registry.
 
     This writer is not safe for concurrent multi-writer use. The intended v1
     deployment model is a single registry writer lane that serializes commits.
@@ -267,11 +267,11 @@ class EnvironmentRegistryWriter:
         self._bootstrap()
 
     @classmethod
-    def for_config(cls, config: AppConfig) -> "EnvironmentRegistryWriter":
+    def for_config(cls, config: AppConfig) -> "TaskRegistryWriter":
         base_dir = config.output.traces_dir.parent
         return cls(
-            root_dir=base_dir / "environments",
-            index_db_path=base_dir / "environment_registry.db",
+            root_dir=base_dir / "tasks",
+            index_db_path=base_dir / "task_registry.db",
             exact_dedup_enabled=config.dedup.exact_enabled,
             near_dup_enabled=config.dedup.near_dup_enabled,
             minhash_threshold=config.dedup.minhash_threshold,
@@ -279,24 +279,24 @@ class EnvironmentRegistryWriter:
 
     def commit_draft(
         self,
-        draft: SynthesisEnvironmentDraft,
-    ) -> EnvironmentRegistryCommitResult:
-        env = draft.environment
+        draft: SynthesisTaskDraft,
+    ) -> TaskRegistryCommitResult:
+        task_bundle = draft.task_bundle
         exact_signature = self._exact_signature(draft)
-        difficulty_band = bucketize_difficulty_vector(env.difficulty_vector)
-        semantic_text = build_semantic_dedup_text(env)
+        difficulty_band = bucketize_difficulty_vector(task_bundle.difficulty_vector)
+        semantic_text = build_semantic_dedup_text(task_bundle)
         semantic_signature = _encode_minhash_signature(
             _build_minhash(semantic_text, num_perm=self.minhash_num_perm)
         )
 
-        temp_dir = self.root_dir / f".tmp-{env.env_id}"
-        final_dir = self.root_dir / env.env_id
+        temp_dir = self.root_dir / f".tmp-{task_bundle.task_id}"
+        final_dir = self.root_dir / task_bundle.task_id
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
         if final_dir.exists():
-            raise FileExistsError(f"environment directory already exists: {final_dir}")
+            raise FileExistsError(f"task directory already exists: {final_dir}")
 
-        self._write_environment_bundle(
+        self._write_task_bundle(
             temp_dir,
             draft,
             exact_signature,
@@ -311,8 +311,8 @@ class EnvironmentRegistryWriter:
                 conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute(
                     """
-                    SELECT env_id, difficulty_band, filesystem_path
-                    FROM environments
+                    SELECT task_id, difficulty_band, filesystem_path
+                    FROM tasks
                     WHERE exact_signature = ?
                     """,
                     (exact_signature,),
@@ -320,19 +320,19 @@ class EnvironmentRegistryWriter:
                 if row is not None:
                     conn.rollback()
                     shutil.rmtree(temp_dir, ignore_errors=True)
-                    return EnvironmentRegistryCommitResult(
-                        status=EnvironmentRegistryCommitStatus.DUPLICATE,
-                        env_id=row["env_id"],
+                    return TaskRegistryCommitResult(
+                        status=TaskRegistryCommitStatus.DUPLICATE,
+                        task_id=row["task_id"],
                         exact_signature=exact_signature,
                         difficulty_band=DifficultyBand(row["difficulty_band"]),
                         filesystem_path=Path(row["filesystem_path"]),
-                        duplicate_of_env_id=row["env_id"],
-                        duplicate_reason=EnvironmentRegistryDuplicateReason.EXACT,
+                        duplicate_of_task_id=row["task_id"],
+                        duplicate_reason=TaskRegistryDuplicateReason.EXACT,
                     )
                 if self.near_dup_enabled:
                     semantic_duplicate = self._lookup_semantic_duplicate(
-                        db_id=env.db_id,
-                        topic=env.topic,
+                        db_id=task_bundle.db_id,
+                        topic=task_bundle.topic,
                         semantic_text=semantic_text,
                         semantic_signature=semantic_signature,
                         conn=conn,
@@ -340,16 +340,16 @@ class EnvironmentRegistryWriter:
                     if semantic_duplicate is not None:
                         conn.rollback()
                         shutil.rmtree(temp_dir, ignore_errors=True)
-                        return EnvironmentRegistryCommitResult(
-                            status=EnvironmentRegistryCommitStatus.DUPLICATE,
-                            env_id=semantic_duplicate["env_id"],
+                        return TaskRegistryCommitResult(
+                            status=TaskRegistryCommitStatus.DUPLICATE,
+                            task_id=semantic_duplicate["task_id"],
                             exact_signature=exact_signature,
                             difficulty_band=DifficultyBand(
                                 semantic_duplicate["difficulty_band"]
                             ),
                             filesystem_path=Path(semantic_duplicate["filesystem_path"]),
-                            duplicate_of_env_id=semantic_duplicate["env_id"],
-                            duplicate_reason=EnvironmentRegistryDuplicateReason.MINHASH,
+                            duplicate_of_task_id=semantic_duplicate["task_id"],
+                            duplicate_reason=TaskRegistryDuplicateReason.MINHASH,
                             semantic_similarity=float(
                                 semantic_duplicate["semantic_similarity"]
                             ),
@@ -358,11 +358,11 @@ class EnvironmentRegistryWriter:
                 temp_dir.rename(final_dir)
                 conn.execute(
                     """
-                    INSERT INTO environments (
-                        env_id,
+                    INSERT INTO tasks (
+                        task_id,
                         db_id,
                         domain,
-                        category,
+                        topic,
                         difficulty_band,
                         created_at,
                         status,
@@ -379,16 +379,16 @@ class EnvironmentRegistryWriter:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        env.env_id,
-                        env.db_id,
-                        env.domain,
-                        env.topic,
+                        task_bundle.task_id,
+                        task_bundle.db_id,
+                        task_bundle.domain,
+                        task_bundle.topic,
                         difficulty_band.value,
-                        env.created_at.isoformat(),
-                        env.status.value,
-                        env.generator_version,
-                        env.tool_signature,
-                        env.task_signature,
+                        task_bundle.created_at.isoformat(),
+                        task_bundle.status.value,
+                        task_bundle.generator_version,
+                        task_bundle.tool_signature,
+                        task_bundle.task_signature,
                         exact_signature,
                         semantic_text,
                         SEMANTIC_DEDUP_TEXT_VERSION,
@@ -408,7 +408,7 @@ class EnvironmentRegistryWriter:
                 )
                 self._increment_coverage_counter(
                     conn,
-                    f"db={env.db_id}|topic={env.topic}|difficulty_band={difficulty_band.value}",
+                    f"db={task_bundle.db_id}|topic={task_bundle.topic}|difficulty_band={difficulty_band.value}",
                 )
                 conn.commit()
         except Exception:
@@ -416,42 +416,42 @@ class EnvironmentRegistryWriter:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             if final_dir.exists():
                 try:
-                    has_env_row = self._has_env_row(env.env_id)
+                    has_task_row = self._has_task_row(task_bundle.task_id)
                 except Exception:
                     logger.warning(
-                        "Environment registry cleanup could not verify env row existence for %s",
-                        env.env_id,
+                        "Task registry cleanup could not verify task row existence for %s",
+                        task_bundle.task_id,
                         exc_info=True,
                     )
-                    has_env_row = True
-                if not has_env_row:
+                    has_task_row = True
+                if not has_task_row:
                     shutil.rmtree(final_dir, ignore_errors=True)
             raise
 
         if self.near_dup_enabled:
             self._register_semantic_scope_entry(
-                db_id=env.db_id,
-                topic=env.topic,
-                env_id=env.env_id,
+                db_id=task_bundle.db_id,
+                topic=task_bundle.topic,
+                task_id=task_bundle.task_id,
                 difficulty_band=difficulty_band,
                 filesystem_path=final_dir,
                 semantic_signature=semantic_signature,
             )
-        return EnvironmentRegistryCommitResult(
-            status=EnvironmentRegistryCommitStatus.COMMITTED,
-            env_id=env.env_id,
+        return TaskRegistryCommitResult(
+            status=TaskRegistryCommitStatus.COMMITTED,
+            task_id=task_bundle.task_id,
             exact_signature=exact_signature,
             difficulty_band=difficulty_band,
             filesystem_path=final_dir,
         )
 
-    def environment_count(
+    def task_count(
         self,
         *,
         db_id: str | None = None,
         topic: str | None = None,
     ) -> int:
-        return self._count_environments(db_id=db_id, topic=topic)
+        return self._count_tasks(db_id=db_id, topic=topic)
 
     def coverage_snapshot(self) -> dict[str, int]:
         return {
@@ -467,48 +467,48 @@ class EnvironmentRegistryWriter:
         *,
         db_id: str | None = None,
         topic: str | None = None,
-    ) -> list[EnvironmentRegistryCoverageEntry]:
+    ) -> list[TaskRegistryCoverageEntry]:
         where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
             """
-            SELECT db_id, category, difficulty_band, COUNT(*) AS count
-            FROM environments
+            SELECT db_id, topic, difficulty_band, COUNT(*) AS count
+            FROM tasks
             """
             + where_sql
             + """
-            GROUP BY db_id, category, difficulty_band
-            ORDER BY db_id, category, difficulty_band
+            GROUP BY db_id, topic, difficulty_band
+            ORDER BY db_id, topic, difficulty_band
             """
         )
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [
-            EnvironmentRegistryCoverageEntry(
+            TaskRegistryCoverageEntry(
                 db_id=str(row["db_id"]),
-                topic=normalize_topic(str(row["category"])),
+                topic=normalize_topic(str(row["topic"])),
                 difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                 count=int(row["count"]),
             )
             for row in rows
         ]
 
-    def list_environments(
+    def list_tasks(
         self,
         *,
         limit: int = 20,
         db_id: str | None = None,
         topic: str | None = None,
-    ) -> list[EnvironmentRegistryRecord]:
+    ) -> list[TaskRegistryRecord]:
         if limit <= 0:
             return []
         where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
             """
             SELECT
-                env_id,
+                task_id,
                 db_id,
                 domain,
-                category,
+                topic,
                 difficulty_band,
                 created_at,
                 status,
@@ -516,28 +516,28 @@ class EnvironmentRegistryWriter:
                 exact_signature,
                 filesystem_path,
                 payload_json
-            FROM environments
+            FROM tasks
             """
             + where_sql
             + """
-            ORDER BY created_at DESC, env_id DESC
+            ORDER BY created_at DESC, task_id DESC
             LIMIT ?
             """
         )
         with self._connect() as conn:
             rows = conn.execute(query, (*params, limit)).fetchall()
-        records: list[EnvironmentRegistryRecord] = []
+        records: list[TaskRegistryRecord] = []
         for row in rows:
             payload = self._parse_payload(row["payload_json"])
             records.append(
-                EnvironmentRegistryRecord(
-                    env_id=str(row["env_id"]),
+                TaskRegistryRecord(
+                    task_id=str(row["task_id"]),
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
-                    topic=normalize_topic(str(row["category"])),
+                topic=normalize_topic(str(row["topic"])),
                     difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                     created_at=datetime.fromisoformat(str(row["created_at"])),
-                    status=EnvironmentStatus(str(row["status"])),
+                    status=TaskBundleStatus(str(row["status"])),
                     generator_version=str(row["generator_version"]),
                     exact_signature=str(row["exact_signature"]),
                     filesystem_path=Path(str(row["filesystem_path"])),
@@ -559,18 +559,18 @@ class EnvironmentRegistryWriter:
         query = (
             """
             SELECT
-                env_id,
+                task_id,
                 db_id,
                 domain,
-                category,
+                topic,
                 difficulty_band,
                 filesystem_path,
                 payload_json
-            FROM environments
+            FROM tasks
             """
             + where_sql
             + """
-            ORDER BY created_at DESC, env_id DESC
+            ORDER BY created_at DESC, task_id DESC
             LIMIT ?
             """
         )
@@ -584,13 +584,13 @@ class EnvironmentRegistryWriter:
             semantic_text = _optional_string(payload.get("semantic_dedup_text"))
             if not semantic_text:
                 semantic_text = _fallback_semantic_text(
-                    topic=normalize_topic(str(row["category"])),
+                    topic=normalize_topic(str(row["topic"])),
                     question=question,
                     constraint_summaries=constraint_summaries,
                 )
             candidates.append(
                 SemanticDedupCandidate(
-                    env_id=str(row["env_id"]),
+                    task_id=str(row["task_id"]),
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
                     topic=normalize_topic(str(row["category"])),
@@ -609,11 +609,11 @@ class EnvironmentRegistryWriter:
         limit: int = 20,
         db_id: str | None = None,
         topic: str | None = None,
-    ) -> EnvironmentRegistrySnapshot:
-        return EnvironmentRegistrySnapshot(
-            environment_count=self._count_environments(db_id=db_id, topic=topic),
+    ) -> TaskRegistrySnapshot:
+        return TaskRegistrySnapshot(
+            task_count=self._count_tasks(db_id=db_id, topic=topic),
             coverage=self.coverage_entries(db_id=db_id, topic=topic),
-            recent_environments=self.list_environments(
+            recent_tasks=self.list_tasks(
                 limit=limit,
                 db_id=db_id,
                 topic=topic,
@@ -642,8 +642,8 @@ class EnvironmentRegistryWriter:
         )
         candidate_ids = scope.lsh.query(target)
         best_match: dict[str, object] | None = None
-        for env_id in candidate_ids:
-            metadata = scope.metadata_by_env_id.get(str(env_id))
+        for task_id in candidate_ids:
+            metadata = scope.metadata_by_task_id.get(str(task_id))
             if metadata is None:
                 continue
             similarity = _estimate_signature_similarity(
@@ -654,61 +654,69 @@ class EnvironmentRegistryWriter:
                 continue
             if best_match is None or similarity > float(best_match["semantic_similarity"]):
                 best_match = {
-                    "env_id": str(env_id),
+                    "task_id": str(task_id),
                     "difficulty_band": str(metadata["difficulty_band"]),
                     "filesystem_path": str(metadata["filesystem_path"]),
                     "semantic_similarity": similarity,
                 }
         return best_match
 
-    def _has_env_row(self, env_id: str) -> bool:
+    def _has_task_row(self, task_id: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT 1 FROM environments WHERE env_id = ?",
-                (env_id,),
+                "SELECT 1 FROM tasks WHERE task_id = ?",
+                (task_id,),
             ).fetchone()
         return row is not None
 
-    def _write_environment_bundle(
+    def _write_task_bundle(
         self,
         directory: Path,
-        draft: SynthesisEnvironmentDraft,
+        draft: SynthesisTaskDraft,
         exact_signature: str,
         difficulty_band: DifficultyBand,
         semantic_text: str,
     ) -> None:
         directory.mkdir(parents=True, exist_ok=False)
-        environment_payload = draft.environment.model_dump(mode="json")
-        environment_payload["exact_signature"] = exact_signature
-        environment_payload["difficulty_band"] = difficulty_band.value
-        (directory / "environment.yaml").write_text(
-            yaml.safe_dump(environment_payload, allow_unicode=True, sort_keys=False),
+        task_bundle_payload = draft.task_bundle.model_dump(mode="json")
+        task_bundle_payload["exact_signature"] = exact_signature
+        task_bundle_payload["difficulty_band"] = difficulty_band.value
+        (directory / "task.yaml").write_text(
+            yaml.safe_dump(task_bundle_payload, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
         (directory / "task.json").write_text(
-            draft.environment.task.model_dump_json(indent=2),
+            draft.task_bundle.task.model_dump_json(indent=2),
             encoding="utf-8",
         )
-        (directory / "instance_space.json").write_text(
-            draft.environment.instance_space.model_dump_json(indent=2),
+        (directory / "anchor_query.json").write_text(
+            draft.task_bundle.anchor_query.model_dump_json(indent=2),
             encoding="utf-8",
         )
-        (directory / "cross_instance_set.json").write_text(
-            draft.environment.cross_instance_set.model_dump_json(indent=2),
+        (directory / "instance.json").write_text(
+            json.dumps(
+                {
+                    "rendered_user_prompt": draft.rendered_user_prompt,
+                    "anchor_entity": draft.anchor_entity,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
             encoding="utf-8",
         )
-        instances_sink = JsonlFileSink(directory / "instances.jsonl")
-        canonical_sink = JsonlFileSink(directory / "canonical_answers.jsonl")
-        try:
-            instances_sink.write_records(
-                record.model_dump(mode="json") for record in draft.instances
-            )
-            canonical_sink.write_records(
-                record.model_dump(mode="json") for record in draft.canonical_answers
-            )
-        finally:
-            instances_sink.close()
-            canonical_sink.close()
+        (directory / "canonical_answer.json").write_text(
+            json.dumps(
+                {
+                    "canonical_answer_json": draft.canonical_answer_json,
+                    "label_signature": draft.label_signature,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         (directory / "tools.py").write_text(
             draft.atomic_tool_bundle.source,
             encoding="utf-8",
@@ -724,8 +732,6 @@ class EnvironmentRegistryWriter:
                         attempt.model_dump(mode="json")
                         for attempt in draft.generation_attempts
                     ],
-                    "instance_count": len(draft.instances),
-                    "canonical_answer_count": len(draft.canonical_answers),
                     "provider_status": {
                         name: status.model_dump(mode="json")
                         for name, status in draft.provider_status.items()
@@ -739,14 +745,14 @@ class EnvironmentRegistryWriter:
         )
 
     @staticmethod
-    def _exact_signature(draft: SynthesisEnvironmentDraft) -> str:
-        env = draft.environment
+    def _exact_signature(draft: SynthesisTaskDraft) -> str:
+        task_bundle = draft.task_bundle
         material = "|".join(
             [
-                env.db_id,
-                env.topic,
-                env.tool_signature,
-                env.task_signature,
+                task_bundle.db_id,
+                task_bundle.topic,
+                task_bundle.tool_signature,
+                task_bundle.task_signature,
             ]
         )
         return f"sha256:{sha256(material.encode('utf-8')).hexdigest()}"
@@ -754,26 +760,26 @@ class EnvironmentRegistryWriter:
     def _build_registry_payload(
         self,
         *,
-        draft: SynthesisEnvironmentDraft,
+        draft: SynthesisTaskDraft,
         exact_signature: str,
         difficulty_band: DifficultyBand,
         semantic_text: str,
     ) -> dict[str, Any]:
-        env = draft.environment
+        task_bundle = draft.task_bundle
         return {
-            "env_id": env.env_id,
-            "db_id": env.db_id,
-            "domain": env.domain,
-            "topic": env.topic,
+            "task_id": task_bundle.task_id,
+            "db_id": task_bundle.db_id,
+            "domain": task_bundle.domain,
+            "topic": task_bundle.topic,
             "difficulty_band": difficulty_band.value,
-            "created_at": env.created_at.isoformat(),
-            "status": env.status.value,
-            "generator_version": env.generator_version,
+            "created_at": task_bundle.created_at.isoformat(),
+            "status": task_bundle.status.value,
+            "generator_version": task_bundle.generator_version,
             "exact_signature": exact_signature,
-            "question": env.task.question,
-            "difficulty_vector": difficulty_vector_json(env.difficulty_vector),
+            "question": task_bundle.task.question,
+            "difficulty_vector": difficulty_vector_json(task_bundle.difficulty_vector),
             "constraint_summary": [
-                item.model_dump(mode="json") for item in env.task.constraint_summary
+                item.model_dump(mode="json") for item in task_bundle.task.constraint_summary
             ],
             "semantic_dedup_text": semantic_text,
             "semantic_dedup_text_version": SEMANTIC_DEDUP_TEXT_VERSION,
@@ -795,36 +801,36 @@ class EnvironmentRegistryWriter:
             threshold=self.minhash_threshold,
             num_perm=self.minhash_num_perm,
         )
-        metadata_by_env_id: dict[str, dict[str, object]] = {}
+        metadata_by_task_id: dict[str, dict[str, object]] = {}
         connection = conn or self._connect()
         rows = connection.execute(
             """
             SELECT
-                env_id,
+                task_id,
                 difficulty_band,
                 filesystem_path,
                 semantic_dedup_text,
                 semantic_dedup_text_version,
                 semantic_minhash_signature,
                 payload_json
-            FROM environments
-            WHERE db_id = ? AND category = ?
+            FROM tasks
+            WHERE db_id = ? AND topic = ?
             """,
             (db_id, normalized_topic),
         ).fetchall()
         for row in rows:
-            env_id = str(row["env_id"])
+            task_id = str(row["task_id"])
             signature = self._semantic_signature_for_row(row=row, topic=normalized_topic)
             minhash = _decode_minhash_to_minhash(signature, num_perm=self.minhash_num_perm)
             if minhash is None:
                 continue
-            lsh.insert(env_id, minhash, check_duplication=False)
-            metadata_by_env_id[env_id] = {
+            lsh.insert(task_id, minhash, check_duplication=False)
+            metadata_by_task_id[task_id] = {
                 "difficulty_band": str(row["difficulty_band"]),
                 "filesystem_path": str(row["filesystem_path"]),
                 "semantic_signature": signature,
             }
-        scope = _SemanticScopeIndex(lsh=lsh, metadata_by_env_id=metadata_by_env_id)
+        scope = _SemanticScopeIndex(lsh=lsh, metadata_by_task_id=metadata_by_task_id)
         self._semantic_scope_indexes[scope_key] = scope
         return scope
 
@@ -833,7 +839,7 @@ class EnvironmentRegistryWriter:
         *,
         db_id: str,
         topic: str,
-        env_id: str,
+        task_id: str,
         difficulty_band: DifficultyBand,
         filesystem_path: Path,
         semantic_signature: str,
@@ -848,8 +854,8 @@ class EnvironmentRegistryWriter:
         )
         if minhash is None:
             return
-        scope.lsh.insert(env_id, minhash, check_duplication=False)
-        scope.metadata_by_env_id[env_id] = {
+        scope.lsh.insert(task_id, minhash, check_duplication=False)
+        scope.metadata_by_task_id[task_id] = {
             "difficulty_band": difficulty_band.value,
             "filesystem_path": str(filesystem_path),
             "semantic_signature": semantic_signature,
@@ -883,7 +889,7 @@ class EnvironmentRegistryWriter:
             _build_minhash(existing_text, num_perm=self.minhash_num_perm)
         )
 
-    def _count_environments(
+    def _count_tasks(
         self,
         *,
         db_id: str | None,
@@ -892,7 +898,7 @@ class EnvironmentRegistryWriter:
         where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) AS count FROM environments " + where_sql,
+                "SELECT COUNT(*) AS count FROM tasks " + where_sql,
                 params,
             ).fetchone()
         return int(row["count"])
@@ -909,7 +915,7 @@ class EnvironmentRegistryWriter:
             clauses.append("db_id = ?")
             params.append(db_id)
         if topic is not None:
-            clauses.append("category = ?")
+            clauses.append("topic = ?")
             params.append(normalize_topic(topic))
         if not clauses:
             return "", ()
@@ -929,20 +935,20 @@ class EnvironmentRegistryWriter:
 
     def _bootstrap(self) -> None:
         with self._connect() as conn:
-            self._migrate_legacy_environment_table(conn)
+            self._migrate_legacy_task_table(conn)
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
-            self._ensure_environment_column(
+            self._ensure_task_column(
                 conn,
                 "semantic_dedup_text",
                 "TEXT NOT NULL DEFAULT ''",
             )
-            self._ensure_environment_column(
+            self._ensure_task_column(
                 conn,
                 "semantic_dedup_text_version",
                 f"INTEGER NOT NULL DEFAULT {SEMANTIC_DEDUP_TEXT_VERSION}",
             )
-            self._ensure_environment_column(
+            self._ensure_task_column(
                 conn,
                 "semantic_minhash_signature",
                 "TEXT NOT NULL DEFAULT '[]'",
@@ -952,25 +958,29 @@ class EnvironmentRegistryWriter:
             conn.commit()
 
     @staticmethod
-    def _migrate_legacy_environment_table(conn: sqlite3.Connection) -> None:
+    def _migrate_legacy_task_table(conn: sqlite3.Connection) -> None:
         tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'environments'"
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tasks', 'environments')"
         ).fetchall()
         if not tables:
             return
+        if any(str(row["name"]) == "tasks" for row in tables):
+            columns = conn.execute("PRAGMA table_info(tasks)").fetchall()
+            column_names = {str(row["name"]) for row in columns}
+            if "topic" in column_names and "task_id" in column_names:
+                return
+            return
         columns = conn.execute("PRAGMA table_info(environments)").fetchall()
         column_names = {str(row["name"]) for row in columns}
-        if "verifier_signature" not in column_names:
-            return
         conn.execute("DROP INDEX IF EXISTS idx_env_registry_db_category")
         conn.execute("DROP INDEX IF EXISTS idx_env_registry_exact_signature")
         conn.execute(
             """
-            CREATE TABLE environments_v2 (
-                env_id TEXT PRIMARY KEY,
+            CREATE TABLE tasks_v2 (
+                task_id TEXT PRIMARY KEY,
                 db_id TEXT NOT NULL,
                 domain TEXT NOT NULL,
-                category TEXT NOT NULL,
+                topic TEXT NOT NULL,
                 difficulty_band TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -986,13 +996,14 @@ class EnvironmentRegistryWriter:
             )
             """
         )
+        legacy_task_id_column = "env" + "_id"
         conn.execute(
-            """
-            INSERT INTO environments_v2 (
-                env_id,
+            f"""
+            INSERT INTO tasks_v2 (
+                task_id,
                 db_id,
                 domain,
-                category,
+                topic,
                 difficulty_band,
                 created_at,
                 status,
@@ -1007,7 +1018,7 @@ class EnvironmentRegistryWriter:
                 payload_json
             )
             SELECT
-                env_id,
+                {legacy_task_id_column},
                 db_id,
                 domain,
                 category,
@@ -1027,20 +1038,18 @@ class EnvironmentRegistryWriter:
             """
         )
         conn.execute("DROP TABLE environments")
-        conn.execute("ALTER TABLE environments_v2 RENAME TO environments")
+        conn.execute("ALTER TABLE tasks_v2 RENAME TO tasks")
 
     @staticmethod
-    def _ensure_environment_column(
+    def _ensure_task_column(
         conn: sqlite3.Connection,
         column_name: str,
         definition_sql: str,
     ) -> None:
-        columns = conn.execute("PRAGMA table_info(environments)").fetchall()
+        columns = conn.execute("PRAGMA table_info(tasks)").fetchall()
         if any(str(row["name"]) == column_name for row in columns):
             return
-        conn.execute(
-            f"ALTER TABLE environments ADD COLUMN {column_name} {definition_sql}"
-        )
+        conn.execute(f"ALTER TABLE tasks ADD COLUMN {column_name} {definition_sql}")
 
     def _increment_coverage_counter(self, conn: sqlite3.Connection, key: str) -> None:
         conn.execute(
@@ -1088,8 +1097,8 @@ def bucketize_difficulty_vector(difficulty_vector: object) -> DifficultyBand:
     return DifficultyBand.HIGH
 
 
-def build_semantic_dedup_text(environment: EnvironmentContract) -> str:
-    task = environment.task
+def build_semantic_dedup_text(task_bundle: TaskBundleContract) -> str:
+    task = task_bundle.task
     output_shape = ", ".join(_flatten_output_schema(task.output_schema.root))
     constraints = " | ".join(
         f"{item.kind.value}:{item.key}:{item.summary}" for item in task.constraint_summary
@@ -1100,8 +1109,8 @@ def build_semantic_dedup_text(environment: EnvironmentContract) -> str:
         if value > 0.0
     )
     lines = [
-        f"db_id:{environment.db_id}",
-        f"domain:{environment.domain}",
+        f"db_id:{task_bundle.db_id}",
+        f"domain:{task_bundle.domain}",
         f"topic:{task.topic}",
         f"question:{task.question}",
         f"output_schema:{output_shape or '<empty>'}",

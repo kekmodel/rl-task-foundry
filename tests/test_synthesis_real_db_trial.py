@@ -9,15 +9,9 @@ import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
-from rl_task_foundry.synthesis.environment_registry import (
-    DifficultyBand,
-    EnvironmentRegistryCommitResult,
-    EnvironmentRegistryCommitStatus,
-)
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
-    _config_with_trial_traces_dir,
 )
 from rl_task_foundry.synthesis.runtime import (
     SynthesisArtifactDiagnostics,
@@ -25,7 +19,12 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisGenerationAttempt,
     SynthesisGenerationOutcome,
 )
-from tests.test_synthesis_environment_registry import _sample_draft
+from rl_task_foundry.synthesis.task_registry import (
+    DifficultyBand,
+    TaskRegistryCommitResult,
+    TaskRegistryCommitStatus,
+)
+from tests.test_synthesis_task_registry import _sample_draft
 
 
 @dataclass(slots=True)
@@ -57,7 +56,7 @@ class _FakeSynthesisRuntime:
 
 @dataclass(slots=True)
 class _FakeRegistry:
-    result: EnvironmentRegistryCommitResult
+    result: TaskRegistryCommitResult
     committed_drafts: list[object] | None = None
     closed: bool = False
 
@@ -65,7 +64,7 @@ class _FakeRegistry:
         if self.committed_drafts is None:
             self.committed_drafts = []
 
-    def commit_draft(self, draft: object) -> EnvironmentRegistryCommitResult:
+    def commit_draft(self, draft: object) -> TaskRegistryCommitResult:
         self.committed_drafts.append(draft)
         return self.result
 
@@ -85,10 +84,10 @@ class _FakeExporter:
         self,
         bundle_root: Path,
         *,
-        env_id: str | None = None,
+        task_id: str | None = None,
         **_: object,
     ) -> object:
-        self.calls.append((bundle_root, env_id))
+        self.calls.append((bundle_root, task_id))
         bundle_root.mkdir(parents=True, exist_ok=True)
         return SimpleNamespace(bundle_root=bundle_root)
 
@@ -108,13 +107,13 @@ def _config_with_tmp_traces(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -> None:
-    base_draft = _sample_draft(tmp_env_id="env_real_trial")
+    base_draft = _sample_draft(tmp_task_id="task_real_trial")
     accepted_draft = base_draft.model_copy(
         update={
-            "environment": base_draft.environment.model_copy(
+            "task_bundle": base_draft.task_bundle.model_copy(
                 update={
                     "status": "accepted",
-                    "quality_metrics": base_draft.environment.quality_metrics.model_copy(
+                    "quality_metrics": base_draft.task_bundle.quality_metrics.model_copy(
                         update={
                             "solver_pass_rate": 0.5,
                             "solver_ci_low": 0.1,
@@ -127,12 +126,12 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     )
     runtime = _FakeSynthesisRuntime(draft=accepted_draft)
     registry = _FakeRegistry(
-        result=EnvironmentRegistryCommitResult(
-            status=EnvironmentRegistryCommitStatus.COMMITTED,
-            env_id=accepted_draft.environment.env_id,
+        result=TaskRegistryCommitResult(
+            status=TaskRegistryCommitStatus.COMMITTED,
+            task_id=accepted_draft.task_bundle.task_id,
             exact_signature="sha256:trial",
             difficulty_band=DifficultyBand.UNSET,
-            filesystem_path=tmp_path / "environments" / accepted_draft.environment.env_id,
+            filesystem_path=tmp_path / "tasks" / accepted_draft.task_bundle.task_id,
         )
     )
     exporter = _FakeExporter()
@@ -155,12 +154,12 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
 
     assert summary.trial_status is RealDbTrialStatus.ACCEPTED
     assert summary.quality_gate_status == "accept"
-    assert summary.registry_status is EnvironmentRegistryCommitStatus.COMMITTED
+    assert summary.registry_status is TaskRegistryCommitStatus.COMMITTED
     assert summary.bundle_root == output_root / "bundle"
-    assert exporter.calls == [(output_root / "bundle", accepted_draft.environment.env_id)]
+    assert exporter.calls == [(output_root / "bundle", accepted_draft.task_bundle.task_id)]
     payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
     assert payload["trial_status"] == "accepted"
-    assert payload["env_id"] == "env_real_trial"
+    assert payload["task_id"] == "task_real_trial"
     assert registry.closed is True
 
 
@@ -188,9 +187,9 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
         _config_with_tmp_traces(tmp_path),
         synthesis_runtime=_FakeSynthesisRuntime(exc=exc),
         registry=_FakeRegistry(
-            result=EnvironmentRegistryCommitResult(
-                status=EnvironmentRegistryCommitStatus.COMMITTED,
-                env_id="unused",
+            result=TaskRegistryCommitResult(
+                status=TaskRegistryCommitStatus.COMMITTED,
+                task_id="unused",
                 exact_signature="sha256:unused",
                 difficulty_band=DifficultyBand.UNSET,
                 filesystem_path=tmp_path / "unused",
@@ -213,10 +212,3 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
     assert summary.attempt_outcomes == ("artifact_invalid",)
     assert summary.error_codes == ("reject_too_easy",)
     assert runner.registry.closed is True
-
-
-def test_config_with_trial_traces_dir_rebinds_output_root(tmp_path: Path) -> None:
-    config = _config_with_tmp_traces(tmp_path)
-    rebound = _config_with_trial_traces_dir(config, tmp_path / "debug" / "traces")
-
-    assert rebound.output.traces_dir == tmp_path / "debug" / "traces"

@@ -17,14 +17,14 @@ from rl_task_foundry.synthesis.runner import (
     load_synthesis_registry,
 )
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
-from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
+from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
-from rl_task_foundry.synthesis.environment_registry import EnvironmentRegistryWriter
-from rl_task_foundry.synthesis.proof_environment import ProofEnvironmentRunner
+from rl_task_foundry.synthesis.proof_environment import ProofTaskRunner
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
 )
+from rl_task_foundry.synthesis.task_registry import TaskRegistryWriter
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -32,7 +32,7 @@ console = Console()
 
 def _solver_summary(config) -> str:
     return ", ".join(
-        f"{solver.solver_id}={solver.provider}/{solver.model}x{solver.replicas}"
+        f"{solver.solver_id}={solver.provider}/{solver.model}"
         for solver in config.models.solvers
     )
 
@@ -55,7 +55,7 @@ def validate_config(
         solver_model=solver_model,
     )
     console.print(f"[green]config ok[/green]: {config_path}")
-    console.print(f"solver_replicas={config.models.total_solver_replicas}")
+    console.print(f"total_solver_runs={config.models.total_solver_runs}")
     console.print(f"run_db={config.output.run_db_path}")
     console.print(
         f"composer={config.models.composer.provider}/{config.models.composer.model}"
@@ -143,10 +143,10 @@ def run_synthesis_registry(
         console.print(f"initially_processed_pairs={summary.initially_processed_pairs}")
         console.print(f"processed_pairs_after_run={summary.processed_pairs_after_run}")
         console.print(f"generated_drafts={summary.generated_drafts}")
-        console.print(f"quality_accepted_envs={summary.quality_accepted_envs}")
-        console.print(f"quality_rejected_envs={summary.quality_rejected_envs}")
-        console.print(f"registry_committed_envs={summary.registry_committed_envs}")
-        console.print(f"registry_duplicate_envs={summary.registry_duplicate_envs}")
+        console.print(f"quality_accepted_tasks={summary.quality_accepted_tasks}")
+        console.print(f"quality_rejected_tasks={summary.quality_rejected_tasks}")
+        console.print(f"registry_committed_tasks={summary.registry_committed_tasks}")
+        console.print(f"registry_duplicate_tasks={summary.registry_duplicate_tasks}")
         console.print(f"remaining_pairs={summary.remaining_pairs}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
@@ -156,14 +156,14 @@ def run_synthesis_registry(
             console.print(f"registry_root_dir={summary.registry_root_dir}")
         if summary.registry_index_db_path is not None:
             console.print(f"registry_index_db_path={summary.registry_index_db_path}")
-        if summary.generated_env_ids:
-            console.print(f"generated_env_ids={summary.generated_env_ids}")
-        if summary.committed_env_ids:
-            console.print(f"committed_env_ids={summary.committed_env_ids}")
-        if summary.duplicate_env_ids:
-            console.print(f"duplicate_env_ids={summary.duplicate_env_ids}")
-        if summary.quality_rejected_env_ids:
-            console.print(f"quality_rejected_env_ids={summary.quality_rejected_env_ids}")
+        if summary.generated_task_ids:
+            console.print(f"generated_task_ids={summary.generated_task_ids}")
+        if summary.committed_task_ids:
+            console.print(f"committed_task_ids={summary.committed_task_ids}")
+        if summary.duplicate_task_ids:
+            console.print(f"duplicate_task_ids={summary.duplicate_task_ids}")
+        if summary.quality_rejected_task_ids:
+            console.print(f"quality_rejected_task_ids={summary.quality_rejected_task_ids}")
         if summary.last_decision is not None:
             console.print(f"last_status={summary.last_decision.status}")
             console.print(f"last_db_id={summary.last_decision.db_id}")
@@ -172,37 +172,29 @@ def run_synthesis_registry(
     asyncio.run(_run())
 
 
-@app.command("show-synthesis-environment-registry")
-def show_synthesis_environment_registry(
+@app.command("show-task-registry")
+def show_task_registry(
     config_path: Path = Path("rl_task_foundry.yaml"),
     limit: int = 10,
     db_id: str | None = None,
     topic: str | None = typer.Option(None, "--topic", "--category"),
 ) -> None:
-    """Print the current durable synthesis environment registry snapshot."""
+    """Print the current durable synthesis task registry snapshot."""
 
     config = load_config(config_path)
-    registry = EnvironmentRegistryWriter.for_config(config)
+    registry = TaskRegistryWriter.for_config(config)
     resolved_topic = normalize_topic(topic) if topic is not None else None
-    try:
-        snapshot = registry.snapshot(limit=limit, db_id=db_id, topic=resolved_topic)
-        semantic_candidates = registry.semantic_dedup_candidates(
-            limit=limit,
-            db_id=db_id,
-            topic=resolved_topic,
-        )
-    except TypeError:
-        snapshot = registry.snapshot(limit=limit, db_id=db_id, category=resolved_topic)
-        semantic_candidates = registry.semantic_dedup_candidates(
-            limit=limit,
-            db_id=db_id,
-            category=resolved_topic,
-        )
+    snapshot = registry.snapshot(limit=limit, db_id=db_id, topic=resolved_topic)
+    semantic_candidates = registry.semantic_dedup_candidates(
+        limit=limit,
+        db_id=db_id,
+        topic=resolved_topic,
+    )
 
-    console.print("[green]synthesis environment registry[/green]")
+    console.print("[green]synthesis task registry[/green]")
     console.print(f"root_dir={registry.root_dir}")
     console.print(f"index_db_path={registry.index_db_path}")
-    console.print(f"environment_count={snapshot.environment_count}")
+    console.print(f"task_count={snapshot.task_count}")
     console.print(f"coverage_cells={len(snapshot.coverage)}")
     console.print(f"semantic_candidates={len(semantic_candidates)}")
     for entry in snapshot.coverage:
@@ -210,10 +202,10 @@ def show_synthesis_environment_registry(
             "coverage="
             f"{entry.db_id}|{entry.topic}|{entry.difficulty_band.value}|{entry.count}"
         )
-    for record in snapshot.recent_environments:
+    for record in snapshot.recent_tasks:
         console.print(
-            "env="
-            f"{record.env_id}|{record.db_id}|{record.topic}"
+            "task="
+            f"{record.task_id}|{record.db_id}|{record.topic}"
             f"|{record.difficulty_band.value}|{record.status.value}"
         )
 
@@ -230,9 +222,9 @@ def plan_synthesis_coverage(
     registry = load_synthesis_registry(registry_path)
     if not registry:
         raise typer.BadParameter("registry file is empty")
-    environment_registry = EnvironmentRegistryWriter.for_config(config)
+    task_registry = TaskRegistryWriter.for_config(config)
     planner = SynthesisCoveragePlanner.for_config(config)
-    plan = planner.build_plan(registry, environment_registry.coverage_entries())
+    plan = planner.build_plan(registry, task_registry.coverage_entries())
 
     console.print(f"[green]synthesis coverage plan[/green]: {registry_path}")
     console.print(
@@ -272,57 +264,49 @@ def export_bundle(
     config_path: Path = Path("rl_task_foundry.yaml"),
     db_id: str | None = None,
     topic: str | None = typer.Option(None, "--topic", "--category"),
-    env_id: str | None = None,
+    task_id: str | None = None,
 ) -> None:
-    """Export registered environments into the environment API bundle layout."""
+    """Export registered task bundles into the bundle layout."""
 
     config = load_config(config_path)
-    exporter = EnvironmentBundleExporter.for_config(config)
+    exporter = TaskBundleExporter.for_config(config)
     resolved_topic = normalize_topic(topic) if topic is not None else None
-    try:
-        summary = exporter.export_bundle(
-            output_dir,
-            db_id=db_id,
-            topic=resolved_topic,
-            env_id=env_id,
-        )
-    except TypeError:
-        summary = exporter.export_bundle(
-            output_dir,
-            db_id=db_id,
-            category=resolved_topic,
-            env_id=env_id,
-        )
-    if summary.environment_count == 0:
-        raise typer.BadParameter("no registered environments matched the requested filters")
+    summary = exporter.export_bundle(
+        output_dir,
+        db_id=db_id,
+        topic=resolved_topic,
+        task_id=task_id,
+    )
+    if summary.task_count == 0:
+        raise typer.BadParameter("no registered tasks matched the requested filters")
 
     console.print(f"[green]bundle exported[/green]: {summary.bundle_root}")
     console.print(f"database_count={summary.database_count}")
-    console.print(f"environment_count={summary.environment_count}")
+    console.print(f"task_count={summary.task_count}")
     if summary.db_ids:
         console.print(f"db_ids={list(summary.db_ids)}")
-    if summary.env_ids:
-        console.print(f"env_ids={list(summary.env_ids)}")
+    if summary.task_ids:
+        console.print(f"task_ids={list(summary.task_ids)}")
 
 
-@app.command("run-proof-environment")
-def run_proof_environment(
+@app.command("run-proof-task")
+def run_proof_task(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
-    """Run the synthetic proof-environment vertical slice and export its bundle."""
+    """Run the synthetic proof-task vertical slice and export its bundle."""
 
     async def _run() -> None:
         config = load_config(config_path)
-        runner = ProofEnvironmentRunner(config)
+        runner = ProofTaskRunner(config)
         try:
             summary = await runner.run(output_dir)
         finally:
             await runner.close()
 
-        console.print(f"[green]proof environment run complete[/green]: {output_dir}")
+        console.print(f"[green]proof task run complete[/green]: {output_dir}")
         console.print(f"db_id={summary.db_id}")
-        console.print(f"env_id={summary.env_id}")
+        console.print(f"task_id={summary.task_id}")
         console.print(f"fixture_sql_root={summary.fixture_sql_root}")
         console.print(f"quality_gate_status={summary.quality_gate_status}")
         if summary.flow_id is not None:
@@ -337,8 +321,8 @@ def run_proof_environment(
             console.print(f"solver_ci_high={summary.solver_ci_high}")
         if summary.registry_status is not None:
             console.print(f"registry_status={summary.registry_status}")
-        if summary.registry_env_id is not None:
-            console.print(f"registry_env_id={summary.registry_env_id}")
+        if summary.registry_task_id is not None:
+            console.print(f"registry_task_id={summary.registry_task_id}")
         if summary.bundle_root is not None:
             console.print(f"bundle_root={summary.bundle_root}")
         if summary.quality_gate_status != "accept":
@@ -354,7 +338,7 @@ def run_real_db_trial(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
-    """Run a real-database single-environment trial and persist a trial summary."""
+    """Run a real-database single-task trial and persist a trial summary."""
 
     async def _run() -> None:
         config = load_config(config_path)
@@ -378,8 +362,8 @@ def run_real_db_trial(
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:
             console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
-        if summary.env_id is not None:
-            console.print(f"env_id={summary.env_id}")
+        if summary.task_id is not None:
+            console.print(f"task_id={summary.task_id}")
         if summary.quality_gate_status is not None:
             console.print(f"quality_gate_status={summary.quality_gate_status}")
         if summary.attempt_outcomes:
@@ -402,8 +386,8 @@ def run_real_db_trial(
             console.print(f"solver_ci_high={summary.solver_ci_high}")
         if summary.registry_status is not None:
             console.print(f"registry_status={summary.registry_status}")
-        if summary.registry_env_id is not None:
-            console.print(f"registry_env_id={summary.registry_env_id}")
+        if summary.registry_task_id is not None:
+            console.print(f"registry_task_id={summary.registry_task_id}")
         if summary.bundle_root is not None:
             console.print(f"bundle_root={summary.bundle_root}")
         if summary.debug_root is not None:

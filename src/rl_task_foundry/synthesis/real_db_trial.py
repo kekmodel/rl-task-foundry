@@ -1,4 +1,4 @@
-"""Real-database single-environment trial runner."""
+"""Real-database single-task trial runner."""
 
 from __future__ import annotations
 
@@ -9,12 +9,8 @@ from pathlib import Path
 from typing import cast
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
+from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
-from rl_task_foundry.synthesis.environment_registry import (
-    EnvironmentRegistryCommitStatus,
-    EnvironmentRegistryWriter,
-)
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.runtime import (
@@ -24,6 +20,10 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisPhaseExecutionError,
     SynthesisProviderUnavailableError,
     SynthesisRuntimeError,
+)
+from rl_task_foundry.synthesis.task_registry import (
+    TaskRegistryCommitStatus,
+    TaskRegistryWriter,
 )
 
 
@@ -45,7 +45,7 @@ class RealDbTrialSummary:
     debug_traces_dir: Path | None = None
     synthesis_traces_dir: Path | None = None
     solver_traces_dir: Path | None = None
-    env_id: str | None = None
+    task_id: str | None = None
     quality_gate_status: str | None = None
     synthesis_error_type: str | None = None
     synthesis_error_message: str | None = None
@@ -56,8 +56,8 @@ class RealDbTrialSummary:
     solver_pass_rate: float | None = None
     solver_ci_low: float | None = None
     solver_ci_high: float | None = None
-    registry_status: EnvironmentRegistryCommitStatus | None = None
-    registry_env_id: str | None = None
+    registry_status: TaskRegistryCommitStatus | None = None
+    registry_task_id: str | None = None
     bundle_root: Path | None = None
 
     def __init__(
@@ -74,7 +74,7 @@ class RealDbTrialSummary:
         debug_traces_dir: Path | None = None,
         synthesis_traces_dir: Path | None = None,
         solver_traces_dir: Path | None = None,
-        env_id: str | None = None,
+        task_id: str | None = None,
         quality_gate_status: str | None = None,
         synthesis_error_type: str | None = None,
         synthesis_error_message: str | None = None,
@@ -85,8 +85,8 @@ class RealDbTrialSummary:
         solver_pass_rate: float | None = None,
         solver_ci_low: float | None = None,
         solver_ci_high: float | None = None,
-        registry_status: EnvironmentRegistryCommitStatus | None = None,
-        registry_env_id: str | None = None,
+        registry_status: TaskRegistryCommitStatus | None = None,
+        registry_task_id: str | None = None,
         bundle_root: Path | None = None,
     ) -> None:
         resolved_topic = requested_topic if requested_topic is not None else requested_category
@@ -100,7 +100,7 @@ class RealDbTrialSummary:
         object.__setattr__(self, "debug_traces_dir", debug_traces_dir)
         object.__setattr__(self, "synthesis_traces_dir", synthesis_traces_dir)
         object.__setattr__(self, "solver_traces_dir", solver_traces_dir)
-        object.__setattr__(self, "env_id", env_id)
+        object.__setattr__(self, "task_id", task_id)
         object.__setattr__(self, "quality_gate_status", quality_gate_status)
         object.__setattr__(self, "synthesis_error_type", synthesis_error_type)
         object.__setattr__(self, "synthesis_error_message", synthesis_error_message)
@@ -112,7 +112,7 @@ class RealDbTrialSummary:
         object.__setattr__(self, "solver_ci_low", solver_ci_low)
         object.__setattr__(self, "solver_ci_high", solver_ci_high)
         object.__setattr__(self, "registry_status", registry_status)
-        object.__setattr__(self, "registry_env_id", registry_env_id)
+        object.__setattr__(self, "registry_task_id", registry_task_id)
         object.__setattr__(self, "bundle_root", bundle_root)
 
 
@@ -120,14 +120,14 @@ class RealDbTrialSummary:
 class RealDbTrialRunner:
     config: AppConfig
     synthesis_runtime: SynthesisAgentRuntime | None = None
-    registry: EnvironmentRegistryWriter | None = None
-    exporter: EnvironmentBundleExporter | None = None
+    registry: TaskRegistryWriter | None = None
+    exporter: TaskBundleExporter | None = None
 
     def __post_init__(self) -> None:
         if self.registry is None:
-            self.registry = EnvironmentRegistryWriter.for_config(self.config)
+            self.registry = TaskRegistryWriter.for_config(self.config)
         if self.exporter is None:
-            self.exporter = EnvironmentBundleExporter(
+            self.exporter = TaskBundleExporter(
                 registry=self.registry,
                 materializer=self.registry.atomic_tool_materializer,
             )
@@ -252,31 +252,31 @@ class RealDbTrialRunner:
             status=commit_result.status.value,
             expected_contract={"accepted_draft_required": True},
             actual_data={
-                "env_id": draft.environment.env_id,
-                "registry_env_id": commit_result.env_id,
+                "task_id": draft.task_bundle.task_id,
+                "registry_task_id": commit_result.task_id,
             },
             checks={
                 "committed_or_duplicate": commit_result.status
                 in {
-                    EnvironmentRegistryCommitStatus.COMMITTED,
-                    EnvironmentRegistryCommitStatus.DUPLICATE,
+                    TaskRegistryCommitStatus.COMMITTED,
+                    TaskRegistryCommitStatus.DUPLICATE,
                 }
             },
             diagnostics={},
         )
         bundle_root = output_root / "bundle"
-        self.exporter.export_bundle(bundle_root, env_id=commit_result.env_id)
+        self.exporter.export_bundle(bundle_root, task_id=commit_result.task_id)
         phase_monitor.emit(
             phase="bundle_export",
             status="completed",
             expected_contract={"bundle_root": bundle_root},
-            actual_data={"bundle_root": bundle_root, "env_id": commit_result.env_id},
+            actual_data={"bundle_root": bundle_root, "task_id": commit_result.task_id},
             checks={"bundle_root_exists": bundle_root.exists()},
             diagnostics={},
         )
         final_status = (
             RealDbTrialStatus.ACCEPTED
-            if commit_result.status is EnvironmentRegistryCommitStatus.COMMITTED
+            if commit_result.status is TaskRegistryCommitStatus.COMMITTED
             else RealDbTrialStatus.REGISTRY_DUPLICATE
         )
         summary = self._write_summary(
@@ -291,13 +291,13 @@ class RealDbTrialRunner:
                 debug_traces_dir=debug_traces_dir,
                 synthesis_traces_dir=synthesis_traces_dir,
                 solver_traces_dir=solver_traces_dir,
-                env_id=draft.environment.env_id,
+                task_id=draft.task_bundle.task_id,
                 quality_gate_status="accept",
-                solver_pass_rate=draft.environment.quality_metrics.solver_pass_rate,
-                solver_ci_low=draft.environment.quality_metrics.solver_ci_low,
-                solver_ci_high=draft.environment.quality_metrics.solver_ci_high,
+                solver_pass_rate=draft.task_bundle.quality_metrics.solver_pass_rate,
+                solver_ci_low=draft.task_bundle.quality_metrics.solver_ci_low,
+                solver_ci_high=draft.task_bundle.quality_metrics.solver_ci_high,
                 registry_status=commit_result.status,
-                registry_env_id=commit_result.env_id,
+                registry_task_id=commit_result.task_id,
                 bundle_root=bundle_root,
             )
         )
@@ -339,8 +339,7 @@ class RealDbTrialRunner:
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
-            )
-            + "\n",
+            ),
             encoding="utf-8",
         )
         return summary
@@ -350,26 +349,24 @@ class RealDbTrialRunner:
         debug_traces_dir: Path,
         phase_monitor: PipelinePhaseMonitorLogger,
     ) -> SynthesisAgentRuntime:
-        if self.synthesis_runtime is None:
-            trial_config = _config_with_trial_traces_dir(self.config, debug_traces_dir)
-            self.synthesis_runtime = SynthesisAgentRuntime(
-                trial_config,
-                phase_monitor=phase_monitor,
-            )
-        return cast(SynthesisAgentRuntime, self.synthesis_runtime)
+        if self.synthesis_runtime is not None:
+            return self.synthesis_runtime
+        runtime = SynthesisAgentRuntime(
+            self.config.model_copy(
+                update={
+                    "output": self.config.output.model_copy(
+                        update={"traces_dir": cast(Path, debug_traces_dir)}
+                    )
+                }
+            ),
+            phase_monitor=phase_monitor,
+        )
+        self.synthesis_runtime = runtime
+        return runtime
 
 
-def _config_with_trial_traces_dir(config: AppConfig, traces_dir: Path) -> AppConfig:
-    output = config.output.model_copy(
-        update={
-            "traces_dir": traces_dir,
-        },
-        deep=True,
+def _encode_backend_failures(backend_failures: tuple[SynthesisBackendFailure, ...]) -> tuple[str, ...]:
+    return tuple(
+        f"{failure.provider}/{failure.model}:{failure.error_type}"
+        for failure in backend_failures
     )
-    return config.model_copy(update={"output": output}, deep=True)
-
-
-def _encode_backend_failures(
-    failures: tuple[SynthesisBackendFailure, ...] | list[SynthesisBackendFailure],
-) -> tuple[str, ...]:
-    return tuple(f"{failure.provider}/{failure.model}:{failure.error_type}" for failure in failures)

@@ -3,9 +3,9 @@ from pathlib import Path
 from rl_task_foundry.config import load_config
 
 
-def test_load_config_uses_solver_replicas_source_of_truth():
+def test_load_config_uses_solver_run_count_source_of_truth():
     config = load_config(Path("rl_task_foundry.yaml"))
-    assert config.models.total_solver_replicas == 6
+    assert config.models.total_solver_runs == 6
     assert config.output.run_db_path.name == "run.db"
     assert config.database.dsn == "postgresql://sakila:sakila@127.0.0.1:5433/sakila"
     assert config.budget.max_gpu_hours is None

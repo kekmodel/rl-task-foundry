@@ -8,7 +8,7 @@ The current acceptance path is intentionally simple.
 LABEL_CONSTRUCTION -> TASK_SYNTHESIS -> solver pass-rate -> registry
 ```
 
-An environment is accepted only when solver pass-rate falls inside the configured band.
+A task bundle is accepted only when solver pass-rate falls inside the configured band.
 
 - pass rate below the lower bound: reject as too hard
 - pass rate above the upper bound: request a harder retry
@@ -38,13 +38,13 @@ Diagnostics to keep:
 - backend failure taxonomy
 - retry count
 
-## Environment Registry
+## Task Registry
 
-The registry is the durable source of accepted environments.
+The registry is the durable source of accepted task bundles.
 
 It maintains:
 
-- filesystem environment records
+- filesystem task records
 - SQLite index tables
 - difficulty-band coverage accounting
 - semantic dedup candidates
@@ -61,9 +61,9 @@ Useful review targets:
 - topic distribution
 - difficulty drift
 
-## Proof Environment
+## Proof Task
 
-A deterministic proof environment is kept as a vertical-slice fixture for end-to-end validation of:
+A deterministic proof task is kept as a vertical-slice fixture for end-to-end validation of:
 
 - synthesis flow
 - solver rollout
@@ -75,10 +75,10 @@ A deterministic proof environment is kept as a vertical-slice fixture for end-to
 The system is successful when it can:
 
 - ingest arbitrary read-only PostgreSQL databases
-- generate grounded label-first environments
+- generate grounded label-first task bundles
 - reject too-easy and too-hard tasks automatically
 - export self-contained serving bundles
-- accumulate accepted environments durably in the registry
+- accumulate accepted task bundles durably in the registry
 
 ## Freeze Policy
 

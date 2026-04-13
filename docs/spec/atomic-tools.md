@@ -2,7 +2,7 @@
 
 ## Tool Architecture
 
-Atomic tools are generated per database from schema structure. They are shared across all environments for the same `db_id`.
+Atomic tools are generated per database from schema structure. They are shared across all task bundles for the same `db_id`.
 
 The synthesis agent does not generate tool code.
 
@@ -59,12 +59,12 @@ The core lookup, traversal, and bounded enumeration surface is kept longest.
 - database access is read-only
 - tool output must stay within declared `returns_schema`
 - deterministic ordering is required whenever multiple rows may be returned
-- actor-visible tool semantics must remain stable across environments sharing the same database
+- actor-visible tool semantics must remain stable across task bundles sharing the same database
 
 ## Seeded Row Ordering
 
 - synthesis runs use one per-run shuffle seed for unordered multi-row tool results
-- solver replicas use one per-replica shuffle seed for unordered multi-row tool results
+- solver runs use one per-solver shuffle seed for unordered multi-row tool results
 - unordered `list_*`, `filter_*`, and reverse traversal tools use seeded row ordering
 - `sorted_top_k` keeps its explicit sort key and uses the seed only as a deterministic tie-breaker
 - scalar aggregate and count tools do not use shuffle ordering

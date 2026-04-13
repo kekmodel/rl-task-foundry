@@ -37,18 +37,40 @@ models:
     provider: "codex_oauth"
     model: "gpt-5.4-mini"
   solvers:
-    - solver_id: "gpt54m_replica"
+    - solver_id: "gpt54m_a"
       backend: "openai_agents"
       provider: "codex_oauth"
       model: "gpt-5.4-mini"
-      replicas: 4
       memory_mode: "none"
       summarization_mode: "off"
-    - solver_id: "gpt54m_memory"
+    - solver_id: "gpt54m_b"
       backend: "openai_agents"
       provider: "codex_oauth"
       model: "gpt-5.4-mini"
-      replicas: 2
+      memory_mode: "none"
+      summarization_mode: "off"
+    - solver_id: "gpt54m_c"
+      backend: "openai_agents"
+      provider: "codex_oauth"
+      model: "gpt-5.4-mini"
+      memory_mode: "none"
+      summarization_mode: "off"
+    - solver_id: "gpt54m_d"
+      backend: "openai_agents"
+      provider: "codex_oauth"
+      model: "gpt-5.4-mini"
+      memory_mode: "none"
+      summarization_mode: "off"
+    - solver_id: "gpt54m_memory_a"
+      backend: "openai_agents"
+      provider: "codex_oauth"
+      model: "gpt-5.4-mini"
+      memory_mode: "explicit_summary"
+      summarization_mode: "explicit"
+    - solver_id: "gpt54m_memory_b"
+      backend: "openai_agents"
+      provider: "codex_oauth"
+      model: "gpt-5.4-mini"
       memory_mode: "explicit_summary"
       summarization_mode: "explicit"
 
@@ -86,9 +108,9 @@ calibration:
   lower_pass_rate: 0.25
   upper_pass_rate: 0.75
   ci_alpha: 0.1
-  canary_replica_count: 3
-  post_canary_batch_size: 3
-  full_replica_limit: 30
+  canary_solver_count: 3
+  post_canary_solver_batch_size: 3
+  full_solver_run_limit: 30
   safe_early_termination: true
 
 dedup:

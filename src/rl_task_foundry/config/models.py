@@ -52,7 +52,6 @@ class SolverModelConfig(StrictModel):
     backend: Literal["openai_agents"] = "openai_agents"
     provider: str
     model: str
-    replicas: int = Field(default=1, ge=1)
     memory_mode: Literal["none", "explicit_summary", "session_only"] = "none"
     summarization_mode: Literal["off", "explicit"] = "off"
 
@@ -63,8 +62,8 @@ class ModelsConfig(StrictModel):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def total_solver_replicas(self) -> int:
-        return sum(solver.replicas for solver in self.solvers)
+    def total_solver_runs(self) -> int:
+        return len(self.solvers)
 
 
 class AtomicToolConfig(StrictModel):
@@ -106,9 +105,9 @@ class CalibrationConfig(StrictModel):
     lower_pass_rate: float = Field(ge=0.0, le=1.0)
     upper_pass_rate: float = Field(ge=0.0, le=1.0)
     ci_alpha: float = Field(default=0.1, ge=0.0, le=1.0)
-    canary_replica_count: int = Field(default=3, ge=1)
-    post_canary_batch_size: int = Field(default=3, ge=1)
-    full_replica_limit: int = Field(default=30, ge=1)
+    canary_solver_count: int = Field(default=3, ge=1)
+    post_canary_solver_batch_size: int = Field(default=3, ge=1)
+    full_solver_run_limit: int = Field(default=30, ge=1)
     safe_early_termination: bool = True
 
 

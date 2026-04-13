@@ -10,11 +10,13 @@ bundle_root/
     <db_id>/
       atomic_tools.py
       atomic_tool_definitions.json
-  environments/
-    <env_id>/
-      environment.yaml
-      instances.jsonl
-      canonical_answers.jsonl
+  tasks/
+    <task_id>/
+      task.yaml
+      task.json
+      anchor_query.json
+      instance.json
+      canonical_answer.json
 ```
 
 ## Key Contracts
@@ -30,15 +32,14 @@ Key fields:
 - `output_schema`
 - `constraint_summary`
 - `difficulty_vector`
-- `instance_parameters`
 
-### `EnvironmentContract`
+### `TaskBundleContract`
 
-The environment contract captures durable metadata.
+The task bundle contract captures durable metadata.
 
 Key fields:
 
-- `env_id`
+- `task_id`
 - `db_id`
 - `domain`
 - `topic`
@@ -50,22 +51,19 @@ Key fields:
 - `quality_metrics`
 - `rollout_constraints`
 - `task`
-- `instance_space`
+- `anchor_query`
 
-### Materialized Instance Records
+### Materialized Instance Record
 
-Per-instance materialized data contains:
+Materialized runtime data contains:
 
-- `instance_id`
 - `rendered_user_prompt`
-- `params`
-- `anchor_values`
+- `anchor_entity`
 
-### Materialized Canonical Answer Records
+### Materialized Canonical Answer Record
 
-Per-instance canonical answer data contains:
+Materialized answer data contains:
 
-- `instance_id`
 - `canonical_answer`
 - `canonical_answer_json`
 - `label_signature`

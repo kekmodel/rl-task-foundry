@@ -1,9 +1,9 @@
-"""Synthetic proof-environment vertical slice helpers.
+"""Synthetic proof-task vertical slice helpers.
 
 This module keeps the first Milestone 5 proof task deterministic and reviewable:
 it defines a synthetic fixture DB schema, a compositional itinerary environment,
 and a small runner that executes the same rollout -> quality gate -> registry ->
-bundle export path used by accepted synthesized environments.
+bundle export path used by accepted synthesized task bundles.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from hashlib import sha256
 from pathlib import Path
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.pipeline.environment_orchestrator import (
-    EnvironmentOrchestrator,
-    EnvironmentQualityGateStatus,
+from rl_task_foundry.pipeline.solver_orchestrator import (
+    SolverOrchestrator,
+    TaskQualityGateStatus,
     evaluate_rollout_summary,
 )
 from rl_task_foundry.synthesis.atomic_tools import (
@@ -25,19 +25,16 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
     AtomicToolResultMode,
 )
-from rl_task_foundry.synthesis.bundle_exporter import EnvironmentBundleExporter
+from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     AnchorQueryContract,
     ConstraintKind,
     ConstraintSummaryItem,
-    CrossInstanceSet,
     DifficultyVectorContract,
-    EnvironmentContract,
-    EnvironmentQualityMetrics,
-    EnvironmentStatus,
-    InstanceContract,
-    InstanceSpaceContract,
+    TaskBundleContract,
+    TaskQualityMetrics,
+    TaskBundleStatus,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
@@ -45,9 +42,9 @@ from rl_task_foundry.synthesis.contracts import (
     TaskContract,
     difficulty_vector_json,
 )
-from rl_task_foundry.synthesis.environment_registry import (
-    EnvironmentRegistryCommitStatus,
-    EnvironmentRegistryWriter,
+from rl_task_foundry.synthesis.task_registry import (
+    TaskRegistryCommitStatus,
+    TaskRegistryWriter,
 )
 from rl_task_foundry.synthesis.phase_monitor import (
     PipelinePhaseMonitorLogger,
@@ -57,13 +54,11 @@ from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_use
 from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
 from rl_task_foundry.synthesis.runtime import (
     CURRENT_SYNTHESIS_GENERATOR_VERSION,
-    MaterializedCanonicalAnswerRecord,
-    MaterializedInstanceRecord,
-    SynthesisEnvironmentDraft,
+    SynthesisTaskDraft,
 )
 
 PROOF_DB_ID = "proof_trip_fixture"
-PROOF_ENV_ID = "env_proof_trip_fixture_itinerary_v1"
+PROOF_TASK_ID = "task_proof_trip_fixture_itinerary_v1"
 
 PROOF_FIXTURE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS proof_anchors (
@@ -141,9 +136,9 @@ class ProofFixtureSqlFiles:
 
 
 @dataclass(frozen=True, slots=True)
-class ProofEnvironmentRunSummary:
+class ProofTaskRunSummary:
     db_id: str
-    env_id: str
+    task_id: str
     fixture_sql_root: Path
     quality_gate_status: str
     flow_id: str | None = None
@@ -151,41 +146,41 @@ class ProofEnvironmentRunSummary:
     solver_pass_rate: float | None = None
     solver_ci_low: float | None = None
     solver_ci_high: float | None = None
-    registry_status: EnvironmentRegistryCommitStatus | None = None
-    registry_env_id: str | None = None
+    registry_status: TaskRegistryCommitStatus | None = None
+    registry_task_id: str | None = None
     bundle_root: Path | None = None
 
 
 @dataclass(slots=True)
-class ProofEnvironmentRunner:
+class ProofTaskRunner:
     config: AppConfig
-    environment_orchestrator: EnvironmentOrchestrator | None = None
-    registry: EnvironmentRegistryWriter | None = None
-    exporter: EnvironmentBundleExporter | None = None
+    solver_orchestrator: SolverOrchestrator | None = None
+    registry: TaskRegistryWriter | None = None
+    exporter: TaskBundleExporter | None = None
 
     def __post_init__(self) -> None:
         if self.registry is None:
-            self.registry = EnvironmentRegistryWriter.for_config(self.config)
+            self.registry = TaskRegistryWriter.for_config(self.config)
         if self.exporter is None:
-            self.exporter = EnvironmentBundleExporter(
+            self.exporter = TaskBundleExporter(
                 registry=self.registry,
                 materializer=self.registry.atomic_tool_materializer,
             )
-        if self.environment_orchestrator is None:
-            self.environment_orchestrator = EnvironmentOrchestrator(self.config)
+        if self.solver_orchestrator is None:
+            self.solver_orchestrator = SolverOrchestrator(self.config)
 
-    async def run(self, output_root: Path) -> ProofEnvironmentRunSummary:
+    async def run(self, output_root: Path) -> ProofTaskRunSummary:
         output_root.mkdir(parents=True, exist_ok=True)
-        flow_id = build_flow_id("proof_environment")
+        flow_id = build_flow_id("proof_task")
         phase_monitor_log_path = output_root / "debug" / "phase_monitors.jsonl"
         phase_monitor = PipelinePhaseMonitorLogger(
             phase_monitor_log_path=phase_monitor_log_path,
-            flow_kind="proof_environment",
+            flow_kind="proof_task",
             flow_id=flow_id,
         )
         try:
             fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
-            draft = build_proof_environment_draft()
+            draft = build_proof_task_draft()
             phase_monitor.emit(
                 phase="draft_build",
                 status="completed",
@@ -194,29 +189,22 @@ class ProofEnvironmentRunner:
                     "topic": "itinerary",
                 },
                 actual_data={
-                    "env_id": draft.environment.env_id,
+                    "task_id": draft.task_bundle.task_id,
                     "difficulty_vector": difficulty_vector_json(
-                        draft.environment.task.difficulty_vector
+                        draft.task_bundle.task.difficulty_vector
                     ),
-                    "rendered_user_prompts": [
-                        instance.rendered_user_prompt for instance in draft.instances
-                    ],
-                    "canonical_answer_jsons": [
-                        answer.canonical_answer_json for answer in draft.canonical_answers
-                    ],
+                    "rendered_user_prompt": draft.rendered_user_prompt,
+                    "canonical_answer_json": draft.canonical_answer_json,
                 },
-                checks={
-                    "instance_count_matches_canonical_answers": len(draft.instances)
-                    == len(draft.canonical_answers),
-                },
+                checks={"label_signature_present": bool(draft.label_signature)},
                 diagnostics={},
             )
-            rollout_summary = await self.environment_orchestrator.run_draft(draft)
+            rollout_summary = await self.solver_orchestrator.run_draft(draft)
             phase_monitor.emit(
                 phase="rollout",
                 status="completed",
                 expected_contract={
-                    "planned_solver_runs_upper_bound": self.config.calibration.full_replica_limit,
+                    "planned_solver_runs_upper_bound": self.config.calibration.full_solver_run_limit,
                 },
                 actual_data={
                     "planned_solver_runs": rollout_summary.planned_solver_runs,
@@ -228,7 +216,7 @@ class ProofEnvironmentRunner:
                     "executed_runs_within_plan": rollout_summary.total_solver_runs
                     <= rollout_summary.planned_solver_runs,
                 },
-                diagnostics={"env_id": draft.environment.env_id},
+                diagnostics={"task_id": draft.task_bundle.task_id},
             )
             quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
             phase_monitor.emit(
@@ -245,14 +233,14 @@ class ProofEnvironmentRunner:
                 },
                 checks={
                     "accepted": quality_gate_summary.status
-                    is EnvironmentQualityGateStatus.ACCEPT,
+                    is TaskQualityGateStatus.ACCEPT,
                 },
-                diagnostics={"env_id": draft.environment.env_id},
+                diagnostics={"task_id": draft.task_bundle.task_id},
             )
-            if quality_gate_summary.status is not EnvironmentQualityGateStatus.ACCEPT:
-                return ProofEnvironmentRunSummary(
-                    db_id=draft.environment.db_id,
-                    env_id=draft.environment.env_id,
+            if quality_gate_summary.status is not TaskQualityGateStatus.ACCEPT:
+                return ProofTaskRunSummary(
+                    db_id=draft.task_bundle.db_id,
+                    task_id=draft.task_bundle.task_id,
                     fixture_sql_root=fixture_files.root_dir,
                     quality_gate_status=quality_gate_summary.status.value,
                     flow_id=flow_id,
@@ -272,25 +260,25 @@ class ProofEnvironmentRunner:
                 status=commit_result.status.value,
                 expected_contract={},
                 actual_data={
-                    "registry_env_id": commit_result.env_id,
+                    "registry_task_id": commit_result.task_id,
                     "status": commit_result.status.value,
                 },
                 checks={},
-                diagnostics={"env_id": accepted_draft.environment.env_id},
+                diagnostics={"task_id": accepted_draft.task_bundle.task_id},
             )
             bundle_root = output_root / "bundle"
-            self.exporter.export_bundle(bundle_root, env_id=commit_result.env_id)
+            self.exporter.export_bundle(bundle_root, task_id=commit_result.task_id)
             phase_monitor.emit(
                 phase="bundle_export",
                 status="completed",
                 expected_contract={"bundle_root": bundle_root},
-                actual_data={"bundle_root": bundle_root, "env_id": commit_result.env_id},
+                actual_data={"bundle_root": bundle_root, "task_id": commit_result.task_id},
                 checks={"bundle_root_exists": bundle_root.exists()},
                 diagnostics={},
             )
-            return ProofEnvironmentRunSummary(
-                db_id=accepted_draft.environment.db_id,
-                env_id=accepted_draft.environment.env_id,
+            return ProofTaskRunSummary(
+                db_id=accepted_draft.task_bundle.db_id,
+                task_id=accepted_draft.task_bundle.task_id,
                 fixture_sql_root=fixture_files.root_dir,
                 quality_gate_status=quality_gate_summary.status.value,
                 flow_id=flow_id,
@@ -299,14 +287,14 @@ class ProofEnvironmentRunner:
                 solver_ci_low=quality_gate_summary.ci_lower,
                 solver_ci_high=quality_gate_summary.ci_upper,
                 registry_status=commit_result.status,
-                registry_env_id=commit_result.env_id,
+                registry_task_id=commit_result.task_id,
                 bundle_root=bundle_root,
             )
         finally:
             phase_monitor.close()
 
     async def close(self) -> None:
-        await self.environment_orchestrator.close()
+        await self.solver_orchestrator.close()
         close_registry = getattr(self.registry, "close", None)
         if callable(close_registry):
             close_registry()
@@ -325,10 +313,10 @@ def write_proof_fixture_sql(root_dir: Path) -> ProofFixtureSqlFiles:
     )
 
 
-def build_proof_environment_draft(
+def build_proof_task_draft(
     *,
     created_at: datetime | None = None,
-) -> SynthesisEnvironmentDraft:
+) -> SynthesisTaskDraft:
     created_at = created_at or datetime.now(timezone.utc)
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(
@@ -422,8 +410,8 @@ def build_proof_environment_draft(
             "budget_bucket": "mid",
         },
     )
-    environment = EnvironmentContract(
-        env_id=PROOF_ENV_ID,
+    task_bundle = TaskBundleContract(
+        task_id=PROOF_TASK_ID,
         db_id=PROOF_DB_ID,
         domain="travel_planning",
         topic="itinerary",
@@ -433,38 +421,20 @@ def build_proof_environment_draft(
         generator_version=CURRENT_SYNTHESIS_GENERATOR_VERSION,
         tool_signature=_sha256_hex(_proof_atomic_tool_bundle().source),
         task_signature=_sha256_hex(task.model_dump_json()),
-        status=EnvironmentStatus.DRAFT,
-        quality_metrics=EnvironmentQualityMetrics(),
+        status=TaskBundleStatus.DRAFT,
+        quality_metrics=TaskQualityMetrics(),
         rollout_constraints=RolloutConstraintsContract(
             max_turns=12,
             max_episode_duration_ms=90000,
             max_tool_rows=50,
         ),
         task=task,
-        instance_space=InstanceSpaceContract(
-            anchor_query=AnchorQueryContract(
-                sql=(
-                    "SELECT anchor_id, season, budget_bucket "
-                    "FROM proof_anchors ORDER BY anchor_id"
-                ),
-                outputs=["anchor_id", "season", "budget_bucket"],
+        anchor_query=AnchorQueryContract(
+            sql=(
+                "SELECT anchor_id, season, budget_bucket "
+                "FROM proof_anchors ORDER BY anchor_id"
             ),
-            instance_count=1,
-        ),
-        cross_instance_set=CrossInstanceSet(
-            minimum_required=1,
-            instances=[
-                InstanceContract(
-                    instance_id="instance_0001",
-                    anchor_values={
-                        "anchor_id": 1,
-                        "season": "spring",
-                        "budget_bucket": "mid",
-                    },
-                    parameter_values={"day_count": 3},
-                    expected_label_signature=label_signature,
-                )
-            ],
+            outputs=["anchor_id", "season", "budget_bucket"],
         ),
     )
     anchor_entity = {"anchor_id": 1}
@@ -473,30 +443,18 @@ def build_proof_environment_draft(
         anchor_entity=anchor_entity,
         canonical_answer=canonical_answer,
     )
-    return SynthesisEnvironmentDraft(
+    return SynthesisTaskDraft(
         created_at=created_at,
         db_id=PROOF_DB_ID,
         requested_topic="itinerary",
         schema_summary={"included_table_count": 5, "fixture": "proof_trip_fixture"},
         selected_topic="itinerary",
-        environment=environment,
+        task_bundle=task_bundle,
         atomic_tool_bundle=_proof_atomic_tool_bundle(),
-        instances=[
-            MaterializedInstanceRecord(
-                instance_id="instance_0001",
-                rendered_user_prompt=rendered_prompt,
-                params={"day_count": 3},
-                anchor_values=anchor_entity,
-            )
-        ],
-        canonical_answers=[
-            MaterializedCanonicalAnswerRecord(
-                instance_id="instance_0001",
-                canonical_answer=canonical_answer,
-                canonical_answer_json=canonical_answer_json,
-                label_signature=label_signature,
-            )
-        ],
+        rendered_user_prompt=rendered_prompt,
+        anchor_entity=anchor_entity,
+        canonical_answer_json=canonical_answer_json,
+        label_signature=label_signature,
         generation_attempts=[],
         provider_status={},
     )

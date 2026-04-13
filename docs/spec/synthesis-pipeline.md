@@ -2,18 +2,20 @@
 
 ## Authoritative Flow
 
-The authoritative synthesis flow is label-first.
+The authoritative synthesis flow is label-first and is executed by a single synthesis agent.
 
 ```text
-SCHEMA_EXPLORATION
-  -> CATEGORY_INFERENCE
-  -> LABEL_CONSTRUCTION
-  -> TASK_SYNTHESIS
+explore real tools
+  -> choose a grounded topic
+  -> construct the label
+  -> synthesize the user-facing request
+  -> submit_draft
+  -> feedback / retry in the same conversation
 ```
 
-## Stage 1: Schema and Data Exploration
+The agent keeps one conversation context throughout the loop. Retry feedback is returned as tool output and the same agent continues exploring before it submits again.
 
-The synthesis agent explores the real database using live atomic tools.
+## Exploration
 
 Goals:
 
@@ -22,13 +24,13 @@ Goals:
 - identify grounded answer candidates
 - understand what evidence paths are actually available
 
-## Stage 2: Category Inference
+## Topic Selection
 
-The agent selects a `topic` string for the candidate environment.
+The agent selects a `topic` string for the candidate task bundle.
 
-This is a lightweight orientation step. The authoritative semantics are still set by the label.
+The topic is a soft orientation aid. The authoritative semantics are still set by the label.
 
-## Stage 3: Label Construction
+## Label Construction
 
 The agent produces the canonical answer first.
 
@@ -36,14 +38,13 @@ Current output includes:
 
 - `canonical_answer_json`
 - `anchor_entity`
+- `anchor_query`
 - `difficulty_vector`
-- `instance_parameters`
 - `label_summary`
-- `memory_summary`
 
 The runtime derives the output schema from the canonical answer automatically.
 
-## Stage 4: Task Synthesis
+## Task Synthesis
 
 Given the fixed label, the agent writes the user-facing task request that makes that label the unique correct answer.
 
@@ -64,10 +65,8 @@ Keep:
 - domain summary
 - requested topic
 - compact schema orientation
-- previous phase outputs
-- natural-language error feedback
+- tool feedback
 - natural-language difficulty hint
-- one few-shot example when helpful
 
 Do not dump internal runtime state, raw debug payloads, or redundant tool-definition JSON into the prompt.
 
@@ -76,5 +75,5 @@ Do not dump internal runtime state, raw debug payloads, or redundant tool-defini
 Generation retries are allowed, but retries are not the source of truth.
 
 - the label remains authoritative
-- quality feedback can request a harder retry
+- `submit_draft` feedback can request a harder retry
 - retries must change latent task semantics, not just wording
