@@ -338,10 +338,19 @@ def test_atomic_tool_generator_applies_seeded_row_shuffle_to_unordered_tools_onl
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
+    assert "md5(" not in tool_by_name["get_customer_by_id"].sql
     assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"customer_id\"::text, ''), COALESCE($2::text, ''))) ASC" in tool_by_name["list_customer_ids"].sql
     assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["filter_order_by_status_eq"].sql
+    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"customer_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["filter_customer_by_tier_in"].sql
+    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($4::text, ''))) ASC" in tool_by_name["filter_order_by_total_amount_range"].sql
+    assert "ORDER BY md5(concat_ws('|', COALESCE(t.\"customer_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["filter_customer_by_tier_like"].sql
+    assert "md5(" not in tool_by_name["traverse_order_to_customer_by_customer_id"].sql
+    assert "ORDER BY md5(concat_ws('|', COALESCE(source.\"order_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["traverse_customer_to_order_by_customer_id"].sql
+    assert "md5(" not in tool_by_name["distinct_order_status"].sql
     assert "ORDER BY t.\"total_amount\" ASC," in tool_by_name["top_k_order_by_total_amount_asc"].sql
     assert "md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($2::text, ''))) ASC" in tool_by_name["top_k_order_by_total_amount_asc"].sql
+    assert "ORDER BY t.\"total_amount\" ASC," in tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].sql
+    assert "md5(concat_ws('|', COALESCE(t.\"order_id\"::text, ''), COALESCE($3::text, ''))) ASC" in tool_by_name["top_k_order_by_total_amount_asc_where_status_eq"].sql
     assert "md5(" not in tool_by_name["count_customer"].sql
     assert "md5(" not in tool_by_name["top_customer_id_by_sum_order_total_amount_desc"].sql
 

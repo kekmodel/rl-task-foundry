@@ -13,7 +13,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
-from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +34,7 @@ from rl_task_foundry.synthesis.runtime import (
 )
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
+    build_shuffle_seed,
     bind_atomic_tool_executor,
     load_atomic_tool_module,
     with_tool_shuffle_seed,
@@ -54,12 +54,6 @@ EnvironmentToolExecutorFactory = Callable[
     dict[str, ToolExecutor] | Awaitable[dict[str, ToolExecutor]],
 ]
 EnvironmentSolverRunFactory = Callable[[], Awaitable["EnvironmentSolverRun"]]
-
-
-def _build_shuffle_seed(*parts: object) -> str:
-    payload = "|".join(str(part) for part in parts)
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
-
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentRolloutBundle:
@@ -164,7 +158,7 @@ class EnvironmentOrchestrator:
             for solver_config in self.config.models.solvers:
                 provider_config = self.config.providers[solver_config.provider]
                 for replica_index in range(solver_config.replicas):
-                    shuffle_seed = _build_shuffle_seed(
+                    shuffle_seed = build_shuffle_seed(
                         "solver",
                         bundle.environment.env_id,
                         instance.instance_id,

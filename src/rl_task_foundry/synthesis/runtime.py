@@ -62,6 +62,7 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
 )
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
+    build_shuffle_seed,
     bind_atomic_tool_executor,
     load_atomic_tool_module,
     with_tool_shuffle_seed,
@@ -377,11 +378,6 @@ def _snapshot_to_status(snapshot: ProviderCircuitSnapshot) -> SynthesisProviderS
     )
 
 
-def _build_shuffle_seed(*parts: object) -> str:
-    payload = "|".join(str(part) for part in parts)
-    return sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
 @dataclass(slots=True)
 class SynthesisAgentRuntime:
     """Single-db synthesis runtime with lock-protected shared state."""
@@ -411,6 +407,7 @@ class SynthesisAgentRuntime:
     _category_state_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
+    _conversation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     phase_monitor: PipelinePhaseMonitorLogger | None = None
 
     def __post_init__(self) -> None:
@@ -468,7 +465,7 @@ class SynthesisAgentRuntime:
         )
         schema_summary = summarize_schema_graph(resolved_graph)
         tool_surface_summary = summarize_atomic_tool_surface(atomic_tool_bundle)
-        shuffle_seed = _build_shuffle_seed(
+        shuffle_seed = build_shuffle_seed(
             "synthesis",
             db_id,
             requested_topic,
@@ -489,18 +486,19 @@ class SynthesisAgentRuntime:
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
             forbidden_question_tokens=forbidden_question_tokens(schema_summary),
         )
-        await self._prime_synthesis_backends_with_context(
-            db_id=db_id,
-            bundle=atomic_tool_bundle,
-            controller=controller,
-            shuffle_seed=shuffle_seed,
-        )
-        conversation_result = await self._run_synthesis_conversation(
-            db_id=db_id,
-            requested_topic=requested_topic,
-            schema_summary=schema_summary,
-            tool_surface_summary=tool_surface_summary,
-        )
+        async with self._conversation_lock:
+            await self._prime_synthesis_backends_with_context(
+                db_id=db_id,
+                bundle=atomic_tool_bundle,
+                controller=controller,
+                shuffle_seed=shuffle_seed,
+            )
+            conversation_result = await self._run_synthesis_conversation(
+                db_id=db_id,
+                requested_topic=requested_topic,
+                schema_summary=schema_summary,
+                tool_surface_summary=tool_surface_summary,
+            )
         if controller.accepted_draft is None:
             attempts = self._generation_attempts_from_submit_records(
                 controller=controller,

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from hashlib import sha256
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType
@@ -11,7 +12,12 @@ from typing import Any
 
 from rl_task_foundry.infra.db import DatabasePools
 
-ToolExecutor = Callable[[dict[str, Any]], Any]
+ToolExecutor = Callable[[dict[str, Any]], Awaitable[Any]]
+
+
+def build_shuffle_seed(*parts: object) -> str:
+    payload = "|".join(str(part) for part in parts)
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def load_atomic_tool_module(source_path: Path, *, module_name: str) -> ModuleType:
