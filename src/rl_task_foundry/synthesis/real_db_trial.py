@@ -128,6 +128,7 @@ class RealDbTrialRunner:
         if self.registry is None:
             self.registry = TaskRegistryWriter.for_config(self.config)
         if self.exporter is None:
+            assert self.registry.atomic_tool_materializer is not None
             self.exporter = TaskBundleExporter(
                 registry=self.registry,
                 materializer=self.registry.atomic_tool_materializer,
@@ -295,6 +296,8 @@ class RealDbTrialRunner:
             phase_monitor.close()
             return summary
 
+        assert self.registry is not None
+        assert self.exporter is not None
         commit_result = self.registry.commit_draft(draft)
         phase_monitor.emit(
             phase="registry_commit",

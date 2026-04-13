@@ -21,6 +21,7 @@ from datasketch import MinHash, MinHashLSH
 from rl_task_foundry.config.models import AppConfig, TaskRegistryConfig
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
+    DifficultyVectorContract,
     OutputFieldContract,
     OutputFieldType,
     TaskBundleContract,
@@ -347,13 +348,13 @@ class TaskRegistryWriter:
                         shutil.rmtree(temp_dir, ignore_errors=True)
                         return TaskRegistryCommitResult(
                             status=TaskRegistryCommitStatus.DUPLICATE,
-                            task_id=semantic_duplicate["task_id"],
+                            task_id=str(semantic_duplicate["task_id"]),
                             exact_signature=exact_signature,
-                            difficulty_band=DifficultyBand(semantic_duplicate["difficulty_band"]),
-                            filesystem_path=Path(semantic_duplicate["filesystem_path"]),
-                            duplicate_of_task_id=semantic_duplicate["task_id"],
+                            difficulty_band=DifficultyBand(str(semantic_duplicate["difficulty_band"])),
+                            filesystem_path=Path(str(semantic_duplicate["filesystem_path"])),
+                            duplicate_of_task_id=str(semantic_duplicate["task_id"]),
                             duplicate_reason=TaskRegistryDuplicateReason.MINHASH,
-                            semantic_similarity=float(semantic_duplicate["semantic_similarity"]),
+                            semantic_similarity=float(str(semantic_duplicate["semantic_similarity"])),
                         )
 
                 temp_dir.rename(final_dir)
@@ -655,7 +656,7 @@ class TaskRegistryWriter:
             )
             if similarity < self.minhash_threshold:
                 continue
-            if best_match is None or similarity > float(best_match["semantic_similarity"]):
+            if best_match is None or similarity > float(str(best_match["semantic_similarity"])):
                 best_match = {
                     "task_id": str(task_id),
                     "difficulty_band": str(metadata["difficulty_band"]),
@@ -1091,7 +1092,7 @@ def bucketize_difficulty_vector(
 ) -> DifficultyBand:
     if difficulty_vector is None:
         return DifficultyBand.UNSET
-    if hasattr(difficulty_vector, "flatten"):
+    if isinstance(difficulty_vector, DifficultyVectorContract):
         total = sum(float(value) for value in flatten_difficulty_vector(difficulty_vector).values())
     elif isinstance(difficulty_vector, dict):
         total = sum(float(value) for value in difficulty_vector.values())

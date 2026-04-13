@@ -187,7 +187,7 @@ class PostgresSchemaIntrospector:
                 primary_keys[table_key] = columns
 
         fk_members: set[tuple[str, str, str]] = set()
-        sensitivity_by_column = {
+        sensitivity_by_column: dict[tuple[str, str, str], Visibility] = {
             (
                 sensitivity.schema_name,
                 sensitivity.table_name,

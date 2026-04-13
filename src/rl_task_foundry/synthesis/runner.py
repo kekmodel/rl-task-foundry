@@ -165,6 +165,7 @@ class SynthesisRegistryRunner:
             flow_id=flow_id,
         )
         try:
+            assert self.task_registry is not None
             if not registry:
                 return SynthesisRegistryRunSummary(
                     outcome=SynthesisRegistryRunOutcome.EMPTY_REGISTRY,
@@ -203,6 +204,9 @@ class SynthesisRegistryRunner:
             quality_accepted_tasks = 0
             quality_rejected_tasks = 0
             processed_pairs_after_run = initially_processed_pairs
+            assert self.orchestrator is not None
+            assert self.checkpoint is not None
+            assert self.task_registry is not None
             orchestrator = self.orchestrator
             checkpoint = self.checkpoint
             task_registry = self.task_registry
@@ -343,6 +347,7 @@ class SynthesisRegistryRunner:
             phase_monitor.close()
 
     async def close(self) -> None:
+        assert self.orchestrator is not None
         await self.orchestrator.close()
         close_registry = getattr(self.task_registry, "close", None)
         if callable(close_registry):
@@ -366,6 +371,7 @@ class SynthesisRegistryRunner:
         *,
         checkpoint_namespace: str,
     ) -> tuple[list[SynthesisDbRegistryEntry], int]:
+        assert self.checkpoint is not None
         pending_entries: list[SynthesisDbRegistryEntry] = []
         already_processed = 0
         for entry in registry:

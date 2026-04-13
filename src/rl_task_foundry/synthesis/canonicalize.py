@@ -207,9 +207,12 @@ def _canonicalize_list(
     if field.ordered:
         result = items
     elif field.sort_key is not None:
+        assert field.items is not None
+        sk = field.sort_key
+        item_field = field.items
         result = sorted(
             items,
-            key=lambda element: _object_sort_key(element, field.sort_key, field.items),
+            key=lambda element: _object_sort_key(element, sk, item_field),
         )
     else:
         result = sorted(items, key=_unordered_sort_key)

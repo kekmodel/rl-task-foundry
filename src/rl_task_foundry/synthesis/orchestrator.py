@@ -154,9 +154,9 @@ class SynthesisOrchestrator:
                 graph=entry.graph,
             )
         else:
-            draft = await runtime.synthesize_environment_draft(
+            draft = await runtime.synthesize_environment_draft(  # pyright: ignore[reportCallIssue]
                 db_id=entry.db_id,
-                requested_category=step.decision.topic,
+                requested_category=step.decision.topic,  # pyright: ignore[reportCallIssue]
                 graph=entry.graph,
             )
         return SynthesisOrchestrationStep(

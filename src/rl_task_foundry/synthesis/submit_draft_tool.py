@@ -431,10 +431,14 @@ def _label_change_summary(
     previous: dict[str, object] | None,
     current: dict[str, object],
 ) -> dict[str, object]:
-    previous_field_names = (
-        list(previous.get("canonical_answer_field_names", [])) if previous else []
+    previous_field_names: list[object] = (
+        list(previous.get("canonical_answer_field_names", []))  # type: ignore[call-overload]
+        if previous
+        else []
     )
-    current_field_names = list(current.get("canonical_answer_field_names", []))
+    current_field_names: list[object] = list(
+        current.get("canonical_answer_field_names", [])  # type: ignore[call-overload]
+    )
     previous_slot_count = previous.get("canonical_answer_slot_count") if previous else None
     current_slot_count = current.get("canonical_answer_slot_count")
     return {

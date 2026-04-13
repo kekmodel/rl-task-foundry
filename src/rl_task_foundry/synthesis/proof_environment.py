@@ -160,6 +160,7 @@ class ProofTaskRunner:
     def __post_init__(self) -> None:
         if self.registry is None:
             self.registry = TaskRegistryWriter.for_config(self.config)
+        assert self.registry.atomic_tool_materializer is not None
         if self.exporter is None:
             self.exporter = TaskBundleExporter(
                 registry=self.registry,
@@ -198,6 +199,7 @@ class ProofTaskRunner:
                 checks={"label_signature_present": bool(draft.label_signature)},
                 diagnostics={},
             )
+            assert self.solver_orchestrator is not None
             rollout_summary = await self.solver_orchestrator.run_draft(draft)
             phase_monitor.emit(
                 phase="rollout",
@@ -252,6 +254,7 @@ class ProofTaskRunner:
                 draft,
                 quality_gate_summary=quality_gate_summary,
             )
+            assert self.registry is not None
             commit_result = self.registry.commit_draft(accepted_draft)
             phase_monitor.emit(
                 phase="registry_commit",
@@ -264,6 +267,7 @@ class ProofTaskRunner:
                 checks={},
                 diagnostics={"task_id": accepted_draft.task_bundle.task_id},
             )
+            assert self.exporter is not None
             bundle_root = output_root / "bundle"
             self.exporter.export_bundle(bundle_root, task_id=commit_result.task_id)
             phase_monitor.emit(
@@ -292,6 +296,7 @@ class ProofTaskRunner:
             phase_monitor.close()
 
     async def close(self) -> None:
+        assert self.solver_orchestrator is not None
         await self.solver_orchestrator.close()
         close_registry = getattr(self.registry, "close", None)
         if callable(close_registry):
@@ -431,7 +436,7 @@ def build_proof_task_draft(
         ),
         task=task,
     )
-    anchor_entity = {"anchor_id": 1}
+    anchor_entity: dict[str, object] = {"anchor_id": 1}
     rendered_prompt = build_rendered_user_prompt(
         task,
         anchor_entity=anchor_entity,

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.contracts import TopicName
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.task_registry import (
     DifficultyBand,
@@ -120,7 +121,7 @@ class SynthesisCoveragePlanner:
             for topic in entry.topics:
                 pair_cells: list[SynthesisCoverageCellPlan] = []
                 for difficulty_band in self.tracked_bands:
-                    current_count = counts.get((entry.db_id, topic, difficulty_band), 0)
+                    current_count = counts.get((entry.db_id, TopicName(topic), difficulty_band), 0)
                     deficit = max(0, self.target_count_per_band - current_count)
                     cell = SynthesisCoverageCellPlan(
                         db_id=entry.db_id,

@@ -108,6 +108,7 @@ def _extract_submission_output(
         if normalized_output is not None:
             final_output = normalized_output
     if _is_successful_submission(final_output):
+        assert isinstance(final_output, dict)
         answer_text = final_output["answer_text"]
         structured_output: dict[str, object] | None = None
         try:
@@ -118,6 +119,7 @@ def _extract_submission_output(
             structured_output = dict(parsed)
         return answer_text, structured_output, "completed", "submitted", {}
     if _is_failed_submission(final_output):
+        assert isinstance(final_output, dict)
         metadata = {
             key: value for key, value in final_output.items() if key in {"error", "details"}
         }

@@ -66,7 +66,7 @@ def _infer_python_annotation(model_name: str, value: object) -> Any:
             str(key): (_infer_python_annotation(f"{model_name}_{key}", child), ...)
             for key, child in value.items()
         }
-        return create_model(model_name, **fields)
+        return create_model(model_name, **fields)  # type: ignore[call-overload]
     if isinstance(value, list):
         item_value = value[0] if value else ""
         item_annotation = _infer_python_annotation(f"{model_name}Item", item_value)
