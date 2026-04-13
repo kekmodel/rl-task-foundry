@@ -109,6 +109,17 @@ GROUP BY
 ORDER BY src_ns.nspname, src_tbl.relname, con.conname
 """
 
+_PG_STATS_QUERY = """
+SELECT
+  schemaname AS schema_name,
+  tablename AS table_name,
+  attname AS column_name,
+  n_distinct
+FROM pg_stats
+WHERE schemaname = ANY($1::text[])
+ORDER BY schemaname, tablename, attname
+"""
+
 
 @dataclass(slots=True)
 class PostgresSchemaIntrospector:
@@ -125,12 +136,13 @@ class PostgresSchemaIntrospector:
             for statement in settings.timeout_sql:
                 await conn.execute(statement)
 
-            table_rows, column_rows, unique_rows, fk_rows = await self._fetch_metadata(conn)
+            table_rows, column_rows, unique_rows, fk_rows, stats_rows = await self._fetch_metadata(conn)
             return self._build_graph(
                 table_rows=table_rows,
                 column_rows=column_rows,
                 unique_rows=unique_rows,
                 fk_rows=fk_rows,
+                stats_rows=stats_rows,
             )
         finally:
             await conn.close()
@@ -141,7 +153,8 @@ class PostgresSchemaIntrospector:
         column_rows = await conn.fetch(_COLUMN_QUERY, schemas)
         unique_rows = await conn.fetch(_UNIQUE_INDEX_QUERY, schemas)
         fk_rows = await conn.fetch(_FOREIGN_KEY_QUERY, schemas)
-        return table_rows, column_rows, unique_rows, fk_rows
+        stats_rows = await conn.fetch(_PG_STATS_QUERY, schemas)
+        return table_rows, column_rows, unique_rows, fk_rows, stats_rows
 
     def _build_graph(
         self,
@@ -150,6 +163,7 @@ class PostgresSchemaIntrospector:
         column_rows: list[asyncpg.Record],
         unique_rows: list[asyncpg.Record],
         fk_rows: list[asyncpg.Record],
+        stats_rows: list[asyncpg.Record],
     ) -> SchemaGraph:
         table_profiles: dict[tuple[str, str], TableProfile] = {
             (row["schema_name"], row["table_name"]): TableProfile(
@@ -188,6 +202,15 @@ class PostgresSchemaIntrospector:
                 default_visibility=self.default_visibility,
                 overrides=self.visibility_overrides,
             )
+        }
+        n_distinct_by_column = {
+            (
+                row["schema_name"],
+                row["table_name"],
+                row["column_name"],
+            ): float(row["n_distinct"])
+            for row in stats_rows
+            if row["n_distinct"] is not None
         }
 
         edges: list[ForeignKeyEdge] = []
@@ -232,6 +255,9 @@ class PostgresSchemaIntrospector:
                     is_primary_key=column_name in primary_keys.get(table_key, ()),
                     is_foreign_key=(row["schema_name"], row["table_name"], column_name) in fk_members,
                     is_unique=(column_name,) in unique_constraints.get(table_key, []),
+                    n_distinct=n_distinct_by_column.get(
+                        (row["schema_name"], row["table_name"], column_name)
+                    ),
                 )
             )
 

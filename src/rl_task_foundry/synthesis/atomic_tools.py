@@ -120,9 +120,9 @@ class AtomicToolGenerator:
         compiled: list[AtomicToolDefinition] = []
         for table in sorted(graph.tables, key=lambda item: (item.schema_name, item.table_name)):
             compiled.extend(self._build_get_tools(table, table_slugs))
-            compiled.extend(self._build_find_tools(table, table_slugs))
+            compiled.extend(self._build_find_tools(graph, table, table_slugs))
             compiled.extend(self._build_calc_tools(table, table_slugs))
-            compiled.extend(self._build_rank_tools(table, table_slugs))
+            compiled.extend(self._build_rank_tools(graph, table, table_slugs))
 
         compiled = _compress_tools(
             sorted(compiled, key=lambda tool: (_family_rank(tool.family), tool.name)),
@@ -162,18 +162,19 @@ class AtomicToolGenerator:
                 sql=_get_sql_template(table),
                 result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
                 semantic_key=f"{table.qualified_name}:get",
-                runtime_metadata=_table_runtime_metadata(table),
+                runtime_metadata=_table_runtime_metadata(None, table),
             )
         ]
 
     def _build_find_tools(
         self,
+        graph: SchemaGraph,
         table: TableProfile,
         table_slugs: dict[tuple[str, str], str],
     ) -> list[AtomicToolDefinition]:
         table_slug = table_slugs[(table.schema_name, table.table_name)]
         tools: list[AtomicToolDefinition] = []
-        for column in _find_columns(table):
+        for column in _find_columns(graph, table):
             allowed_ops = _find_ops_for_column(column)
             tools.append(
                 AtomicToolDefinition(
@@ -198,7 +199,7 @@ class AtomicToolGenerator:
                     result_mode=AtomicToolResultMode.ROW_LIST,
                     semantic_key=f"{table.qualified_name}:find:{column.column_name}",
                     runtime_metadata={
-                        **_table_runtime_metadata(table),
+                        **_table_runtime_metadata(graph, table),
                         "filter_column": column.column_name,
                         "allowed_ops": list(allowed_ops),
                     },
@@ -232,7 +233,7 @@ class AtomicToolGenerator:
                 result_mode=AtomicToolResultMode.SCALAR,
                 semantic_key=f"{table.qualified_name}:calc",
                 runtime_metadata={
-                    **_table_runtime_metadata(table),
+                    **_table_runtime_metadata(None, table),
                     "allowed_fns": list(allowed_fns),
                 },
             )
@@ -240,6 +241,7 @@ class AtomicToolGenerator:
 
     def _build_rank_tools(
         self,
+        graph: SchemaGraph,
         table: TableProfile,
         table_slugs: dict[tuple[str, str], str],
     ) -> list[AtomicToolDefinition]:
@@ -247,7 +249,7 @@ class AtomicToolGenerator:
         numeric_columns = _numeric_columns(table)
         allowed_fns = ("count",) if not numeric_columns else ("count", "sum", "avg", "min", "max")
         tools: list[AtomicToolDefinition] = []
-        for column in _group_columns(table):
+        for column in _group_columns(graph, table):
             tools.append(
                 AtomicToolDefinition(
                     name=f"rank_{table_slug}_by_{column.column_name}",
@@ -270,7 +272,7 @@ class AtomicToolGenerator:
                     result_mode=AtomicToolResultMode.ROW_LIST,
                     semantic_key=f"{table.qualified_name}:rank:{column.column_name}",
                     runtime_metadata={
-                        **_table_runtime_metadata(table),
+                        **_table_runtime_metadata(graph, table),
                         "group_column": column.column_name,
                         "allowed_fns": list(allowed_fns),
                     },
@@ -388,16 +390,72 @@ def _is_float_like(column: ColumnProfile) -> bool:
     return _normalized_data_type(column.data_type) in _FLOAT_TYPES
 
 
-def _find_columns(table: TableProfile) -> list[ColumnProfile]:
-    return [column for column in table.columns if _is_scalar(column)]
+def _is_numeric_or_date(column: ColumnProfile) -> bool:
+    return _normalized_data_type(column.data_type) in _FIND_COMPARABLE_TYPES
+
+
+def _is_useful_for_find(column: ColumnProfile, table: TableProfile) -> bool:
+    if column.n_distinct is None:
+        return False
+    if column.n_distinct < 0:
+        return abs(column.n_distinct) < 0.9
+    if table.row_estimate is None or table.row_estimate <= 0:
+        return False
+    return column.n_distinct < (table.row_estimate * 0.9)
+
+
+def _foreign_key_column_names(graph: SchemaGraph | None, table: TableProfile) -> set[str]:
+    if graph is None:
+        return {
+            column.column_name
+            for column in table.columns
+            if column.is_foreign_key
+        }
+    names: set[str] = set()
+    for edge in graph.edges_from(table.table_name, schema_name=table.schema_name):
+        names.update(edge.source_columns)
+    return names
+
+
+def _find_columns(graph: SchemaGraph | None, table: TableProfile) -> list[ColumnProfile]:
+    fk_column_names = _foreign_key_column_names(graph, table)
+    columns: list[ColumnProfile] = []
+    for column in table.columns:
+        if not _is_scalar(column):
+            continue
+        if column.column_name in table.primary_key:
+            continue
+        if column.column_name in fk_column_names:
+            columns.append(column)
+            continue
+        if _is_useful_for_find(column, table):
+            columns.append(column)
+            continue
+        if _is_numeric_or_date(column):
+            columns.append(column)
+    return columns
 
 
 def _numeric_columns(table: TableProfile) -> list[ColumnProfile]:
     return [column for column in table.columns if _is_numeric(column)]
 
 
-def _group_columns(table: TableProfile) -> list[ColumnProfile]:
-    return [column for column in table.columns if _is_scalar(column)]
+def _group_columns(graph: SchemaGraph | None, table: TableProfile) -> list[ColumnProfile]:
+    fk_column_names = _foreign_key_column_names(graph, table)
+    columns: list[ColumnProfile] = []
+    for column in table.columns:
+        if not _is_scalar(column):
+            continue
+        if column.column_name in table.primary_key:
+            continue
+        if column.column_name in fk_column_names:
+            columns.append(column)
+            continue
+        if _is_numeric_or_date(column):
+            continue
+        if _is_useful_for_find(column, table):
+            columns.append(column)
+    return columns
 
 
 def _sortable_columns(table: TableProfile) -> list[ColumnProfile]:
@@ -414,7 +472,7 @@ def _find_ops_for_column(column: ColumnProfile) -> tuple[str, ...]:
     return tuple(ops)
 
 
-def _table_runtime_metadata(table: TableProfile) -> dict[str, Any]:
+def _table_runtime_metadata(graph: SchemaGraph | None, table: TableProfile) -> dict[str, Any]:
     return {
         "schema_name": table.schema_name,
         "table_name": table.table_name,
@@ -427,7 +485,7 @@ def _table_runtime_metadata(table: TableProfile) -> dict[str, Any]:
         },
         "array_casts": {column.column_name: _postgres_array_cast(column) for column in table.columns},
         "numeric_columns": [column.column_name for column in _numeric_columns(table)],
-        "filter_columns": [column.column_name for column in _find_columns(table)],
+        "filter_columns": [column.column_name for column in _find_columns(graph, table)],
         "sortable_columns": [column.column_name for column in _sortable_columns(table)],
     }
 
@@ -502,7 +560,7 @@ def _calc_params_schema(
     max_batch_values: int,
 ) -> dict[str, Any]:
     metric_columns = [column.column_name for column in _numeric_columns(table)]
-    filter_columns = [column.column_name for column in _find_columns(table)]
+    filter_columns = [column.column_name for column in _find_columns(None, table)]
     return _object_schema(
         {
             "fn": _described_schema(
@@ -538,7 +596,7 @@ def _rank_params_schema(
     max_items: int,
 ) -> dict[str, Any]:
     metric_columns = [column.column_name for column in _numeric_columns(table)]
-    filter_columns = [column.column_name for column in _find_columns(table)]
+    filter_columns = [column.column_name for column in _find_columns(None, table)]
     return _object_schema(
         {
             "fn": _described_schema(
@@ -617,7 +675,7 @@ def _find_value_schema(column: ColumnProfile, *, max_batch_values: int) -> dict[
 
 def _generic_filter_value_schema(table: TableProfile, *, max_batch_values: int) -> dict[str, Any]:
     scalar_variants = _dedupe_schemas(
-        [_non_null_json_schema_for_column(column) for column in _find_columns(table)]
+        [_non_null_json_schema_for_column(column) for column in _find_columns(None, table)]
     ) or [{"type": "string"}]
     array_variants = [
         {

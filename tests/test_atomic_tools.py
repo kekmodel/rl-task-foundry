@@ -34,6 +34,7 @@ def _sample_graph() -> SchemaGraph:
                         visibility="blocked",
                         is_primary_key=True,
                         is_unique=True,
+                        n_distinct=-1.0,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -43,6 +44,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=2,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=3,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -52,6 +54,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=3,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=365,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -61,6 +64,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=4,
                         is_nullable=True,
                         visibility="user_visible",
+                        n_distinct=120,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -70,6 +74,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=5,
                         is_nullable=True,
                         visibility="internal",
+                        n_distinct=-0.95,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -79,6 +84,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=6,
                         is_nullable=True,
                         visibility="blocked",
+                        n_distinct=-1.0,
                     ),
                 ],
                 row_estimate=1000,
@@ -98,6 +104,7 @@ def _sample_graph() -> SchemaGraph:
                         visibility="blocked",
                         is_primary_key=True,
                         is_unique=True,
+                        n_distinct=-1.0,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -108,6 +115,7 @@ def _sample_graph() -> SchemaGraph:
                         is_nullable=False,
                         visibility="blocked",
                         is_foreign_key=True,
+                        n_distinct=100,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -117,6 +125,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=3,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=4,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -126,6 +135,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=4,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=300,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -135,6 +145,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=5,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=1000,
                     ),
                 ],
                 row_estimate=5000,
@@ -154,6 +165,7 @@ def _sample_graph() -> SchemaGraph:
                         visibility="blocked",
                         is_primary_key=True,
                         is_unique=True,
+                        n_distinct=-1.0,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -164,6 +176,7 @@ def _sample_graph() -> SchemaGraph:
                         is_nullable=False,
                         visibility="blocked",
                         is_foreign_key=True,
+                        n_distinct=500,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -173,6 +186,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=3,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=500,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -182,6 +196,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=4,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=8,
                     ),
                     ColumnProfile(
                         schema_name="public",
@@ -191,6 +206,7 @@ def _sample_graph() -> SchemaGraph:
                         ordinal_position=5,
                         is_nullable=False,
                         visibility="user_visible",
+                        n_distinct=200,
                     ),
                 ],
                 row_estimate=18000,
@@ -243,11 +259,16 @@ def test_atomic_tool_generator_is_deterministic_and_covers_new_tool_families() -
     names = {tool.name for tool in first.tools}
     tool_by_name = {tool.name: tool for tool in first.tools}
     assert "get_customer" in names
-    assert "find_customer_by_api_key" in names
     assert "find_customer_by_tier" in names
+    assert "find_customer_by_signup_date" in names
+    assert "find_customer_by_score" in names
+    assert "find_customer_by_email" not in names
+    assert "find_customer_by_api_key" not in names
     assert "find_order_by_customer_id" in names
     assert "calc_order" in names
-    assert "rank_customer_by_api_key" in names
+    assert "rank_customer_by_tier" in names
+    assert "rank_customer_by_api_key" not in names
+    assert "rank_customer_by_score" not in names
     assert "rank_order_by_customer_id" in names
     assert (
         tool_by_name["get_customer"].description
@@ -288,7 +309,7 @@ def test_atomic_tool_generator_compresses_by_removing_whole_tables() -> None:
 
     assert len(bundle.tools) <= 18
     remaining_tables = {tool.runtime_metadata["qualified_name"] for tool in bundle.tools}
-    assert remaining_tables == {"public.orders"}
+    assert remaining_tables == {"public.orders", "public.line_items"}
 
 
 def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:

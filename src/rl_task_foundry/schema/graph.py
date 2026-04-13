@@ -19,6 +19,7 @@ class ColumnProfile:
     is_primary_key: bool = False
     is_foreign_key: bool = False
     is_unique: bool = False
+    n_distinct: float | None = None
 
     @property
     def qualified_name(self) -> str:
