@@ -224,6 +224,96 @@ def _stable_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
 
 
+def _monitor_answer_snapshot(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return {
+            "root_type": "object",
+            "slot_count": len(value),
+            "field_names": list(value.keys())[:8],
+            "preview": _preview_payload(value),
+        }
+    if isinstance(value, list):
+        field_names: list[str] = []
+        if value and isinstance(value[0], dict):
+            field_names = [str(key) for key in list(value[0].keys())[:8]]
+        return {
+            "root_type": "array",
+            "slot_count": len(value),
+            "field_names": field_names,
+            "preview": _preview_payload(value),
+        }
+    return {
+        "root_type": type(value).__name__,
+        "slot_count": 1,
+        "field_names": [],
+        "preview": _preview_payload(value),
+    }
+
+
+def _answer_slot_count(value: object) -> int:
+    if isinstance(value, dict):
+        return len(value)
+    if isinstance(value, list):
+        if not value:
+            return 0
+        return sum(_answer_slot_count(item) for item in value)
+    return 1
+
+
+def _monitor_label_data(
+    payload: SubmitDraftPayload | dict[str, object] | None,
+) -> dict[str, object]:
+    if payload is None:
+        return {
+            "canonical_answer_preview": None,
+            "canonical_answer_root_type": None,
+            "canonical_answer_slot_count": None,
+            "canonical_answer_field_names": [],
+            "label_summary": None,
+            "constraint_summary": [],
+        }
+
+    if isinstance(payload, SubmitDraftPayload):
+        raw_canonical = payload.canonical_answer_json
+        label_summary = payload.label_summary
+        constraint_summary = _constraint_summary_payload(payload.constraint_summary)
+    else:
+        raw_canonical = payload.get("canonical_answer_json")
+        label_summary = payload.get("label_summary")
+        raw_constraints = payload.get("constraint_summary")
+        constraint_summary = (
+            _preview_payload(raw_constraints)
+            if isinstance(raw_constraints, list)
+            else []
+        )
+
+    canonical_answer: object | None = None
+    if isinstance(raw_canonical, str):
+        try:
+            canonical_answer = json.loads(raw_canonical)
+        except json.JSONDecodeError:
+            canonical_answer = raw_canonical
+
+    snapshot = (
+        _monitor_answer_snapshot(canonical_answer)
+        if canonical_answer is not None
+        else {
+            "root_type": None,
+            "slot_count": None,
+            "field_names": [],
+            "preview": None,
+        }
+    )
+    return {
+        "canonical_answer_preview": snapshot["preview"],
+        "canonical_answer_root_type": snapshot["root_type"],
+        "canonical_answer_slot_count": snapshot["slot_count"],
+        "canonical_answer_field_names": snapshot["field_names"],
+        "label_summary": label_summary,
+        "constraint_summary": constraint_summary,
+    }
+
+
 def _is_single_tool_derivable(answer: object, result: object) -> bool:
     if _stable_json(answer) == _stable_json(result):
         return True
@@ -451,6 +541,9 @@ class SubmitDraftController:
     _atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
     _raw_atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
     _tool_call_count_at_last_submission: int = field(default=0, init=False)
+    _last_label_signature: str | None = field(default=None, init=False)
+    _last_label_slot_count: int | None = field(default=None, init=False)
+    _last_constraint_count: int | None = field(default=None, init=False)
 
     def submissions_left(self) -> int:
         return max(0, self.max_submissions - len(self.attempts))
@@ -558,7 +651,12 @@ class SubmitDraftController:
             canonical_answer = json.loads(payload.canonical_answer_json)
         except json.JSONDecodeError:
             canonical_answer = None
+        label_signature: str | None = None
+        label_slot_count: int | None = None
+        constraint_count = len(payload.constraint_summary)
         if canonical_answer is not None:
+            label_signature = _stable_json(canonical_answer)
+            label_slot_count = _answer_slot_count(canonical_answer)
             blank_paths = _blank_string_paths(canonical_answer)
             if blank_paths:
                 error_codes.append("label_blank_string_forbidden")
@@ -610,6 +708,26 @@ class SubmitDraftController:
             )
             if current_axis_value <= strongest_axis_value:
                 error_codes.append("required_difficulty_axis_not_strengthened")
+        if (
+            self.required_axis is not None
+            and label_signature is not None
+            and self._last_label_signature is not None
+            and label_signature == self._last_label_signature
+        ):
+            error_codes.append("label_not_strengthened")
+        if (
+            self.required_axis is DifficultyAxis.SOLUTION_SPACE
+            and label_slot_count is not None
+            and self._last_label_slot_count is not None
+            and label_slot_count <= self._last_label_slot_count
+        ):
+            error_codes.append("required_label_axis_not_strengthened")
+        if (
+            self.required_axis is DifficultyAxis.CONSTRAINT_DENSITY
+            and self._last_constraint_count is not None
+            and constraint_count <= self._last_constraint_count
+        ):
+            error_codes.append("required_label_axis_not_strengthened")
 
         if error_codes:
             return self._record_rejection(
@@ -641,6 +759,9 @@ class SubmitDraftController:
         self.last_quality_gate_status = quality_gate_summary.status.value
         self.last_quality_gate_pass_rate = quality_gate_summary.pass_rate
         self._tool_call_count_at_last_submission = len(self._atomic_tool_calls)
+        self._last_label_signature = label_signature
+        self._last_label_slot_count = label_slot_count
+        self._last_constraint_count = constraint_count
         self.strongest_difficulty_vector = _merge_strongest_difficulty_vector(
             self.strongest_difficulty_vector,
             payload.difficulty_vector,
@@ -770,6 +891,12 @@ class SubmitDraftController:
             "required_difficulty_axis_not_strengthened": (
                 "Rejected. The requested difficulty axis was not strengthened."
             ),
+            "required_label_axis_not_strengthened": (
+                "Rejected. Strengthen the label itself along the requested axis by one grounded step before resubmitting."
+            ),
+            "label_not_strengthened": (
+                "Rejected. After a too-easy result, do not resubmit the same label. Strengthen the canonical answer itself with a new grounded step."
+            ),
             "submit_payload_invalid": (
                 "Rejected. submit_draft arguments did not match the required schema."
             ),
@@ -839,6 +966,7 @@ class SubmitDraftController:
     ) -> None:
         if self.phase_monitor is None:
             return
+        label_data = _monitor_label_data(payload)
         self.phase_monitor.emit(
             phase="submit_draft",
             status=status,
@@ -869,6 +997,17 @@ class SubmitDraftController:
                     if isinstance(payload, dict)
                     else None
                 ),
+                **label_data,
+                "label_axis_proxies": {
+                    "search_cost_observations": len(self._raw_atomic_tool_calls)
+                    - self._tool_call_count_at_last_submission,
+                    "solution_space_slots": label_data["canonical_answer_slot_count"],
+                    "constraint_density_constraints": (
+                        len(label_data["constraint_summary"])
+                        if isinstance(label_data["constraint_summary"], list)
+                        else None
+                    ),
+                },
                 "pass_rate": pass_rate,
                 "matched_solver_runs": matched_solver_runs,
                 "total_solver_runs": total_solver_runs,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +17,8 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
     AtomicToolResultMode,
 )
-from rl_task_foundry.synthesis.contracts import DifficultyAxis
+from rl_task_foundry.synthesis.contracts import DifficultyAxis, DifficultyVectorContract
+from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
@@ -210,6 +212,23 @@ def _accepted_payload() -> SubmitDraftPayload:
             "label_summary": "This assignment answer is grounded because the store_id comes from the customer lookup and the total customer count comes from a separate aggregate.",
         }
     )
+
+
+def _minimal_draft():
+    return type(
+        "Draft",
+        (),
+        {
+            "environment": type(
+                "Env",
+                (),
+                {
+                    "env_id": "env_test",
+                    "db_id": "sakila",
+                },
+            )(),
+        },
+    )()
 
 
 @pytest.mark.asyncio
@@ -493,6 +512,73 @@ async def test_submit_draft_rejects_questions_that_repeat_raw_identifier_fields(
 
     assert "raw identifier field names" in message
     assert controller.attempts[-1].error_codes[0] == "question_raw_identifier_leak"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_requires_label_strengthening_after_too_easy(
+    tmp_path: Path,
+) -> None:
+    phase_monitor = PipelinePhaseMonitorLogger(
+        phase_monitor_log_path=tmp_path / "phase_monitors.jsonl",
+        flow_kind="test",
+        flow_id="flow:test",
+    )
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=4,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: _minimal_draft(),
+        phase_monitor=phase_monitor,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"store_id": 1},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_customer",
+        params={},
+        result=5,
+    )
+
+    first_message = await controller.submit(_accepted_payload())
+
+    assert "Crank search_cost" in first_message
+    assert controller.required_axis is DifficultyAxis.SEARCH_COST
+
+    controller.record_atomic_tool_call(
+        tool_name="list_customer_ids",
+        params={"limit": 5},
+        result=[1, 2, 3],
+    )
+    second_payload = _accepted_payload().model_copy(
+        update={
+            "difficulty_vector": DifficultyVectorContract(
+                search_cost=3.0,
+                solution_space=1.0,
+                constraint_density=1.0,
+            )
+        }
+    )
+
+    second_message = await controller.submit(second_payload)
+
+    assert "do not resubmit the same label" in second_message
+    assert "label_not_strengthened" in controller.attempts[-1].error_codes
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "phase_monitors.jsonl").read_text().splitlines()
+    ]
+    assert records[-1]["actual_data"]["canonical_answer_preview"] == {
+        "customer_count": 5,
+        "store_id": 1,
+    }
+    assert records[-1]["actual_data"]["label_axis_proxies"]["solution_space_slots"] == 2
+    assert records[-1]["actual_data"]["label_summary"].startswith("This assignment answer")
 
 
 @pytest.mark.asyncio
