@@ -666,6 +666,45 @@ def test_extract_submission_output_keeps_non_object_json_as_raw_text_only():
     assert termination_metadata == {}
 
 
+def test_solver_backend_write_artifact_creates_dir_once_per_kind(
+    tmp_path: Path,
+    monkeypatch,
+):
+    backend = OpenAIAgentsSolverBackend(
+        solver_config=SolverModelConfig(
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+            replicas=1,
+        ),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SolverRuntimeConfig(max_turns=8),
+        traces_dir=tmp_path / "traces",
+    )
+
+    mkdir_calls: list[Path] = []
+    original_mkdir = Path.mkdir
+
+    def _recording_mkdir(self: Path, *args, **kwargs):
+        mkdir_calls.append(self)
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _recording_mkdir)
+
+    backend._write_artifact("transcripts", "task_a", 0, {"a": 1})
+    first_transcript_dir_calls = mkdir_calls.count(tmp_path / "traces" / "transcripts")
+    backend._write_artifact("transcripts", "task_a", 1, {"a": 2})
+
+    transcript_dir = tmp_path / "traces" / "transcripts"
+    assert mkdir_calls.count(transcript_dir) == first_transcript_dir_calls
+
+
 @pytest.mark.asyncio
 async def test_openai_agents_solver_backend_writes_transcript_before_missing_submit_error(
     tmp_path, monkeypatch

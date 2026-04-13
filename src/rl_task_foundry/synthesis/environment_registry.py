@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -31,6 +32,8 @@ from rl_task_foundry.synthesis.contracts import (
     normalize_topic,
 )
 from rl_task_foundry.synthesis.runtime import SynthesisEnvironmentDraft
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_STATEMENTS = (
     """
@@ -414,6 +417,11 @@ class EnvironmentRegistryWriter:
                 try:
                     has_env_row = self._has_env_row(env.env_id)
                 except Exception:
+                    logger.warning(
+                        "Environment registry cleanup could not verify env row existence for %s",
+                        env.env_id,
+                        exc_info=True,
+                    )
                     has_env_row = True
                 if not has_env_row:
                     shutil.rmtree(final_dir, ignore_errors=True)

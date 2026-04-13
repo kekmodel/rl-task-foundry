@@ -189,6 +189,7 @@ class OpenAIAgentsSolverBackend:
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
     _shared_models: ClassVar[dict[tuple[str, str | None, str, float, str], Any]] = {}
+    _created_artifact_dirs: set[Path] = field(default_factory=set, init=False, repr=False)
 
     def _resolve_api_key(self) -> str:
         return _resolve_provider_api_key(self.provider_config)
@@ -291,7 +292,9 @@ class OpenAIAgentsSolverBackend:
             return _trace_stub(kind, task_id, self.solver_config.solver_id, replica_index)
 
         target_dir = self.traces_dir / kind
-        target_dir.mkdir(parents=True, exist_ok=True)
+        if target_dir not in self._created_artifact_dirs:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            self._created_artifact_dirs.add(target_dir)
         target_path = target_dir / (
             f"{task_id}__{self.solver_config.solver_id}__replica_{replica_index}.json"
         )

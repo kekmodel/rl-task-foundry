@@ -73,6 +73,7 @@ class OpenAIAgentsSynthesisBackend:
     submit_draft_controller: SubmitDraftController | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
+    _created_artifact_dirs: set[Path] = field(default_factory=set, init=False, repr=False)
 
     @property
     def provider_name(self) -> str:
@@ -157,7 +158,9 @@ class OpenAIAgentsSynthesisBackend:
         if self.traces_dir is None:
             return _trace_stub(kind, db_id, self.provider_name, self.model_name)
         target_dir = self.traces_dir / kind
-        target_dir.mkdir(parents=True, exist_ok=True)
+        if target_dir not in self._created_artifact_dirs:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            self._created_artifact_dirs.add(target_dir)
         target_path = target_dir / (
             f"{db_id}__{requested_topic}__synthesis__{self.provider_name}__{self.model_name}.json"
         )

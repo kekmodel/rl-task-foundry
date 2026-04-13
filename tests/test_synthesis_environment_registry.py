@@ -5,6 +5,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
@@ -209,6 +211,39 @@ def test_environment_registry_writer_reuses_cached_connection(tmp_path: Path) ->
 
     assert first is second
     assert first is not third
+
+
+def test_environment_registry_commit_preserves_primary_error_when_cleanup_probe_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+    draft = _sample_draft()
+
+    def _raise_primary(conn: sqlite3.Connection, key: str) -> None:
+        del conn, key
+        raise RuntimeError("primary failure")
+
+    def _raise_secondary(env_id: str) -> bool:
+        del env_id
+        raise RuntimeError("secondary cleanup failure")
+
+    monkeypatch.setattr(
+        EnvironmentRegistryWriter,
+        "_increment_coverage_counter",
+        lambda self, conn, key: _raise_primary(conn, key),
+    )
+    monkeypatch.setattr(
+        EnvironmentRegistryWriter,
+        "_has_env_row",
+        lambda self, env_id: _raise_secondary(env_id),
+    )
+
+    with pytest.raises(RuntimeError, match="primary failure"):
+        writer.commit_draft(draft)
 
 
 def test_environment_registry_exact_signature_ignores_label_signature(tmp_path: Path) -> None:
