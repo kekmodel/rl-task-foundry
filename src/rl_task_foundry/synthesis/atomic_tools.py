@@ -80,7 +80,7 @@ class AtomicToolDefinition(StrictModel):
     description: str
     params_schema: dict[str, Any]
     returns_schema: dict[str, Any]
-    sql: str
+    sql: str = Field(description="Display/audit only SQL template. Not executed directly.")
     result_mode: AtomicToolResultMode
     semantic_key: str
     runtime_metadata: dict[str, Any] = Field(default_factory=dict, exclude=True)
@@ -121,7 +121,7 @@ class AtomicToolGenerator:
         for table in sorted(graph.tables, key=lambda item: (item.schema_name, item.table_name)):
             compiled.extend(self._build_get_tools(table, table_slugs))
             compiled.extend(self._build_find_tools(graph, table, table_slugs))
-            compiled.extend(self._build_calc_tools(table, table_slugs))
+            compiled.extend(self._build_calc_tools(graph, table, table_slugs))
             compiled.extend(self._build_rank_tools(graph, table, table_slugs))
 
         compiled = _compress_tools(
@@ -209,6 +209,7 @@ class AtomicToolGenerator:
 
     def _build_calc_tools(
         self,
+        graph: SchemaGraph,
         table: TableProfile,
         table_slugs: dict[tuple[str, str], str],
     ) -> list[AtomicToolDefinition]:
@@ -224,6 +225,7 @@ class AtomicToolGenerator:
                     "Returns one number."
                 ),
                 params_schema=_calc_params_schema(
+                    graph,
                     table,
                     allowed_fns=allowed_fns,
                     max_batch_values=self.config.max_batch_values,
@@ -233,7 +235,7 @@ class AtomicToolGenerator:
                 result_mode=AtomicToolResultMode.SCALAR,
                 semantic_key=f"{table.qualified_name}:calc",
                 runtime_metadata={
-                    **_table_runtime_metadata(None, table),
+                    **_table_runtime_metadata(graph, table),
                     "allowed_fns": list(allowed_fns),
                 },
             )
@@ -259,6 +261,7 @@ class AtomicToolGenerator:
                         f"{humanize_identifier(table_slug)}. Returns a sorted list."
                     ),
                     params_schema=_rank_params_schema(
+                        graph,
                         table,
                         allowed_fns=allowed_fns,
                         max_batch_values=self.config.max_batch_values,
@@ -396,6 +399,13 @@ def _is_numeric_or_date(column: ColumnProfile) -> bool:
 
 def _is_useful_for_find(column: ColumnProfile, table: TableProfile) -> bool:
     if column.n_distinct is None:
+        if _normalized_data_type(column.data_type) in _TEXT_TYPES:
+            logger.debug(
+                "Including %s.%s in find/rank selection because n_distinct is unavailable.",
+                table.qualified_name,
+                column.column_name,
+            )
+            return True
         return False
     if column.n_distinct < 0:
         return abs(column.n_distinct) < 0.9
@@ -554,13 +564,14 @@ def _find_params_schema(
 
 
 def _calc_params_schema(
+    graph: SchemaGraph | None,
     table: TableProfile,
     *,
     allowed_fns: tuple[str, ...],
     max_batch_values: int,
 ) -> dict[str, Any]:
     metric_columns = [column.column_name for column in _numeric_columns(table)]
-    filter_columns = [column.column_name for column in _find_columns(None, table)]
+    filter_columns = [column.column_name for column in _find_columns(graph, table)]
     return _object_schema(
         {
             "fn": _described_schema(
@@ -580,7 +591,7 @@ def _calc_params_schema(
                 "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
             ),
             "value": _described_schema(
-                _generic_filter_value_schema(table, max_batch_values=max_batch_values),
+                _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
                 "Value to match against. Single value or list (for op=in). Use null for no filter.",
             ),
         },
@@ -589,6 +600,7 @@ def _calc_params_schema(
 
 
 def _rank_params_schema(
+    graph: SchemaGraph | None,
     table: TableProfile,
     *,
     allowed_fns: tuple[str, ...],
@@ -596,7 +608,7 @@ def _rank_params_schema(
     max_items: int,
 ) -> dict[str, Any]:
     metric_columns = [column.column_name for column in _numeric_columns(table)]
-    filter_columns = [column.column_name for column in _find_columns(None, table)]
+    filter_columns = [column.column_name for column in _find_columns(graph, table)]
     return _object_schema(
         {
             "fn": _described_schema(
@@ -621,7 +633,7 @@ def _rank_params_schema(
                 "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
             ),
             "value": _described_schema(
-                _generic_filter_value_schema(table, max_batch_values=max_batch_values),
+                _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
                 "Value to match against. Single value or list (for op=in). Use null for no filter.",
             ),
         },
@@ -673,9 +685,14 @@ def _find_value_schema(column: ColumnProfile, *, max_batch_values: int) -> dict[
     }
 
 
-def _generic_filter_value_schema(table: TableProfile, *, max_batch_values: int) -> dict[str, Any]:
+def _generic_filter_value_schema(
+    graph: SchemaGraph | None,
+    table: TableProfile,
+    *,
+    max_batch_values: int,
+) -> dict[str, Any]:
     scalar_variants = _dedupe_schemas(
-        [_non_null_json_schema_for_column(column) for column in _find_columns(None, table)]
+        [_non_null_json_schema_for_column(column) for column in _find_columns(graph, table)]
     ) or [{"type": "string"}]
     array_variants = [
         {
@@ -795,6 +812,7 @@ def _limit_param_schema(*, max_items: int) -> dict[str, Any]:
     return {
         "type": "integer",
         "minimum": 1,
+        "maximum": max_items,
         "description": "Maximum number of results.",
     }
 

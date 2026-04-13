@@ -821,7 +821,7 @@ def _uses_unanchored_global_ranking(
 ) -> bool:
     for record in tool_calls:
         tool_name = str(record.get("tool_name", ""))
-        if not tool_name.startswith("top_"):
+        if not tool_name.startswith(("rank_", "top_")):
             continue
         if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
             continue
@@ -892,8 +892,7 @@ def _count_semantics_present(
 
 def _observed_count_evidence(tool_calls: list[dict[str, object]]) -> bool:
     for record in tool_calls:
-        tool_name = str(record.get("tool_name", ""))
-        if tool_name.startswith("count_"):
+        if _tool_call_is_count_evidence(record):
             return True
     return False
 
@@ -904,12 +903,23 @@ def _observed_anchor_scoped_count_evidence(
     anchor_entity: dict[str, object],
 ) -> bool:
     for record in tool_calls:
-        tool_name = str(record.get("tool_name", ""))
-        if not tool_name.startswith("count_"):
+        if not _tool_call_is_count_evidence(record):
             continue
         if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
             return True
     return False
+
+
+def _tool_call_is_count_evidence(record: dict[str, object]) -> bool:
+    tool_name = str(record.get("tool_name", "")).strip()
+    if tool_name.startswith("count_"):
+        return True
+    if not tool_name.startswith("calc_"):
+        return False
+    params = record.get("params")
+    if not isinstance(params, dict):
+        return False
+    return str(params.get("fn", "")).strip().lower() == "count"
 
 
 def _distinct_tool_name_count(tool_calls: list[dict[str, object]]) -> int:

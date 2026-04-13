@@ -30,6 +30,7 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     _label_summary_matches_selected_topic,
     _mentions_global_scope,
     _next_difficulty_crank_axis,
+    _uses_unanchored_global_ranking,
 )
 
 
@@ -60,9 +61,9 @@ def _seed_min_initial_exploration(
     customer_id: int = 1,
 ) -> None:
     controller.record_atomic_tool_call(
-        tool_name="list_customer_ids",
-        params={"limit": 5},
-        result=[customer_id, customer_id + 1, customer_id + 2],
+        tool_name="find_customer_by_store_id",
+        params={"op": "eq", "value": 2, "sort_by": None, "direction": "asc", "limit": 5},
+        result=[{"customer_id": customer_id}, {"customer_id": customer_id + 1}],
     )
     controller.record_atomic_tool_call(
         tool_name="get_customer",
@@ -70,14 +71,14 @@ def _seed_min_initial_exploration(
         result={"customer_id": customer_id, "store_id": 2},
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_customer_to_store_by_store_id",
-        params={"customer_id": customer_id},
-        result={"store_id": 2},
+        tool_name="find_payment_by_customer_id",
+        params={"op": "eq", "value": customer_id, "sort_by": None, "direction": "asc", "limit": 3},
+        result=[{"payment_id": 11}, {"payment_id": 12}],
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_customer_to_payment_by_customer_id",
-        params={"customer_id": customer_id, "limit": 3},
-        result=[{"payment_id": 11}, {"payment_id": 12}],
+        tool_name="find_rental_by_customer_id",
+        params={"op": "eq", "value": customer_id, "sort_by": None, "direction": "asc", "limit": 3},
+        result=[{"rental_id": 101}, {"rental_id": 102}],
     )
     controller.record_atomic_tool_call(
         tool_name="get_payment",
@@ -85,15 +86,9 @@ def _seed_min_initial_exploration(
         result={"payment_id": 11},
     )
     controller.record_atomic_tool_call(
-        tool_name="find_customer_by_customer_id",
-        params={
-            "op": "in",
-            "value": [customer_id, customer_id + 1],
-            "sort_by": "customer_id",
-            "direction": "asc",
-            "limit": 2,
-        },
-        result=[{"customer_id": customer_id}, {"customer_id": customer_id + 1}],
+        tool_name="calc_payment",
+        params={"fn": "count", "metric": None, "by": "customer_id", "op": "eq", "value": customer_id},
+        result=2,
     )
 
 
@@ -223,9 +218,9 @@ class _FakeBackend:
         self.seen_max_turns.append(max_turns)
         assert self.bound_controller is not None
         self.bound_controller.record_atomic_tool_call(
-            tool_name="list_customer_ids",
-            params={"limit": 5},
-            result=[1, 2, 3],
+            tool_name="find_customer_by_store_id",
+            params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 5},
+            result=[{"customer_id": 1}, {"customer_id": 2}],
         )
         self.bound_controller.record_atomic_tool_call(
             tool_name="get_customer",
@@ -233,18 +228,18 @@ class _FakeBackend:
             result={"store_id": 1},
         )
         self.bound_controller.record_atomic_tool_call(
-            tool_name="traverse_customer_to_store_by_store_id",
-            params={"customer_id": 1},
-            result={"store_id": 1},
-        )
-        self.bound_controller.record_atomic_tool_call(
-            tool_name="traverse_customer_to_payment_by_customer_id",
-            params={"customer_id": 1, "limit": 3},
+            tool_name="find_payment_by_customer_id",
+            params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
             result=[{"payment_id": 11}, {"payment_id": 12}],
         )
         self.bound_controller.record_atomic_tool_call(
-            tool_name="count_customer",
-            params={},
+            tool_name="find_rental_by_customer_id",
+            params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
+            result=[{"rental_id": 201}, {"rental_id": 202}],
+        )
+        self.bound_controller.record_atomic_tool_call(
+            tool_name="calc_customer",
+            params={"fn": "count", "metric": None, "by": None, "op": None, "value": None},
             result=5,
         )
         self.bound_controller.record_atomic_tool_call(
@@ -513,6 +508,27 @@ def test_mentions_global_scope_does_not_treat_local_total_as_global() -> None:
     )
 
 
+def test_unanchored_global_ranking_matches_rank_family() -> None:
+    assert _uses_unanchored_global_ranking(
+        [
+            {
+                "tool_name": "rank_payment_by_store_id",
+                "params": {
+                    "fn": "count",
+                    "metric": None,
+                    "direction": "desc",
+                    "limit": 5,
+                    "by": None,
+                    "op": None,
+                    "value": None,
+                },
+                "result": [{"group_key": 1, "value": 5}],
+            }
+        ],
+        anchor_entity={"customer_id": 1},
+    )
+
+
 @pytest.mark.asyncio
 async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path) -> None:
     controller = SubmitDraftController(
@@ -556,9 +572,9 @@ async def test_submit_draft_requires_more_first_submit_exploration(
         result={"customer_name": "Alice"},
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_customer_to_store_by_store_id",
-        params={"id": 1},
-        result={"store_id": 1},
+        tool_name="find_payment_by_customer_id",
+        params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
+        result=[{"payment_id": 11}, {"payment_id": 12}],
     )
 
     message = await controller.submit(_accepted_payload())
@@ -667,8 +683,8 @@ async def test_submit_draft_pushes_self_scoped_count_back_to_anchor_evidence(
         result={"customer_name": "Alice"},
     )
     controller.record_atomic_tool_call(
-        tool_name="count_customer",
-        params={},
+        tool_name="calc_customer",
+        params={"fn": "count", "metric": None, "by": None, "op": None, "value": None},
         result=5,
     )
 
@@ -694,13 +710,13 @@ async def test_submit_draft_calls_out_id_only_identifier_chain_path(
     )
     _seed_min_initial_exploration(controller)
     controller.record_atomic_tool_call(
-        tool_name="traverse_customer_to_rental_by_customer_id",
-        params={"customer_id": 1, "limit": 3},
+        tool_name="find_rental_by_customer_id",
+        params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
         result=[{"rental_id": 777}],
     )
     controller.record_atomic_tool_call(
-        tool_name="traverse_rental_to_payment_by_rental_id",
-        params={"rental_id": 777, "limit": 3},
+        tool_name="find_payment_by_customer_id",
+        params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
         result=[{"payment_id": 9710}],
     )
 

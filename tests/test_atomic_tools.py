@@ -12,6 +12,7 @@ from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGr
 from rl_task_foundry.synthesis import atomic_tools as atomic_tools_module
 from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
+    AtomicToolDefinition,
     AtomicToolGenerator,
 )
 
@@ -79,9 +80,19 @@ def _sample_graph() -> SchemaGraph:
                     ColumnProfile(
                         schema_name="public",
                         table_name="customers",
-                        column_name="api_key",
+                        column_name="segment",
                         data_type="text",
                         ordinal_position=6,
+                        is_nullable=True,
+                        visibility="user_visible",
+                        n_distinct=None,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="customers",
+                        column_name="api_key",
+                        data_type="text",
+                        ordinal_position=7,
                         is_nullable=True,
                         visibility="blocked",
                         n_distinct=-1.0,
@@ -260,6 +271,7 @@ def test_atomic_tool_generator_is_deterministic_and_covers_new_tool_families() -
     tool_by_name = {tool.name: tool for tool in first.tools}
     assert "get_customer" in names
     assert "find_customer_by_tier" in names
+    assert "find_customer_by_segment" in names
     assert "find_customer_by_signup_date" in names
     assert "find_customer_by_score" in names
     assert "find_customer_by_email" not in names
@@ -267,6 +279,7 @@ def test_atomic_tool_generator_is_deterministic_and_covers_new_tool_families() -
     assert "find_order_by_customer_id" in names
     assert "calc_order" in names
     assert "rank_customer_by_tier" in names
+    assert "rank_customer_by_segment" in names
     assert "rank_customer_by_api_key" not in names
     assert "rank_customer_by_score" not in names
     assert "rank_order_by_customer_id" in names
@@ -361,12 +374,14 @@ def test_atomic_tool_params_follow_family_patterns() -> None:
     text_find_schema = tool_by_name["find_customer_by_tier"].params_schema
     assert text_find_schema["required"] == ["op", "value", "sort_by", "direction", "limit"]
     assert text_find_schema["properties"]["op"]["enum"] == ["any", "eq", "in", "like"]
+    assert text_find_schema["properties"]["limit"]["maximum"] == 100
     assert text_find_schema["properties"]["sort_by"]["anyOf"][0]["enum"] == [
         "customer_id",
         "tier",
         "signup_date",
         "score",
         "email",
+        "segment",
         "api_key",
     ]
 
@@ -389,6 +404,103 @@ def test_atomic_tool_params_follow_family_patterns() -> None:
     rank_schema = tool_by_name["rank_order_by_customer_id"].params_schema
     assert rank_schema["required"] == ["fn", "metric", "direction", "limit", "by", "op", "value"]
     assert rank_schema["properties"]["direction"]["enum"] == ["asc", "desc"]
+    assert rank_schema["properties"]["limit"]["maximum"] == 100
+
+
+def test_atomic_tool_definition_sql_is_documented_as_display_only() -> None:
+    assert AtomicToolDefinition.model_fields["sql"].description == (
+        "Display/audit only SQL template. Not executed directly."
+    )
+
+
+def test_calc_and_rank_filter_fields_follow_graph_foreign_keys_not_column_flags() -> None:
+    parent_id = ColumnProfile(
+        schema_name="public",
+        table_name="orders",
+        column_name="parent_id",
+        data_type="int4",
+        ordinal_position=1,
+        is_nullable=False,
+        visibility="blocked",
+        n_distinct=10,
+    )
+    order_id = ColumnProfile(
+        schema_name="public",
+        table_name="orders",
+        column_name="order_id",
+        data_type="int4",
+        ordinal_position=2,
+        is_nullable=False,
+        visibility="blocked",
+        is_primary_key=True,
+        n_distinct=-1.0,
+    )
+    status = ColumnProfile(
+        schema_name="public",
+        table_name="orders",
+        column_name="status",
+        data_type="text",
+        ordinal_position=3,
+        is_nullable=False,
+        visibility="user_visible",
+        n_distinct=4,
+    )
+    graph = SchemaGraph(
+        tables=[
+            TableProfile(
+                schema_name="public",
+                table_name="parents",
+                primary_key=("parent_id",),
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="parents",
+                        column_name="parent_id",
+                        data_type="int4",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                        n_distinct=-1.0,
+                    )
+                ],
+                row_estimate=10,
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="orders",
+                primary_key=("order_id",),
+                columns=[parent_id, order_id, status],
+                row_estimate=100,
+            ),
+        ],
+        edges=[
+            ForeignKeyEdge(
+                constraint_name="orders_parent_id_fkey",
+                source_schema="public",
+                source_table="orders",
+                source_columns=("parent_id",),
+                target_schema="public",
+                target_table="parents",
+                target_columns=("parent_id",),
+                source_is_unique=False,
+                fanout_estimate=10.0,
+            )
+        ],
+    )
+
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(graph, db_id="sakila")
+    tool_by_name = {tool.name: tool for tool in bundle.tools}
+
+    calc_by_enum = tool_by_name["calc_order"].params_schema["properties"]["by"]["anyOf"][0]["enum"]
+    rank_by_enum = tool_by_name["rank_order_by_parent_id"].params_schema["properties"]["by"]["anyOf"][0]["enum"]
+    calc_value_variants = tool_by_name["calc_order"].params_schema["properties"]["value"]["anyOf"]
+    rank_value_variants = tool_by_name["rank_order_by_parent_id"].params_schema["properties"]["value"]["anyOf"]
+
+    assert "parent_id" in calc_by_enum
+    assert "parent_id" in rank_by_enum
+    assert {"type": "integer"} in calc_value_variants
+    assert {"type": "integer"} in rank_value_variants
 
 
 def test_generated_atomic_tool_source_is_ast_valid_and_tool_functions_are_async() -> None:
