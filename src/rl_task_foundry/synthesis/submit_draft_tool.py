@@ -784,9 +784,11 @@ def _count_semantics_present(
 ) -> bool:
     if isinstance(answer, dict):
         count_keys = [key for key in answer if isinstance(key, str) and "count" in key.lower()]
-        if count_keys and len(count_keys) == len(answer):
+        if count_keys:
             return True
-        return False
+        return any(_count_semantics_present(item, constraint_summary) for item in answer.values())
+    if isinstance(answer, list):
+        return any(_count_semantics_present(item, constraint_summary) for item in answer)
     if not isinstance(answer, (int, float)):
         return False
     text_parts: list[str] = []
@@ -1036,7 +1038,7 @@ class SubmitDraftController:
     _consecutive_primary_error_count: int = field(default=0, init=False)
 
     def submissions_left(self) -> int:
-        return max(0, self.max_submissions - len(self.attempts))
+        return max(0, self.max_submissions - (len(self.attempts) + self._feedback_events))
 
     def record_atomic_tool_call(
         self,
@@ -1648,15 +1650,16 @@ class SubmitDraftController:
                 extra_text = extra.removeprefix("Feedback. ").strip()
             additional_messages.append(extra_text)
         if feedback_only:
+            attempts_left_after = self.submissions_left() - 1
             if additional_messages:
                 return (
                     f"{primary}{preserve_guidance}{escalation_guidance} Also fix: {' '.join(additional_messages)} "
                     "Make another atomic tool call if needed, then call submit_draft again. Do not stop with plain text. "
-                    "Submission budget unchanged."
+                    f"{max(0, attempts_left_after)} attempts left."
                 )
             return (
                 f"{primary}{preserve_guidance}{escalation_guidance} Make another atomic tool call if needed, then call submit_draft again. "
-                "Do not stop with plain text. Submission budget unchanged."
+                f"Do not stop with plain text. {max(0, attempts_left_after)} attempts left."
             )
         attempts_left_after = self.submissions_left() - 1
         if additional_messages:
@@ -1677,8 +1680,9 @@ class SubmitDraftController:
     ) -> str:
         self._update_primary_error_state(error_codes)
         self._feedback_events += 1
+        attempts_left_after = self.submissions_left()
         self._emit_monitor(
-            status="feedback",
+            status="budget_exhausted" if attempts_left_after <= 0 else "feedback",
             payload=payload,
             pass_rate=None,
             matched_solver_runs=None,
@@ -1686,6 +1690,8 @@ class SubmitDraftController:
             search_cost_observations=search_cost_observations,
             diagnostics={"error_codes": _error_code_values(error_codes), **(diagnostics or {})},
         )
+        if attempts_left_after <= 0 and "Budget exhausted. No more attempts." not in message:
+            return f"{message} Budget exhausted. No more attempts."
         return message
 
     def _record_rejection(

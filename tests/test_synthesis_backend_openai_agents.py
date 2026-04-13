@@ -327,10 +327,33 @@ def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
         [
             SimpleNamespace(
                 tool=SimpleNamespace(name="submit_draft"),
-                output="Feedback. Fix the identifier chain and resubmit. Submission budget unchanged.",
+                output="Feedback. Fix the identifier chain and resubmit. 2 attempts left.",
             )
         ],
     )
 
     assert finalize.is_final_output is False
     assert finalize.final_output is None
+
+
+def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> None:
+    class FakeToolsToFinalOutputResult:
+        def __init__(self, *, is_final_output: bool, final_output: str | None):
+            self.is_final_output = is_final_output
+            self.final_output = final_output
+
+    sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
+
+    finalize = OpenAIAgentsSynthesisBackend._build_tool_use_behavior(sdk)(
+        None,
+        [
+            SimpleNamespace(
+                tool=SimpleNamespace(name="submit_draft"),
+                output="Feedback. Fix the identifier chain and resubmit. 0 attempts left. Budget exhausted. No more attempts.",
+            )
+        ],
+    )
+
+    assert finalize.is_final_output is True
+    assert finalize.final_output is not None
+    assert "Budget exhausted. No more attempts." in finalize.final_output

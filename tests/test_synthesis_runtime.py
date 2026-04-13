@@ -24,6 +24,7 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisArtifactGenerationError,
 )
 from rl_task_foundry.synthesis.submit_draft_tool import (
+    SubmitDraftController,
     SubmitDraftPayload,
     _label_summary_matches_selected_topic,
     _next_difficulty_crank_axis,
@@ -232,6 +233,38 @@ def _feedback_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(payload)
 
 
+def _count_without_count_evidence_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "canonical_answer_json": '{"customer_count": 1, "customer_name": "Alice"}',
+            "anchor_entity": anchor_entity,
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 1.0,
+                "constraint_density": 1.0,
+            },
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "제 기록을 기준으로 고객 수와 제 이름을 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_self",
+                    "kind": "membership",
+                    "summary": "Answer must be about the anchored customer.",
+                }
+            ],
+            "anchor_query": {
+                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                "outputs": ["customer_id"],
+            },
+            "label_summary": "The assignment label is grounded in anchored customer evidence.",
+        }
+    )
+
+
 def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
     payload = SubmitDraftPayload.model_validate(_accepted_payload().model_dump(mode="json"))
     cached_answer = payload.canonical_answer
@@ -258,6 +291,54 @@ def test_next_difficulty_crank_axis_rotates_after_two_attempts() -> None:
     assert _next_difficulty_crank_axis(
         [DifficultyAxis.SEARCH_COST, DifficultyAxis.SEARCH_COST]
     ) is DifficultyAxis.SOLUTION_SPACE
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=2,
+    )
+
+    first = await controller.submit(_feedback_payload())
+    second = await controller.submit(_feedback_payload())
+    third = await controller.submit(_feedback_payload())
+
+    assert "1 attempts left." in first
+    assert "Budget exhausted. No more attempts." in second
+    assert third == "Budget exhausted. No more attempts."
+    assert controller.submissions_left() == 0
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_mixed_count_label_without_count_evidence(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_name": "Alice"},
+    )
+
+    message = await controller.submit(_count_without_count_evidence_payload())
+
+    assert "count-like label needs explicit count evidence" in message.lower()
 
 
 @pytest.mark.asyncio
