@@ -955,6 +955,63 @@ def _answer_has_multi_item_collection(value: object) -> bool:
     return False
 
 
+def _human_join(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def _field_preservation_guidance(label_data: dict[str, object] | None) -> str:
+    if not isinstance(label_data, dict):
+        return ""
+    raw_field_names = label_data.get("canonical_answer_field_names")
+    if not isinstance(raw_field_names, list):
+        return ""
+    readable_field_names = [
+        str(field_name)
+        for field_name in raw_field_names
+        if isinstance(field_name, str) and not _is_identifier_field_name(field_name)
+    ]
+    if not readable_field_names:
+        return ""
+    preview = readable_field_names[:3]
+    return (
+        " Preserve grounded readable answer slots such as "
+        f"{_human_join(preview)} if they still fit the same anchored user need."
+    )
+
+
+def _too_easy_retry_guidance(
+    *,
+    axis: DifficultyAxis,
+    label_data: dict[str, object] | None,
+) -> str:
+    preserve_guidance = _field_preservation_guidance(label_data)
+    shared_prefix = (
+        " Stay inside the same connected anchored neighborhood and keep the same anchored user need."
+        f"{preserve_guidance}"
+    )
+    if axis is DifficultyAxis.SEARCH_COST:
+        return (
+            f"{shared_prefix} Add exactly one more connected grounded fact or one more anchored hop on the same path before you change anything else. "
+            "Prefer extending the current readable path over starting a new path. "
+            "Do not replace the current readable path with a disconnected lookup, an id-only fallback, or a simpler global count."
+        )
+    if axis is DifficultyAxis.SOLUTION_SPACE:
+        return (
+            f"{shared_prefix} Keep the current connected path and add one more grounded slot or one more connected ordered item from that same path. "
+            "Do not throw away the current readable answer structure just to produce a different label."
+        )
+    return (
+        f"{shared_prefix} Keep the current connected path and add one more grounded rule, tie-breaker, or filter on that same path. "
+        "Do not reset to a different path or simplify back to identifiers while tightening the constraints."
+    )
+
+
 def _axis_to_relax_for_too_hard(
     *,
     answer: object,
@@ -1604,6 +1661,10 @@ class SubmitDraftController:
             self.difficulty_crank_history.append(requested_axis)
             strongest_axis_value = getattr(self.strongest_difficulty_vector, requested_axis.value)
             self.required_axis_reference_value = strongest_axis_value
+            strengthening_guidance = _too_easy_retry_guidance(
+                axis=requested_axis,
+                label_data=_monitor_label_data(payload, config=self.config),
+            )
             return self._record_rejection(
                 submission_index=submission_index,
                 message=(
@@ -1612,6 +1673,7 @@ class SubmitDraftController:
                     f"Crank {requested_axis.value}. {difficulty_axis_feedback(requested_axis)} "
                     "Keep the same anchored user need and preserve the other two axes at least as strong as before. "
                     f"Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that axis above {strongest_axis_value:.1f} with the smallest grounded step you can justify before resubmitting. "
+                    f"{strengthening_guidance} "
                     f"{max(0, attempts_left_after)} attempts left."
                 ),
                 error_codes=[SubmitDraftErrorCode.REJECT_TOO_EASY],
@@ -1797,6 +1859,14 @@ class SubmitDraftController:
                 )
         if feedback_only and primary.startswith("Rejected. "):
             primary = primary.replace("Rejected. ", "Feedback. ", 1)
+        if error_codes and error_codes[0] in (
+            SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED,
+            SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
+        ):
+            primary += _too_easy_retry_guidance(
+                axis=self.required_axis or DifficultyAxis.SEARCH_COST,
+                label_data=self._last_monitored_label_data,
+            )
         if error_codes and error_codes[0] is SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT:
             primary = (
                 "Feedback. Do not submit yet. Go back to research mode first. Before the first judged draft, map the database relationships around the anchored user and keep exploring until you fully understand the nearby evidence paths and have enough grounded context: "

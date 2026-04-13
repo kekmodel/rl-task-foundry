@@ -22,19 +22,23 @@ _DIFFICULTY_AXIS_GUIDANCE_BY_AXIS: dict[DifficultyAxis, str] = {
         "change the label so it depends on a longer grounded evidence path: for example, "
         "add one more linked entity, require one more lookup before the label is fixed, "
         "or force the label to combine facts from a deeper chain instead of a single obvious record. "
+        "When the current label already has grounded readable fields, preserve that readable path when possible and deepen it by one connected anchored hop instead of throwing it away. "
         "Do not spend the extra hop on echoing the anchor id or on whichever related row happened to appear first in exploration results. "
         "If you need one related row among many, define a grounded ordering or tie-breaker that you can explain naturally to the user. "
-        "Prefer a local ordering inside the anchored scope before jumping to a global ranking over the whole database."
+        "Prefer a local ordering inside the anchored scope before jumping to a global ranking over the whole database. "
+        "Do not replace a good readable path with a disconnected table, an id-only fallback, or a simpler global count."
     ),
     DifficultyAxis.SOLUTION_SPACE: (
         "change the label so it is larger or less immediately determined: for example, "
         "add more answer fields, return an ordered set instead of one scalar, ask for the top few grounded items instead of one item, "
-        "or require choosing among several grounded candidates with an explicit tie-breaker."
+        "or require choosing among several grounded candidates with an explicit tie-breaker. "
+        "When the current label already has grounded readable fields, preserve those grounded slots when possible and add one more connected slot or one more connected item from the same anchored relation map."
     ),
     DifficultyAxis.CONSTRAINT_DENSITY: (
         "change the label by adding one more hard grounded rule: for example, "
         "add a uniqueness rule, add a stricter ordering or tie-breaker, require a subset condition, "
-        "or combine two grounded filters so fewer labels remain valid."
+        "or combine two grounded filters so fewer labels remain valid. "
+        "Keep the same connected readable path when possible and tighten it with one extra grounded rule instead of replacing it with a different easier path."
     ),
 }
 
@@ -105,6 +109,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "Use that map to classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends before you commit to a label. "
             "Prefer staying inside the connected anchored neighborhood. Do not jump to a disconnected table just because it happens to expose readable fields. "
             "Use your research to identify multiple grounded label candidates for the anchored user, compare them, and then pick one path to turn into the final label. "
+            "After a too-easy result, keep the current good readable path when possible, preserve grounded readable answer slots that still belong in the task, and make the smallest connected strengthening step on that same anchored relation map. "
             "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
             "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
             "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
@@ -144,7 +149,8 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "A first-person request such as 'Which of my recent requests is still open, and when was it created?' when both status and creation time were directly observed on one anchored path. "
             "Inspecting two or more nearby paths around the same anchored user, noticing that one path is id-only while another exposes readable status and date fields, and then choosing the readable path for the final label. "
             "A label that combines two grounded observations, such as an amount plus a status, or a title plus a date, rather than one internal identifier. "
-            "A tie-breaker that is grounded by an observed field, such as earliest date, latest timestamp, lowest amount, highest count, or alphabetical label."
+            "A tie-breaker that is grounded by an observed field, such as earliest date, latest timestamp, lowest amount, highest count, or alphabetical label. "
+            "After a too-easy result, keeping the current readable path and adding one more connected grounded fact from the same anchored neighborhood instead of rebuilding the label from scratch."
         ),
         (
             "BAD",
@@ -157,6 +163,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "BAD: Jumping to an unrelated entry type that is not yet connected to the anchored neighborhood just because it has readable fields. "
             "BAD: Using the first sampled row as 'latest', 'earliest', or 'first' without grounded temporal or sequence evidence. "
             "BAD: Jumping to a global count for a self-scoped request. "
+            "BAD: After a too-easy result, throwing away a good readable path and replacing it with a disconnected path, an id-only fallback, or a simpler global count. "
             "BAD: Repeating raw identifier field names or raw anchor ids in the user-facing request. "
             "BAD: Submitting a draft before you can explain why each answer slot is grounded and needed."
         ),

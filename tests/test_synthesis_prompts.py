@@ -117,6 +117,8 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Use that research phase to build a small relation map around the anchored user" in instructions
     assert "classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends" in instructions
     assert "Do not jump to a disconnected table just because it happens to expose readable fields." in instructions
+    assert "After a too-easy result, keep the current good readable path when possible" in instructions
+    assert "make the smallest connected strengthening step on that same anchored relation map" in instructions
     assert "distinct tool names" in instructions
     assert "anchor-scoped observations whose parameters depend on anchor_entity" in instructions
     assert "identify multiple grounded label candidates" in instructions
@@ -145,9 +147,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Writing SQL or describing the answer path as a SQL query" in instructions
     assert "Which of my recent requests is still open, and when was it created?" in instructions
     assert "Inspecting two or more nearby paths around the same anchored user" in instructions
+    assert "After a too-easy result, keeping the current readable path and adding one more connected grounded fact" in instructions
     assert "When you strengthen search_cost" in instructions
     assert "When you strengthen solution_space" in instructions
     assert "When you strengthen constraint_density" in instructions
+    assert "preserve that readable path when possible and deepen it by one connected anchored hop" in instructions
     assert "ways to change the label itself" in instructions
     assert "do not keep the same label and only rewrite the question" in instructions
     assert "Do not reset to a different topic, a different anchor, or a simpler scalar count" in instructions
@@ -157,6 +161,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Submitting a label from the first path you happened to inspect before you understand the nearby relationships" in instructions
     assert "Seeing that one nearby path only returns identifiers, but drafting from it anyway" in instructions
     assert "Jumping to an unrelated entry type that is not yet connected to the anchored neighborhood" in instructions
+    assert "throwing away a good readable path and replacing it with a disconnected path, an id-only fallback, or a simpler global count" in instructions
 
 
 def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules() -> None:

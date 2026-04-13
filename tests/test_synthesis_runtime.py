@@ -299,6 +299,50 @@ def _feedback_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(payload)
 
 
+def _too_easy_readable_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment_summary",
+            "canonical_answer_json": json.dumps(
+                {
+                    "staff_name": "Mike Hillyer",
+                    "staff_email": "Mike.Hillyer@sakilastaff.com",
+                    "latest_rental_count": 32,
+                },
+                ensure_ascii=False,
+            ),
+            "anchor_entity": anchor_entity,
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 2.0,
+                "constraint_density": 2.0,
+            },
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "내 계정 기준으로 담당 직원 이름과 이메일을 알려주고, 제가 지금까지 빌린 건수도 함께 알려주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_customer",
+                    "kind": "membership",
+                    "summary": "답변은 엔티티 블록에 표시된 고객 계정에 대해 grounded 되어야 한다.",
+                },
+                {
+                    "key": "staff_identity",
+                    "kind": "readable label",
+                    "summary": "담당 직원은 이름과 이메일처럼 읽을 수 있는 비식별 정보로 제시해야 한다.",
+                },
+                {
+                    "key": "rental_count",
+                    "kind": "aggregate",
+                    "summary": "제가 지금까지 빌린 건수는 해당 고객의 실제 대여 건수 집계로 제시해야 한다.",
+                },
+            ],
+        }
+    )
+
+
 def _count_without_count_evidence_payload() -> SubmitDraftPayload:
     anchor_entity = {"customer_id": 1}
     return SubmitDraftPayload.model_validate(
@@ -677,6 +721,86 @@ async def test_submit_draft_pushes_self_scoped_count_back_to_anchor_evidence(
 
     assert "only keep a count field if you observed a count or aggregate tool call" in message
     assert "drop the count field" in message
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_too_easy_feedback_preserves_readable_path(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=5,
+            total_solver_runs=6,
+        ),
+        build_draft=lambda payload: type(
+            "Draft",
+            (),
+            {"task_bundle": type("TaskBundle", (), {"task_id": "task-1", "db_id": "sakila"})()},
+        )(),
+        max_submissions=3,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer",
+        params={"id": 1},
+        result={
+            "customer_id": 1,
+            "first_name": "MARY",
+            "last_name": "SMITH",
+            "email": "MARY.SMITH@sakilacustomer.org",
+            "store_id": 1,
+        },
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_staff",
+        params={"id": 1},
+        result={
+            "staff_id": 1,
+            "first_name": "Mike",
+            "last_name": "Hillyer",
+            "email": "Mike.Hillyer@sakilastaff.com",
+        },
+    )
+    controller.record_atomic_tool_call(
+        tool_name="find_rental_by_customer_id",
+        params={"op": "eq", "value": 1, "sort_by": "rental_date", "direction": "desc", "limit": 3},
+        result=[
+            {
+                "rental_id": 13486,
+                "customer_id": 1,
+                "rental_date": "2006-02-14 15:16:03",
+                "return_date": None,
+                "staff_id": 1,
+            }
+        ],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="calc_rental",
+        params={"fn": "count", "metric": None, "by": "customer_id", "op": "eq", "value": 1},
+        result=32,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="find_payment_by_customer_id",
+        params={"op": "eq", "value": 1, "sort_by": "payment_date", "direction": "desc", "limit": 3},
+        result=[{"payment_id": 10, "customer_id": 1, "payment_date": "2007-02-14 15:16:03"}],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="find_customer_by_store_id",
+        params={"op": "eq", "value": 1, "sort_by": "customer_id", "direction": "asc", "limit": 3},
+        result=[{"customer_id": 1}, {"customer_id": 2}],
+    )
+
+    message = await controller.submit(_too_easy_readable_payload())
+
+    assert "Crank search_cost." in message
+    assert "Stay inside the same connected anchored neighborhood" in message
+    assert (
+        "Preserve grounded readable answer slots such as staff_name, staff_email, and latest_rental_count"
+        in message
+    )
+    assert "Add exactly one more connected grounded fact or one more anchored hop" in message
+    assert "Do not replace the current readable path with a disconnected lookup" in message
 
 
 @pytest.mark.asyncio
