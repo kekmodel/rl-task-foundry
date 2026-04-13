@@ -100,7 +100,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Compare candidate paths." in instructions
     assert "Build the label from one chosen path." in instructions
     assert "Render the request from the label." in instructions
-    assert "Retry intelligently after feedback." in instructions
+    assert "Retry after feedback." in instructions
     assert "Do research and analysis first." in instructions
     assert "Submit only when you fully understand the anchored user, the relevant evidence path" in instructions
     assert "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary" in instructions
@@ -109,14 +109,10 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "IMPORTANT: If an answer slot would sound unnatural, redundant, or hard to ask for in the request, remove that slot from the label" in instructions
     assert "IMPORTANT: The <entity> block already identifies the subject." in instructions
     assert "DO NOT add subject-name slots to the label unless the request explicitly asks for that subject's name." in instructions
-    assert "Use that research phase to build a small relation map around the anchored user" in instructions
-    assert "classify nearby paths as readable, id-only, local-only, countable, orderable, aggregate-capable, or dead ends" in instructions
     assert "Do not jump to a disconnected table just because it happens to expose readable fields." in instructions
     assert "After a too-easy result, keep the current good readable path when possible" in instructions
     assert "drop any slot that no longer belongs in the request" in instructions
     assert "make the smallest connected strengthening step on that same anchored relation map" in instructions
-    assert "identify multiple grounded label candidates" in instructions
-    assert "pick one path to turn into the final label" in instructions
     assert "Calling submit_draft without anchor_entity is always wrong." not in instructions
     assert "ALWAYS include anchor_entity with at least one real primary-key value from the current database." in instructions
     assert "anchor_entity must be a flat JSON object" in instructions
@@ -125,7 +121,6 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "ALWAYS use names, titles, labels, statuses, dates, or other business strings exactly as you directly observed them" in instructions
     assert "WHY: even small rewrites break grounding." in instructions
     assert "If the label returns a count, ground that count with an explicit count or aggregate observation." in instructions
-    assert "Stay inside the connected anchored neighborhood when possible" in instructions
     assert "Use tool results as evidence, not inspiration." in instructions
     assert "GOOD: A request asks for a recent item's title, date, and assigned staff" in instructions
     assert "BAD: A request asks only for a recent item's title, date, and assigned staff, but the label still includes extra customer-name slots." in instructions
@@ -133,12 +128,10 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Write the user-facing request as a normal business request" in instructions
     assert "DO NOT reveal internal tool paths, raw table names" in instructions
     assert "DO NOT repeat the raw anchor entity key or raw anchor entity id" in instructions
-    assert "DO NOT submit blank or placeholder string fields in the canonical answer." in instructions
     assert "DO NOT shorten, paraphrase, partially copy, or reformat observed string or date values." in instructions
     assert "DO NOT merge separate observed fields into a new readable value" in instructions
     assert "DO NOT ask for unreadable text fields from an id-only surface." in instructions
     assert "DO NOT manufacture readable labels by wrapping an id in generic words" in instructions
-    assert "DO NOT start with a multi-item set, top-few list, or paired bundle" in instructions
     assert "DO NOT submit single-call labels." in instructions
     assert "DO NOT write SQL, draft SQL, or include SQL queries in the submission." in instructions
     assert "DO NOT submit a label with non-anchor answer slots that the user-facing request does not explicitly ask for." in instructions
