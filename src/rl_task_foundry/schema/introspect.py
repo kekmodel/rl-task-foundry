@@ -89,7 +89,8 @@ JOIN pg_class AS tgt_tbl
   ON tgt_tbl.oid = con.confrelid
 JOIN pg_namespace AS tgt_ns
   ON tgt_ns.oid = tgt_tbl.relnamespace
-JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS key_cols(src_attnum, tgt_attnum, ordinality)
+JOIN LATERAL unnest(con.conkey, con.confkey)
+  WITH ORDINALITY AS key_cols(src_attnum, tgt_attnum, ordinality)
   ON TRUE
 JOIN pg_attribute AS src_att
   ON src_att.attrelid = src_tbl.oid
@@ -136,7 +137,9 @@ class PostgresSchemaIntrospector:
             for statement in settings.timeout_sql:
                 await conn.execute(statement)
 
-            table_rows, column_rows, unique_rows, fk_rows, stats_rows = await self._fetch_metadata(conn)
+            table_rows, column_rows, unique_rows, fk_rows, stats_rows = await self._fetch_metadata(
+                conn
+            )
             return self._build_graph(
                 table_rows=table_rows,
                 column_rows=column_rows,
@@ -223,7 +226,11 @@ class PostgresSchemaIntrospector:
             source_table = table_profiles[source_key]
             target_table = table_profiles[target_key]
             fanout_estimate: float | None = None
-            if source_table.row_estimate and target_table.row_estimate and target_table.row_estimate > 0:
+            if (
+                source_table.row_estimate
+                and target_table.row_estimate
+                and target_table.row_estimate > 0
+            ):
                 fanout_estimate = source_table.row_estimate / target_table.row_estimate
             edges.append(
                 ForeignKeyEdge(
@@ -251,9 +258,12 @@ class PostgresSchemaIntrospector:
                     data_type=row["data_type"],
                     ordinal_position=int(row["ordinal_position"]),
                     is_nullable=bool(row["is_nullable"]),
-                    visibility=sensitivity_by_column[(row["schema_name"], row["table_name"], column_name)],
+                    visibility=sensitivity_by_column[
+                        (row["schema_name"], row["table_name"], column_name)
+                    ],
                     is_primary_key=column_name in primary_keys.get(table_key, ()),
-                    is_foreign_key=(row["schema_name"], row["table_name"], column_name) in fk_members,
+                    is_foreign_key=(row["schema_name"], row["table_name"], column_name)
+                    in fk_members,
                     is_unique=(column_name,) in unique_constraints.get(table_key, []),
                     n_distinct=n_distinct_by_column.get(
                         (row["schema_name"], row["table_name"], column_name)
@@ -267,6 +277,8 @@ class PostgresSchemaIntrospector:
             table.columns.sort(key=lambda column: column.ordinal_position)
 
         return SchemaGraph(
-            tables=sorted(table_profiles.values(), key=lambda table: (table.schema_name, table.table_name)),
+            tables=sorted(
+                table_profiles.values(), key=lambda table: (table.schema_name, table.table_name)
+            ),
             edges=edges,
         )

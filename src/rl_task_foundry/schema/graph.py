@@ -100,7 +100,9 @@ class SchemaGraph:
     def iter_columns(self) -> list[ColumnProfile]:
         return [column for table in self.tables for column in table.columns]
 
-    def edges_from(self, table_name: str, *, schema_name: str | None = None) -> list[ForeignKeyEdge]:
+    def edges_from(
+        self, table_name: str, *, schema_name: str | None = None
+    ) -> list[ForeignKeyEdge]:
         return [
             edge
             for edge in self.edges

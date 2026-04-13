@@ -412,7 +412,9 @@ def load_synthesis_registry(path: Path) -> list[SynthesisDbRegistryEntry]:
         payload = json.loads(raw)
         entries = [_parse_registry_item(item) for item in payload]
     else:
-        entries = [_parse_registry_item(json.loads(line)) for line in raw.splitlines() if line.strip()]
+        entries = [
+            _parse_registry_item(json.loads(line)) for line in raw.splitlines() if line.strip()
+        ]
     _validate_unique_db_ids(entries)
     return entries
 

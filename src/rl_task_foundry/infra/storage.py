@@ -277,7 +277,8 @@ def summarize_run(path: str | Path, *, run_id: str) -> RunDbSummary:
                 COUNT(*) AS total_tasks,
                 SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) AS accepted_tasks,
                 SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_tasks,
-                SUM(CASE WHEN status NOT IN ('accepted', 'rejected') THEN 1 ELSE 0 END) AS skipped_tasks,
+                SUM(CASE WHEN status NOT IN ('accepted', 'rejected')
+                    THEN 1 ELSE 0 END) AS skipped_tasks,
                 (
                     SELECT COUNT(*)
                     FROM verification_results

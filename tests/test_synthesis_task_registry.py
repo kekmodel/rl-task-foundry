@@ -177,9 +177,7 @@ def test_task_registry_writer_commits_single_task_layout(tmp_path: Path) -> None
     assert metadata["generation_attempts"] == []
     instance_payload = json.loads((task_dir / "instance.json").read_text(encoding="utf-8"))
     assert instance_payload["anchor_entity"] == {"customer_id": 1}
-    answer_payload = json.loads(
-        (task_dir / "canonical_answer.json").read_text(encoding="utf-8")
-    )
+    answer_payload = json.loads((task_dir / "canonical_answer.json").read_text(encoding="utf-8"))
     assert answer_payload["label_signature"] == draft.label_signature
 
 
@@ -271,7 +269,7 @@ def test_task_registry_bootstrap_migrates_legacy_schema(tmp_path: Path) -> None:
         conn.execute(
             f"""
             CREATE TABLE environments (
-                {'env' + '_id'} TEXT PRIMARY KEY,
+                {"env" + "_id"} TEXT PRIMARY KEY,
                 db_id TEXT NOT NULL,
                 domain TEXT NOT NULL,
                 category TEXT NOT NULL,
@@ -307,10 +305,7 @@ def test_task_registry_bootstrap_migrates_legacy_schema(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
-        }
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
     assert "tasks" in tables
     assert "environments" not in tables
     assert "verifier_signature" not in columns

@@ -56,8 +56,9 @@ def redact_value(value: object, visibility: Visibility) -> object:
     return "[REDACTED]"
 
 
-def redact_dict(payload: dict[str, object], visibilities: dict[str, Visibility]) -> dict[str, object]:
+def redact_dict(
+    payload: dict[str, object], visibilities: dict[str, Visibility]
+) -> dict[str, object]:
     return {
-        key: redact_value(value, visibilities.get(key, "blocked"))
-        for key, value in payload.items()
+        key: redact_value(value, visibilities.get(key, "blocked")) for key, value in payload.items()
     }

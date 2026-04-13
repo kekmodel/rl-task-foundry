@@ -91,7 +91,9 @@ class SynthesisOrchestrator:
 
     runtime_factory: RuntimeFactory
     scheduler: SynthesisDomainScheduler = field(default_factory=SynthesisDomainScheduler)
-    _runtimes: dict[str, SynthesisRuntimeHandle] = field(default_factory=dict, init=False, repr=False)
+    _runtimes: dict[str, SynthesisRuntimeHandle] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _runtime_accepts_requested_topic: dict[str, bool] = field(
         default_factory=dict,
         init=False,

@@ -102,7 +102,7 @@ def _is_failed_submission(output: Any) -> bool:
 
 def _extract_submission_output(
     final_output: Any,
-    ) -> tuple[str | None, dict[str, object] | None, str, str | None, dict[str, object]]:
+) -> tuple[str | None, dict[str, object] | None, str, str | None, dict[str, object]]:
     if isinstance(final_output, str):
         normalized_output = _parse_submission_output_string(final_output)
         if normalized_output is not None:
@@ -119,9 +119,7 @@ def _extract_submission_output(
         return answer_text, structured_output, "completed", "submitted", {}
     if _is_failed_submission(final_output):
         metadata = {
-            key: value
-            for key, value in final_output.items()
-            if key in {"error", "details"}
+            key: value for key, value in final_output.items() if key in {"error", "details"}
         }
         return None, None, "invalid_submit", "invalid_submit_schema", metadata
     return None, None, "completed", None, {}
@@ -157,7 +155,10 @@ def _make_submit_result_tool() -> object:
             "properties": {
                 "answer_text": {
                     "type": "string",
-                    "description": "Final answer as a JSON string matching the rendered prompt format.",
+                    "description": (
+                        "Final answer as a JSON string"
+                        " matching the rendered prompt format."
+                    ),
                 }
             },
             "required": ["answer_text"],
@@ -224,7 +225,8 @@ class OpenAIAgentsSolverBackend:
             return self._model
         if self.provider_config.type not in {"openai", "openai_compatible"}:
             raise NotImplementedError(
-                f"OpenAI Agents backend does not yet support provider type: {self.provider_config.type}"
+                "OpenAI Agents backend does not yet support"
+                f" provider type: {self.provider_config.type}"
             )
         api_key = _resolve_provider_api_key(self.provider_config)
         cache_key = (
@@ -412,9 +414,7 @@ class OpenAIAgentsSolverBackend:
             status,
             termination_reason,
             termination_metadata,
-        ) = _extract_submission_output(
-            run_result.final_output
-        )
+        ) = _extract_submission_output(run_result.final_output)
         raw_output_text = _raw_output_text(run_result.final_output, submitted_answer_text)
         transcript_ref = self._write_artifact(
             "transcripts",

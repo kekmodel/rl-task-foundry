@@ -78,6 +78,7 @@ RUNTIME_OWNED_TASK_BUNDLE_FIELDS = frozenset(
     }
 )
 
+
 class SynthesisProviderStatus(StrictModel):
     observed_at: datetime
     total_requests: int
@@ -120,6 +121,7 @@ class SynthesisCategoryStatus(StrictModel):
     @property
     def category(self) -> TopicName:
         return TopicName(self.topic)
+
 
 class SynthesisTaskDraft(StrictModel):
     created_at: datetime
@@ -394,7 +396,9 @@ class SynthesisAgentRuntime:
 
     config: AppConfig
     synthesis_backends: list[object] | None = None
-    _breakers: dict[str, ProviderCircuitBreaker] = field(default_factory=dict, init=False, repr=False)
+    _breakers: dict[str, ProviderCircuitBreaker] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _graph_cache: SchemaGraph | None = field(default=None, init=False, repr=False)
     _atomic_tool_bundles: dict[str, AtomicToolBundle] = field(
         default_factory=dict, init=False, repr=False
@@ -414,9 +418,7 @@ class SynthesisAgentRuntime:
         default=None, init=False, repr=False
     )
     _solver_orchestrator: object | None = field(default=None, init=False, repr=False)
-    _category_state_lock: asyncio.Lock = field(
-        default_factory=asyncio.Lock, init=False, repr=False
-    )
+    _category_state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _conversation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     phase_monitor: PipelinePhaseMonitorLogger | None = None
     _owns_phase_monitor: bool = field(default=False, init=False, repr=False)
@@ -537,7 +539,8 @@ class SynthesisAgentRuntime:
                 error_codes=list(diagnostics.error_codes),
             )
             raise SynthesisArtifactGenerationError(
-                "single-agent synthesis did not produce an accepted draft before budget or turn exhaustion",
+                "single-agent synthesis did not produce an accepted"
+                " draft before budget or turn exhaustion",
                 attempts=attempts,
                 last_artifact_diagnostics=diagnostics,
             )
@@ -993,9 +996,7 @@ class SynthesisAgentRuntime:
                 "task_signature": task_signature,
                 "status": TaskBundleStatus.DRAFT,
                 "quality_metrics": TaskQualityMetrics().model_dump(mode="python"),
-                "rollout_constraints": self._build_rollout_constraints().model_dump(
-                    mode="python"
-                ),
+                "rollout_constraints": self._build_rollout_constraints().model_dump(mode="python"),
             }
         )
         return TaskBundleContract.model_validate(payload)

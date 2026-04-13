@@ -27,10 +27,7 @@ async def test_make_sdk_tool_returns_tool_error_string_instead_of_raising() -> N
 
     result = await tool.on_invoke_tool(None, json.dumps({}))
 
-    assert result == (
-        "ToolError: ValueError: bad params. "
-        "Fix the tool arguments and continue."
-    )
+    assert result == ("ToolError: ValueError: bad params. Fix the tool arguments and continue.")
 
 
 @pytest.mark.asyncio

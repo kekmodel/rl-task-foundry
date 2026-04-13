@@ -153,8 +153,8 @@ class BudgetConfig(StrictModel):
 
 class PrivacyConfig(StrictModel):
     default_visibility: Literal["blocked", "internal", "user_visible"] = "blocked"
-    visibility_overrides: dict[str, Literal["blocked", "internal", "user_visible"]] = (
-        Field(default_factory=dict)
+    visibility_overrides: dict[str, Literal["blocked", "internal", "user_visible"]] = Field(
+        default_factory=dict
     )
 
 
@@ -171,9 +171,7 @@ class AppConfig(StrictModel):
     domain: DomainConfig
     providers: dict[str, ProviderConfig]
     models: ModelsConfig
-    provider_resilience: ProviderResilienceConfig = Field(
-        default_factory=ProviderResilienceConfig
-    )
+    provider_resilience: ProviderResilienceConfig = Field(default_factory=ProviderResilienceConfig)
     atomic_tools: AtomicToolConfig = Field(default_factory=AtomicToolConfig)
     synthesis: SynthesisConfig = Field(default_factory=SynthesisConfig)
     solver_runtime: SolverRuntimeConfig

@@ -32,8 +32,7 @@ console = Console()
 
 def _solver_summary(config) -> str:
     return ", ".join(
-        f"{solver.solver_id}={solver.provider}/{solver.model}"
-        for solver in config.models.solvers
+        f"{solver.solver_id}={solver.provider}/{solver.model}" for solver in config.models.solvers
     )
 
 
@@ -57,9 +56,7 @@ def validate_config(
     console.print(f"[green]config ok[/green]: {config_path}")
     console.print(f"total_solver_runs={config.models.total_solver_runs}")
     console.print(f"run_db={config.output.run_db_path}")
-    console.print(
-        f"composer={config.models.composer.provider}/{config.models.composer.model}"
-    )
+    console.print(f"composer={config.models.composer.provider}/{config.models.composer.model}")
     console.print(
         "atomic_tools="
         f"max_tools={config.atomic_tools.max_tools},"
@@ -197,8 +194,7 @@ def show_task_registry(
     console.print(f"semantic_candidates={len(semantic_candidates)}")
     for entry in snapshot.coverage:
         console.print(
-            "coverage="
-            f"{entry.db_id}|{entry.topic}|{entry.difficulty_band.value}|{entry.count}"
+            f"coverage={entry.db_id}|{entry.topic}|{entry.difficulty_band.value}|{entry.count}"
         )
     for record in snapshot.recent_tasks:
         console.print(
@@ -225,9 +221,7 @@ def plan_synthesis_coverage(
     plan = planner.build_plan(registry, task_registry.coverage_entries())
 
     console.print(f"[green]synthesis coverage plan[/green]: {registry_path}")
-    console.print(
-        f"tracked_bands={'|'.join(band.value for band in plan.tracked_bands)}"
-    )
+    console.print(f"tracked_bands={'|'.join(band.value for band in plan.tracked_bands)}")
     console.print(f"target_count_per_band={plan.target_count_per_band}")
     console.print(f"total_pairs={plan.total_pairs}")
     console.print(f"total_cells={plan.total_cells}")
@@ -421,9 +415,7 @@ def check_db(config_path: Path = Path("rl_task_foundry.yaml")) -> None:
 def show_layout() -> None:
     """Print the high-level package layout."""
 
-    console.print(
-        "config, infra, schema, synthesis, solver, calibration, pipeline"
-    )
+    console.print("config, infra, schema, synthesis, solver, calibration, pipeline")
 
 
 @app.command("run-summary")
@@ -442,8 +434,6 @@ def run_summary(
     console.print(f"skipped={summary.skipped_tasks}")
     console.print(f"verification_results={summary.verification_results}")
     console.print(f"events={summary.event_count}")
-
-
 
 
 if __name__ == "__main__":

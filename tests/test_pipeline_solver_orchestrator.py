@@ -140,10 +140,12 @@ async def test_solver_orchestrator_injects_distinct_shuffle_seed_per_solver_run(
 
     orchestrator = SolverOrchestrator(
         config,
-        runtime_factory=lambda _solver, _provider, _task, _defs, tool_executors: _SeedCapturingRuntime(
-            raw_output_text='{"customer":"Alice","day":"2026-04-12"}',
-            executor=next(iter(tool_executors.values())),
-            seen_payloads=[],
+        runtime_factory=lambda _solver, _provider, _task, _defs, tool_executors: (
+            _SeedCapturingRuntime(
+                raw_output_text='{"customer":"Alice","day":"2026-04-12"}',
+                executor=next(iter(tool_executors.values())),
+                seen_payloads=[],
+            )
         ),
         tool_executor_factory=lambda _bundle: {"get_customer_by_id": _recording_executor},
     )

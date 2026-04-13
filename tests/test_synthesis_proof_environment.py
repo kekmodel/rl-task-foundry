@@ -41,8 +41,7 @@ def _config(tmp_path: Path):
 def test_build_proof_task_draft_is_compositional() -> None:
     config = load_config("rl_task_foundry.yaml")
     draft = build_proof_task_draft(
-        config=config,
-        created_at=datetime(2026, 4, 12, tzinfo=timezone.utc)
+        config=config, created_at=datetime(2026, 4, 12, tzinfo=timezone.utc)
     )
 
     root = draft.task_bundle.task.output_schema.root
@@ -55,10 +54,7 @@ def test_build_proof_task_draft_is_compositional() -> None:
     assert root.unique_elements is True
     assert len(draft.task_bundle.task.constraint_summary) == 4
     assert len(draft.canonical_answer) == 3
-    assert (
-        draft.task_bundle.rollout_constraints.max_turns
-        == config.solver_runtime.max_turns
-    )
+    assert draft.task_bundle.rollout_constraints.max_turns == config.solver_runtime.max_turns
     assert (
         draft.task_bundle.rollout_constraints.max_episode_duration_ms
         == config.database.statement_timeout_ms * config.solver_runtime.max_turns
@@ -166,7 +162,10 @@ async def test_proof_task_runner_commits_and_exports_bundle(tmp_path: Path) -> N
 
     assert summary.quality_gate_status == "accept"
     assert summary.flow_id is not None
-    assert summary.phase_monitor_log_path == tmp_path / "proof_output" / "debug" / "phase_monitors.jsonl"
+    assert (
+        summary.phase_monitor_log_path
+        == tmp_path / "proof_output" / "debug" / "phase_monitors.jsonl"
+    )
     assert summary.registry_status is TaskRegistryCommitStatus.COMMITTED
     assert summary.bundle_root is not None
     assert (summary.fixture_sql_root / "schema.sql").exists()

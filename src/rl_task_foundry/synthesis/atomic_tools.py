@@ -185,7 +185,8 @@ class AtomicToolGenerator:
             else:
                 description = (
                     f"Find {humanize_identifier(table_slug)} entries where "
-                    f"{humanize_identifier(column.column_name)} matches a condition. Returns a list."
+                    f"{humanize_identifier(column.column_name)}"
+                    " matches a condition. Returns a list."
                 )
             tools.append(
                 AtomicToolDefinition(
@@ -432,11 +433,7 @@ def _is_useful_for_find(column: ColumnProfile, table: TableProfile) -> bool:
 
 def _foreign_key_column_names(graph: SchemaGraph | None, table: TableProfile) -> set[str]:
     if graph is None:
-        return {
-            column.column_name
-            for column in table.columns
-            if column.is_foreign_key
-        }
+        return {column.column_name for column in table.columns if column.is_foreign_key}
     names: set[str] = set()
     for edge in graph.edges_from(table.table_name, schema_name=table.schema_name):
         names.update(edge.source_columns)
@@ -523,11 +520,14 @@ def _table_runtime_metadata(graph: SchemaGraph | None, table: TableProfile) -> d
         "qualified_name": table.qualified_name,
         "all_columns": [column.column_name for column in table.columns],
         "primary_key": list(table.primary_key),
-        "order_columns": list(table.primary_key) or [column.column_name for column in table.columns],
+        "order_columns": list(table.primary_key)
+        or [column.column_name for column in table.columns],
         "column_types": {
             column.column_name: _normalized_data_type(column.data_type) for column in table.columns
         },
-        "array_casts": {column.column_name: _postgres_array_cast(column) for column in table.columns},
+        "array_casts": {
+            column.column_name: _postgres_array_cast(column) for column in table.columns
+        },
         "numeric_columns": [column.column_name for column in _numeric_columns(table)],
         "filter_columns": [column.column_name for column in _find_columns(graph, table)],
         "sortable_columns": [column.column_name for column in _sortable_columns(table)],
@@ -557,7 +557,9 @@ def _get_params_schema(table: TableProfile) -> dict[str, Any]:
                     },
                     required=table.primary_key,
                 ),
-                "Identifier of the entry to retrieve. Use an object keyed by ID field name when the entry uses multiple ID fields.",
+                "Identifier of the entry to retrieve."
+                " Use an object keyed by ID field name"
+                " when the entry uses multiple ID fields.",
             )
         },
         required=("id",),
@@ -621,7 +623,9 @@ def _calc_params_schema(
         ),
         "op": _described_schema(
             _nullable_enum_schema(_CALC_FILTER_OPS),
-            "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
+            "Condition type: eq (exact), in (any of list),"
+            " lt, gt, lte, gte (comparison), like (pattern)."
+            " Use null for no filter.",
         ),
         "value": _described_schema(
             _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
@@ -670,7 +674,9 @@ def _rank_params_schema(
         ),
         "op": _described_schema(
             _nullable_enum_schema(_CALC_FILTER_OPS),
-            "Condition type: eq (exact), in (any of list), lt, gt, lte, gte (comparison), like (pattern). Use null for no filter.",
+            "Condition type: eq (exact), in (any of list),"
+            " lt, gt, lte, gte (comparison), like (pattern)."
+            " Use null for no filter.",
         ),
         "value": _described_schema(
             _generic_filter_value_schema(graph, table, max_batch_values=max_batch_values),
@@ -883,12 +889,17 @@ def _get_sql_template(table: TableProfile) -> str:
 def _find_sql_template(table: TableProfile, column: ColumnProfile) -> str:
     alias = "t"
     seed_index = 3
+    seed_hash = _seeded_order_hash_sql(
+        alias, table, seed_param_index=seed_index,
+    )
+    stable = _order_by_sql(alias, table)
+    order_suffix = f", {stable}" if stable else ""
     return readonly_query(
         f"""
         SELECT *
         FROM {quote_table(table.schema_name, table.table_name)} AS {alias}
         WHERE /* dynamic condition for {quote_ident(column.column_name)} */ TRUE
-        ORDER BY {_seeded_order_hash_sql(alias, table, seed_param_index=seed_index)}{", " if _order_by_sql(alias, table) else ""}{_order_by_sql(alias, table)}
+        ORDER BY {seed_hash}{order_suffix}
         LIMIT $1
         """
     )
@@ -906,16 +917,23 @@ def _calc_sql_template(table: TableProfile) -> str:
 
 def _rank_sql_template(table: TableProfile, group_column: ColumnProfile) -> str:
     seed_index = 2
+    col = quote_ident(group_column.column_name)
+    tbl = quote_table(table.schema_name, table.table_name)
+    hash_expr = (
+        f"md5(concat_ws('|', "
+        f"COALESCE(t.{col}::text, ''), "
+        f"COALESCE(${seed_index}::text, ''))) ASC"
+    )
     return readonly_query(
         f"""
-        SELECT t.{quote_ident(group_column.column_name)} AS group_key,
+        SELECT t.{col} AS group_key,
                COUNT(*)::bigint AS value
-        FROM {quote_table(table.schema_name, table.table_name)} AS t
+        FROM {tbl} AS t
         WHERE /* optional dynamic condition */ TRUE
-        GROUP BY t.{quote_ident(group_column.column_name)}
+        GROUP BY t.{col}
         ORDER BY value DESC,
-                 md5(concat_ws('|', COALESCE(t.{quote_ident(group_column.column_name)}::text, ''), COALESCE(${seed_index}::text, ''))) ASC,
-                 t.{quote_ident(group_column.column_name)} ASC
+                 {hash_expr},
+                 t.{col} ASC
         LIMIT $1
         """
     )
@@ -931,7 +949,10 @@ def _pk_predicate_sql(alias: str, table: TableProfile, *, start_index: int) -> s
 def _seeded_order_hash_sql(alias: str, table: TableProfile, *, seed_param_index: int) -> str:
     column_names = list(table.primary_key) or [column.column_name for column in table.columns]
     parts = [
-        *(f"COALESCE({alias}.{quote_ident(column_name)}::text, '')" for column_name in column_names),
+        *(
+            f"COALESCE({alias}.{quote_ident(column_name)}::text, '')"
+            for column_name in column_names
+        ),
         f"COALESCE(${seed_param_index}::text, '')",
     ]
     return f"md5(concat_ws('|', {', '.join(parts)})) ASC"
@@ -999,7 +1020,7 @@ def _render_atomic_tool_source(
         "    return '\"' + identifier.replace('\"', '\"\"') + '\"'",
         "",
         "def _quote_table(schema_name: str, table_name: str) -> str:",
-        "    return f\"{_quote_ident(schema_name)}.{_quote_ident(table_name)}\"",
+        '    return f"{_quote_ident(schema_name)}.{_quote_ident(table_name)}"',
         "",
         "def _readonly_query(sql: str) -> str:",
         "    return ' '.join(sql.split())",
@@ -1020,14 +1041,14 @@ def _render_atomic_tool_source(
         '        raise ValueError("direction must be asc or desc")',
         "    return direction.upper()",
         "",
-        "def _seeded_order_hash_sql(alias: str, column_names: list[str], *, seed_param_index: int) -> str:",
-        "    parts = [*(f\"COALESCE({alias}.{_quote_ident(column_name)}::text, '')\" for column_name in column_names), f\"COALESCE(${seed_param_index}::text, '')\"]",
+        "def _seeded_order_hash_sql(alias: str, column_names: list[str], *, seed_param_index: int) -> str:",  # noqa: E501
+        "    parts = [*(f\"COALESCE({alias}.{_quote_ident(column_name)}::text, '')\" for column_name in column_names), f\"COALESCE(${seed_param_index}::text, '')\"]",  # noqa: E501
         "    return f\"md5(concat_ws('|', {', '.join(parts)})) ASC\"",
         "",
         "def _stable_order_sql(alias: str, column_names: list[str]) -> str:",
         "    if not column_names:",
         "        return ''",
-        "    return ', '.join(f\"{alias}.{_quote_ident(column_name)} ASC\" for column_name in column_names)",
+        "    return ', '.join(f\"{alias}.{_quote_ident(column_name)} ASC\" for column_name in column_names)",  # noqa: E501
         "",
         "def _coerce_id_params(meta: dict[str, Any], id_value: Any) -> list[Any]:",
         "    primary_key = list(meta['primary_key'])",
@@ -1041,16 +1062,16 @@ def _render_atomic_tool_source(
         "    if not isinstance(id_value, dict):",
         '        raise TypeError("id must be an object when the entry uses multiple ID fields")',
         "    if set(id_value) != set(primary_key):",
-        '        raise ValueError("id object must include exactly the ID field names for the entry")',
+        '        raise ValueError("id object must include exactly the ID field names for the entry")',  # noqa: E501
         "    return [id_value[column_name] for column_name in primary_key]",
         "",
-        "def _validate_choice(value: Any, allowed: list[str], *, allow_null: bool = False, field_name: str) -> Any:",
+        "def _validate_choice(value: Any, allowed: list[str], *, allow_null: bool = False, field_name: str) -> Any:",  # noqa: E501
         "    if value is None:",
         "        if allow_null:",
         "            return None",
         '        raise ValueError(f"{field_name} cannot be null")',
         "    if value not in allowed:",
-        '        raise ValueError(f\"{field_name} must be one of {sorted(allowed)}\")',
+        '        raise ValueError(f"{field_name} must be one of {sorted(allowed)}")',
         "    return value",
         "",
         "def _validate_find_value(op: str, value: Any) -> None:",
@@ -1068,7 +1089,7 @@ def _render_atomic_tool_source(
         "    if op == 'like' and not isinstance(value, str):",
         '        raise ValueError("value must be a string when op=like")',
         "",
-        "def _validate_filter_context(meta: dict[str, Any], by: Any, op: Any, value: Any) -> tuple[str | None, str | None, Any]:",
+        "def _validate_filter_context(meta: dict[str, Any], by: Any, op: Any, value: Any) -> tuple[str | None, str | None, Any]:",  # noqa: E501
         "    filter_columns = list(meta['filter_columns'])",
         "    if by is None:",
         "        if op is not None or value is not None:",
@@ -1077,7 +1098,7 @@ def _render_atomic_tool_source(
         "    by = _validate_choice(by, filter_columns, field_name='by')",
         "    if op is None:",
         '        raise ValueError("op is required when by is provided")',
-        "    op = _validate_choice(op, list(meta.get('filter_ops', ['eq', 'in', 'lt', 'gt', 'lte', 'gte', 'like'])), field_name='op')",
+        "    op = _validate_choice(op, list(meta.get('filter_ops', ['eq', 'in', 'lt', 'gt', 'lte', 'gte', 'like'])), field_name='op')",  # noqa: E501
         "    _validate_dynamic_op(meta, by, op)",
         "    _validate_find_value(op, value)",
         "    return by, op, value",
@@ -1085,62 +1106,62 @@ def _render_atomic_tool_source(
         "def _validate_dynamic_op(meta: dict[str, Any], column_name: str, op: str) -> None:",
         "    column_type = meta['column_types'][column_name]",
         "    allowed = {'eq', 'in'}",
-        "    if column_type in {'bigint', 'int2', 'int4', 'int8', 'integer', 'smallint', 'decimal', 'double precision', 'float4', 'float8', 'numeric', 'real', 'date', 'timestamp', 'timestamp with time zone', 'timestamp without time zone', 'timestamptz'}:",
+        "    if column_type in {'bigint', 'int2', 'int4', 'int8', 'integer', 'smallint', 'decimal', 'double precision', 'float4', 'float8', 'numeric', 'real', 'date', 'timestamp', 'timestamp with time zone', 'timestamp without time zone', 'timestamptz'}:",  # noqa: E501
         "        allowed.update({'lt', 'gt', 'lte', 'gte'})",
-        "    if column_type in {'bpchar', 'char', 'character', 'character varying', 'citext', 'name', 'text', 'uuid', 'varchar'}:",
+        "    if column_type in {'bpchar', 'char', 'character', 'character varying', 'citext', 'name', 'text', 'uuid', 'varchar'}:",  # noqa: E501
         "        allowed.add('like')",
         "    if op not in allowed:",
         '        raise ValueError(f"op={op} is not supported for the selected field")',
         "",
-        "def _predicate_sql(*, alias: str, column_name: str, column_cast: str, op: str, start_index: int) -> tuple[str, int]:",
-        "    column_sql = f\"{alias}.{_quote_ident(column_name)}\"",
+        "def _predicate_sql(*, alias: str, column_name: str, column_cast: str, op: str, start_index: int) -> tuple[str, int]:",  # noqa: E501
+        '    column_sql = f"{alias}.{_quote_ident(column_name)}"',
         "    if op == 'eq':",
-        "        return f\"{column_sql} = ${start_index}\", 1",
+        '        return f"{column_sql} = ${start_index}", 1',
         "    if op == 'in':",
-        "        return f\"{column_sql} = ANY(${start_index}::{column_cast}[])\", 1",
+        '        return f"{column_sql} = ANY(${start_index}::{column_cast}[])", 1',
         "    if op == 'lt':",
-        "        return f\"{column_sql} < ${start_index}\", 1",
+        '        return f"{column_sql} < ${start_index}", 1',
         "    if op == 'gt':",
-        "        return f\"{column_sql} > ${start_index}\", 1",
+        '        return f"{column_sql} > ${start_index}", 1',
         "    if op == 'lte':",
-        "        return f\"{column_sql} <= ${start_index}\", 1",
+        '        return f"{column_sql} <= ${start_index}", 1',
         "    if op == 'gte':",
-        "        return f\"{column_sql} >= ${start_index}\", 1",
+        '        return f"{column_sql} >= ${start_index}", 1',
         "    if op == 'like':",
-        "        return f\"{column_sql} ILIKE ${start_index}\", 1",
+        '        return f"{column_sql} ILIKE ${start_index}", 1',
         "    if op == 'any':",
         "        return 'TRUE', 0",
         '    raise ValueError(f"unsupported op: {op}")',
         "",
         "def _aggregate_sql(fn: str, metric: str, *, column_type: str) -> str:",
-        "    column_sql = f\"t.{_quote_ident(metric)}\"",
+        '    column_sql = f"t.{_quote_ident(metric)}"',
         "    if fn == 'count':",
         "        return 'COUNT(*)::bigint'",
-        "    base = f\"{fn.upper()}({column_sql})\"",
+        '    base = f"{fn.upper()}({column_sql})"',
         "    if fn == 'avg':",
-        "        return f\"ROUND({base}::numeric, {FLOAT_PRECISION})\"",
-        "    if fn == 'sum' and column_type in {'decimal', 'double precision', 'float4', 'float8', 'numeric', 'real'}:",
-        "        return f\"ROUND({base}::numeric, {FLOAT_PRECISION})\"",
+        '        return f"ROUND({base}::numeric, {FLOAT_PRECISION})"',
+        "    if fn == 'sum' and column_type in {'decimal', 'double precision', 'float4', 'float8', 'numeric', 'real'}:",  # noqa: E501
+        '        return f"ROUND({base}::numeric, {FLOAT_PRECISION})"',
         "    return base",
         "",
         "async def _run_get(conn, meta: dict[str, Any], id: Any) -> dict[str, Any] | None:",
         "    params = _coerce_id_params(meta, id)",
         "    predicates = ' AND '.join(",
-        "        f\"t.{_quote_ident(column_name)} = ${index}\"",
+        '        f"t.{_quote_ident(column_name)} = ${index}"',
         "        for index, column_name in enumerate(meta['primary_key'], start=1)",
         "    )",
         "    sql = _readonly_query(",
-        "        f\"SELECT * FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {predicates} LIMIT 1\"",
+        "        f\"SELECT * FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {predicates} LIMIT 1\"",  # noqa: E501
         "    )",
         "    row = await conn.fetchrow(sql, *params)",
         "    return _row_to_dict(row)",
         "",
-        "async def _run_find(conn, meta: dict[str, Any], op: str, value: Any, sort_by: Any, direction: str, limit: int, shuffle_seed: Any) -> list[dict[str, Any]]:",
+        "async def _run_find(conn, meta: dict[str, Any], op: str, value: Any, sort_by: Any, direction: str, limit: int, shuffle_seed: Any) -> list[dict[str, Any]]:",  # noqa: E501
         "    op = _validate_choice(op, list(meta['allowed_ops']), field_name='op')",
         "    _validate_find_value(op, value)",
         "    limit = _bounded_limit(limit)",
         "    if sort_by is not None:",
-        "        sort_by = _validate_choice(sort_by, list(meta['sortable_columns']), field_name='sort_by')",
+        "        sort_by = _validate_choice(sort_by, list(meta['sortable_columns']), field_name='sort_by')",  # noqa: E501
         "    direction_sql = _normalize_direction(direction)",
         "    params: list[Any] = []",
         "    if op == 'any':",
@@ -1156,29 +1177,29 @@ def _render_atomic_tool_source(
         "        params.append(value)",
         "    params.append(limit)",
         "    seed_param_index = len(params) + 1",
-        "    seed_sql = _seeded_order_hash_sql('t', list(meta['order_columns']), seed_param_index=seed_param_index)",
+        "    seed_sql = _seeded_order_hash_sql('t', list(meta['order_columns']), seed_param_index=seed_param_index)",  # noqa: E501
         "    stable_sql = _stable_order_sql('t', list(meta['order_columns']))",
         "    if sort_by is None:",
         "        order_parts = [seed_sql]",
         "    else:",
-        "        order_parts = [f\"t.{_quote_ident(sort_by)} {direction_sql}\", seed_sql]",
+        '        order_parts = [f"t.{_quote_ident(sort_by)} {direction_sql}", seed_sql]',
         "    if stable_sql:",
         "        order_parts.append(stable_sql)",
         "    sql = _readonly_query(",
-        "        f\"SELECT * FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql} ORDER BY {', '.join(order_parts)} LIMIT ${len(params)}\"",
+        "        f\"SELECT * FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql} ORDER BY {', '.join(order_parts)} LIMIT ${len(params)}\"",  # noqa: E501
         "    )",
         "    params.append(shuffle_seed)",
         "    rows = await conn.fetch(sql, *params)",
         "    return _rows_to_dicts(rows)",
         "",
-        "async def _run_calc(conn, meta: dict[str, Any], fn: str, metric: Any, by: Any, op: Any, value: Any) -> Any:",
+        "async def _run_calc(conn, meta: dict[str, Any], fn: str, metric: Any, by: Any, op: Any, value: Any) -> Any:",  # noqa: E501
         "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
         "    if fn == 'count':",
         "        if metric is not None:",
         '            raise ValueError("metric must be omitted when fn=count")',
         "        metric_name = None",
         "    else:",
-        "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",
+        "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",  # noqa: E501
         "    by, op, value = _validate_filter_context(meta, by, op, value)",
         "    params: list[Any] = []",
         "    predicates: list[str] = []",
@@ -1193,25 +1214,25 @@ def _render_atomic_tool_source(
         "        predicates.append(predicate_sql)",
         "        params.append(value)",
         "    if metric_name is not None:",
-        "        predicates.append(f\"t.{_quote_ident(metric_name)} IS NOT NULL\")",
+        '        predicates.append(f"t.{_quote_ident(metric_name)} IS NOT NULL")',
         "        column_type = str(meta['column_types'][metric_name])",
         "        aggregate_sql = _aggregate_sql(fn, metric_name, column_type=column_type)",
         "    else:",
         "        aggregate_sql = _aggregate_sql('count', '__unused__', column_type='integer')",
         "    where_sql = 'TRUE' if not predicates else ' AND '.join(predicates)",
         "    sql = _readonly_query(",
-        "        f\"SELECT {aggregate_sql} AS value FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql}\"",
+        "        f\"SELECT {aggregate_sql} AS value FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql}\"",  # noqa: E501
         "    )",
         "    return await conn.fetchval(sql, *params)",
         "",
-        "async def _run_rank(conn, meta: dict[str, Any], fn: str, metric: Any, direction: str, limit: int, by: Any, op: Any, value: Any, shuffle_seed: Any) -> list[dict[str, Any]]:",
+        "async def _run_rank(conn, meta: dict[str, Any], fn: str, metric: Any, direction: str, limit: int, by: Any, op: Any, value: Any, shuffle_seed: Any) -> list[dict[str, Any]]:",  # noqa: E501
         "    fn = _validate_choice(fn, list(meta['allowed_fns']), field_name='fn')",
         "    if fn == 'count':",
         "        if metric is not None:",
         '            raise ValueError("metric must be omitted when fn=count")',
         "        metric_name = None",
         "    else:",
-        "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",
+        "        metric_name = _validate_choice(metric, list(meta['numeric_columns']), field_name='metric')",  # noqa: E501
         "    by, op, value = _validate_filter_context(meta, by, op, value)",
         "    limit = _bounded_limit(limit)",
         "    direction_sql = _normalize_direction(direction)",
@@ -1228,7 +1249,7 @@ def _render_atomic_tool_source(
         "        predicates.append(predicate_sql)",
         "        params.append(value)",
         "    if metric_name is not None:",
-        "        predicates.append(f\"t.{_quote_ident(metric_name)} IS NOT NULL\")",
+        '        predicates.append(f"t.{_quote_ident(metric_name)} IS NOT NULL")',
         "        column_type = str(meta['column_types'][metric_name])",
         "        aggregate_sql = _aggregate_sql(fn, metric_name, column_type=column_type)",
         "    else:",
@@ -1236,10 +1257,10 @@ def _render_atomic_tool_source(
         "    params.append(limit)",
         "    seed_param_index = len(params) + 1",
         "    group_column = str(meta['group_column'])",
-        "    tiebreak_sql = _seeded_order_hash_sql('t', [group_column], seed_param_index=seed_param_index)",
+        "    tiebreak_sql = _seeded_order_hash_sql('t', [group_column], seed_param_index=seed_param_index)",  # noqa: E501
         "    where_sql = 'TRUE' if not predicates else ' AND '.join(predicates)",
         "    sql = _readonly_query(",
-        "        f\"SELECT t.{_quote_ident(group_column)} AS group_key, {aggregate_sql} AS value FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql} GROUP BY t.{_quote_ident(group_column)} ORDER BY value {direction_sql}, {tiebreak_sql}, t.{_quote_ident(group_column)} ASC LIMIT ${len(params)}\"",
+        "        f\"SELECT t.{_quote_ident(group_column)} AS group_key, {aggregate_sql} AS value FROM {_quote_table(meta['schema_name'], meta['table_name'])} AS t WHERE {where_sql} GROUP BY t.{_quote_ident(group_column)} ORDER BY value {direction_sql}, {tiebreak_sql}, t.{_quote_ident(group_column)} ASC LIMIT ${len(params)}\"",  # noqa: E501
         "    )",
         "    params.append(shuffle_seed)",
         "    rows = await conn.fetch(sql, *params)",
@@ -1262,9 +1283,9 @@ def _render_tool_function(tool: AtomicToolDefinition) -> list[str]:
         ]
     if tool.family is AtomicToolFamily.FIND:
         return [
-            f"async def {tool.name}(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):",
+            f"async def {tool.name}(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):",  # noqa: E501
             f"    meta = {meta_literal}",
-            "    return await _run_find(conn, meta, op, value, sort_by, direction, limit, _shuffle_seed)",
+            "    return await _run_find(conn, meta, op, value, sort_by, direction, limit, _shuffle_seed)",  # noqa: E501
             "",
         ]
     if tool.family is AtomicToolFamily.CALC:
@@ -1275,9 +1296,9 @@ def _render_tool_function(tool: AtomicToolDefinition) -> list[str]:
             "",
         ]
     return [
-        f"async def {tool.name}(conn, fn, metric=None, direction='desc', limit=1, by=None, op=None, value=None, _shuffle_seed=None):",
+        f"async def {tool.name}(conn, fn, metric=None, direction='desc', limit=1, by=None, op=None, value=None, _shuffle_seed=None):",  # noqa: E501
         f"    meta = {meta_literal}",
-        "    return await _run_rank(conn, meta, fn, metric, direction, limit, by, op, value, _shuffle_seed)",
+        "    return await _run_rank(conn, meta, fn, metric, direction, limit, by, op, value, _shuffle_seed)",  # noqa: E501
         "",
     ]
 

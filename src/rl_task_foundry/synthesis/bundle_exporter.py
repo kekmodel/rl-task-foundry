@@ -100,7 +100,8 @@ class TaskBundleExporter:
         source_definitions = source_dir / "atomic_tool_definitions.json"
         if not source_atomic_tools.exists():
             raise FileNotFoundError(
-                f"missing materialized atomic tool bundle for db_id={db_id!r}: {source_atomic_tools}"
+                f"missing materialized atomic tool bundle for"
+                f" db_id={db_id!r}: {source_atomic_tools}"
             )
         if not source_definitions.exists():
             raise FileNotFoundError(

@@ -84,7 +84,9 @@ def _sample_graph() -> SchemaGraph:
 
 def test_atomic_tool_materializer_writes_bundle_files(tmp_path: Path) -> None:
     config = load_config("rl_task_foundry.yaml")
-    bundle = AtomicToolGenerator(config.atomic_tools).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(config.atomic_tools).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
     materializer = AtomicToolMaterializer(root_dir=tmp_path / "databases")
 
     materialization = materializer.materialize_bundle(bundle)
@@ -100,7 +102,9 @@ def test_atomic_tool_materializer_writes_bundle_files(tmp_path: Path) -> None:
 
 def test_atomic_tool_materializer_reads_actor_tool_definitions(tmp_path: Path) -> None:
     config = load_config("rl_task_foundry.yaml")
-    bundle = AtomicToolGenerator(config.atomic_tools).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(config.atomic_tools).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
     materializer = AtomicToolMaterializer(root_dir=tmp_path / "databases")
     materializer.materialize_bundle(bundle)
 

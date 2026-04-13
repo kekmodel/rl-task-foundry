@@ -56,9 +56,10 @@ class BudgetLedger:
         )
         if projected > self.max_run_usd:
             raise ValueError("budget exceeded")
-        if self.max_gpu_hours is not None and (
-            self.spent_gpu_hours + self.reserved_gpu_hours + gpu_hours
-        ) > self.max_gpu_hours:
+        if (
+            self.max_gpu_hours is not None
+            and (self.spent_gpu_hours + self.reserved_gpu_hours + gpu_hours) > self.max_gpu_hours
+        ):
             raise ValueError("gpu budget exceeded")
         reservation_id = str(uuid4())
         self._reservations[reservation_id] = PhaseReservation(

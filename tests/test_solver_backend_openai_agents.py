@@ -237,18 +237,8 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
     assert FakeRunner.calls[0]["max_turns"] == 8
     assert FakeSQLiteSession.last_instance.session_id == "task_assignment_solver:solver_a"
 
-    transcript_path = (
-        tmp_path
-        / "traces"
-        / "transcripts"
-        / "task_assignment_solver__solver_a.json"
-    )
-    tool_trace_path = (
-        tmp_path
-        / "traces"
-        / "tool_traces"
-        / "task_assignment_solver__solver_a.json"
-    )
+    transcript_path = tmp_path / "traces" / "transcripts" / "task_assignment_solver__solver_a.json"
+    tool_trace_path = tmp_path / "traces" / "tool_traces" / "task_assignment_solver__solver_a.json"
     assert result.transcript_ref == str(transcript_path)
     assert result.tool_trace_ref == str(tool_trace_path)
 
@@ -722,10 +712,5 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
     with pytest.raises(RuntimeError, match="did not submit an answer"):
         await backend.run(episode)
 
-    transcript_path = (
-        tmp_path
-        / "traces"
-        / "transcripts"
-        / "task_assignment_solver__solver_a.json"
-    )
+    transcript_path = tmp_path / "traces" / "transcripts" / "task_assignment_solver__solver_a.json"
     assert transcript_path.exists()

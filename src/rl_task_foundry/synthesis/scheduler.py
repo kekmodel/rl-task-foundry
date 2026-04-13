@@ -157,11 +157,11 @@ class SynthesisDomainScheduler:
                 reason="no selectable categories were provided",
             )
         return SynthesisSchedulerDecision(
-                status=SynthesisSelectionStatus.BACKOFF,
-                reason="all candidate topics are currently backed off",
-                wait_until=earliest_wait_until,
-                wait_seconds=max(0.0, (earliest_wait_until - observed_at).total_seconds()),
-            )
+            status=SynthesisSelectionStatus.BACKOFF,
+            reason="all candidate topics are currently backed off",
+            wait_until=earliest_wait_until,
+            wait_seconds=max(0.0, (earliest_wait_until - observed_at).total_seconds()),
+        )
 
     def _ordered_db_ids(self, current_db_ids: list[str]) -> list[str]:
         if not current_db_ids:

@@ -177,9 +177,7 @@ class SolverOrchestrator:
         early_stop_decision: str | None = None
         if scheduled_calls:
             runs, early_stop_decision = await self._execute_solver_batches(scheduled_calls)
-        matched_solver_runs = sum(
-            1 for run in runs if run.reward_result.status == "matched"
-        )
+        matched_solver_runs = sum(1 for run in runs if run.reward_result.status == "matched")
         return TaskRolloutSummary(
             task_id=bundle.task_bundle.task_id,
             db_id=bundle.task_bundle.db_id,

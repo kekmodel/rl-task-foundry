@@ -177,10 +177,13 @@ class OpenAIAgentsSynthesisBackend:
                 _shared_make_sdk_tool(
                     definition,
                     executor,
-                    after_invoke=lambda name, payload, result, controller=self.submit_draft_controller: controller.record_atomic_tool_call(
-                        tool_name=name,
-                        params=payload,
-                        result=result,
+                    after_invoke=lambda name, payload, result,
+                    controller=self.submit_draft_controller: (
+                        controller.record_atomic_tool_call(
+                            tool_name=name,
+                            params=payload,
+                            result=result,
+                        )
                     ),
                 )
             )
@@ -197,7 +200,10 @@ class OpenAIAgentsSynthesisBackend:
                 if not isinstance(output, str):
                     continue
                 normalized = output.strip()
-                if normalized.startswith("Accepted:") or "BudgetExhaustedError: No more attempts." in normalized:
+                if (
+                    normalized.startswith("Accepted:")
+                    or "BudgetExhaustedError: No more attempts." in normalized
+                ):
                     return sdk.ToolsToFinalOutputResult(
                         is_final_output=True,
                         final_output=normalized,
@@ -313,7 +319,9 @@ class OpenAIAgentsSynthesisBackend:
             if (tool_name := _extract_tool_call_name(item)) is not None
         )
         final_output = run_result.final_output
-        final_output_text = final_output if isinstance(final_output, str) else str(final_output or "")
+        final_output_text = (
+            final_output if isinstance(final_output, str) else str(final_output or "")
+        )
         transcript_ref = self._write_artifact(
             kind="transcripts",
             db_id=db_id,

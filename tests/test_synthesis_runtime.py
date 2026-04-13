@@ -84,7 +84,13 @@ def _seed_min_initial_exploration(
     )
     controller.record_atomic_tool_call(
         tool_name="calc_payment",
-        params={"fn": "count", "metric": None, "by": "customer_id", "op": "eq", "value": customer_id},
+        params={
+            "fn": "count",
+            "metric": None,
+            "by": "customer_id",
+            "op": "eq",
+            "value": customer_id,
+        },
         result=2,
     )
 
@@ -211,7 +217,15 @@ class _FakeBackend:
         tool_surface_summary: dict[str, object],
         max_turns: int,
     ):
-        del db_id, requested_topic, domain_name, task_language, scenario_description, schema_summary, tool_surface_summary
+        del (
+            db_id,
+            requested_topic,
+            domain_name,
+            task_language,
+            scenario_description,
+            schema_summary,
+            tool_surface_summary,
+        )
         self.seen_max_turns.append(max_turns)
         assert self.bound_controller is not None
         self.bound_controller.record_atomic_tool_call(
@@ -311,7 +325,8 @@ def _too_easy_readable_payload() -> SubmitDraftPayload:
             },
             "question": _wrap_user_prompt(
                 anchor_entity,
-                "내 계정 기준으로 담당 직원 이름과 이메일을 알려주고, 제가 지금까지 빌린 건수도 함께 알려주세요.",
+                "내 계정 기준으로 담당 직원 이름과 이메일을 알려주고,"
+                " 제가 지금까지 빌린 건수도 함께 알려주세요.",
             ),
         }
     )
@@ -421,6 +436,7 @@ def _id_chain_payload() -> SubmitDraftPayload:
             ),
         }
     )
+
 
 def test_ungrounded_answer_strings_accepts_datetime_observations() -> None:
     ungrounded = _ungrounded_answer_strings(
@@ -762,10 +778,14 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
 
     message = await controller.submit(_too_easy_readable_payload())
 
-    assert "Choose exactly one difficulty axis yourself from the observed data and current label." in message
+    assert (
+        "Choose exactly one difficulty axis yourself from the observed data and current label."
+        in message
+    )
     assert "Stay inside the same connected anchored neighborhood" in message
     assert (
-        "Preserve grounded readable answer slots such as staff_name, staff_email, and latest_rental_count"
+        "Preserve grounded readable answer slots such as"
+        " staff_name, staff_email, and latest_rental_count"
         in message
     )
     assert "Use search_cost if the path is too shallow" in message
@@ -802,6 +822,7 @@ async def test_submit_draft_calls_out_id_only_identifier_chain_path(
 
     assert "current anchored evidence path is still id-only" in message
     assert "Do not submit another answer made only of *_id fields" in message
+
 
 @pytest.mark.asyncio
 async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> None:

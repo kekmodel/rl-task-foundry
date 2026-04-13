@@ -157,7 +157,10 @@ def _build_difficulty_features(
             cardinality_estimate = float(target_table.row_estimate)
         for edge in edges:
             source_table = graph.get_table(edge.source_table, schema_name=edge.source_schema)
-            if any(source_table.get_column(column_name).is_nullable for column_name in edge.source_columns):
+            if any(
+                source_table.get_column(column_name).is_nullable
+                for column_name in edge.source_columns
+            ):
                 nullable_hop = True
                 break
 

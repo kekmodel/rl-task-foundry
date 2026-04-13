@@ -21,5 +21,4 @@ class SolverEpisodeInput(StrictModel):
 class AgentRuntime(Protocol):
     """Common runtime contract for solver and future rollout agents."""
 
-    async def run(self, episode: SolverEpisodeInput) -> SolverResult:
-        ...
+    async def run(self, episode: SolverEpisodeInput) -> SolverResult: ...

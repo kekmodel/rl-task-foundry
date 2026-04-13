@@ -18,9 +18,7 @@ def extract_output_schema_from_canonical(canonical_answer: object) -> OutputSche
     """Infer the internal output-schema contract from a grounded canonical answer."""
 
     root = _infer_output_field("answer", canonical_answer)
-    primary_output_format = (
-        "json_array" if root.type == OutputFieldType.LIST else "json_object"
-    )
+    primary_output_format = "json_array" if root.type == OutputFieldType.LIST else "json_object"
     return OutputSchemaContract(root=root, primary_output_format=primary_output_format)
 
 

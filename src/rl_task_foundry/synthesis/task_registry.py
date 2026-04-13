@@ -349,15 +349,11 @@ class TaskRegistryWriter:
                             status=TaskRegistryCommitStatus.DUPLICATE,
                             task_id=semantic_duplicate["task_id"],
                             exact_signature=exact_signature,
-                            difficulty_band=DifficultyBand(
-                                semantic_duplicate["difficulty_band"]
-                            ),
+                            difficulty_band=DifficultyBand(semantic_duplicate["difficulty_band"]),
                             filesystem_path=Path(semantic_duplicate["filesystem_path"]),
                             duplicate_of_task_id=semantic_duplicate["task_id"],
                             duplicate_reason=TaskRegistryDuplicateReason.MINHASH,
-                            semantic_similarity=float(
-                                semantic_duplicate["semantic_similarity"]
-                            ),
+                            semantic_similarity=float(semantic_duplicate["semantic_similarity"]),
                         )
 
                 temp_dir.rename(final_dir)
@@ -540,7 +536,7 @@ class TaskRegistryWriter:
                     task_id=str(row["task_id"]),
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
-                topic=normalize_topic(str(row["topic"])),
+                    topic=normalize_topic(str(row["topic"])),
                     difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                     created_at=datetime.fromisoformat(str(row["created_at"])),
                     status=TaskBundleStatus(str(row["status"])),
@@ -637,7 +633,7 @@ class TaskRegistryWriter:
         conn: sqlite3.Connection | None = None,
     ) -> dict[str, object] | None:
         target = _decode_minhash_to_minhash(
-                semantic_signature,
+            semantic_signature,
             num_perm=self.registry_config.minhash_num_perm,
         )
         if target is None:
@@ -732,8 +728,7 @@ class TaskRegistryWriter:
                     "semantic_dedup_text": semantic_text,
                     "semantic_dedup_text_version": SEMANTIC_DEDUP_TEXT_VERSION,
                     "generation_attempts": [
-                        attempt.model_dump(mode="json")
-                        for attempt in draft.generation_attempts
+                        attempt.model_dump(mode="json") for attempt in draft.generation_attempts
                     ],
                     "provider_status": {
                         name: status.model_dump(mode="json")
@@ -970,7 +965,7 @@ class TaskRegistryWriter:
     @staticmethod
     def _migrate_legacy_task_table(conn: sqlite3.Connection) -> None:
         tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tasks', 'environments')"
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tasks', 'environments')"  # noqa: E501
         ).fetchall()
         if not tables:
             return
@@ -1236,9 +1231,7 @@ def _estimate_signature_similarity(left_signature: str, right_signature: str) ->
     if not left or len(left) != len(right):
         return 0.0
     matches = sum(
-        1
-        for left_value, right_value in zip(left, right, strict=True)
-        if left_value == right_value
+        1 for left_value, right_value in zip(left, right, strict=True) if left_value == right_value
     )
     return matches / len(left)
 

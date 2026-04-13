@@ -39,7 +39,10 @@ class PipelineFlowLogger:
 
     def __post_init__(self) -> None:
         self._primary_sink = JsonlFileSink(self.event_log_path)
-        if self.mirror_event_log_path is not None and self.mirror_event_log_path != self.event_log_path:
+        if (
+            self.mirror_event_log_path is not None
+            and self.mirror_event_log_path != self.event_log_path
+        ):
             self._mirror_sink = JsonlFileSink(self.mirror_event_log_path)
 
     def emit(

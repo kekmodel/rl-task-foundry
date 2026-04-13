@@ -17,9 +17,7 @@ class _FakeConn:
     async def execute(self, statement: str) -> None:
         self.statements.append(statement)
         if self.fail_on_role and statement.startswith("SET ROLE "):
-            raise db_module.asyncpg.InvalidParameterValueError(
-                'role "rlvr_reader" does not exist'
-            )
+            raise db_module.asyncpg.InvalidParameterValueError('role "rlvr_reader" does not exist')
 
 
 class _FakePool:

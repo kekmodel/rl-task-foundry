@@ -50,8 +50,7 @@ def test_cli_validate_config_command():
     assert "total_solver_runs=6" in normalized
     assert "composer=codex_oauth/gpt-5.4-mini" in normalized
     assert (
-        "atomic_tools=max_tools=300,bounded_result_limit=100,"
-        "max_batch_values=128,float_precision=2"
+        "atomic_tools=max_tools=300,bounded_result_limit=100,max_batch_values=128,float_precision=2"
     ) in normalized
     assert (
         "synthesis_runtime=max_turns=50,tracing=True,sdk_sessions_enabled=False,"
@@ -448,9 +447,23 @@ def test_cli_run_summary_reads_run_db(tmp_path):
 
     bootstrap_run_db(run_db_path)
     with connect_run_db(run_db_path) as conn:
-        record_run(conn, run_id="run_test_456", config_hash="abc", created_at="2026-04-11T00:00:00+00:00")
-        record_task(conn, run_id="run_test_456", task_id="task_1", status="accepted", payload={"task_id": "task_1"})
-        record_task(conn, run_id="run_test_456", task_id="task_2", status="rejected", payload={"task_id": "task_2"})
+        record_run(
+            conn, run_id="run_test_456", config_hash="abc", created_at="2026-04-11T00:00:00+00:00"
+        )
+        record_task(
+            conn,
+            run_id="run_test_456",
+            task_id="task_1",
+            status="accepted",
+            payload={"task_id": "task_1"},
+        )
+        record_task(
+            conn,
+            run_id="run_test_456",
+            task_id="task_2",
+            status="rejected",
+            payload={"task_id": "task_2"},
+        )
         record_verification_result(
             conn,
             run_id="run_test_456",
@@ -471,7 +484,9 @@ def test_cli_run_summary_reads_run_db(tmp_path):
             task_id="task_1",
             payload={"task_id": "task_1"},
         )
-        record_event(conn, run_id="run_test_456", event_type="run_started", payload={"task_count": 2})
+        record_event(
+            conn, run_id="run_test_456", event_type="run_started", payload={"task_count": 2}
+        )
         conn.commit()
 
     result = CliRunner().invoke(

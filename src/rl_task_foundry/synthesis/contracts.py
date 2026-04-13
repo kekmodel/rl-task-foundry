@@ -298,9 +298,7 @@ class TaskBundleContract(StrictModel):
     tool_signature: str
     task_signature: str
     status: TaskBundleStatus = TaskBundleStatus.DRAFT
-    quality_metrics: TaskQualityMetrics = Field(
-        default_factory=TaskQualityMetrics
-    )
+    quality_metrics: TaskQualityMetrics = Field(default_factory=TaskQualityMetrics)
     rollout_constraints: RolloutConstraintsContract
     task: TaskContract
 

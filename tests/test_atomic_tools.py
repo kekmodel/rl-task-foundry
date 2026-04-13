@@ -306,7 +306,9 @@ def test_atomic_tool_generator_is_deterministic_and_covers_new_tool_families() -
 
 
 def test_atomic_tool_generator_returns_all_table_fields() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
     customer_schema = tool_by_name["get_customer"].returns_schema["anyOf"][0]
@@ -330,7 +332,9 @@ def test_atomic_tool_generator_compresses_by_removing_whole_tables() -> None:
 
 
 def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
     tool_definitions = json.loads(bundle.actor_tool_definitions_json())
 
     assert tool_definitions
@@ -342,12 +346,18 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
     }
     assert "async def get_customer(conn, id):" in bundle.source
     assert (
-        "async def find_customer_by_tier(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):"
+        "async def find_customer_by_tier("
+        "conn, op, value, sort_by, direction, limit, _shuffle_seed=None):"
         in bundle.source
     )
-    assert "async def calc_customer(conn, fn, metric=None, by=None, op=None, value=None):" in bundle.source
     assert (
-        "async def rank_customer_by_tier(conn, fn, metric=None, direction='desc', limit=1, by=None, op=None, value=None, _shuffle_seed=None):"
+        "async def calc_customer(conn, fn, metric=None, by=None, op=None, value=None):"
+        in bundle.source
+    )
+    assert (
+        "async def rank_customer_by_tier("
+        "conn, fn, metric=None, direction='desc', limit=1,"
+        " by=None, op=None, value=None, _shuffle_seed=None):"
         in bundle.source
     )
     assert 'raise ValueError("metric must be omitted when fn=count")' in bundle.source
@@ -360,7 +370,9 @@ def test_atomic_tool_generator_renders_actor_payload_and_source() -> None:
 
 
 def test_atomic_tool_generator_applies_seeded_row_shuffle_to_find_and_rank_only() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
     assert "md5(" not in tool_by_name["get_customer"].sql
@@ -370,7 +382,9 @@ def test_atomic_tool_generator_applies_seeded_row_shuffle_to_find_and_rank_only(
 
 
 def test_atomic_tool_params_follow_family_patterns() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
     tool_by_name = {tool.name: tool for tool in bundle.tools}
 
     get_schema = tool_by_name["get_customer"].params_schema
@@ -408,7 +422,11 @@ def test_atomic_tool_params_follow_family_patterns() -> None:
     assert calc_schema["if"] == {"properties": {"fn": {"const": "count"}}}
     assert calc_schema["then"] == {"properties": {"metric": {"type": "null"}}}
     assert calc_schema["else"]["required"] == ["metric"]
-    assert calc_schema["else"]["properties"]["metric"]["enum"] == ["order_id", "customer_id", "total_amount"]
+    assert calc_schema["else"]["properties"]["metric"]["enum"] == [
+        "order_id",
+        "customer_id",
+        "total_amount",
+    ]
 
     rank_schema = tool_by_name["rank_order_by_customer_id"].params_schema
     assert rank_schema["type"] == "object"
@@ -419,7 +437,11 @@ def test_atomic_tool_params_follow_family_patterns() -> None:
     assert rank_schema["if"] == {"properties": {"fn": {"const": "count"}}}
     assert rank_schema["then"] == {"properties": {"metric": {"type": "null"}}}
     assert rank_schema["else"]["required"] == ["metric"]
-    assert rank_schema["else"]["properties"]["metric"]["enum"] == ["order_id", "customer_id", "total_amount"]
+    assert rank_schema["else"]["properties"]["metric"]["enum"] == [
+        "order_id",
+        "customer_id",
+        "total_amount",
+    ]
 
 
 def test_atomic_tool_definition_sql_is_documented_as_display_only() -> None:
@@ -521,12 +543,12 @@ def test_calc_and_rank_filter_fields_follow_graph_foreign_keys_not_column_flags(
 
 
 def test_generated_atomic_tool_source_is_ast_valid_and_tool_functions_are_async() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
 
     module = ast.parse(bundle.source)
-    async_defs = {
-        node.name: node for node in module.body if isinstance(node, ast.AsyncFunctionDef)
-    }
+    async_defs = {node.name: node for node in module.body if isinstance(node, ast.AsyncFunctionDef)}
 
     for tool in bundle.tools:
         assert tool.name in async_defs
@@ -535,7 +557,9 @@ def test_generated_atomic_tool_source_is_ast_valid_and_tool_functions_are_async(
 
 
 def test_generated_atomic_tool_sql_templates_parse_under_postgres_dialect() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
 
     for tool in bundle.tools:
         parsed = sqlglot.parse_one(tool.sql, dialect="postgres")
@@ -543,7 +567,9 @@ def test_generated_atomic_tool_sql_templates_parse_under_postgres_dialect() -> N
 
 
 def test_atomic_tool_names_do_not_leak_task_intent_keywords() -> None:
-    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(
+        _sample_graph(), db_id="sakila"
+    )
     forbidden_keywords = {
         "assignment",
         "itinerary",

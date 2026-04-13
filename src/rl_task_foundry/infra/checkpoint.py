@@ -22,9 +22,7 @@ class CheckpointStore:
     def open(cls, path: str | Path) -> "CheckpointStore":
         run_db_path = bootstrap_run_db(path)
         with connect_run_db(run_db_path) as conn:
-            rows = conn.execute(
-                "SELECT namespace, item_key FROM processed_keys"
-            ).fetchall()
+            rows = conn.execute("SELECT namespace, item_key FROM processed_keys").fetchall()
         return cls(
             run_db_path=run_db_path,
             _processed={(row["namespace"], row["item_key"]) for row in rows},

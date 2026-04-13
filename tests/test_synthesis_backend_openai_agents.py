@@ -329,7 +329,8 @@ def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
                 tool=SimpleNamespace(name="submit_draft"),
                 output=(
                     "FeedbackError: Fix the identifier chain and resubmit. "
-                    "Next step: Make another atomic tool call if needed, then call submit_draft again. "
+                    "Next step: Make another atomic tool call if needed,"
+                    " then call submit_draft again. "
                     "Do not stop with plain text. Attempts left: 2."
                 ),
             )
@@ -355,7 +356,8 @@ def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> No
                 tool=SimpleNamespace(name="submit_draft"),
                 output=(
                     "FeedbackError: Fix the identifier chain and resubmit. "
-                    "Next step: Make another atomic tool call if needed, then call submit_draft again. "
+                    "Next step: Make another atomic tool call if needed,"
+                    " then call submit_draft again. "
                     "Do not stop with plain text. Attempts left: 0. "
                     "BudgetExhaustedError: No more attempts."
                 ),

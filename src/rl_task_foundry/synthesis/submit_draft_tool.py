@@ -87,6 +87,7 @@ def _render_structured_message(
         parts.append(f"Attempts left: {attempts_left}.")
     return " ".join(parts)
 
+
 class SubmitDraftErrorCode(StrEnum):
     NO_NEW_GROUNDED_OBSERVATION = "no_new_grounded_observation"
     TOPIC_REQUIRED = "topic_required"
@@ -196,24 +197,24 @@ class SubmitDraftPayload(StrictModel):
     )
     canonical_answer_json: str = Field(
         min_length=1,
-        description="Canonical answer as a JSON string. This is the exact label used for EM scoring.",
+        description="Canonical answer as a JSON string. This is the exact label used for EM scoring.",  # noqa: E501
     )
     anchor_entity: dict[str, object] = Field(
         min_length=1,
         description=(
-            "Mandatory anchor entity as a flat JSON object from primary-key field name to scalar value, "
-            'for example {"<pk_name>": 123}. Never omit this field and do not nest it under keys such as '
+            "Mandatory anchor entity as a flat JSON object from primary-key field name to scalar value, "  # noqa: E501
+            'for example {"<pk_name>": 123}. Never omit this field and do not nest it under keys such as '  # noqa: E501
             "entity_type, primary_key, primary_keys, or metadata."
-        )
+        ),
     )
     difficulty_vector: DifficultyVectorContract = Field(
-        description="Declared difficulty levels for search_cost, solution_space, and constraint_density."
+        description="Declared difficulty levels for search_cost, solution_space, and constraint_density."  # noqa: E501
     )
     question: str = Field(
         min_length=1,
         description=(
             "Full user-facing prompt in the configured task language, starting with "
-            "<entity> ... </entity> on its own lines, followed by a blank line and the natural user request body. "
+            "<entity> ... </entity> on its own lines, followed by a blank line and the natural user request body. "  # noqa: E501
             "The entity block must exactly match anchor_entity."
         ),
     )
@@ -420,9 +421,7 @@ def _monitor_label_data(
         "canonical_answer_slot_count": snapshot["slot_count"],
         "canonical_answer_field_names": snapshot["field_names"],
         "canonical_answer_signature": (
-            canonical_json(canonical_answer, default=str)
-            if canonical_answer is not None
-            else None
+            canonical_json(canonical_answer, default=str) if canonical_answer is not None else None
         ),
     }
 
@@ -432,7 +431,9 @@ def _label_change_summary(
     previous: dict[str, object] | None,
     current: dict[str, object],
 ) -> dict[str, object]:
-    previous_field_names = list(previous.get("canonical_answer_field_names", [])) if previous else []
+    previous_field_names = (
+        list(previous.get("canonical_answer_field_names", [])) if previous else []
+    )
     current_field_names = list(current.get("canonical_answer_field_names", []))
     previous_slot_count = previous.get("canonical_answer_slot_count") if previous else None
     current_slot_count = current.get("canonical_answer_slot_count")
@@ -481,16 +482,23 @@ def _is_single_tool_derivable(answer: object, result: object) -> bool:
         prefix = result[: len(answer)]
         if canonical_json(answer, default=str) == canonical_json(prefix, default=str):
             return True
-        if answer and all(isinstance(item, dict) for item in answer) and all(
-            isinstance(item, dict) for item in prefix
+        if (
+            answer
+            and all(isinstance(item, dict) for item in answer)
+            and all(isinstance(item, dict) for item in prefix)
         ):
             if all(
-                all(key in result_item and result_item[key] == value for key, value in answer_item.items())
+                all(
+                    key in result_item and result_item[key] == value
+                    for key, value in answer_item.items()
+                )
                 for answer_item, result_item in zip(answer, prefix)
             ):
                 return True
-        if answer and all(not isinstance(item, (dict, list)) for item in answer) and all(
-            isinstance(item, dict) for item in prefix
+        if (
+            answer
+            and all(not isinstance(item, (dict, list)) for item in answer)
+            and all(isinstance(item, dict) for item in prefix)
         ):
             shared_keys = set(prefix[0].keys())
             for item in prefix[1:]:
@@ -551,7 +559,9 @@ def _answer_uses_only_identifier_fields(answer: object) -> bool:
             if _keys_are_identifier_only(value):
                 return True
             child_values = list(value.values())
-            return bool(child_values) and all(_is_identifier_only_tree(item) for item in child_values)
+            return bool(child_values) and all(
+                _is_identifier_only_tree(item) for item in child_values
+            )
         if isinstance(value, list):
             return bool(value) and all(_is_identifier_only_tree(item) for item in value)
         return False
@@ -669,13 +679,9 @@ def _format_ungrounded_value_guidance(diagnostics: dict[str, object] | None) -> 
     ]
     datetime_like_values = [value for value in values if _DATETIME_LITERAL_RE.fullmatch(value)]
     if name_like_values:
-        message += (
-            " If the tool response exposed first_name and last_name separately, keep them as separate answer fields instead of merging them into one full-name string."
-        )
+        message += " If the tool response exposed first_name and last_name separately, keep them as separate answer fields instead of merging them into one full-name string."  # noqa: E501
     if datetime_like_values:
-        message += (
-            " If you use a date or timestamp field, copy the exact raw value from the chosen tool response row without changing its formatting."
-        )
+        message += " If you use a date or timestamp field, copy the exact raw value from the chosen tool response row without changing its formatting."  # noqa: E501
     return message
 
 
@@ -900,12 +906,12 @@ def _too_easy_retry_guidance(
 ) -> str:
     preserve_guidance = _field_preservation_guidance(label_data)
     return (
-        " Stay inside the same connected anchored neighborhood and keep the same anchored user need."
+        " Stay inside the same connected anchored neighborhood and keep the same anchored user need."  # noqa: E501
         f"{preserve_guidance} Choose exactly one axis from the observed data and current label. "
-        "Use search_cost if the path is too shallow and needs one more connected grounded hop or fact. "
-        "Use solution_space if the answer needs one more grounded slot or one more connected ordered item. "
-        "Use constraint_density if the same path needs one more grounded rule, tie-breaker, or filter. "
-        "Do not replace the current readable path with a disconnected lookup, an id-only fallback, or a simpler global count."
+        "Use search_cost if the path is too shallow and needs one more connected grounded hop or fact. "  # noqa: E501
+        "Use solution_space if the answer needs one more grounded slot or one more connected ordered item. "  # noqa: E501
+        "Use constraint_density if the same path needs one more grounded rule, tie-breaker, or filter. "  # noqa: E501
+        "Do not replace the current readable path with a disconnected lookup, an id-only fallback, or a simpler global count."  # noqa: E501
     )
 
 
@@ -937,6 +943,7 @@ def _split_entity_wrapped_prompt(
     if not body:
         return anchor_entity, None, SubmitDraftErrorCode.QUESTION_BODY_REQUIRED
     return anchor_entity, body, None
+
 
 def _question_repeats_anchor_entity(
     question: str,
@@ -971,9 +978,7 @@ def _anchor_entity_patterns(
         value_pattern = re.escape(value)
         compiled_patterns.extend(
             (
-                re.compile(
-                    rf"(?<![a-z0-9_]){key_pattern}\s*[:#-]?\s*{value_pattern}(?![a-z0-9_])"
-                ),
+                re.compile(rf"(?<![a-z0-9_]){key_pattern}\s*[:#-]?\s*{value_pattern}(?![a-z0-9_])"),
                 re.compile(
                     rf"(?<![a-z0-9_]){value_pattern}(?:번)?\s*[:#-]?\s*{key_pattern}(?![a-z0-9_])"
                 ),
@@ -1146,7 +1151,10 @@ class SubmitDraftController:
             error_codes.append(SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION)
         if not payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
-        elif self._locked_anchor_entity is not None and payload.anchor_entity != self._locked_anchor_entity:
+        elif (
+            self._locked_anchor_entity is not None
+            and payload.anchor_entity != self._locked_anchor_entity
+        ):
             error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED)
             invalid_diagnostics["locked_anchor_entity"] = self._locked_anchor_entity
         elif payload.anchor_entity:
@@ -1170,13 +1178,10 @@ class SubmitDraftController:
             error_codes.append(prompt_error)
         elif prompt_anchor_entity != payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH)
-        if (
-            _uses_unanchored_global_ranking(
-                self._raw_atomic_tool_calls,
-                anchor_entity=payload.anchor_entity,
-            )
-            and not _mentions_global_scope(question_body)
-        ):
+        if _uses_unanchored_global_ranking(
+            self._raw_atomic_tool_calls,
+            anchor_entity=payload.anchor_entity,
+        ) and not _mentions_global_scope(question_body):
             error_codes.append(SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE)
         label_signature = canonical_json(canonical_answer, default=str)
         label_slot_count = _answer_slot_count(canonical_answer)
@@ -1241,9 +1246,9 @@ class SubmitDraftController:
                     anchor_entity=payload.anchor_entity,
                 )
             )
-        if _count_semantics_present(canonical_answer, question_body) and not _observed_count_evidence(
-            self._raw_atomic_tool_calls
-        ):
+        if _count_semantics_present(
+            canonical_answer, question_body
+        ) and not _observed_count_evidence(self._raw_atomic_tool_calls):
             error_codes.append(SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE)
         if (
             question_body is not None
@@ -1277,7 +1282,10 @@ class SubmitDraftController:
                 error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED)
             else:
                 self.required_axis = increased_axes[0]
-                if self._last_label_signature is not None and label_signature == self._last_label_signature:
+                if (
+                    self._last_label_signature is not None
+                    and label_signature == self._last_label_signature
+                ):
                     error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
         elif self.required_axis_mode is DifficultyAdjustmentMode.RELAX:
             if increased_axes or len(decreased_axes) != 1:
@@ -1390,15 +1398,15 @@ class SubmitDraftController:
                         f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
                     ),
                     primary=(
-                        "Choose exactly one difficulty axis yourself from the observed data and current label. "
-                        "Increase exactly one of search_cost, solution_space, or constraint_density above the previous level, and leave the other two unchanged."
+                        "Choose exactly one difficulty axis yourself from the observed data and current label. "  # noqa: E501
+                        "Increase exactly one of search_cost, solution_space, or constraint_density above the previous level, and leave the other two unchanged."  # noqa: E501
                     ),
                     important=(
-                        "Keep the same anchored user need and preserve the other two axes at least as strong as before. "
+                        "Keep the same anchored user need and preserve the other two axes at least as strong as before. "  # noqa: E501
                         f"{strengthening_guidance.strip()}"
                     ),
                     next_step=(
-                        "Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that one axis before resubmitting."
+                        "Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that one axis before resubmitting."  # noqa: E501
                     ),
                     attempts_left=max(0, attempts_left_after),
                 ),
@@ -1423,11 +1431,11 @@ class SubmitDraftController:
                     f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
                 ),
                 primary=(
-                    "This draft is too hard for the configured band. Choose exactly one difficulty axis yourself from the current label and observed data. "
-                    "Reduce exactly one of search_cost, solution_space, or constraint_density by one grounded step, and leave the other two unchanged."
+                    "This draft is too hard for the configured band. Choose exactly one difficulty axis yourself from the current label and observed data. "  # noqa: E501
+                    "Reduce exactly one of search_cost, solution_space, or constraint_density by one grounded step, and leave the other two unchanged."  # noqa: E501
                 ),
                 important=(
-                    "Keep the same anchored user need while simplifying only that one axis before changing topic or anchor."
+                    "Keep the same anchored user need while simplifying only that one axis before changing topic or anchor."  # noqa: E501
                 ),
                 attempts_left=max(0, attempts_left_after),
             ),
@@ -1455,18 +1463,18 @@ class SubmitDraftController:
                 "Rejected. Observe more real database facts with atomic tools before resubmitting."
             ),
             SubmitDraftErrorCode.TOPIC_REQUIRED: "Rejected. topic is required.",
-            SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED: "Rejected. anchor_entity must contain at least one primary-key value.",
+            SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED: "Rejected. anchor_entity must contain at least one primary-key value.",  # noqa: E501
             SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED: (
-                "Rejected. anchor_entity must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. Do not nest it under entity_type, primary_key, or primary_keys."
+                'Rejected. anchor_entity must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {"customer_id": 123} or {"order_id": 7, "line_no": 2}. Do not nest it under entity_type, primary_key, or primary_keys.'  # noqa: E501
             ),
-            SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_REQUIRED: "Rejected. canonical_answer_json is required.",
-            SubmitDraftErrorCode.DIFFICULTY_VECTOR_REQUIRED: "Rejected. difficulty_vector is required.",
+            SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_REQUIRED: "Rejected. canonical_answer_json is required.",  # noqa: E501
+            SubmitDraftErrorCode.DIFFICULTY_VECTOR_REQUIRED: "Rejected. difficulty_vector is required.",  # noqa: E501
             SubmitDraftErrorCode.QUESTION_REQUIRED: "Rejected. question is required.",
             SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED: (
-                "Rejected. question must already be the full user prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request."
+                "Rejected. question must already be the full user prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON: (
-                "Rejected. The <entity> block must contain a valid flat JSON object with one or more primary-key fields."
+                "Rejected. The <entity> block must contain a valid flat JSON object with one or more primary-key fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH: (
                 "Rejected. The JSON inside the <entity> block must exactly match anchor_entity."
@@ -1478,96 +1486,99 @@ class SubmitDraftController:
                 "Rejected. canonical_answer_json must be a valid JSON string."
             ),
             SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED: (
-                "Rejected. Replace every placeholder token with grounded names and values from the current database."
+                "Rejected. Replace every placeholder token with grounded names and values from the current database."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK: (
-                "Rejected. Rewrite the user-facing question for a non-technical user who knows nothing about the database schema. Remove raw table names, bridge-table names, SQL keywords, and other internal data-model language."
+                "Rejected. Rewrite the user-facing question for a non-technical user who knows nothing about the database schema. Remove raw table names, bridge-table names, SQL keywords, and other internal data-model language."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK: (
-                "Rejected. Rewrite the user-facing question for a user who does not know internal field names. Remove raw identifier names such as <entity>_id and keep identifiers only inside anchor_entity."
+                "Rejected. Rewrite the user-facing question for a user who does not know internal field names. Remove raw identifier names such as <entity>_id and keep identifiers only inside anchor_entity."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN: (
-                "Rejected. Do not repeat the literal <entity> token inside the user-request body. Use it only once as the required XML entity block at the top."
+                "Rejected. Do not repeat the literal <entity> token inside the user-request body. Use it only once as the required XML entity block at the top."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK: (
-                "Rejected. Rewrite the user-request body without repeating the raw anchor entity id. The user only sees the entity block, so refer to that anchor naturally instead of surfacing its internal identifier again."
+                "Rejected. Rewrite the user-request body without repeating the raw anchor entity id. The user only sees the entity block, so refer to that anchor naturally instead of surfacing its internal identifier again."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED: (
-                "Rejected. Keep the same anchored user entity across retries. The requesting user has not changed, so do not switch anchor_entity to a different person or role while repairing this draft."
+                "Rejected. Keep the same anchored user entity across retries. The requesting user has not changed, so do not switch anchor_entity to a different person or role while repairing this draft."  # noqa: E501
             ),
             SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED: (
-                "Rejected. Do not use recent, latest, earliest, first, or similar ordering language unless you directly observed a temporal or sequence field that grounds that ordering. The current evidence path only shows ids or unordered rows, so sampled rows are not a valid notion of recency or priority."
+                "Rejected. Do not use recent, latest, earliest, first, or similar ordering language unless you directly observed a temporal or sequence field that grounds that ordering. The current evidence path only shows ids or unordered rows, so sampled rows are not a valid notion of recency or priority."  # noqa: E501
             ),
             SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE: (
-                "Rejected. The draft jumps from the anchored user's own records to a global ranking without saying so. Keep rankings local to the anchored scope, or explicitly ask for a global benchmark in the user-facing request and constraints."
+                "Rejected. The draft jumps from the anchored user's own records to a global ranking without saying so. Keep rankings local to the anchored scope, or explicitly ask for a global benchmark in the user-facing request and constraints."  # noqa: E501
             ),
             SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE: (
-                "Rejected. A count-like label needs explicit count evidence. Do not infer a total from the first sampled rows you happened to inspect; use a grounded count or aggregate observation for that anchored scope."
+                "Rejected. A count-like label needs explicit count evidence. Do not infer a total from the first sampled rows you happened to inspect; use a grounded count or aggregate observation for that anchored scope."  # noqa: E501
             ),
             SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE: (
-                "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, only keep a count field if you observed a count or aggregate tool call whose parameters depend on anchor_entity. Otherwise drop the count field or gather anchored count evidence on the same user path instead of using a global total."
+                "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, only keep a count field if you observed a count or aggregate tool call whose parameters depend on anchor_entity. Otherwise drop the count field or gather anchored count evidence on the same user path instead of using a global total."  # noqa: E501
             ),
             SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD: (
-                "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."
+                "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE: (
-                "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations. A one-hop foreign-key lookup that only returns identifiers is still too weak."
+                "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations. A one-hop foreign-key lookup that only returns identifiers is still too weak."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY: (
-                "Rejected. Do not repeat anchor_entity fields inside the canonical answer. The entity block already provides that grounding, so use the answer slots for new grounded information."
+                "Rejected. Do not repeat anchor_entity fields inside the canonical answer. The entity block already provides that grounding, so use the answer slots for new grounded information."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
-                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, keep the same anchored user and switch to grounded counts, dates, amounts, statuses, ordering, or make new anchored tool calls until you observe readable fields."
+                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, keep the same anchored user and switch to grounded counts, dates, amounts, statuses, ordering, or make new anchored tool calls until you observe readable fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN: (
-                "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead. If the current hinted topic keeps forcing id-only answers, choose a better grounded topic for the same anchored user need before resubmitting."
+                "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead. If the current hinted topic keeps forcing id-only answers, choose a better grounded topic for the same anchored user need before resubmitting."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings, dates, and other readable values that you actually observed in real tool outputs, and copy them exactly as they appeared there. Do not shorten names, paraphrase labels, normalize timestamp formatting, or manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."
+                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings, dates, and other readable values that you actually observed in real tool outputs, and copy them exactly as they appeared there. Do not shorten names, paraphrase labels, normalize timestamp formatting, or manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."  # noqa: E501
             ),
             SubmitDraftErrorCode.DIFFICULTY_WEAKENED: (
-                "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."
+                "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."  # noqa: E501
             ),
             SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED: (
                 "Rejected. The requested difficulty axis was not strengthened."
             ),
             SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED: (
-                "Rejected. The requested difficulty axis was not reduced. Keep the same anchored user need and simplify only that axis by one grounded step."
+                "Rejected. The requested difficulty axis was not reduced. Keep the same anchored user need and simplify only that axis by one grounded step."  # noqa: E501
             ),
             SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED: (
-                "Rejected. Strengthen the label itself along the requested axis by one grounded step before resubmitting."
+                "Rejected. Strengthen the label itself along the requested axis by one grounded step before resubmitting."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED: (
-                "Rejected. After a too-easy result, do not resubmit the same label. Strengthen the canonical answer itself with a new grounded step."
+                "Rejected. After a too-easy result, do not resubmit the same label. Strengthen the canonical answer itself with a new grounded step."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. submit_draft arguments did not match the required schema."
             ),
-            SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED: "Rejected. The submitted draft could not be validated.",
+            SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED: "Rejected. The submitted draft could not be validated.",  # noqa: E501
         }
         primary = message_map.get(error_codes[0], "Rejected. Fix the draft and resubmit.")
         if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE:
-            if (
-                diagnostics is not None
-                and diagnostics.get("single_tool_scope") == "global"
-            ):
+            if diagnostics is not None and diagnostics.get("single_tool_scope") == "global":
                 primary = (
-                    "Rejected. The canonical answer can be recovered from a single global tool call that does not depend on the anchor entity. "
-                    "Keep the label anchored to the selected entity and combine multiple anchored observations."
+                    "Rejected. The canonical answer can be recovered from a single global tool call that does not depend on the anchor entity. "  # noqa: E501
+                    "Keep the label anchored to the selected entity and combine multiple anchored observations."  # noqa: E501
                 )
         if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED:
-            if diagnostics is not None and diagnostics.get("anchor_path_has_readable_strings") is False:
+            if (
+                diagnostics is not None
+                and diagnostics.get("anchor_path_has_readable_strings") is False
+            ):
                 primary = (
-                    "Rejected. The current anchored evidence path does not expose readable text fields in real tool outputs. "
-                    "Stop retrying names, titles, or other readable strings on this same path. Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or make new anchored tool calls until you actually observe readable fields."
+                    "Rejected. The current anchored evidence path does not expose readable text fields in real tool outputs. "  # noqa: E501
+                    "Stop retrying names, titles, or other readable strings on this same path. Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or make new anchored tool calls until you actually observe readable fields."  # noqa: E501
                 )
             else:
                 primary += _format_ungrounded_value_guidance(diagnostics)
         if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN:
-            if diagnostics is not None and diagnostics.get("anchor_path_has_readable_strings") is False:
+            if (
+                diagnostics is not None
+                and diagnostics.get("anchor_path_has_readable_strings") is False
+            ):
                 primary = (
-                    "Rejected. The current anchored evidence path is still id-only. Do not submit another answer made only of *_id fields on this same path. "
-                    "Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or pivot to a better grounded topic for that same user need."
+                    "Rejected. The current anchored evidence path is still id-only. Do not submit another answer made only of *_id fields on this same path. "  # noqa: E501
+                    "Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or pivot to a better grounded topic for that same user need."  # noqa: E501
                 )
         if error_codes and error_codes[0] in (
             SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED,
@@ -1580,7 +1591,7 @@ class SubmitDraftController:
         if self._last_monitored_label_data is not None:
             preserve_guidance = (
                 "Keep the same anchored user need and fix only the failing part when possible. "
-                "Do not reset to a different topic, a different anchor, or a simpler global count just to satisfy this feedback."
+                "Do not reset to a different topic, a different anchor, or a simpler global count just to satisfy this feedback."  # noqa: E501
             )
         additional_messages: list[str] = []
         for error_code in error_codes[1:3]:
@@ -1747,7 +1758,9 @@ class SubmitDraftController:
                 "atomic_tool_calls_seen": len(self._atomic_tool_calls),
             },
             diagnostics={
-                "required_axis": self.required_axis.value if self.required_axis is not None else None,
+                "required_axis": self.required_axis.value
+                if self.required_axis is not None
+                else None,
                 "required_axis_mode": (
                     self.required_axis_mode.value if self.required_axis_mode is not None else None
                 ),
@@ -1789,24 +1802,24 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         name="submit_draft",
         description=(
             "Submit a grounded RLVR task draft after inspecting real database rows with tools. "
-            "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
+            "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "  # noqa: E501
             "and the natural user-facing question. "
-            "Use only tool-observed evidence. Do not write SQL, do not invent hidden joins, and do not include SQL queries in the submission. "
-            "Trace many relationships and interesting grounded paths with tools first, then choose one path and build a unique, verifiable label from that path. "
-            "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "
-            "Call submit_draft only when you fully understand the anchored user, the relevant evidence path, which observed fields are readable, which paths are id-only dead ends, and why every answer slot is needed. "
-            "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "
-            "anchor_entity is mandatory and must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
-            "Do not call submit_draft until anchor_entity is present and final for that draft. After the first valid self anchor is established, keep that same anchor_entity across retries. "
-            "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
+            "Use only tool-observed evidence. Do not write SQL, do not invent hidden joins, and do not include SQL queries in the submission. "  # noqa: E501
+            "Trace many relationships and interesting grounded paths with tools first, then choose one path and build a unique, verifiable label from that path. "  # noqa: E501
+            "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "  # noqa: E501
+            "Call submit_draft only when you fully understand the anchored user, the relevant evidence path, which observed fields are readable, which paths are id-only dead ends, and why every answer slot is needed. "  # noqa: E501
+            "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "  # noqa: E501
+            'anchor_entity is mandatory and must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {"customer_id": 123} or {"order_id": 7, "line_no": 2}. '  # noqa: E501
+            "Do not call submit_draft until anchor_entity is present and final for that draft. After the first valid self anchor is established, keep that same anchor_entity across retries. "  # noqa: E501
+            "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "  # noqa: E501
             "The JSON inside the <entity> block must exactly match anchor_entity. "
-            "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "
-            "Do not submit opaque identifier values such as UUIDs, hashes, encrypted tokens, or random-looking reference strings as answer labels, even if they were observed. "
-            "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "
-            "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "
-            "After any rejection, make at least one new atomic tool call before calling submit_draft again. "
+            "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "  # noqa: E501
+            "Do not submit opaque identifier values such as UUIDs, hashes, encrypted tokens, or random-looking reference strings as answer labels, even if they were observed. "  # noqa: E501
+            "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "  # noqa: E501
+            "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "  # noqa: E501
+            "After any rejection, make at least one new atomic tool call before calling submit_draft again. "  # noqa: E501
             "A rejection means keep going in the same conversation, not stop. "
-            "All submit_draft arguments are schema-validated; missing required fields and invalid canonical_answer_json values are rejected automatically."
+            "All submit_draft arguments are schema-validated; missing required fields and invalid canonical_answer_json values are rejected automatically."  # noqa: E501
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,

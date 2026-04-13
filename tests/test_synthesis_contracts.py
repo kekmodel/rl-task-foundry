@@ -58,6 +58,8 @@ def test_output_schema_rejects_invalid_scalar_children() -> None:
             type=OutputFieldType.STRING,
             fields=[OutputFieldContract(name="nested", type=OutputFieldType.STRING)],
         )
+
+
 def test_task_bundle_contract_round_trips_without_generated_artifacts() -> None:
     output_schema = _build_output_schema()
     difficulty_vector = build_difficulty_vector(

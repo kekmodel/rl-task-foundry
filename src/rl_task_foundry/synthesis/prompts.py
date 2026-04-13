@@ -78,10 +78,7 @@ def difficulty_axis_guidance(axis: DifficultyAxis) -> str:
 
 def difficulty_axis_feedback(axis: DifficultyAxis) -> str:
     guidance = difficulty_axis_guidance(axis)
-    return (
-        f"Strengthen the label through {axis.value}. "
-        f"{guidance[:1].upper()}{guidance[1:]}"
-    )
+    return f"Strengthen the label through {axis.value}. {guidance[:1].upper()}{guidance[1:]}"
 
 
 DIFFICULTY_AXIS_GUIDANCE = (
@@ -144,7 +141,7 @@ def build_synthesis_agent_instructions(
             "The user only sees the <entity> block and "
             "the natural-language request, so the task "
             "must read like a normal business request "
-            "from that user's perspective."
+            "from that user's perspective.",
         ),
         (
             "Meta Rules",
@@ -163,7 +160,7 @@ def build_synthesis_agent_instructions(
             "investigating instead of hiding the problem "
             "behind nicer prose. "
             "Feedback and tool errors are working "
-            "signals, not terminal states."
+            "signals, not terminal states.",
         ),
         (
             "Core Behavior",
@@ -190,7 +187,7 @@ def build_synthesis_agent_instructions(
             "smallest failing part first, and when "
             "feedback says too easy or too hard, choose "
             "exactly one difficulty axis yourself from "
-            "the observed data and current label."
+            "the observed data and current label.",
         ),
         (
             "Safety and Constraints",
@@ -243,8 +240,8 @@ def build_synthesis_agent_instructions(
             "anchor_entity must be a flat JSON object "
             "from one or more primary-key field names to "
             "scalar values, for example "
-            "{\"customer_id\": 123} or "
-            "{\"order_id\": 7, \"line_no\": 2}. "
+            '{"customer_id": 123} or '
+            '{"order_id": 7, "line_no": 2}. '
             "question must already be the full "
             "user-facing prompt in this exact shape: "
             "<entity> newline JSON newline </entity> "
@@ -266,7 +263,7 @@ def build_synthesis_agent_instructions(
             "When you need one row among many, prefer "
             "local grounded ordering inside the anchored "
             "scope before using a global ranking. "
-            f"{DIFFICULTY_AXIS_GUIDANCE}"
+            f"{DIFFICULTY_AXIS_GUIDANCE}",
         ),
         (
             "Means",
@@ -292,7 +289,7 @@ def build_synthesis_agent_instructions(
             "into one full-name slot when the combined "
             "value was never directly observed. WHY: the "
             "value was rewritten instead of copied from "
-            "evidence."
+            "evidence.",
         ),
         (
             "Expression",
@@ -349,12 +346,10 @@ def build_synthesis_agent_instructions(
             "DO NOT reset to a different topic, a "
             "different anchor, or a simpler scalar count "
             "unless the feedback proves the current "
-            "anchored path cannot be grounded."
+            "anchored path cannot be grounded.",
         ),
     ]
-    return "\n\n".join(
-        f"{title}\n{body}" for title, body in sections
-    )
+    return "\n\n".join(f"{title}\n{body}" for title, body in sections)
 
 
 def build_synthesis_input(
@@ -372,62 +367,36 @@ def build_synthesis_input(
 
     session_lines.append(f"- Domain: {domain_name}")
     session_lines.append(f"- Scenario: {scenario_description}")
-    session_lines.append(
-        f"- Requested topic hint: {requested_topic}"
-    )
+    session_lines.append(f"- Requested topic hint: {requested_topic}")
     topic_semantics = _topic_semantics_instruction(requested_topic)
     if topic_semantics is not None:
-        session_lines.append(
-            f"- Topic semantics: {topic_semantics}"
-        )
-    language_name = LANGUAGE_NAMES.get(
-        task_language, task_language
-    )
+        session_lines.append(f"- Topic semantics: {topic_semantics}")
+    language_name = LANGUAGE_NAMES.get(task_language, task_language)
     session_lines.append(
-        "- User-facing language: "
-        + TASK_LANGUAGE_INSTRUCTION.format(
-            language=language_name
-        )
+        "- User-facing language: " + TASK_LANGUAGE_INSTRUCTION.format(language=language_name)
     )
 
     table_count = schema_summary.get("table_count")
     edge_count = schema_summary.get("edge_count")
     if isinstance(table_count, int):
-        environment_lines.append(
-            f"- Table count: {table_count}"
-        )
+        environment_lines.append(f"- Table count: {table_count}")
     if isinstance(edge_count, int):
-        environment_lines.append(
-            f"- Foreign-key edge count: {edge_count}"
-        )
+        environment_lines.append(f"- Foreign-key edge count: {edge_count}")
     tables = schema_summary.get("tables")
     if isinstance(tables, list):
-        max_tables = (
-            runtime_config.prompt_schema_orientation_max_tables
-        )
+        max_tables = runtime_config.prompt_schema_orientation_max_tables
         for table in tables[:max_tables]:
             if not isinstance(table, dict):
                 continue
-            qualified_name = (
-                table.get("qualified_name")
-                or table.get("table_name")
-            )
+            qualified_name = table.get("qualified_name") or table.get("table_name")
             columns = table.get("column_names") or []
-            max_cols = (
-                runtime_config
-                .prompt_schema_orientation_max_columns
-            )
-            environment_lines.append(
-                f"- {qualified_name}: "
-                f"columns={list(columns)[:max_cols]}"
-            )
+            max_cols = runtime_config.prompt_schema_orientation_max_columns
+            environment_lines.append(f"- {qualified_name}: columns={list(columns)[:max_cols]}")
 
     family_counts = tool_surface_summary.get("family_counts")
     tool_count = tool_surface_summary.get("tool_count")
     if isinstance(tool_count, int):
-        environment_lines.append(
-            f"- Total atomic tools: {tool_count}"
-        )
+        environment_lines.append(f"- Total atomic tools: {tool_count}")
     if isinstance(family_counts, dict):
         ordered_family_lines = [
             ("get", "retrieve one entry by ID"),
@@ -442,14 +411,11 @@ def build_synthesis_input(
             count = family_counts.get(family_name)
             if isinstance(count, int) and count > 0:
                 environment_lines.append(
-                    f"- {family_name}: {count} tools "
-                    f"available; use these to {meaning}."
+                    f"- {family_name}: {count} tools available; use these to {meaning}."
                 )
     surfaces = tool_surface_summary.get("entity_surfaces")
     if isinstance(surfaces, list):
-        hint_limit = (
-            runtime_config.prompt_tool_surface_hint_limit
-        )
+        hint_limit = runtime_config.prompt_tool_surface_hint_limit
         for item in surfaces[:hint_limit]:
             if not isinstance(item, dict):
                 continue
@@ -457,19 +423,11 @@ def build_synthesis_input(
             readable_fields = item.get("readable_fields")
             if not isinstance(readable_fields, list):
                 continue
-            readable = [
-                str(field) for field in readable_fields
-            ]
+            readable = [str(field) for field in readable_fields]
             if readable:
-                environment_lines.append(
-                    f"- {tool_name}: "
-                    f"readable fields={readable}"
-                )
+                environment_lines.append(f"- {tool_name}: readable fields={readable}")
             else:
-                environment_lines.append(
-                    f"- {tool_name}: "
-                    "readable fields=[] (id-only surface)"
-                )
+                environment_lines.append(f"- {tool_name}: readable fields=[] (id-only surface)")
         environment_lines.append(
             "- Schema orientation is only for navigation. "
             "A listed column is not automatically "
@@ -482,15 +440,8 @@ def build_synthesis_input(
         )
 
     sections: list[str] = [
-        "BOUNDARY\nStatic rules end here. "
-        "Everything below is specific to this session.",
-        "Session Context\n"
-        + "\n".join(session_lines),
-        "Environment and State\n"
-        + "\n".join(environment_lines),
+        "BOUNDARY\nStatic rules end here. Everything below is specific to this session.",
+        "Session Context\n" + "\n".join(session_lines),
+        "Environment and State\n" + "\n".join(environment_lines),
     ]
-    return "\n\n".join(
-        section.strip()
-        for section in sections
-        if section.strip()
-    )
+    return "\n\n".join(section.strip() for section in sections if section.strip())

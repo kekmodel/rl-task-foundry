@@ -231,8 +231,7 @@ class ProofTaskRunner:
                     "ci_high": quality_gate_summary.ci_upper,
                 },
                 checks={
-                    "accepted": quality_gate_summary.status
-                    is TaskQualityGateStatus.ACCEPT,
+                    "accepted": quality_gate_summary.status is TaskQualityGateStatus.ACCEPT,
                 },
                 diagnostics={"task_id": draft.task_bundle.task_id},
             )
@@ -510,7 +509,12 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                             {"type": "null"},
                         ]
                     },
-                    "sort_by": {"anyOf": [{"type": "string", "enum": ["city_id", "city_name", "region_name"]}, {"type": "null"}]},
+                    "sort_by": {
+                        "anyOf": [
+                            {"type": "string", "enum": ["city_id", "city_name", "region_name"]},
+                            {"type": "null"},
+                        ]
+                    },
                     "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
@@ -540,7 +544,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
         AtomicToolDefinition(
             name="find_proof_city_link_by_city_id",
             family=AtomicToolFamily.FIND,
-            description="Find proof city link entries where city id matches a condition. Returns a list.",
+            description="Find proof city link entries where city id matches a condition. Returns a list.",  # noqa: E501
             params_schema={
                 "type": "object",
                 "properties": {
@@ -557,7 +561,12 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                             {"type": "null"},
                         ]
                     },
-                    "sort_by": {"anyOf": [{"type": "string", "enum": ["neighbor_city_id"]}, {"type": "null"}]},
+                    "sort_by": {
+                        "anyOf": [
+                            {"type": "string", "enum": ["neighbor_city_id"]},
+                            {"type": "null"},
+                        ]
+                    },
                     "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
@@ -574,7 +583,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                 },
             },
             sql=(
-                "SELECT neighbor_city_id FROM proof_city_links WHERE TRUE ORDER BY neighbor_city_id LIMIT $1"
+                "SELECT neighbor_city_id FROM proof_city_links WHERE TRUE ORDER BY neighbor_city_id LIMIT $1"  # noqa: E501
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
             semantic_key="proof_city_links:find:city_id",
@@ -582,7 +591,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
         AtomicToolDefinition(
             name="find_proof_lodging_by_city_id",
             family=AtomicToolFamily.FIND,
-            description="Find proof lodging entries where city id matches a condition. Returns a list.",
+            description="Find proof lodging entries where city id matches a condition. Returns a list.",  # noqa: E501
             params_schema={
                 "type": "object",
                 "properties": {
@@ -599,7 +608,15 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                             {"type": "null"},
                         ]
                     },
-                    "sort_by": {"anyOf": [{"type": "string", "enum": ["lodging_id", "lodging_name", "nightly_cost"]}, {"type": "null"}]},
+                    "sort_by": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "enum": ["lodging_id", "lodging_name", "nightly_cost"],
+                            },
+                            {"type": "null"},
+                        ]
+                    },
                     "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
@@ -620,7 +637,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                 },
             },
             sql=(
-                "SELECT lodging_id, lodging_name, nightly_cost FROM proof_lodgings WHERE TRUE ORDER BY lodging_id LIMIT $1"
+                "SELECT lodging_id, lodging_name, nightly_cost FROM proof_lodgings WHERE TRUE ORDER BY lodging_id LIMIT $1"  # noqa: E501
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
             semantic_key="proof_lodgings:find:city_id",
@@ -628,7 +645,7 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
         AtomicToolDefinition(
             name="find_proof_activity_by_city_id",
             family=AtomicToolFamily.FIND,
-            description="Find proof activity entries where city id matches a condition. Returns a list.",
+            description="Find proof activity entries where city id matches a condition. Returns a list.",  # noqa: E501
             params_schema={
                 "type": "object",
                 "properties": {
@@ -645,7 +662,15 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                             {"type": "null"},
                         ]
                     },
-                    "sort_by": {"anyOf": [{"type": "string", "enum": ["activity_id", "activity_name", "ticket_cost"]}, {"type": "null"}]},
+                    "sort_by": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "enum": ["activity_id", "activity_name", "ticket_cost"],
+                            },
+                            {"type": "null"},
+                        ]
+                    },
                     "direction": {"type": "string", "enum": ["asc", "desc"]},
                     "limit": {"type": "integer", "minimum": 1},
                 },
@@ -666,13 +691,14 @@ def _proof_atomic_tool_bundle() -> AtomicToolBundle:
                 },
             },
             sql=(
-                "SELECT activity_id, activity_name, ticket_cost FROM proof_activities WHERE TRUE ORDER BY activity_id LIMIT $1"
+                "SELECT activity_id, activity_name, ticket_cost FROM proof_activities WHERE TRUE ORDER BY activity_id LIMIT $1"  # noqa: E501
             ),
             result_mode=AtomicToolResultMode.ROW_LIST,
             semantic_key="proof_activities:find:city_id",
         ),
     ]
-    source = """
+    source = (
+        """
 \"\"\"Atomic tools for the proof_trip_fixture database.\"\"\"
 from __future__ import annotations
 
@@ -719,7 +745,9 @@ async def find_proof_city_by_season(conn, op, value, sort_by, direction, limit, 
     return [dict(row) for row in rows]
 
 
-async def find_proof_city_link_by_city_id(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):
+async def find_proof_city_link_by_city_id(
+    conn, op, value, sort_by, direction, limit, _shuffle_seed=None,
+):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
@@ -735,7 +763,9 @@ async def find_proof_city_link_by_city_id(conn, op, value, sort_by, direction, l
     return [dict(row) for row in rows]
 
 
-async def find_proof_lodging_by_city_id(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):
+async def find_proof_lodging_by_city_id(
+    conn, op, value, sort_by, direction, limit, _shuffle_seed=None,
+):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
@@ -751,7 +781,9 @@ async def find_proof_lodging_by_city_id(conn, op, value, sort_by, direction, lim
     return [dict(row) for row in rows]
 
 
-async def find_proof_activity_by_city_id(conn, op, value, sort_by, direction, limit, _shuffle_seed=None):
+async def find_proof_activity_by_city_id(
+    conn, op, value, sort_by, direction, limit, _shuffle_seed=None,
+):
     limit = min(limit, 20)
     rows = await conn.fetch(
         \"\"\"
@@ -765,8 +797,11 @@ async def find_proof_activity_by_city_id(conn, op, value, sort_by, direction, li
         limit,
     )
     return [dict(row) for row in rows]
-""".strip() + "\n"
+""".strip()
+        + "\n"
+    )
     return AtomicToolBundle(db_id=PROOF_DB_ID, tools=tools, source=source)
+
 
 def _sha256_hex(payload: str) -> str:
     return "sha256:" + sha256(payload.encode("utf-8")).hexdigest()

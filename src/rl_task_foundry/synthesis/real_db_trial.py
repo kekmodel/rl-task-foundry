@@ -378,8 +378,9 @@ class RealDbTrialRunner:
         return runtime
 
 
-def _encode_backend_failures(backend_failures: tuple[SynthesisBackendFailure, ...]) -> tuple[str, ...]:
+def _encode_backend_failures(
+    backend_failures: tuple[SynthesisBackendFailure, ...],
+) -> tuple[str, ...]:
     return tuple(
-        f"{failure.provider}/{failure.model}:{failure.error_type}"
-        for failure in backend_failures
+        f"{failure.provider}/{failure.model}:{failure.error_type}" for failure in backend_failures
     )

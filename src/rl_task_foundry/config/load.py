@@ -20,6 +20,7 @@ def _expand_env(value: Any) -> Any:
     if isinstance(value, list):
         return [_expand_env(v) for v in value]
     if isinstance(value, str):
+
         def replace(match: re.Match[str]) -> str:
             env_name = match.group(1)
             default = match.group(2)
