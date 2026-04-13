@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -66,11 +65,10 @@ def _should_ignore_session_setting_error(
 
 @dataclass(slots=True)
 class DatabasePools:
-    """Two-lane pool: solver lane is semaphore guarded, control lane is unconstrained."""
+    """Two-lane pool with solver and control connections."""
 
     solver_pool: Any
     control_pool: Any
-    _solver_semaphore: asyncio.Semaphore
 
     @classmethod
     async def create(cls, config: DatabaseConfig) -> "DatabasePools":
@@ -91,14 +89,12 @@ class DatabasePools:
         return cls(
             solver_pool=solver_pool,
             control_pool=control_pool,
-            _solver_semaphore=asyncio.Semaphore(config.solver_pool_size),
         )
 
     @asynccontextmanager
     async def solver_connection(self):
-        async with self._solver_semaphore:
-            async with self.solver_pool.acquire() as conn:
-                yield conn
+        async with self.solver_pool.acquire() as conn:
+            yield conn
 
     @asynccontextmanager
     async def control_connection(self):

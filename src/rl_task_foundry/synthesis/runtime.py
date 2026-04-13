@@ -414,6 +414,7 @@ class SynthesisAgentRuntime:
     )
     _conversation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     phase_monitor: PipelinePhaseMonitorLogger | None = None
+    _owns_phase_monitor: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.synthesis_backends is None:
@@ -450,6 +451,7 @@ class SynthesisAgentRuntime:
                 flow_kind="synthesis_runtime",
                 flow_id=build_flow_id("synthesis_runtime"),
             )
+            self._owns_phase_monitor = True
 
     async def synthesize_environment_draft(
         self,
@@ -575,6 +577,9 @@ class SynthesisAgentRuntime:
             self._database_pools = None
         self._atomic_tool_bundles.clear()
         self._tool_executor_cache.clear()
+        if self._owns_phase_monitor and self.phase_monitor is not None:
+            self.phase_monitor.close()
+            self.phase_monitor = None
 
     def _emit_phase_monitor(
         self,

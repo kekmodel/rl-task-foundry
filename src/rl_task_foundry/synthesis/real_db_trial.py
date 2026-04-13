@@ -155,14 +155,13 @@ class RealDbTrialRunner:
             flow_id=flow_id,
         )
         runtime = self._synthesis_runtime_for_trial(debug_traces_dir, phase_monitor)
-
         try:
             draft = await runtime.synthesize_environment_draft(
                 db_id=db_id,
                 requested_topic=topic,
             )
         except SynthesisArtifactGenerationError as exc:
-            return self._write_summary(
+            summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
                     requested_topic=topic,
@@ -184,8 +183,10 @@ class RealDbTrialRunner:
                     ),
                 )
             )
+            phase_monitor.close()
+            return summary
         except SynthesisPhaseExecutionError as exc:
-            return self._write_summary(
+            summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
                     requested_topic=topic,
@@ -203,8 +204,10 @@ class RealDbTrialRunner:
                     backend_failures=_encode_backend_failures(exc.backend_failures),
                 )
             )
+            phase_monitor.close()
+            return summary
         except SynthesisProviderUnavailableError as exc:
-            return self._write_summary(
+            summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
                     requested_topic=topic,
@@ -221,8 +224,10 @@ class RealDbTrialRunner:
                     synthesis_phase=exc.phase,
                 )
             )
+            phase_monitor.close()
+            return summary
         except SynthesisRuntimeError as exc:
-            return self._write_summary(
+            summary = self._write_summary(
                 RealDbTrialSummary(
                     db_id=db_id,
                     requested_topic=topic,
@@ -238,6 +243,8 @@ class RealDbTrialRunner:
                     synthesis_error_message=str(exc),
                 )
             )
+            phase_monitor.close()
+            return summary
 
         commit_result = self.registry.commit_draft(draft)
         phase_monitor.emit(
@@ -272,7 +279,7 @@ class RealDbTrialRunner:
             if commit_result.status is EnvironmentRegistryCommitStatus.COMMITTED
             else RealDbTrialStatus.REGISTRY_DUPLICATE
         )
-        return self._write_summary(
+        summary = self._write_summary(
             RealDbTrialSummary(
                 db_id=db_id,
                 requested_topic=topic,
@@ -294,10 +301,15 @@ class RealDbTrialRunner:
                 bundle_root=bundle_root,
             )
         )
+        phase_monitor.close()
+        return summary
 
     async def close(self) -> None:
         if self.synthesis_runtime is not None:
             await self.synthesis_runtime.close()
+        close_registry = getattr(self.registry, "close", None)
+        if callable(close_registry):
+            close_registry()
 
     @staticmethod
     def _summary_payload(summary: RealDbTrialSummary) -> dict[str, object]:

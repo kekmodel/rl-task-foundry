@@ -251,6 +251,7 @@ class EnvironmentRegistryWriter:
         default=None,
         repr=False,
     )
+    _connection: sqlite3.Connection | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -282,36 +283,6 @@ class EnvironmentRegistryWriter:
         semantic_signature = _encode_minhash_signature(
             _build_minhash(semantic_text, num_perm=self.minhash_num_perm)
         )
-        if self.exact_dedup_enabled:
-            existing = self._lookup_duplicate(exact_signature)
-            if existing is not None:
-                return EnvironmentRegistryCommitResult(
-                    status=EnvironmentRegistryCommitStatus.DUPLICATE,
-                    env_id=existing["env_id"],
-                    exact_signature=exact_signature,
-                    difficulty_band=DifficultyBand(existing["difficulty_band"]),
-                    filesystem_path=Path(existing["filesystem_path"]),
-                    duplicate_of_env_id=existing["env_id"],
-                    duplicate_reason=EnvironmentRegistryDuplicateReason.EXACT,
-                )
-        if self.near_dup_enabled:
-            semantic_duplicate = self._lookup_semantic_duplicate(
-                db_id=env.db_id,
-                        topic=env.topic,
-                semantic_text=semantic_text,
-                semantic_signature=semantic_signature,
-            )
-            if semantic_duplicate is not None:
-                return EnvironmentRegistryCommitResult(
-                    status=EnvironmentRegistryCommitStatus.DUPLICATE,
-                    env_id=semantic_duplicate["env_id"],
-                    exact_signature=exact_signature,
-                    difficulty_band=DifficultyBand(semantic_duplicate["difficulty_band"]),
-                    filesystem_path=Path(semantic_duplicate["filesystem_path"]),
-                    duplicate_of_env_id=semantic_duplicate["env_id"],
-                    duplicate_reason=EnvironmentRegistryDuplicateReason.MINHASH,
-                    semantic_similarity=float(semantic_duplicate["semantic_similarity"]),
-                )
 
         temp_dir = self.root_dir / f".tmp-{env.env_id}"
         final_dir = self.root_dir / env.env_id
@@ -834,27 +805,22 @@ class EnvironmentRegistryWriter:
             num_perm=self.minhash_num_perm,
         )
         metadata_by_env_id: dict[str, dict[str, object]] = {}
-        manages_connection = conn is None
         connection = conn or self._connect()
-        try:
-            rows = connection.execute(
-                """
-                SELECT
-                    env_id,
-                    difficulty_band,
-                    filesystem_path,
-                    semantic_dedup_text,
-                    semantic_dedup_text_version,
-                    semantic_minhash_signature,
-                    payload_json
-                FROM environments
-                WHERE db_id = ? AND category = ?
-                """,
-                (db_id, normalized_topic),
-            ).fetchall()
-        finally:
-            if manages_connection:
-                connection.close()
+        rows = connection.execute(
+            """
+            SELECT
+                env_id,
+                difficulty_band,
+                filesystem_path,
+                semantic_dedup_text,
+                semantic_dedup_text_version,
+                semantic_minhash_signature,
+                payload_json
+            FROM environments
+            WHERE db_id = ? AND category = ?
+            """,
+            (db_id, normalized_topic),
+        ).fetchall()
         for row in rows:
             env_id = str(row["env_id"])
             signature = self._semantic_signature_for_row(row=row, topic=normalized_topic)
@@ -1096,12 +1062,20 @@ class EnvironmentRegistryWriter:
         )
 
     def _connect(self) -> sqlite3.Connection:
-        self.index_db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.index_db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
-        return conn
+        if self._connection is None:
+            self.index_db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.index_db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=FULL")
+            self._connection = conn
+        return self._connection
+
+    def close(self) -> None:
+        if self._connection is None:
+            return
+        self._connection.close()
+        self._connection = None
 
 
 def bucketize_difficulty_vector(difficulty_vector: object) -> DifficultyBand:

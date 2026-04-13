@@ -183,75 +183,114 @@ class ProofEnvironmentRunner:
             flow_kind="proof_environment",
             flow_id=flow_id,
         )
-        fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
-        draft = build_proof_environment_draft()
-        phase_monitor.emit(
-            phase="draft_build",
-            status="completed",
-            expected_contract={
-                "db_id": PROOF_DB_ID,
-                "topic": "itinerary",
-            },
-            actual_data={
-                "env_id": draft.environment.env_id,
-                "difficulty_vector": difficulty_vector_json(
-                    draft.environment.task.difficulty_vector
-                ),
-                "rendered_user_prompts": [
-                    instance.rendered_user_prompt for instance in draft.instances
-                ],
-                "canonical_answer_jsons": [
-                    answer.canonical_answer_json for answer in draft.canonical_answers
-                ],
-            },
-            checks={
-                "instance_count_matches_canonical_answers": len(draft.instances)
-                == len(draft.canonical_answers),
-            },
-            diagnostics={},
-        )
-        rollout_summary = await self.environment_orchestrator.run_draft(draft)
-        phase_monitor.emit(
-            phase="rollout",
-            status="completed",
-            expected_contract={
-                "planned_solver_runs_upper_bound": self.config.calibration.full_replica_limit,
-            },
-            actual_data={
-                "planned_solver_runs": rollout_summary.planned_solver_runs,
-                "total_solver_runs": rollout_summary.total_solver_runs,
-                "matched_solver_runs": rollout_summary.matched_solver_runs,
-                "early_stop_decision": rollout_summary.early_stop_decision,
-            },
-            checks={
-                "executed_runs_within_plan": rollout_summary.total_solver_runs
-                <= rollout_summary.planned_solver_runs,
-            },
-            diagnostics={"env_id": draft.environment.env_id},
-        )
-        quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
-        phase_monitor.emit(
-            phase="quality_gate",
-            status=quality_gate_summary.status.value,
-            expected_contract={
-                "band_lower": quality_gate_summary.band_lower,
-                "band_upper": quality_gate_summary.band_upper,
-            },
-            actual_data={
-                "pass_rate": quality_gate_summary.pass_rate,
-                "ci_low": quality_gate_summary.ci_lower,
-                "ci_high": quality_gate_summary.ci_upper,
-            },
-            checks={
-                "accepted": quality_gate_summary.status
-                is EnvironmentQualityGateStatus.ACCEPT,
-            },
-            diagnostics={"env_id": draft.environment.env_id},
-        )
-        if quality_gate_summary.status is not EnvironmentQualityGateStatus.ACCEPT:
+        try:
+            fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
+            draft = build_proof_environment_draft()
+            phase_monitor.emit(
+                phase="draft_build",
+                status="completed",
+                expected_contract={
+                    "db_id": PROOF_DB_ID,
+                    "topic": "itinerary",
+                },
+                actual_data={
+                    "env_id": draft.environment.env_id,
+                    "difficulty_vector": difficulty_vector_json(
+                        draft.environment.task.difficulty_vector
+                    ),
+                    "rendered_user_prompts": [
+                        instance.rendered_user_prompt for instance in draft.instances
+                    ],
+                    "canonical_answer_jsons": [
+                        answer.canonical_answer_json for answer in draft.canonical_answers
+                    ],
+                },
+                checks={
+                    "instance_count_matches_canonical_answers": len(draft.instances)
+                    == len(draft.canonical_answers),
+                },
+                diagnostics={},
+            )
+            rollout_summary = await self.environment_orchestrator.run_draft(draft)
+            phase_monitor.emit(
+                phase="rollout",
+                status="completed",
+                expected_contract={
+                    "planned_solver_runs_upper_bound": self.config.calibration.full_replica_limit,
+                },
+                actual_data={
+                    "planned_solver_runs": rollout_summary.planned_solver_runs,
+                    "total_solver_runs": rollout_summary.total_solver_runs,
+                    "matched_solver_runs": rollout_summary.matched_solver_runs,
+                    "early_stop_decision": rollout_summary.early_stop_decision,
+                },
+                checks={
+                    "executed_runs_within_plan": rollout_summary.total_solver_runs
+                    <= rollout_summary.planned_solver_runs,
+                },
+                diagnostics={"env_id": draft.environment.env_id},
+            )
+            quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
+            phase_monitor.emit(
+                phase="quality_gate",
+                status=quality_gate_summary.status.value,
+                expected_contract={
+                    "band_lower": quality_gate_summary.band_lower,
+                    "band_upper": quality_gate_summary.band_upper,
+                },
+                actual_data={
+                    "pass_rate": quality_gate_summary.pass_rate,
+                    "ci_low": quality_gate_summary.ci_lower,
+                    "ci_high": quality_gate_summary.ci_upper,
+                },
+                checks={
+                    "accepted": quality_gate_summary.status
+                    is EnvironmentQualityGateStatus.ACCEPT,
+                },
+                diagnostics={"env_id": draft.environment.env_id},
+            )
+            if quality_gate_summary.status is not EnvironmentQualityGateStatus.ACCEPT:
+                return ProofEnvironmentRunSummary(
+                    db_id=draft.environment.db_id,
+                    env_id=draft.environment.env_id,
+                    fixture_sql_root=fixture_files.root_dir,
+                    quality_gate_status=quality_gate_summary.status.value,
+                    flow_id=flow_id,
+                    phase_monitor_log_path=phase_monitor_log_path,
+                    solver_pass_rate=quality_gate_summary.pass_rate,
+                    solver_ci_low=quality_gate_summary.ci_lower,
+                    solver_ci_high=quality_gate_summary.ci_upper,
+                )
+
+            accepted_draft = accepted_draft_with_quality_metrics(
+                draft,
+                quality_gate_summary=quality_gate_summary,
+            )
+            commit_result = self.registry.commit_draft(accepted_draft)
+            phase_monitor.emit(
+                phase="registry_commit",
+                status=commit_result.status.value,
+                expected_contract={},
+                actual_data={
+                    "registry_env_id": commit_result.env_id,
+                    "status": commit_result.status.value,
+                },
+                checks={},
+                diagnostics={"env_id": accepted_draft.environment.env_id},
+            )
+            bundle_root = output_root / "bundle"
+            self.exporter.export_bundle(bundle_root, env_id=commit_result.env_id)
+            phase_monitor.emit(
+                phase="bundle_export",
+                status="completed",
+                expected_contract={"bundle_root": bundle_root},
+                actual_data={"bundle_root": bundle_root, "env_id": commit_result.env_id},
+                checks={"bundle_root_exists": bundle_root.exists()},
+                diagnostics={},
+            )
             return ProofEnvironmentRunSummary(
-                db_id=draft.environment.db_id,
-                env_id=draft.environment.env_id,
+                db_id=accepted_draft.environment.db_id,
+                env_id=accepted_draft.environment.env_id,
                 fixture_sql_root=fixture_files.root_dir,
                 quality_gate_status=quality_gate_summary.status.value,
                 flow_id=flow_id,
@@ -259,51 +298,18 @@ class ProofEnvironmentRunner:
                 solver_pass_rate=quality_gate_summary.pass_rate,
                 solver_ci_low=quality_gate_summary.ci_lower,
                 solver_ci_high=quality_gate_summary.ci_upper,
+                registry_status=commit_result.status,
+                registry_env_id=commit_result.env_id,
+                bundle_root=bundle_root,
             )
-
-        accepted_draft = accepted_draft_with_quality_metrics(
-            draft,
-            quality_gate_summary=quality_gate_summary,
-        )
-        commit_result = self.registry.commit_draft(accepted_draft)
-        phase_monitor.emit(
-            phase="registry_commit",
-            status=commit_result.status.value,
-            expected_contract={},
-            actual_data={
-                "registry_env_id": commit_result.env_id,
-                "status": commit_result.status.value,
-            },
-            checks={},
-            diagnostics={"env_id": accepted_draft.environment.env_id},
-        )
-        bundle_root = output_root / "bundle"
-        self.exporter.export_bundle(bundle_root, env_id=commit_result.env_id)
-        phase_monitor.emit(
-            phase="bundle_export",
-            status="completed",
-            expected_contract={"bundle_root": bundle_root},
-            actual_data={"bundle_root": bundle_root, "env_id": commit_result.env_id},
-            checks={"bundle_root_exists": bundle_root.exists()},
-            diagnostics={},
-        )
-        return ProofEnvironmentRunSummary(
-            db_id=accepted_draft.environment.db_id,
-            env_id=accepted_draft.environment.env_id,
-            fixture_sql_root=fixture_files.root_dir,
-            quality_gate_status=quality_gate_summary.status.value,
-            flow_id=flow_id,
-            phase_monitor_log_path=phase_monitor_log_path,
-            solver_pass_rate=quality_gate_summary.pass_rate,
-            solver_ci_low=quality_gate_summary.ci_lower,
-            solver_ci_high=quality_gate_summary.ci_upper,
-            registry_status=commit_result.status,
-            registry_env_id=commit_result.env_id,
-            bundle_root=bundle_root,
-        )
+        finally:
+            phase_monitor.close()
 
     async def close(self) -> None:
         await self.environment_orchestrator.close()
+        close_registry = getattr(self.registry, "close", None)
+        if callable(close_registry):
+            close_registry()
 
 
 def write_proof_fixture_sql(root_dir: Path) -> ProofFixtureSqlFiles:

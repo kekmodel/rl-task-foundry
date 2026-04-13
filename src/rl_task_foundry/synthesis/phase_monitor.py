@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from rl_task_foundry.synthesis.jsonl_logger import JsonlFileSink
 
 
 def default_phase_monitor_log_path(traces_dir: Path) -> Path:
@@ -36,6 +37,16 @@ class PipelinePhaseMonitorLogger:
     flow_id: str
     mirror_phase_monitor_log_path: Path | None = None
     _seq: int = field(default=0, init=False, repr=False)
+    _primary_sink: JsonlFileSink = field(init=False, repr=False)
+    _mirror_sink: JsonlFileSink | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._primary_sink = JsonlFileSink(self.phase_monitor_log_path)
+        if (
+            self.mirror_phase_monitor_log_path is not None
+            and self.mirror_phase_monitor_log_path != self.phase_monitor_log_path
+        ):
+            self._mirror_sink = JsonlFileSink(self.mirror_phase_monitor_log_path)
 
     def emit(
         self,
@@ -60,17 +71,6 @@ class PipelinePhaseMonitorLogger:
             checks=dict(checks or {}),
             diagnostics=dict(diagnostics or {}),
         )
-        self._append_jsonl(self.phase_monitor_log_path, record)
-        if (
-            self.mirror_phase_monitor_log_path is not None
-            and self.mirror_phase_monitor_log_path != self.phase_monitor_log_path
-        ):
-            self._append_jsonl(self.mirror_phase_monitor_log_path, record)
-        return record
-
-    @staticmethod
-    def _append_jsonl(path: Path, record: PipelinePhaseMonitorRecord) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "flow_kind": record.flow_kind,
             "flow_id": record.flow_id,
@@ -83,6 +83,12 @@ class PipelinePhaseMonitorLogger:
             "checks": record.checks,
             "diagnostics": record.diagnostics,
         }
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str))
-            handle.write("\n")
+        self._primary_sink.write_record(payload)
+        if self._mirror_sink is not None:
+            self._mirror_sink.write_record(payload)
+        return record
+
+    def close(self) -> None:
+        self._primary_sink.close()
+        if self._mirror_sink is not None:
+            self._mirror_sink.close()

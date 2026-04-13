@@ -59,6 +59,7 @@ class _FakeSynthesisRuntime:
 class _FakeRegistry:
     result: EnvironmentRegistryCommitResult
     committed_drafts: list[object] | None = None
+    closed: bool = False
 
     def __post_init__(self) -> None:
         if self.committed_drafts is None:
@@ -67,6 +68,9 @@ class _FakeRegistry:
     def commit_draft(self, draft: object) -> EnvironmentRegistryCommitResult:
         self.committed_drafts.append(draft)
         return self.result
+
+    def close(self) -> None:
+        self.closed = True
 
 
 @dataclass(slots=True)
@@ -157,6 +161,7 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
     assert payload["trial_status"] == "accepted"
     assert payload["env_id"] == "env_real_trial"
+    assert registry.closed is True
 
 
 @pytest.mark.asyncio
@@ -207,6 +212,7 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
     assert summary.synthesis_error_type == "SynthesisArtifactGenerationError"
     assert summary.attempt_outcomes == ("artifact_invalid",)
     assert summary.error_codes == ("reject_too_easy",)
+    assert runner.registry.closed is True
 
 
 def test_config_with_trial_traces_dir_rebinds_output_root(tmp_path: Path) -> None:

@@ -196,6 +196,21 @@ def test_environment_registry_writer_commits_label_only_bundle(tmp_path: Path) -
     assert metadata["generation_attempts"] == []
 
 
+def test_environment_registry_writer_reuses_cached_connection(tmp_path: Path) -> None:
+    writer = EnvironmentRegistryWriter(
+        root_dir=tmp_path / "environments",
+        index_db_path=tmp_path / "environment_registry.db",
+    )
+
+    first = writer._connect()
+    second = writer._connect()
+    writer.close()
+    third = writer._connect()
+
+    assert first is second
+    assert first is not third
+
+
 def test_environment_registry_exact_signature_ignores_label_signature(tmp_path: Path) -> None:
     writer = EnvironmentRegistryWriter(
         root_dir=tmp_path / "environments",

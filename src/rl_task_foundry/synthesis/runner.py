@@ -175,184 +175,190 @@ class SynthesisRegistryRunner:
             flow_kind="synthesis_registry",
             flow_id=flow_id,
         )
-        if not registry:
+        try:
+            if not registry:
+                return SynthesisRegistryRunSummary(
+                    outcome=SynthesisRegistryRunOutcome.EMPTY_REGISTRY,
+                    checkpoint_namespace=checkpoint_namespace,
+                    flow_id=flow_id,
+                    requested_steps=max_steps,
+                    executed_steps=0,
+                    total_pairs=0,
+                    initially_processed_pairs=0,
+                    processed_pairs_after_run=0,
+                    generated_drafts=0,
+                    registry_committed_envs=0,
+                    registry_duplicate_envs=0,
+                    remaining_pairs=0,
+                    phase_monitor_log_path=phase_monitor_log_path,
+                    quality_accepted_envs=0,
+                    quality_rejected_envs=0,
+                    registry_root_dir=self.environment_registry.root_dir,
+                    registry_index_db_path=self.environment_registry.index_db_path,
+                )
+
+            total_pairs = sum(len(entry.topics) for entry in registry)
+            pending_registry, initially_processed_pairs = self._pending_registry(
+                registry,
+                checkpoint_namespace=checkpoint_namespace,
+            )
+            steps: list[SynthesisRegistryStepSummary] = []
+            generated_env_ids: list[str] = []
+            committed_env_ids: list[str] = []
+            duplicate_env_ids: list[str] = []
+            quality_rejected_env_ids: list[str] = []
+            executed_steps = 0
+            generated_drafts = 0
+            registry_committed_envs = 0
+            registry_duplicate_envs = 0
+            quality_accepted_envs = 0
+            quality_rejected_envs = 0
+            processed_pairs_after_run = initially_processed_pairs
+            orchestrator = self.orchestrator
+            checkpoint = self.checkpoint
+            environment_registry = self.environment_registry
+            outcome: SynthesisRegistryRunOutcome | None = None
+
+            for _ in range(max_steps):
+                if not pending_registry:
+                    outcome = SynthesisRegistryRunOutcome.COMPLETED_ALL
+                    break
+                step = await orchestrator.run_next(pending_registry)
+                executed_steps += 1
+
+                if step.decision.status != SynthesisSelectionStatus.READY:
+                    steps.append(SynthesisRegistryStepSummary(decision=step.decision))
+                    outcome = (
+                        SynthesisRegistryRunOutcome.ALL_BACKED_OFF
+                        if step.decision.status == SynthesisSelectionStatus.BACKOFF
+                        else SynthesisRegistryRunOutcome.COMPLETED_ALL
+                    )
+                    break
+                if step.draft is None:
+                    raise RuntimeError("synthesis orchestrator returned READY without a draft")
+
+                assert step.decision.db_id is not None
+                assert step.decision.topic is not None
+                phase_monitor.emit(
+                    phase="quality_gate",
+                    status="accept",
+                    expected_contract={
+                        "step_index": executed_steps,
+                        "internal_submit_draft_acceptance": True,
+                    },
+                    actual_data={
+                        "env_id": step.draft.environment.env_id,
+                        "pass_rate": step.draft.environment.quality_metrics.solver_pass_rate,
+                        "ci_low": step.draft.environment.quality_metrics.solver_ci_low,
+                        "ci_high": step.draft.environment.quality_metrics.solver_ci_high,
+                    },
+                    checks={
+                        "accepted": step.draft.environment.status is EnvironmentStatus.ACCEPTED,
+                    },
+                    diagnostics={"step_index": executed_steps},
+                )
+                generated_drafts += 1
+                generated_env_ids.append(step.draft.environment.env_id)
+                quality_accepted_envs += 1
+                commit_result = environment_registry.commit_draft(step.draft)
+                phase_monitor.emit(
+                    phase="registry_commit",
+                    status=commit_result.status.value,
+                    expected_contract={"step_index": executed_steps},
+                    actual_data={
+                        "env_id": step.draft.environment.env_id,
+                        "registry_env_id": commit_result.env_id,
+                        "status": commit_result.status.value,
+                    },
+                    checks={},
+                    diagnostics={"step_index": executed_steps},
+                )
+                steps.append(
+                    SynthesisRegistryStepSummary(
+                        decision=step.decision,
+                        draft_env_id=step.draft.environment.env_id,
+                        draft_created_at=step.draft.created_at,
+                        quality_gate_status="accept",
+                        quality_gate_pass_rate=step.draft.environment.quality_metrics.solver_pass_rate,
+                        quality_gate_ci_low=step.draft.environment.quality_metrics.solver_ci_low,
+                        quality_gate_ci_high=step.draft.environment.quality_metrics.solver_ci_high,
+                        registry_status=commit_result.status,
+                        registry_env_id=commit_result.env_id,
+                    )
+                )
+                checkpoint.mark_processed(
+                    self._checkpoint_key(step.decision.db_id, step.decision.topic),
+                    namespace=checkpoint_namespace,
+                    payload={
+                        "db_id": step.decision.db_id,
+                        "topic": step.decision.topic,
+                        "env_id": commit_result.env_id,
+                        "created_at": step.draft.created_at.isoformat(),
+                        "registry_status": commit_result.status.value,
+                        "quality_gate_status": "accept",
+                        "solver_pass_rate": step.draft.environment.quality_metrics.solver_pass_rate,
+                        "solver_ci_low": step.draft.environment.quality_metrics.solver_ci_low,
+                        "solver_ci_high": step.draft.environment.quality_metrics.solver_ci_high,
+                    },
+                )
+                checkpoint.flush()
+                processed_pairs_after_run += 1
+                if commit_result.status == EnvironmentRegistryCommitStatus.COMMITTED:
+                    registry_committed_envs += 1
+                    committed_env_ids.append(commit_result.env_id)
+                else:
+                    registry_duplicate_envs += 1
+                    duplicate_env_ids.append(commit_result.env_id)
+                pending_registry = self._strip_processed_pair(
+                    pending_registry,
+                    db_id=step.decision.db_id,
+                    topic=step.decision.topic,
+                )
+
+            remaining_pairs = total_pairs - processed_pairs_after_run
+            if outcome is None:
+                outcome = (
+                    SynthesisRegistryRunOutcome.COMPLETED_ALL
+                    if remaining_pairs == 0
+                    else SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
+                )
+            assert generated_drafts == quality_accepted_envs + quality_rejected_envs
+            assert processed_pairs_after_run == initially_processed_pairs + quality_accepted_envs
+            assert remaining_pairs == total_pairs - processed_pairs_after_run
+
             return SynthesisRegistryRunSummary(
-                outcome=SynthesisRegistryRunOutcome.EMPTY_REGISTRY,
+                outcome=outcome,
                 checkpoint_namespace=checkpoint_namespace,
                 flow_id=flow_id,
                 requested_steps=max_steps,
-                executed_steps=0,
-                total_pairs=0,
-                initially_processed_pairs=0,
-                processed_pairs_after_run=0,
-                generated_drafts=0,
-                registry_committed_envs=0,
-                registry_duplicate_envs=0,
-                remaining_pairs=0,
+                executed_steps=executed_steps,
+                total_pairs=total_pairs,
+                initially_processed_pairs=initially_processed_pairs,
+                processed_pairs_after_run=processed_pairs_after_run,
+                generated_drafts=generated_drafts,
+                registry_committed_envs=registry_committed_envs,
+                registry_duplicate_envs=registry_duplicate_envs,
+                remaining_pairs=remaining_pairs,
                 phase_monitor_log_path=phase_monitor_log_path,
-                quality_accepted_envs=0,
-                quality_rejected_envs=0,
-                registry_root_dir=self.environment_registry.root_dir,
-                registry_index_db_path=self.environment_registry.index_db_path,
+                quality_accepted_envs=quality_accepted_envs,
+                quality_rejected_envs=quality_rejected_envs,
+                generated_env_ids=generated_env_ids,
+                committed_env_ids=committed_env_ids,
+                duplicate_env_ids=duplicate_env_ids,
+                quality_rejected_env_ids=quality_rejected_env_ids,
+                registry_root_dir=environment_registry.root_dir,
+                registry_index_db_path=environment_registry.index_db_path,
+                steps=steps,
             )
-
-        total_pairs = sum(len(entry.topics) for entry in registry)
-        pending_registry, initially_processed_pairs = self._pending_registry(
-            registry,
-            checkpoint_namespace=checkpoint_namespace,
-        )
-        steps: list[SynthesisRegistryStepSummary] = []
-        generated_env_ids: list[str] = []
-        committed_env_ids: list[str] = []
-        duplicate_env_ids: list[str] = []
-        quality_rejected_env_ids: list[str] = []
-        executed_steps = 0
-        generated_drafts = 0
-        registry_committed_envs = 0
-        registry_duplicate_envs = 0
-        quality_accepted_envs = 0
-        quality_rejected_envs = 0
-        processed_pairs_after_run = initially_processed_pairs
-        orchestrator = self.orchestrator
-        checkpoint = self.checkpoint
-        environment_registry = self.environment_registry
-        outcome: SynthesisRegistryRunOutcome | None = None
-
-        for _ in range(max_steps):
-            if not pending_registry:
-                outcome = SynthesisRegistryRunOutcome.COMPLETED_ALL
-                break
-            step = await orchestrator.run_next(pending_registry)
-            executed_steps += 1
-
-            if step.decision.status != SynthesisSelectionStatus.READY:
-                steps.append(SynthesisRegistryStepSummary(decision=step.decision))
-                outcome = (
-                    SynthesisRegistryRunOutcome.ALL_BACKED_OFF
-                    if step.decision.status == SynthesisSelectionStatus.BACKOFF
-                    else SynthesisRegistryRunOutcome.COMPLETED_ALL
-                )
-                break
-            if step.draft is None:
-                raise RuntimeError("synthesis orchestrator returned READY without a draft")
-
-            assert step.decision.db_id is not None
-            assert step.decision.topic is not None
-            phase_monitor.emit(
-                phase="quality_gate",
-                status="accept",
-                expected_contract={
-                    "step_index": executed_steps,
-                    "internal_submit_draft_acceptance": True,
-                },
-                actual_data={
-                    "env_id": step.draft.environment.env_id,
-                    "pass_rate": step.draft.environment.quality_metrics.solver_pass_rate,
-                    "ci_low": step.draft.environment.quality_metrics.solver_ci_low,
-                    "ci_high": step.draft.environment.quality_metrics.solver_ci_high,
-                },
-                checks={
-                    "accepted": step.draft.environment.status is EnvironmentStatus.ACCEPTED,
-                },
-                diagnostics={"step_index": executed_steps},
-            )
-            generated_drafts += 1
-            generated_env_ids.append(step.draft.environment.env_id)
-            quality_accepted_envs += 1
-            commit_result = environment_registry.commit_draft(step.draft)
-            phase_monitor.emit(
-                phase="registry_commit",
-                status=commit_result.status.value,
-                expected_contract={"step_index": executed_steps},
-                actual_data={
-                    "env_id": step.draft.environment.env_id,
-                    "registry_env_id": commit_result.env_id,
-                    "status": commit_result.status.value,
-                },
-                checks={},
-                diagnostics={"step_index": executed_steps},
-            )
-            steps.append(
-                SynthesisRegistryStepSummary(
-                    decision=step.decision,
-                    draft_env_id=step.draft.environment.env_id,
-                    draft_created_at=step.draft.created_at,
-                    quality_gate_status="accept",
-                    quality_gate_pass_rate=step.draft.environment.quality_metrics.solver_pass_rate,
-                    quality_gate_ci_low=step.draft.environment.quality_metrics.solver_ci_low,
-                    quality_gate_ci_high=step.draft.environment.quality_metrics.solver_ci_high,
-                    registry_status=commit_result.status,
-                    registry_env_id=commit_result.env_id,
-                )
-            )
-            checkpoint.mark_processed(
-                self._checkpoint_key(step.decision.db_id, step.decision.topic),
-                namespace=checkpoint_namespace,
-                payload={
-                    "db_id": step.decision.db_id,
-                    "topic": step.decision.topic,
-                    "env_id": commit_result.env_id,
-                    "created_at": step.draft.created_at.isoformat(),
-                    "registry_status": commit_result.status.value,
-                    "quality_gate_status": "accept",
-                    "solver_pass_rate": step.draft.environment.quality_metrics.solver_pass_rate,
-                    "solver_ci_low": step.draft.environment.quality_metrics.solver_ci_low,
-                    "solver_ci_high": step.draft.environment.quality_metrics.solver_ci_high,
-                },
-            )
-            checkpoint.flush()
-            processed_pairs_after_run += 1
-            if commit_result.status == EnvironmentRegistryCommitStatus.COMMITTED:
-                registry_committed_envs += 1
-                committed_env_ids.append(commit_result.env_id)
-            else:
-                registry_duplicate_envs += 1
-                duplicate_env_ids.append(commit_result.env_id)
-            pending_registry = self._strip_processed_pair(
-                pending_registry,
-                db_id=step.decision.db_id,
-                topic=step.decision.topic,
-            )
-
-        remaining_pairs = total_pairs - processed_pairs_after_run
-        if outcome is None:
-            outcome = (
-                SynthesisRegistryRunOutcome.COMPLETED_ALL
-                if remaining_pairs == 0
-                else SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
-            )
-        assert generated_drafts == quality_accepted_envs + quality_rejected_envs
-        assert processed_pairs_after_run == initially_processed_pairs + quality_accepted_envs
-        assert remaining_pairs == total_pairs - processed_pairs_after_run
-
-        return SynthesisRegistryRunSummary(
-            outcome=outcome,
-            checkpoint_namespace=checkpoint_namespace,
-            flow_id=flow_id,
-            requested_steps=max_steps,
-            executed_steps=executed_steps,
-            total_pairs=total_pairs,
-            initially_processed_pairs=initially_processed_pairs,
-            processed_pairs_after_run=processed_pairs_after_run,
-            generated_drafts=generated_drafts,
-            registry_committed_envs=registry_committed_envs,
-            registry_duplicate_envs=registry_duplicate_envs,
-            remaining_pairs=remaining_pairs,
-            phase_monitor_log_path=phase_monitor_log_path,
-            quality_accepted_envs=quality_accepted_envs,
-            quality_rejected_envs=quality_rejected_envs,
-            generated_env_ids=generated_env_ids,
-            committed_env_ids=committed_env_ids,
-            duplicate_env_ids=duplicate_env_ids,
-            quality_rejected_env_ids=quality_rejected_env_ids,
-            registry_root_dir=environment_registry.root_dir,
-            registry_index_db_path=environment_registry.index_db_path,
-            steps=steps,
-        )
+        finally:
+            phase_monitor.close()
 
     async def close(self) -> None:
         await self.orchestrator.close()
         await self.environment_orchestrator.close()
+        close_registry = getattr(self.environment_registry, "close", None)
+        if callable(close_registry):
+            close_registry()
 
     def _build_runtime(self, entry: SynthesisDbRegistryEntry) -> SynthesisRuntimeHandle:
         config = self.base_config

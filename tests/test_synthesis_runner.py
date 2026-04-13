@@ -82,6 +82,7 @@ class _FakeRegistry:
     index_db_path: Path
     commit_results: list[EnvironmentRegistryCommitResult] = field(default_factory=list)
     committed_drafts: list[object] = field(default_factory=list)
+    closed: bool = False
 
     def commit_draft(self, draft: object) -> EnvironmentRegistryCommitResult:
         self.committed_drafts.append(draft)
@@ -95,6 +96,9 @@ class _FakeRegistry:
             difficulty_band=DifficultyBand.UNSET,
             filesystem_path=self.root_dir / env_id,
         )
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _config_with_run_db(tmp_path: Path):
@@ -181,6 +185,7 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
         ("sakila", CategoryTaxonomy.ASSIGNMENT, None),
         ("sakila", CategoryTaxonomy.ITINERARY, None),
     ]
+    assert fake_registry.closed is True
 
     runner2 = SynthesisRegistryRunner(
         _config_with_run_db(tmp_path),
