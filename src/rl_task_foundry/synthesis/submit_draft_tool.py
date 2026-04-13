@@ -309,8 +309,65 @@ def _monitor_label_data(
         "canonical_answer_root_type": snapshot["root_type"],
         "canonical_answer_slot_count": snapshot["slot_count"],
         "canonical_answer_field_names": snapshot["field_names"],
+        "canonical_answer_signature": (
+            _stable_json(canonical_answer) if canonical_answer is not None else None
+        ),
         "label_summary": label_summary,
         "constraint_summary": constraint_summary,
+    }
+
+
+def _label_change_summary(
+    *,
+    previous: dict[str, object] | None,
+    current: dict[str, object],
+) -> dict[str, object]:
+    previous_field_names = list(previous.get("canonical_answer_field_names", [])) if previous else []
+    current_field_names = list(current.get("canonical_answer_field_names", []))
+    previous_constraint_summary = (
+        list(previous.get("constraint_summary", [])) if previous else []
+    )
+    current_constraint_summary = list(current.get("constraint_summary", []))
+    previous_slot_count = previous.get("canonical_answer_slot_count") if previous else None
+    current_slot_count = current.get("canonical_answer_slot_count")
+    return {
+        "label_changed": (
+            previous.get("canonical_answer_signature") != current.get("canonical_answer_signature")
+            if previous is not None
+            else None
+        ),
+        "previous_canonical_answer_preview": (
+            previous.get("canonical_answer_preview") if previous is not None else None
+        ),
+        "previous_canonical_answer_slot_count": previous_slot_count,
+        "previous_constraint_count": (
+            len(previous_constraint_summary) if previous is not None else None
+        ),
+        "added_field_names": [
+            field_name
+            for field_name in current_field_names
+            if field_name not in previous_field_names
+        ],
+        "removed_field_names": [
+            field_name
+            for field_name in previous_field_names
+            if field_name not in current_field_names
+        ],
+        "slot_count_delta": (
+            current_slot_count - previous_slot_count
+            if isinstance(current_slot_count, int) and isinstance(previous_slot_count, int)
+            else None
+        ),
+        "constraint_count_delta": (
+            len(current_constraint_summary) - len(previous_constraint_summary)
+            if previous is not None
+            else None
+        ),
+        "label_summary_changed": (
+            previous.get("label_summary") != current.get("label_summary")
+            if previous is not None
+            else None
+        ),
     }
 
 
@@ -544,6 +601,7 @@ class SubmitDraftController:
     _last_label_signature: str | None = field(default=None, init=False)
     _last_label_slot_count: int | None = field(default=None, init=False)
     _last_constraint_count: int | None = field(default=None, init=False)
+    _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
 
     def submissions_left(self) -> int:
         return max(0, self.max_submissions - len(self.attempts))
@@ -967,6 +1025,10 @@ class SubmitDraftController:
         if self.phase_monitor is None:
             return
         label_data = _monitor_label_data(payload)
+        label_change = _label_change_summary(
+            previous=self._last_monitored_label_data,
+            current=label_data,
+        )
         self.phase_monitor.emit(
             phase="submit_draft",
             status=status,
@@ -1008,6 +1070,7 @@ class SubmitDraftController:
                         else None
                     ),
                 },
+                "label_change": label_change,
                 "pass_rate": pass_rate,
                 "matched_solver_runs": matched_solver_runs,
                 "total_solver_runs": total_solver_runs,
@@ -1023,6 +1086,7 @@ class SubmitDraftController:
                 **diagnostics,
             },
         )
+        self._last_monitored_label_data = label_data
 
 
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:

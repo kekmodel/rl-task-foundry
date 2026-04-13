@@ -573,12 +573,19 @@ async def test_submit_draft_requires_label_strengthening_after_too_easy(
         json.loads(line)
         for line in (tmp_path / "phase_monitors.jsonl").read_text().splitlines()
     ]
+    assert records[0]["actual_data"]["label_change"]["label_changed"] is None
     assert records[-1]["actual_data"]["canonical_answer_preview"] == {
         "customer_count": 5,
         "store_id": 1,
     }
     assert records[-1]["actual_data"]["label_axis_proxies"]["solution_space_slots"] == 2
     assert records[-1]["actual_data"]["label_summary"].startswith("This assignment answer")
+    assert records[-1]["actual_data"]["label_change"]["label_changed"] is False
+    assert records[-1]["actual_data"]["label_change"]["previous_canonical_answer_preview"] == {
+        "customer_count": 5,
+        "store_id": 1,
+    }
+    assert records[-1]["actual_data"]["label_change"]["slot_count_delta"] == 0
 
 
 @pytest.mark.asyncio
