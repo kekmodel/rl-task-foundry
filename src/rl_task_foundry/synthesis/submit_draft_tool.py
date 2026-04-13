@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import Field, ValidationError, field_validator
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     DIFFICULTY_CRANK_ORDER,
     DifficultyAxis,
@@ -293,10 +294,6 @@ def _constraint_summary_payload(
     return [SubmitConstraintSummaryItem.model_validate(item).model_dump(mode="json") for item in items]
 
 
-def _stable_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
-
-
 def _monitor_answer_snapshot(value: object) -> dict[str, object]:
     if isinstance(value, dict):
         return {
@@ -382,7 +379,9 @@ def _monitor_label_data(
         "canonical_answer_slot_count": snapshot["slot_count"],
         "canonical_answer_field_names": snapshot["field_names"],
         "canonical_answer_signature": (
-            _stable_json(canonical_answer) if canonical_answer is not None else None
+            canonical_json(canonical_answer, default=str)
+            if canonical_answer is not None
+            else None
         ),
         "label_summary": label_summary,
         "constraint_summary": constraint_summary,
@@ -444,7 +443,7 @@ def _label_change_summary(
 
 
 def _is_single_tool_derivable(answer: object, result: object) -> bool:
-    if _stable_json(answer) == _stable_json(result):
+    if canonical_json(answer, default=str) == canonical_json(result, default=str):
         return True
 
     if isinstance(answer, dict):
@@ -458,7 +457,7 @@ def _is_single_tool_derivable(answer: object, result: object) -> bool:
         if not isinstance(result, list) or len(result) < len(answer):
             return False
         prefix = result[: len(answer)]
-        if _stable_json(answer) == _stable_json(prefix):
+        if canonical_json(answer, default=str) == canonical_json(prefix, default=str):
             return True
         if answer and all(isinstance(item, dict) for item in answer) and all(
             isinstance(item, dict) for item in prefix
@@ -955,7 +954,7 @@ class SubmitDraftController:
         elif prompt_anchor_entity != payload.anchor_entity:
             error_codes.append(SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH)
         constraint_count = len(payload.constraint_summary)
-        label_signature = _stable_json(canonical_answer)
+        label_signature = canonical_json(canonical_answer, default=str)
         label_slot_count = _answer_slot_count(canonical_answer)
         blank_paths = _blank_string_paths(canonical_answer)
         if blank_paths:

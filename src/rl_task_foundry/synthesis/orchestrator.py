@@ -92,6 +92,11 @@ class SynthesisOrchestrator:
     runtime_factory: RuntimeFactory
     scheduler: SynthesisDomainScheduler = field(default_factory=SynthesisDomainScheduler)
     _runtimes: dict[str, SynthesisRuntimeHandle] = field(default_factory=dict, init=False, repr=False)
+    _runtime_accepts_requested_topic: dict[str, bool] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     async def build_snapshots(
         self,
@@ -140,8 +145,7 @@ class SynthesisOrchestrator:
         assert step.decision.topic is not None
         entry = next(item for item in registry if item.db_id == step.decision.db_id)
         runtime = self._runtime_for(entry)
-        signature = inspect.signature(runtime.synthesize_environment_draft)
-        if "requested_topic" in signature.parameters:
+        if self._runtime_accepts_topic(runtime, entry.db_id):
             draft = await runtime.synthesize_environment_draft(
                 db_id=entry.db_id,
                 requested_topic=step.decision.topic,
@@ -170,3 +174,12 @@ class SynthesisOrchestrator:
             runtime = self.runtime_factory(entry)
             self._runtimes[entry.db_id] = runtime
         return runtime
+
+    def _runtime_accepts_topic(self, runtime: SynthesisRuntimeHandle, db_id: str) -> bool:
+        cached = self._runtime_accepts_requested_topic.get(db_id)
+        if cached is not None:
+            return cached
+        signature = inspect.signature(runtime.synthesize_environment_draft)
+        accepts = "requested_topic" in signature.parameters
+        self._runtime_accepts_requested_topic[db_id] = accepts
+        return accepts

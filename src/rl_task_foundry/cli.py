@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from pathlib import Path
 
 import typer
@@ -363,19 +362,11 @@ def run_real_db_trial(
 
         runner = RealDbTrialRunner(config)
         try:
-            run_signature = inspect.signature(runner.run)
-            if "topic" in run_signature.parameters:
-                summary = await runner.run(
-                    output_dir,
-                    db_id=db_id,
-                    topic=resolved_topic,
-                )
-            else:
-                summary = await runner.run(
-                    output_dir,
-                    db_id=db_id,
-                    category=resolved_topic,
-                )
+            summary = await runner.run(
+                output_dir,
+                db_id=db_id,
+                topic=resolved_topic,
+            )
         finally:
             await runner.close()
 

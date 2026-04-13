@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
@@ -80,7 +80,11 @@ def canonicalize_field(
     raise CanonicalizationError(path, f"unsupported field type: {field.type}")
 
 
-def canonical_json(value: Any) -> str:
+def canonical_json(
+    value: Any,
+    *,
+    default: Callable[[Any], Any] | None = None,
+) -> str:
     """Return a stable JSON representation for exact-match comparisons."""
 
     return json.dumps(
@@ -88,6 +92,7 @@ def canonical_json(value: Any) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
+        default=default,
     )
 
 

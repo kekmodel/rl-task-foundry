@@ -378,6 +378,14 @@ def test_canonical_json_is_stable_for_exact_match() -> None:
     assert canonical_json({"b": 2, "a": 1}) == '{"a":1,"b":2}'
 
 
+def test_canonical_json_supports_default_serializer() -> None:
+    class _Custom:
+        def __str__(self) -> str:
+            return "custom-value"
+
+    assert canonical_json({"value": _Custom()}, default=str) == '{"value":"custom-value"}'
+
+
 def test_compute_reward_returns_matched_for_equal_canonical() -> None:
     schema = OutputSchemaContract(
         root=OutputFieldContract(

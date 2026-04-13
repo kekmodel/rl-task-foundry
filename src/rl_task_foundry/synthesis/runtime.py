@@ -1074,7 +1074,7 @@ class SynthesisAgentRuntime:
 
     @staticmethod
     def _signature_for_payload(payload: dict[str, object]) -> str:
-        normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+        normalized = canonical_json(payload, default=str)
         return f"sha256:{sha256(normalized.encode('utf-8')).hexdigest()}"
 
     @staticmethod

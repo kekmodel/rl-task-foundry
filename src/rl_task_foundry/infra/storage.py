@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rl_task_foundry.synthesis.canonicalize import canonical_json
+
 SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS runs (
@@ -144,7 +146,7 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
 
 
 def _json_payload(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return canonical_json(payload, default=str)
 
 
 def record_run(
@@ -270,48 +272,35 @@ def append_budget_ledger_entry(
 def summarize_run(path: str | Path, *, run_id: str) -> RunDbSummary:
     db_path = bootstrap_run_db(path)
     with connect_run_db(db_path) as conn:
-        total_tasks = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()[0]
-        )
-        accepted_tasks = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE run_id = ? AND status = 'accepted'",
-                (run_id,),
-            ).fetchone()[0]
-        )
-        rejected_tasks = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE run_id = ? AND status = 'rejected'",
-                (run_id,),
-            ).fetchone()[0]
-        )
-        skipped_tasks = int(
-            conn.execute(
-                """
-                SELECT COUNT(*) FROM tasks
-                WHERE run_id = ?
-                  AND status NOT IN ('accepted', 'rejected')
-                """,
-                (run_id,),
-            ).fetchone()[0]
-        )
-        verification_results = conn.execute(
-            "SELECT COUNT(*) FROM verification_results WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()[0]
-        event_count = conn.execute(
-            "SELECT COUNT(*) FROM event_log WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()[0]
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_tasks,
+                SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) AS accepted_tasks,
+                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_tasks,
+                SUM(CASE WHEN status NOT IN ('accepted', 'rejected') THEN 1 ELSE 0 END) AS skipped_tasks,
+                (
+                    SELECT COUNT(*)
+                    FROM verification_results
+                    WHERE run_id = ?
+                ) AS verification_results,
+                (
+                    SELECT COUNT(*)
+                    FROM event_log
+                    WHERE run_id = ?
+                ) AS event_count
+            FROM tasks
+            WHERE run_id = ?
+            """,
+            (run_id, run_id, run_id),
+        ).fetchone()
+        assert row is not None
     return RunDbSummary(
         run_id=run_id,
-        total_tasks=total_tasks,
-        accepted_tasks=accepted_tasks,
-        rejected_tasks=rejected_tasks,
-        skipped_tasks=skipped_tasks,
-        verification_results=int(verification_results),
-        event_count=int(event_count),
+        total_tasks=int(row["total_tasks"] or 0),
+        accepted_tasks=int(row["accepted_tasks"] or 0),
+        rejected_tasks=int(row["rejected_tasks"] or 0),
+        skipped_tasks=int(row["skipped_tasks"] or 0),
+        verification_results=int(row["verification_results"] or 0),
+        event_count=int(row["event_count"] or 0),
     )

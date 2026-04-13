@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -341,14 +340,10 @@ class RealDbTrialRunner:
     ) -> SynthesisAgentRuntime:
         if self.synthesis_runtime is None:
             trial_config = _config_with_trial_traces_dir(self.config, debug_traces_dir)
-            runtime_signature = inspect.signature(SynthesisAgentRuntime)
-            if "phase_monitor" in runtime_signature.parameters:
-                self.synthesis_runtime = SynthesisAgentRuntime(
-                    trial_config,
-                    phase_monitor=phase_monitor,
-                )
-            else:
-                self.synthesis_runtime = SynthesisAgentRuntime(trial_config)
+            self.synthesis_runtime = SynthesisAgentRuntime(
+                trial_config,
+                phase_monitor=phase_monitor,
+            )
         return cast(SynthesisAgentRuntime, self.synthesis_runtime)
 
 

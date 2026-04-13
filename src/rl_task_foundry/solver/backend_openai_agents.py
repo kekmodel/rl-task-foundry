@@ -186,6 +186,8 @@ class OpenAIAgentsSolverBackend:
     session_db_path: Path | None = None
     traces_dir: Path | None = None
     artifact_writer: ArtifactWriter | None = None
+    _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
+    _model: Any | None = field(default=None, init=False, repr=False)
 
     def _resolve_api_key(self) -> str:
         env_name = self.provider_config.api_key_env
@@ -197,7 +199,14 @@ class OpenAIAgentsSolverBackend:
             return "dummy"
         raise RuntimeError(f"Required API key env var is missing: {env_name}")
 
+    def _sdk_components(self) -> SimpleNamespace:
+        if self._sdk is None:
+            self._sdk = _load_sdk_components()
+        return self._sdk
+
     def _build_model(self, sdk: SimpleNamespace) -> Any:
+        if self._model is not None:
+            return self._model
         if self.provider_config.type not in {"openai", "openai_compatible"}:
             raise NotImplementedError(
                 f"OpenAI Agents backend does not yet support provider type: {self.provider_config.type}"
@@ -207,10 +216,11 @@ class OpenAIAgentsSolverBackend:
             base_url=self.provider_config.base_url,
             timeout=float(self.provider_config.timeout_s),
         )
-        return sdk.OpenAIChatCompletionsModel(
+        self._model = sdk.OpenAIChatCompletionsModel(
             model=self.solver_config.model,
             openai_client=client,
         )
+        return self._model
 
     def _normalized_tool_definitions(self) -> list[dict[str, Any]]:
         return [_normalize_tool_definition(definition) for definition in self.tool_definitions]
@@ -289,7 +299,7 @@ class OpenAIAgentsSolverBackend:
         return input_item.task_id, input_item.rendered_user_prompt
 
     async def run(self, episode: SolverEpisodeInput, *, replica_index: int) -> SolverResult:
-        sdk = _load_sdk_components()
+        sdk = self._sdk_components()
         # For non-OpenAI providers we default tracing off to avoid accidental export attempts.
         sdk.set_tracing_disabled(
             disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"

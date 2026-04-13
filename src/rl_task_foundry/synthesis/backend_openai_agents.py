@@ -75,6 +75,8 @@ class OpenAIAgentsSynthesisBackend:
     tool_definitions: list[dict[str, Any]] = field(default_factory=list)
     tool_executors: dict[str, ToolExecutor] = field(default_factory=dict)
     submit_draft_controller: SubmitDraftController | None = None
+    _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
+    _model: Any | None = field(default=None, init=False, repr=False)
 
     @property
     def provider_name(self) -> str:
@@ -93,7 +95,14 @@ class OpenAIAgentsSynthesisBackend:
             return "dummy"
         raise RuntimeError(f"Required API key env var is missing: {env_name}")
 
+    def _sdk_components(self) -> SimpleNamespace:
+        if self._sdk is None:
+            self._sdk = _load_sdk_components()
+        return self._sdk
+
     def _build_model(self, sdk: SimpleNamespace) -> Any:
+        if self._model is not None:
+            return self._model
         if self.provider_config.type not in {"openai", "openai_compatible"}:
             raise NotImplementedError(
                 "OpenAI Agents synthesis backend only supports openai/openai_compatible providers"
@@ -103,10 +112,11 @@ class OpenAIAgentsSynthesisBackend:
             base_url=self.provider_config.base_url,
             timeout=float(self.provider_config.timeout_s),
         )
-        return sdk.OpenAIChatCompletionsModel(
+        self._model = sdk.OpenAIChatCompletionsModel(
             model=self.model_ref.model,
             openai_client=client,
         )
+        return self._model
 
     def bind_atomic_tools(
         self,
@@ -179,7 +189,7 @@ class OpenAIAgentsSynthesisBackend:
         tool_surface_summary: dict[str, object],
         max_turns: int = 50,
     ) -> SynthesisConversationResult:
-        sdk = _load_sdk_components()
+        sdk = self._sdk_components()
         if hasattr(sdk, "set_tracing_disabled"):
             sdk.set_tracing_disabled(
                 disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"

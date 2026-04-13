@@ -389,6 +389,96 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
     assert tool_trace_payload["error"]["type"] == "MaxTurnsExceeded"
 
 
+@pytest.mark.asyncio
+async def test_openai_agents_solver_backend_reuses_cached_sdk_model(tmp_path, monkeypatch):
+    episode = _sample_episode()
+
+    class FakeAsyncOpenAI:
+        calls: list[dict[str, object]] = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.calls.append(kwargs)
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        calls: list[tuple[str, object]] = []
+
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+            self.model = model
+            self.openai_client = openai_client
+            self.__class__.calls.append((model, openai_client))
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            del agent, input, max_turns, session
+            return SimpleNamespace(
+                final_output={
+                    "submitted": True,
+                    "answer_text": '{"delivery_status":"IN_TRANSIT"}',
+                },
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(usage=SimpleNamespace(requests=1)),
+                to_input_list=lambda mode="preserve_all": [],
+                new_items=["tool-call(submit_result)"],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=lambda **_kwargs: None,
+            set_tracing_disabled=lambda *, disabled: None,
+            ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
+        ),
+    )
+
+    backend = OpenAIAgentsSolverBackend(
+        solver_config=SolverModelConfig(
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+            replicas=1,
+            memory_mode="none",
+            summarization_mode="off",
+        ),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SolverRuntimeConfig(
+            max_turns=8,
+            tracing=True,
+            sdk_sessions_enabled=False,
+        ),
+        tool_definitions=_sample_tool_definitions(),
+        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
+        traces_dir=tmp_path / "traces",
+    )
+
+    await backend.run(episode, replica_index=0)
+    await backend.run(episode, replica_index=1)
+
+    assert len(FakeAsyncOpenAI.calls) == 1
+    assert len(FakeChatModel.calls) == 1
+
+
 def test_openai_agents_solver_backend_rejects_unsupported_provider():
     backend = OpenAIAgentsSolverBackend(
         solver_config=SolverModelConfig(

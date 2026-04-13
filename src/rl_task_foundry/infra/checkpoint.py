@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 from rl_task_foundry.infra.storage import bootstrap_run_db, connect_run_db
+from rl_task_foundry.synthesis.canonicalize import canonical_json
 
 
 @dataclass(slots=True)
@@ -43,7 +43,7 @@ class CheckpointStore:
     ) -> None:
         key = (namespace, item_key)
         self._processed.add(key)
-        self._pending[key] = json.dumps(payload, ensure_ascii=False, sort_keys=True) if payload else None
+        self._pending[key] = canonical_json(payload, default=str) if payload else None
 
     def flush(self) -> None:
         if not self._pending:

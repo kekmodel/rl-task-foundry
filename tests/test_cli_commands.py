@@ -211,14 +211,14 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
             output_dir: Path,
             *,
             db_id: str,
-            category: CategoryTaxonomy,
+            topic: CategoryTaxonomy,
         ) -> RealDbTrialSummary:
             captured["output_dir"] = output_dir
             captured["db_id"] = db_id
-            captured["category"] = category
+            captured["topic"] = topic
             return RealDbTrialSummary(
                 db_id=db_id,
-                requested_category=category,
+                requested_topic=topic,
                 trial_status=RealDbTrialStatus.ACCEPTED,
                 summary_path=output_dir / "trial_summary.json",
                 flow_id="flow_trial_test",
@@ -253,6 +253,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0
     assert "real db trial complete" in result.stdout
+    assert captured["topic"] == CategoryTaxonomy.ASSIGNMENT
     assert "trial_status=accepted" in result.stdout
     assert "db_id=sakila" in result.stdout
     assert "requested_topic=assignment" in result.stdout
@@ -261,7 +262,6 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "summary_path=" in result.stdout
     assert captured["output_dir"] == output_dir
     assert captured["db_id"] == "sakila"
-    assert captured["category"] == CategoryTaxonomy.ASSIGNMENT
     assert captured["closed"] is True
 
 
