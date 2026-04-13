@@ -8,30 +8,7 @@
 - release_owner: `current rewrite lead`
 - branch: `codex/review-pack-archive-temp1`
 - commit: `52b6c97`
-- purpose: `path-centric baseline을 archive로 고정하고, rewrite 회귀 기준을 남긴다`
-
-## Baseline Review Pack
-
-clean-break rewrite 이전 baseline review pack snapshot은 아래 artifact로 고정한다.
-
-- committed markdown snapshot: [`review_pack.md`](/Users/jd/Documents/workspace/rl-data-harness/docs/baselines/phase0/review_pack.md)
-- committed jsonl snapshot: [`review_pack.jsonl`](/Users/jd/Documents/workspace/rl-data-harness/docs/baselines/phase0/review_pack.jsonl)
-
-선정 기준:
-
-- latest archived review pack
-- path-centric generator의 마지막 qualitative baseline
-- 이후 synthesis-agent rewrite와 직접 비교 가능한 artifact
-
-portable reference:
-
-- `docs/baselines/phase0/review_pack.md`
-- `docs/baselines/phase0/review_pack.jsonl`
-
-working-copy source:
-
-- `review_packs/20260411-114636-aggregate-focus-v2/review_pack.md`
-- `review_packs/20260411-114636-aggregate-focus-v2/review_pack.jsonl`
+- purpose: `rewrite 회귀 기준과 freeze 상태를 고정한다`
 
 ## Infra Regression Baseline
 
@@ -47,12 +24,11 @@ rewrite 중 계속 보호할 baseline green suite는 아래다.
 
 현재 기준:
 
-- baseline review pack snapshot이 명시됐다
 - green suite baseline이 재확인됐다
 - production training freeze는 [`runbook.md`](/Users/jd/Documents/workspace/rl-data-harness/docs/runbook.md)에 기록됐다
+- qualitative inspection은 runtime artifact 기준으로 수행한다
 
 ## Notes
 
 - 이 baseline은 training source가 아니다
-- review pack은 qualitative reference artifact이며 production acceptance gate가 아니다
-- 이후 rewrite 진행 중 새 review pack은 별도로 누적하되, 이 snapshot은 비교 기준으로 유지한다
+- qualitative review는 registry bundle과 debug traces를 기준으로 한다
