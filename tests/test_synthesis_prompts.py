@@ -123,6 +123,8 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "use anchor-scoped count evidence rather than a global database total" in instructions
     assert "If submit_draft says the draft is too hard, keep the same anchored user need and reduce only one difficulty axis" in instructions
     assert "Calling submit_draft without anchor_entity is always wrong." in instructions
+    assert "constraint_summary, anchor_query, and label_summary" in instructions
+    assert "instance_space" not in instructions
     assert "A rejection is not the end of the task." in instructions
     assert "smallest grounded step" in instructions
     assert "When submit_draft returns Accepted, stop." in instructions

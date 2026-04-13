@@ -89,7 +89,7 @@ def build_synthesis_agent_instructions() -> str:
         "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
         "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. Do not wrap it inside keys such as entity_type, primary_key, primary_keys, or metadata. "
         "Calling submit_draft without anchor_entity is always wrong. Choose the anchor first and keep it explicit in the payload. "
-        "When you call submit_draft, include all required arguments: topic, canonical_answer_json, anchor_entity, difficulty_vector, question, constraint_summary, instance_space, and label_summary. "
+        "When you call submit_draft, include all required arguments: topic, canonical_answer_json, anchor_entity, difficulty_vector, question, constraint_summary, anchor_query, and label_summary. "
         "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
         "The JSON inside the <entity> block must exactly match anchor_entity, including multi-column primary keys when present. "
         "Do not guess hidden values. "
