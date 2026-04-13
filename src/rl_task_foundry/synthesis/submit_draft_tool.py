@@ -37,6 +37,56 @@ _FORBIDDEN_PLACEHOLDER_TOKENS = (
     "replace_with_real_",
 )
 
+
+def _strip_message_status_prefix(text: str) -> str:
+    for prefix in (
+        "Rejected. ",
+        "Feedback. ",
+        "Accepted. ",
+        "STATUS: REJECTED. PRIMARY ISSUE: ",
+        "STATUS: FEEDBACK. PRIMARY ISSUE: ",
+        "STATUS: ACCEPTED. RESULT: ",
+        "RejectedError: ",
+        "FeedbackError: ",
+        "Accepted: ",
+        "ToolError: ",
+        "BudgetExhaustedError: ",
+    ):
+        if text.startswith(prefix):
+            return text.removeprefix(prefix).strip()
+    return text.strip()
+
+
+def _render_structured_message(
+    *,
+    kind: str,
+    primary: str | None = None,
+    result: str | None = None,
+    important: str | None = None,
+    also_fix: list[str] | None = None,
+    next_step: str | None = None,
+    attempts_left: int | None = None,
+) -> str:
+    headline = _strip_message_status_prefix(result or primary or "")
+    parts = [f"{kind}: {headline}"]
+    if result:
+        if primary:
+            parts.append(f"Primary issue: {_strip_message_status_prefix(primary)}")
+    elif primary:
+        # headline already used the primary body
+        pass
+    if important:
+        parts.append(f"Important: {important.strip()}")
+    if also_fix:
+        cleaned = [_strip_message_status_prefix(message) for message in also_fix if message.strip()]
+        if cleaned:
+            parts.append(f"Also fix: {' '.join(cleaned)}")
+    if next_step:
+        parts.append(f"Next step: {next_step.strip()}")
+    if attempts_left is not None:
+        parts.append(f"Attempts left: {attempts_left}.")
+    return " ".join(parts)
+
 class SubmitDraftErrorCode(StrEnum):
     NO_NEW_GROUNDED_OBSERVATION = "no_new_grounded_observation"
     TOPIC_REQUIRED = "topic_required"
@@ -989,9 +1039,12 @@ class SubmitDraftController:
 
     def reject_invalid_payload(self, *, parsed: dict[str, object], error: ValidationError) -> str:
         if self.accepted_draft is not None:
-            return "Accepted. Draft already stored."
+            return _render_structured_message(
+                kind="Accepted",
+                result="Draft already stored.",
+            )
         if self.submissions_left() <= 0:
-            return "Budget exhausted. No more attempts."
+            return "BudgetExhaustedError: No more attempts."
 
         error_codes: list[SubmitDraftErrorCode] = []
         for error_item in error.errors():
@@ -1072,9 +1125,12 @@ class SubmitDraftController:
 
     async def submit(self, payload: SubmitDraftPayload) -> str:
         if self.accepted_draft is not None:
-            return "Accepted. Draft already stored."
+            return _render_structured_message(
+                kind="Accepted",
+                result="Draft already stored.",
+            )
         if self.submissions_left() <= 0:
-            return "Budget exhausted. No more attempts."
+            return "BudgetExhaustedError: No more attempts."
 
         submission_index = len(self.attempts) + 1
         error_codes: list[SubmitDraftErrorCode] = []
@@ -1265,7 +1321,7 @@ class SubmitDraftController:
         except Exception as exc:
             return self._record_rejection(
                 submission_index=submission_index,
-                message=f"Rejected. Invalid draft: {type(exc).__name__}: {exc}",
+                message=f"RejectedError: Invalid draft: {type(exc).__name__}: {exc}",
                 error_codes=[SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED],
                 payload=payload,
                 search_cost_observations=search_cost_observations,
@@ -1314,9 +1370,12 @@ class SubmitDraftController:
                 search_cost_observations=search_cost_observations,
                 diagnostics={},
             )
-            return (
-                "Accepted. solver pass rate "
-                f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
+            return _render_structured_message(
+                kind="Accepted",
+                result=(
+                    "solver pass rate "
+                    f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
+                ),
             )
 
         attempts_left_after = self.submissions_left() - 1
@@ -1329,15 +1388,24 @@ class SubmitDraftController:
             )
             return self._record_rejection(
                 submission_index=submission_index,
-                message=(
-                    "Rejected. solver pass rate "
-                    f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
-                    "Choose exactly one difficulty axis yourself from the observed data and current label. "
-                    "Increase exactly one of search_cost, solution_space, or constraint_density above the previous level, and leave the other two unchanged. "
-                    "Keep the same anchored user need and preserve the other two axes at least as strong as before. "
-                    "Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that one axis before resubmitting. "
-                    f"{strengthening_guidance} "
-                    f"{max(0, attempts_left_after)} attempts left."
+                message=_render_structured_message(
+                    kind="RejectedError",
+                    result=(
+                        "solver pass rate "
+                        f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
+                    ),
+                    primary=(
+                        "Choose exactly one difficulty axis yourself from the observed data and current label. "
+                        "Increase exactly one of search_cost, solution_space, or constraint_density above the previous level, and leave the other two unchanged."
+                    ),
+                    important=(
+                        "Keep the same anchored user need and preserve the other two axes at least as strong as before. "
+                        f"{strengthening_guidance.strip()}"
+                    ),
+                    next_step=(
+                        "Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that one axis before resubmitting."
+                    ),
+                    attempts_left=max(0, attempts_left_after),
                 ),
                 error_codes=[SubmitDraftErrorCode.REJECT_TOO_EASY],
                 pass_rate=quality_gate_summary.pass_rate,
@@ -1353,14 +1421,20 @@ class SubmitDraftController:
         self.required_axis_reference_vector = payload.difficulty_vector
         return self._record_rejection(
             submission_index=submission_index,
-            message=(
-                "Rejected. solver pass rate "
-                f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}. "
-                "This draft is too hard for the configured band. "
-                "Choose exactly one difficulty axis yourself from the current label and observed data. "
-                "Reduce exactly one of search_cost, solution_space, or constraint_density by one grounded step, and leave the other two unchanged. "
-                "Keep the same anchored user need while simplifying only that one axis before changing topic or anchor. "
-                f"{max(0, attempts_left_after)} attempts left."
+            message=_render_structured_message(
+                kind="RejectedError",
+                result=(
+                    "solver pass rate "
+                    f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
+                ),
+                primary=(
+                    "This draft is too hard for the configured band. Choose exactly one difficulty axis yourself from the current label and observed data. "
+                    "Reduce exactly one of search_cost, solution_space, or constraint_density by one grounded step, and leave the other two unchanged."
+                ),
+                important=(
+                    "Keep the same anchored user need while simplifying only that one axis before changing topic or anchor."
+                ),
+                attempts_left=max(0, attempts_left_after),
             ),
             error_codes=[SubmitDraftErrorCode.REJECT_TOO_HARD],
             pass_rate=quality_gate_summary.pass_rate,
@@ -1500,8 +1574,6 @@ class SubmitDraftController:
                     "Rejected. The current anchored evidence path is still id-only. Do not submit another answer made only of *_id fields on this same path. "
                     "Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or pivot to a better grounded topic for that same user need."
                 )
-        if feedback_only and primary.startswith("Rejected. "):
-            primary = primary.replace("Rejected. ", "Feedback. ", 1)
         if error_codes and error_codes[0] in (
             SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED,
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
@@ -1512,7 +1584,7 @@ class SubmitDraftController:
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (
-                " Keep the same anchored user need and fix only the failing part when possible. "
+                "Keep the same anchored user need and fix only the failing part when possible. "
                 "Do not reset to a different topic, a different anchor, or a simpler global count just to satisfy this feedback."
             )
         additional_messages: list[str] = []
@@ -1520,29 +1592,28 @@ class SubmitDraftController:
             extra = message_map.get(error_code)
             if extra is None:
                 continue
-            extra_text = extra.removeprefix("Rejected. ").strip()
-            if extra.startswith("Feedback. "):
-                extra_text = extra.removeprefix("Feedback. ").strip()
-            additional_messages.append(extra_text)
+            additional_messages.append(extra)
         if feedback_only:
             attempts_left_after = self.submissions_left() - 1
-            if additional_messages:
-                return (
-                    f"{primary}{preserve_guidance} Also fix: {' '.join(additional_messages)} "
-                    "Make another atomic tool call if needed, then call submit_draft again. Do not stop with plain text. "
-                    f"{max(0, attempts_left_after)} attempts left."
-                )
-            return (
-                f"{primary}{preserve_guidance} Make another atomic tool call if needed, then call submit_draft again. "
-                f"Do not stop with plain text. {max(0, attempts_left_after)} attempts left."
+            return _render_structured_message(
+                kind="FeedbackError",
+                primary=primary,
+                important=preserve_guidance or None,
+                also_fix=additional_messages,
+                next_step=(
+                    "Make another atomic tool call if needed, then call submit_draft again. "
+                    "Do not stop with plain text."
+                ),
+                attempts_left=max(0, attempts_left_after),
             )
         attempts_left_after = self.submissions_left() - 1
-        if additional_messages:
-            return (
-                f"{primary}{preserve_guidance} Also fix: {' '.join(additional_messages)} "
-                f"{max(0, attempts_left_after)} attempts left."
-            )
-        return f"{primary}{preserve_guidance} {max(0, attempts_left_after)} attempts left."
+        return _render_structured_message(
+            kind="RejectedError",
+            primary=primary,
+            important=preserve_guidance or None,
+            also_fix=additional_messages,
+            attempts_left=max(0, attempts_left_after),
+        )
 
     def _record_feedback(
         self,
@@ -1564,8 +1635,8 @@ class SubmitDraftController:
             search_cost_observations=search_cost_observations,
             diagnostics={"error_codes": _error_code_values(error_codes), **(diagnostics or {})},
         )
-        if attempts_left_after <= 0 and "Budget exhausted. No more attempts." not in message:
-            return f"{message} Budget exhausted. No more attempts."
+        if attempts_left_after <= 0 and "BudgetExhaustedError: No more attempts." not in message:
+            return f"{message} BudgetExhaustedError: No more attempts."
         return message
 
     def _record_rejection(
@@ -1604,7 +1675,7 @@ class SubmitDraftController:
             diagnostics={"error_codes": _error_code_values(error_codes), **(diagnostics or {})},
         )
         if attempts_left_after <= 0:
-            return f"{message} Budget exhausted. No more attempts."
+            return f"{message} BudgetExhaustedError: No more attempts."
         return message
 
     def _emit_monitor(

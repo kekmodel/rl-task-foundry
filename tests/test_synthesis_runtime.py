@@ -537,9 +537,9 @@ async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path
     second = await controller.submit(_feedback_payload())
     third = await controller.submit(_feedback_payload())
 
-    assert "1 attempts left." in first
-    assert "Budget exhausted. No more attempts." in second
-    assert third == "Budget exhausted. No more attempts."
+    assert "Attempts left: 1." in first
+    assert "BudgetExhaustedError: No more attempts." in second
+    assert third == "BudgetExhaustedError: No more attempts."
     assert controller.submissions_left() == 0
 
 

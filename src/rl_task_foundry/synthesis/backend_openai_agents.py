@@ -182,7 +182,7 @@ class OpenAIAgentsSynthesisBackend:
                 if not isinstance(output, str):
                     continue
                 normalized = output.strip()
-                if normalized.startswith("Accepted.") or "Budget exhausted. No more attempts." in normalized:
+                if normalized.startswith("Accepted:") or "BudgetExhaustedError: No more attempts." in normalized:
                     return sdk.ToolsToFinalOutputResult(
                         is_final_output=True,
                         final_output=normalized,

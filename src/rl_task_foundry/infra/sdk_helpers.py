@@ -180,7 +180,10 @@ def make_sdk_tool(
             if hasattr(result, "__await__"):
                 result = await result
         except Exception as exc:
-            result = f"Tool error: {type(exc).__name__}: {exc}"
+            result = (
+                f"ToolError: {type(exc).__name__}: {exc}. "
+                "Fix the tool arguments and continue."
+            )
         if after_invoke is not None:
             callback_result = after_invoke(str(definition["name"]), payload, result)
             if hasattr(callback_result, "__await__"):

@@ -252,14 +252,14 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
                 [
                     SimpleNamespace(
                         tool=SimpleNamespace(name="submit_draft"),
-                        output="Accepted. solver pass rate 4/6.",
+                        output="Accepted: solver pass rate 4/6.",
                     )
                 ],
             )
             assert finalize.is_final_output is True
-            assert finalize.final_output == "Accepted. solver pass rate 4/6."
+            assert finalize.final_output == "Accepted: solver pass rate 4/6."
             return SimpleNamespace(
-                final_output="Accepted. solver pass rate 4/6.",
+                final_output="Accepted: solver pass rate 4/6.",
                 new_items=[],
                 context_wrapper=SimpleNamespace(usage=SimpleNamespace(requests=1)),
                 _current_turn=1,
@@ -309,7 +309,7 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
         max_turns=50,
     )
 
-    assert result.final_output_text == "Accepted. solver pass rate 4/6."
+    assert result.final_output_text == "Accepted: solver pass rate 4/6."
     assert FakeAgent.last_instance.kwargs["reset_tool_choice"] is False
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
 
@@ -327,7 +327,11 @@ def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
         [
             SimpleNamespace(
                 tool=SimpleNamespace(name="submit_draft"),
-                output="Feedback. Fix the identifier chain and resubmit. 2 attempts left.",
+                output=(
+                    "FeedbackError: Fix the identifier chain and resubmit. "
+                    "Next step: Make another atomic tool call if needed, then call submit_draft again. "
+                    "Do not stop with plain text. Attempts left: 2."
+                ),
             )
         ],
     )
@@ -349,11 +353,16 @@ def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> No
         [
             SimpleNamespace(
                 tool=SimpleNamespace(name="submit_draft"),
-                output="Feedback. Fix the identifier chain and resubmit. 0 attempts left. Budget exhausted. No more attempts.",
+                output=(
+                    "FeedbackError: Fix the identifier chain and resubmit. "
+                    "Next step: Make another atomic tool call if needed, then call submit_draft again. "
+                    "Do not stop with plain text. Attempts left: 0. "
+                    "BudgetExhaustedError: No more attempts."
+                ),
             )
         ],
     )
 
     assert finalize.is_final_output is True
     assert finalize.final_output is not None
-    assert "Budget exhausted. No more attempts." in finalize.final_output
+    assert "BudgetExhaustedError: No more attempts." in finalize.final_output
