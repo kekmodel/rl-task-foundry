@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from rl_task_foundry.config.models import TaskRegistryConfig
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
@@ -129,17 +130,33 @@ def _sample_draft(
 
 
 def test_bucketize_difficulty_vector() -> None:
-    assert bucketize_difficulty_vector(build_difficulty_vector()) == DifficultyBand.UNSET
+    registry_config = TaskRegistryConfig()
     assert (
-        bucketize_difficulty_vector(build_difficulty_vector(solution_space=2.0))
+        bucketize_difficulty_vector(
+            build_difficulty_vector(),
+            registry_config=registry_config,
+        )
+        == DifficultyBand.UNSET
+    )
+    assert (
+        bucketize_difficulty_vector(
+            build_difficulty_vector(solution_space=2.0),
+            registry_config=registry_config,
+        )
         == DifficultyBand.LOW
     )
     assert (
-        bucketize_difficulty_vector(build_difficulty_vector(solution_space=4.0))
+        bucketize_difficulty_vector(
+            build_difficulty_vector(solution_space=4.0),
+            registry_config=registry_config,
+        )
         == DifficultyBand.MEDIUM
     )
     assert (
-        bucketize_difficulty_vector(build_difficulty_vector(solution_space=9.0))
+        bucketize_difficulty_vector(
+            build_difficulty_vector(solution_space=9.0),
+            registry_config=registry_config,
+        )
         == DifficultyBand.HIGH
     )
 

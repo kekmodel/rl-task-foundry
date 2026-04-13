@@ -34,6 +34,7 @@ def test_budget_ledger_abort_guard_and_budget_limit():
         accepted_examples=1,
         attempted_tasks=10,
         minimum_accept_rate=0.2,
+        min_attempts=10,
     )
 
     ledger.release(reservation_id)

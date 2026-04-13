@@ -102,7 +102,7 @@ class BudgetLedger:
         accepted_examples: int,
         attempted_tasks: int,
         minimum_accept_rate: float,
-        min_attempts: int = 10,
+        min_attempts: int,
     ) -> bool:
         if attempted_tasks < min_attempts or attempted_tasks == 0:
             return False

@@ -27,7 +27,7 @@ class _Subscriber:
 class EventBus:
     """Async event bus with bounded per-subscriber queues and drop-on-lag semantics."""
 
-    def __init__(self, *, max_queue_size: int = 1000) -> None:
+    def __init__(self, *, max_queue_size: int) -> None:
         self.max_queue_size = max_queue_size
         self._listeners: dict[str, list[_Subscriber]] = defaultdict(list)
 

@@ -7,6 +7,7 @@ def test_provider_circuit_breaker_trips_and_recovers():
         window_s=60,
         threshold=0.3,
         probe_interval_s=30,
+        minimum_request_count=2,
     )
 
     breaker.record_failure(now=0.0)

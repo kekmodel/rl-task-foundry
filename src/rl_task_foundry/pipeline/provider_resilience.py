@@ -24,7 +24,7 @@ class ProviderCircuitBreaker:
     window_s: int
     threshold: float
     probe_interval_s: int
-    minimum_request_count: int = 2
+    minimum_request_count: int
     _history: deque[tuple[float, bool]] = field(default_factory=deque, init=False, repr=False)
     _open_until_monotonic: float | None = field(default=None, init=False, repr=False)
 

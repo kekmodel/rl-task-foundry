@@ -81,6 +81,21 @@ class SynthesisRuntimeConfig(StrictModel):
     max_difficulty_cranks: int = Field(default=6, ge=1)
     max_consecutive_category_discards: int = Field(default=3, ge=1)
     category_backoff_duration_s: int = Field(default=3600, ge=1)
+    schema_summary_max_tables: int = Field(default=32, ge=1)
+    tool_surface_summary_max_entries: int = Field(default=24, ge=1)
+    prompt_schema_orientation_max_tables: int = Field(default=8, ge=1)
+    prompt_schema_orientation_max_columns: int = Field(default=8, ge=1)
+    prompt_tool_surface_hint_limit: int = Field(default=16, ge=1)
+    prompt_self_anchor_surface_hint_limit: int = Field(default=8, ge=1)
+    selected_topic_min_token_length: int = Field(default=3, ge=1)
+    label_preview_field_limit: int = Field(default=8, ge=1)
+    diagnostic_item_limit: int = Field(default=5, ge=1)
+    recent_tool_call_limit: int = Field(default=20, ge=1)
+    constraint_density_relax_threshold: int = Field(default=2, ge=0)
+    repeated_error_escalation_threshold: int = Field(default=2, ge=1)
+    payload_preview_max_string_length: int = Field(default=400, ge=1)
+    payload_preview_max_list_items: int = Field(default=3, ge=1)
+    payload_preview_max_dict_items: int = Field(default=6, ge=1)
 
 
 class SynthesisCoveragePlannerConfig(StrictModel):
@@ -114,6 +129,7 @@ class ProviderResilienceConfig(StrictModel):
     circuit_breaker_window_s: int = Field(default=60, ge=1)
     circuit_breaker_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
     probe_interval_s: int = Field(default=30, ge=1)
+    minimum_request_count: int = Field(default=2, ge=1)
     release_semaphore_on_backoff: bool = True
 
 
@@ -123,11 +139,20 @@ class DedupConfig(StrictModel):
     minhash_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
 
 
+class TaskRegistryConfig(StrictModel):
+    minhash_num_perm: int = Field(default=128, ge=1)
+    difficulty_band_low_max_total: float = Field(default=3.0, ge=0.0)
+    difficulty_band_medium_max_total: float = Field(default=8.0, ge=0.0)
+    default_query_limit: int = Field(default=20, ge=1)
+    semantic_shingle_size: int = Field(default=3, ge=1)
+
+
 class BudgetConfig(StrictModel):
     max_run_usd: float = Field(ge=0.0)
     max_gpu_hours: float | None = Field(default=None, ge=0.0)
     compose_phase_usd: float = Field(ge=0.0)
     solve_phase_usd: float = Field(ge=0.0)
+    min_accept_rate_attempts: int = Field(default=10, ge=1)
     reserve_strategy: Literal["phase_specific"] = "phase_specific"
 
 
@@ -159,6 +184,7 @@ class AppConfig(StrictModel):
     solver_runtime: SolverRuntimeConfig
     calibration: CalibrationConfig
     dedup: DedupConfig
+    task_registry: TaskRegistryConfig = Field(default_factory=TaskRegistryConfig)
     budget: BudgetConfig
     privacy: PrivacyConfig
     output: OutputConfig

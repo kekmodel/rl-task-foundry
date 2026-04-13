@@ -112,15 +112,34 @@ def normalize_tool_definition(
     return normalized
 
 
-def preview_payload(value: object) -> object:
+def preview_payload(
+    value: object,
+    *,
+    max_string_length: int,
+    max_list_items: int,
+    max_dict_items: int,
+) -> object:
     if isinstance(value, str):
-        return value[:400]
+        return value[:max_string_length]
     if isinstance(value, list):
-        return [preview_payload(item) for item in value[:3]]
+        return [
+            preview_payload(
+                item,
+                max_string_length=max_string_length,
+                max_list_items=max_list_items,
+                max_dict_items=max_dict_items,
+            )
+            for item in value[:max_list_items]
+        ]
     if isinstance(value, dict):
         preview: dict[str, object] = {}
-        for key, item in list(value.items())[:6]:
-            preview[str(key)] = preview_payload(item)
+        for key, item in list(value.items())[:max_dict_items]:
+            preview[str(key)] = preview_payload(
+                item,
+                max_string_length=max_string_length,
+                max_list_items=max_list_items,
+                max_dict_items=max_dict_items,
+            )
         return preview
     return value
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rl_task_foundry.config.models import SynthesisRuntimeConfig
 from rl_task_foundry.synthesis.contracts import DifficultyAxis, topic_phrase
 
 LANGUAGE_NAMES = {
@@ -140,6 +141,7 @@ def build_synthesis_input(
     task_language: str,
     schema_summary: dict[str, object],
     tool_surface_summary: dict[str, object],
+    runtime_config: SynthesisRuntimeConfig,
 ) -> str:
     sections: list[str] = []
     sections.append("# Domain\n" f"{domain_name}: {scenario_description}")
@@ -157,12 +159,14 @@ def build_synthesis_input(
         schema_lines.append(f"- Foreign-key edge count: {edge_count}")
     tables = schema_summary.get("tables")
     if isinstance(tables, list):
-        for table in tables[:8]:
+        for table in tables[: runtime_config.prompt_schema_orientation_max_tables]:
             if not isinstance(table, dict):
                 continue
             qualified_name = table.get("qualified_name") or table.get("table_name")
             columns = table.get("column_names") or []
-            schema_lines.append(f"- {qualified_name}: columns={list(columns)[:8]}")
+            schema_lines.append(
+                f"- {qualified_name}: columns={list(columns)[: runtime_config.prompt_schema_orientation_max_columns]}"
+            )
     if schema_lines:
         sections.append("# Schema Orientation\n" + "\n".join(schema_lines))
 
@@ -170,7 +174,7 @@ def build_synthesis_input(
     self_anchor_lines: list[str] = []
     surfaces = tool_surface_summary.get("entity_surfaces")
     if isinstance(surfaces, list):
-        for item in surfaces[:16]:
+        for item in surfaces[: runtime_config.prompt_tool_surface_hint_limit]:
             if not isinstance(item, dict):
                 continue
             tool_name = str(item.get("tool_name") or "")
@@ -193,7 +197,11 @@ def build_synthesis_input(
         sections.append("# Tool Surface Hints\n" + "\n".join(tool_surface_lines))
     self_anchor_surfaces = tool_surface_summary.get("self_anchor_surfaces")
     if isinstance(self_anchor_surfaces, list):
-        surface_names = [str(name) for name in self_anchor_surfaces[:8] if isinstance(name, str)]
+        surface_names = [
+            str(name)
+            for name in self_anchor_surfaces[: runtime_config.prompt_self_anchor_surface_hint_limit]
+            if isinstance(name, str)
+        ]
         if surface_names:
             self_anchor_lines.append(
                 "- Person-like self anchor surfaces are available: "

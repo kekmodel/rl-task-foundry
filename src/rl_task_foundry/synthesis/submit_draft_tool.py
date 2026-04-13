@@ -319,29 +319,47 @@ def _constraint_summary_payload(
     return [SubmitConstraintSummaryItem.model_validate(item).model_dump(mode="json") for item in items]
 
 
-def _monitor_answer_snapshot(value: object) -> dict[str, object]:
+def _preview_runtime_payload(value: object, *, config: AppConfig) -> object:
+    return preview_payload(
+        value,
+        max_string_length=config.synthesis.runtime.payload_preview_max_string_length,
+        max_list_items=config.synthesis.runtime.payload_preview_max_list_items,
+        max_dict_items=config.synthesis.runtime.payload_preview_max_dict_items,
+    )
+
+
+def _monitor_answer_snapshot(
+    value: object,
+    *,
+    config: AppConfig,
+) -> dict[str, object]:
     if isinstance(value, dict):
         return {
             "root_type": "object",
             "slot_count": len(value),
-            "field_names": list(value.keys())[:8],
-            "preview": preview_payload(value),
+            "field_names": list(value.keys())[: config.synthesis.runtime.label_preview_field_limit],
+            "preview": _preview_runtime_payload(value, config=config),
         }
     if isinstance(value, list):
         field_names: list[str] = []
         if value and isinstance(value[0], dict):
-            field_names = [str(key) for key in list(value[0].keys())[:8]]
+            field_names = [
+                str(key)
+                for key in list(value[0].keys())[
+                    : config.synthesis.runtime.label_preview_field_limit
+                ]
+            ]
         return {
             "root_type": "array",
             "slot_count": len(value),
             "field_names": field_names,
-            "preview": preview_payload(value),
+            "preview": _preview_runtime_payload(value, config=config),
         }
     return {
         "root_type": type(value).__name__,
         "slot_count": 1,
         "field_names": [],
-        "preview": preview_payload(value),
+        "preview": _preview_runtime_payload(value, config=config),
     }
 
 
@@ -357,6 +375,8 @@ def _answer_slot_count(value: object) -> int:
 
 def _monitor_label_data(
     payload: SubmitDraftPayload | dict[str, object] | None,
+    *,
+    config: AppConfig,
 ) -> dict[str, object]:
     if payload is None:
         return {
@@ -378,7 +398,7 @@ def _monitor_label_data(
         label_summary = payload.get("label_summary")
         raw_constraints = payload.get("constraint_summary")
         constraint_summary = (
-            preview_payload(raw_constraints)
+            _preview_runtime_payload(raw_constraints, config=config)
             if isinstance(raw_constraints, list)
             else []
         )
@@ -389,7 +409,7 @@ def _monitor_label_data(
                 canonical_answer = raw_canonical
 
     snapshot = (
-        _monitor_answer_snapshot(canonical_answer)
+        _monitor_answer_snapshot(canonical_answer, config=config)
         if canonical_answer is not None
         else {
             "root_type": None,
@@ -844,10 +864,11 @@ def _axis_to_relax_for_too_hard(
     answer: object,
     constraint_count: int,
     difficulty_vector: DifficultyVectorContract,
+    constraint_density_relax_threshold: int,
 ) -> DifficultyAxis:
     if _answer_has_multi_item_collection(answer):
         return DifficultyAxis.SOLUTION_SPACE
-    if constraint_count > 2:
+    if constraint_count > constraint_density_relax_threshold:
         return DifficultyAxis.CONSTRAINT_DENSITY
     ranked_axes = sorted(
         flatten_difficulty_vector(difficulty_vector).items(),
@@ -913,8 +934,16 @@ def _split_entity_wrapped_prompt(
     return anchor_entity, body, None
 
 
-def _label_summary_matches_selected_topic(*, selected_topic: str, label_summary: str) -> bool:
-    selected_topic_tokens = topic_tokens(selected_topic)
+def _label_summary_matches_selected_topic(
+    *,
+    selected_topic: str,
+    label_summary: str,
+    min_token_length: int,
+) -> bool:
+    selected_topic_tokens = topic_tokens(
+        selected_topic,
+        min_token_length=min_token_length,
+    )
     if not selected_topic_tokens:
         return True
     normalized_summary = normalize_words(label_summary, lowercase=True)
@@ -1057,8 +1086,8 @@ class SubmitDraftController:
         self._atomic_tool_calls.append(
             {
                 "tool_name": tool_name,
-                "params": preview_payload(params),
-                "result": preview_payload(result),
+                "params": _preview_runtime_payload(params, config=self.config),
+                "result": _preview_runtime_payload(result, config=self.config),
             }
         )
 
@@ -1167,7 +1196,9 @@ class SubmitDraftController:
         elif self.self_anchor_surface_names and not _anchor_entity_is_person_like(payload.anchor_entity):
             error_codes.append(SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED)
             invalid_diagnostics["available_self_anchor_surfaces"] = list(
-                self.self_anchor_surface_names[:5]
+                self.self_anchor_surface_names[
+                    : self.config.synthesis.runtime.diagnostic_item_limit
+                ]
             )
         if (
             _uses_temporal_ordering_language(payload.constraint_summary)
@@ -1210,7 +1241,9 @@ class SubmitDraftController:
         blank_paths = _blank_string_paths(canonical_answer)
         if blank_paths:
             error_codes.append(SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN)
-            invalid_diagnostics["blank_string_paths"] = blank_paths[:5]
+            invalid_diagnostics["blank_string_paths"] = blank_paths[
+                : self.config.synthesis.runtime.diagnostic_item_limit
+            ]
         derivation_record = _single_tool_derivation_record(
             canonical_answer,
             self._raw_atomic_tool_calls,
@@ -1236,7 +1269,9 @@ class SubmitDraftController:
         )
         if ungrounded_strings:
             error_codes.append(SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED)
-            invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[:5]
+            invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[
+                : self.config.synthesis.runtime.diagnostic_item_limit
+            ]
         if question_body is not None:
             question_lower = question_body.lower()
             if _contains_entity_placeholder_token(question_lower):
@@ -1284,6 +1319,7 @@ class SubmitDraftController:
         if not _label_summary_matches_selected_topic(
             selected_topic=payload.topic,
             label_summary=payload.label_summary,
+            min_token_length=self.config.synthesis.runtime.selected_topic_min_token_length,
         ):
             error_codes.append(SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED)
 
@@ -1472,6 +1508,9 @@ class SubmitDraftController:
             answer=canonical_answer,
             constraint_count=constraint_count,
             difficulty_vector=payload.difficulty_vector,
+            constraint_density_relax_threshold=(
+                self.config.synthesis.runtime.constraint_density_relax_threshold
+            ),
         )
         self.required_axis = requested_axis
         self.required_axis_mode = DifficultyAdjustmentMode.RELAX
@@ -1633,7 +1672,8 @@ class SubmitDraftController:
         if (
             error_codes
             and error_codes[0] is self._last_primary_error_code
-            and self._consecutive_primary_error_count >= 2
+            and self._consecutive_primary_error_count
+            >= self.config.synthesis.runtime.repeated_error_escalation_threshold
         ):
             escalation_guidance = (
                 " You have repeated the same failure multiple times. Abandon this label family and pivot: "
@@ -1762,7 +1802,7 @@ class SubmitDraftController:
     ) -> None:
         if self.phase_monitor is None:
             return
-        label_data = _monitor_label_data(payload)
+        label_data = _monitor_label_data(payload, config=self.config)
         label_change = _label_change_summary(
             previous=self._last_monitored_label_data,
             current=label_data,
@@ -1833,7 +1873,9 @@ class SubmitDraftController:
                 ),
                 "required_axis_reference_value": self.required_axis_reference_value,
                 "difficulty_crank_history": [axis.value for axis in self.difficulty_crank_history],
-                "recent_tool_calls": self._atomic_tool_calls[-5:],
+                "recent_tool_calls": self._atomic_tool_calls[
+                    -self.config.synthesis.runtime.diagnostic_item_limit :
+                ],
                 **diagnostics,
             },
         )

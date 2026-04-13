@@ -243,6 +243,7 @@ class OpenAIAgentsSynthesisBackend:
             task_language=task_language,
             schema_summary=schema_summary,
             tool_surface_summary=tool_surface_summary,
+            runtime_config=self.runtime_config,
         )
         started_at = perf_counter()
         try:
@@ -279,7 +280,9 @@ class OpenAIAgentsSynthesisBackend:
                     },
                     "transcript_ref": transcript_ref,
                     "recent_atomic_tool_calls": (
-                        self.submit_draft_controller._atomic_tool_calls[-20:]
+                        self.submit_draft_controller._atomic_tool_calls[
+                            -self.runtime_config.recent_tool_call_limit :
+                        ]
                         if self.submit_draft_controller is not None
                         else []
                     ),
@@ -315,7 +318,9 @@ class OpenAIAgentsSynthesisBackend:
                 "tool_calls": list(tool_calls),
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", []) or []],
                 "recent_atomic_tool_calls": (
-                    self.submit_draft_controller._atomic_tool_calls[-20:]
+                    self.submit_draft_controller._atomic_tool_calls[
+                        -self.runtime_config.recent_tool_call_limit :
+                    ]
                     if self.submit_draft_controller is not None
                     else []
                 ),

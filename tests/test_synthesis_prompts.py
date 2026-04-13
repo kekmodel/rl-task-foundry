@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rl_task_foundry.config import load_config
 from rl_task_foundry.synthesis.prompts import (
     build_synthesis_agent_instructions,
     build_synthesis_input,
@@ -7,11 +8,13 @@ from rl_task_foundry.synthesis.prompts import (
 
 
 def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
+    config = load_config("rl_task_foundry.yaml")
     prompt = build_synthesis_input(
         domain_name="service_operations",
         scenario_description="end-user support requests over a business database",
         requested_topic="record_history",
         task_language="ko",
+        runtime_config=config.synthesis.runtime,
         schema_summary={
             "table_count": 2,
             "edge_count": 1,
@@ -132,11 +135,13 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
 
 
 def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules() -> None:
+    config = load_config("rl_task_foundry.yaml")
     prompt = build_synthesis_input(
         domain_name="service_operations",
         scenario_description="end-user support requests over a business database",
         requested_topic="payment_history",
         task_language="ko",
+        runtime_config=config.synthesis.runtime,
         schema_summary={
             "table_count": 2,
             "edge_count": 1,

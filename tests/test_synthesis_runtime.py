@@ -278,10 +278,12 @@ def test_selected_topic_matching_normalizes_word_separators() -> None:
     assert _label_summary_matches_selected_topic(
         selected_topic="bundle_selection",
         label_summary="This bundle selection label is grounded in observed rows.",
+        min_token_length=3,
     )
     assert _label_summary_matches_selected_topic(
         selected_topic="bundle_selection",
         label_summary="This bundle_selection label is grounded in observed rows.",
+        min_token_length=3,
     )
 
 

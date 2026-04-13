@@ -272,7 +272,11 @@ SynthesisCategoryStatus.model_rebuild()
 SynthesisTaskDraft.model_rebuild()
 
 
-def summarize_schema_graph(graph: SchemaGraph, *, max_tables: int = 32) -> dict[str, object]:
+def summarize_schema_graph(
+    graph: SchemaGraph,
+    *,
+    max_tables: int,
+) -> dict[str, object]:
     table_summaries: list[dict[str, object]] = []
     limited_tables = graph.tables[:max_tables]
     for table in limited_tables:
@@ -304,7 +308,7 @@ def summarize_schema_graph(graph: SchemaGraph, *, max_tables: int = 32) -> dict[
 def summarize_atomic_tool_surface(
     bundle: AtomicToolBundle,
     *,
-    max_entity_surfaces: int = 24,
+    max_entity_surfaces: int,
 ) -> dict[str, object]:
     entity_surfaces: list[dict[str, object]] = []
     self_anchor_surfaces: list[str] = []
@@ -434,6 +438,7 @@ class SynthesisAgentRuntime:
                 window_s=self.config.provider_resilience.circuit_breaker_window_s,
                 threshold=self.config.provider_resilience.circuit_breaker_threshold,
                 probe_interval_s=self.config.provider_resilience.probe_interval_s,
+                minimum_request_count=self.config.provider_resilience.minimum_request_count,
             )
             for provider_name in self.config.providers
         }
@@ -467,8 +472,14 @@ class SynthesisAgentRuntime:
             db_id=db_id,
             graph=resolved_graph,
         )
-        schema_summary = summarize_schema_graph(resolved_graph)
-        tool_surface_summary = summarize_atomic_tool_surface(atomic_tool_bundle)
+        schema_summary = summarize_schema_graph(
+            resolved_graph,
+            max_tables=self.config.synthesis.runtime.schema_summary_max_tables,
+        )
+        tool_surface_summary = summarize_atomic_tool_surface(
+            atomic_tool_bundle,
+            max_entity_surfaces=self.config.synthesis.runtime.tool_surface_summary_max_entries,
+        )
         shuffle_seed = build_shuffle_seed(
             "synthesis",
             db_id,

@@ -80,9 +80,13 @@ def topic_phrase(value: object, *, lowercase: bool = False) -> str:
     return normalize_words(normalize_topic(value), lowercase=lowercase)
 
 
-def topic_tokens(value: object) -> tuple[str, ...]:
+def topic_tokens(value: object, *, min_token_length: int) -> tuple[str, ...]:
     normalized = topic_phrase(value, lowercase=True)
-    return tuple(token for token in re.findall(r"[a-z0-9]+", normalized) if len(token) >= 3)
+    return tuple(
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized)
+        if len(token) >= min_token_length
+    )
 
 
 def is_person_like_identifier(value: str) -> bool:

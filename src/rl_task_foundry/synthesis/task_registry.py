@@ -18,7 +18,7 @@ import numpy as np
 from datasketch import MinHash, MinHashLSH
 import yaml
 
-from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.config.models import AppConfig, TaskRegistryConfig
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
@@ -70,7 +70,6 @@ INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_task_registry_exact_signature ON tasks (exact_signature)",
 )
 
-MINHASH_NUM_PERM = 128
 SEMANTIC_DEDUP_TEXT_VERSION = 1
 
 
@@ -246,7 +245,7 @@ class TaskRegistryWriter:
     exact_dedup_enabled: bool = True
     near_dup_enabled: bool = True
     minhash_threshold: float = 0.9
-    minhash_num_perm: int = MINHASH_NUM_PERM
+    registry_config: TaskRegistryConfig = field(default_factory=TaskRegistryConfig)
     _semantic_scope_indexes: dict[tuple[str, str], _SemanticScopeIndex] = field(
         init=False,
         default_factory=dict,
@@ -275,6 +274,7 @@ class TaskRegistryWriter:
             exact_dedup_enabled=config.dedup.exact_enabled,
             near_dup_enabled=config.dedup.near_dup_enabled,
             minhash_threshold=config.dedup.minhash_threshold,
+            registry_config=config.task_registry,
         )
 
     def commit_draft(
@@ -283,10 +283,17 @@ class TaskRegistryWriter:
     ) -> TaskRegistryCommitResult:
         task_bundle = draft.task_bundle
         exact_signature = self._exact_signature(draft)
-        difficulty_band = bucketize_difficulty_vector(task_bundle.difficulty_vector)
+        difficulty_band = bucketize_difficulty_vector(
+            task_bundle.difficulty_vector,
+            registry_config=self.registry_config,
+        )
         semantic_text = build_semantic_dedup_text(task_bundle)
         semantic_signature = _encode_minhash_signature(
-            _build_minhash(semantic_text, num_perm=self.minhash_num_perm)
+            _build_minhash(
+                semantic_text,
+                num_perm=self.registry_config.minhash_num_perm,
+                shingle_size=self.registry_config.semantic_shingle_size,
+            )
         )
 
         temp_dir = self.root_dir / f".tmp-{task_bundle.task_id}"
@@ -495,11 +502,12 @@ class TaskRegistryWriter:
     def list_tasks(
         self,
         *,
-        limit: int = 20,
+        limit: int | None = None,
         db_id: str | None = None,
         topic: str | None = None,
     ) -> list[TaskRegistryRecord]:
-        if limit <= 0:
+        resolved_limit = self.registry_config.default_query_limit if limit is None else limit
+        if resolved_limit <= 0:
             return []
         where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
@@ -525,7 +533,7 @@ class TaskRegistryWriter:
             """
         )
         with self._connect() as conn:
-            rows = conn.execute(query, (*params, limit)).fetchall()
+            rows = conn.execute(query, (*params, resolved_limit)).fetchall()
         records: list[TaskRegistryRecord] = []
         for row in rows:
             payload = self._parse_payload(row["payload_json"])
@@ -549,11 +557,12 @@ class TaskRegistryWriter:
     def semantic_dedup_candidates(
         self,
         *,
-        limit: int = 20,
+        limit: int | None = None,
         db_id: str | None = None,
         topic: str | None = None,
     ) -> list[SemanticDedupCandidate]:
-        if limit <= 0:
+        resolved_limit = self.registry_config.default_query_limit if limit is None else limit
+        if resolved_limit <= 0:
             return []
         where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
@@ -575,7 +584,7 @@ class TaskRegistryWriter:
             """
         )
         with self._connect() as conn:
-            rows = conn.execute(query, (*params, limit)).fetchall()
+            rows = conn.execute(query, (*params, resolved_limit)).fetchall()
         candidates: list[SemanticDedupCandidate] = []
         for row in rows:
             payload = self._parse_payload(row["payload_json"])
@@ -606,7 +615,7 @@ class TaskRegistryWriter:
     def snapshot(
         self,
         *,
-        limit: int = 20,
+        limit: int | None = None,
         db_id: str | None = None,
         topic: str | None = None,
     ) -> TaskRegistrySnapshot:
@@ -630,8 +639,8 @@ class TaskRegistryWriter:
         conn: sqlite3.Connection | None = None,
     ) -> dict[str, object] | None:
         target = _decode_minhash_to_minhash(
-            semantic_signature,
-            num_perm=self.minhash_num_perm,
+                semantic_signature,
+            num_perm=self.registry_config.minhash_num_perm,
         )
         if target is None:
             return None
@@ -799,7 +808,7 @@ class TaskRegistryWriter:
             return existing
         lsh = MinHashLSH(
             threshold=self.minhash_threshold,
-            num_perm=self.minhash_num_perm,
+            num_perm=self.registry_config.minhash_num_perm,
         )
         metadata_by_task_id: dict[str, dict[str, object]] = {}
         connection = conn or self._connect()
@@ -821,7 +830,10 @@ class TaskRegistryWriter:
         for row in rows:
             task_id = str(row["task_id"])
             signature = self._semantic_signature_for_row(row=row, topic=normalized_topic)
-            minhash = _decode_minhash_to_minhash(signature, num_perm=self.minhash_num_perm)
+            minhash = _decode_minhash_to_minhash(
+                signature,
+                num_perm=self.registry_config.minhash_num_perm,
+            )
             if minhash is None:
                 continue
             lsh.insert(task_id, minhash, check_duplication=False)
@@ -850,7 +862,7 @@ class TaskRegistryWriter:
             return
         minhash = _decode_minhash_to_minhash(
             semantic_signature,
-            num_perm=self.minhash_num_perm,
+            num_perm=self.registry_config.minhash_num_perm,
         )
         if minhash is None:
             return
@@ -872,7 +884,7 @@ class TaskRegistryWriter:
         if (
             signature
             and int(version) == SEMANTIC_DEDUP_TEXT_VERSION
-            and _signature_length(signature) == self.minhash_num_perm
+            and _signature_length(signature) == self.registry_config.minhash_num_perm
         ):
             return signature
         payload = self._parse_payload(row["payload_json"])
@@ -886,7 +898,11 @@ class TaskRegistryWriter:
                 constraint_summaries=_constraint_summaries_from_payload(payload),
             )
         return _encode_minhash_signature(
-            _build_minhash(existing_text, num_perm=self.minhash_num_perm)
+            _build_minhash(
+                existing_text,
+                num_perm=self.registry_config.minhash_num_perm,
+                shingle_size=self.registry_config.semantic_shingle_size,
+            )
         )
 
     def _count_tasks(
@@ -1079,7 +1095,11 @@ class TaskRegistryWriter:
         self._connection = None
 
 
-def bucketize_difficulty_vector(difficulty_vector: object) -> DifficultyBand:
+def bucketize_difficulty_vector(
+    difficulty_vector: object,
+    *,
+    registry_config: TaskRegistryConfig,
+) -> DifficultyBand:
     if difficulty_vector is None:
         return DifficultyBand.UNSET
     if hasattr(difficulty_vector, "flatten"):
@@ -1090,9 +1110,9 @@ def bucketize_difficulty_vector(difficulty_vector: object) -> DifficultyBand:
         return DifficultyBand.UNSET
     if total == 0.0:
         return DifficultyBand.UNSET
-    if total <= 3.0:
+    if total <= registry_config.difficulty_band_low_max_total:
         return DifficultyBand.LOW
-    if total <= 8.0:
+    if total <= registry_config.difficulty_band_medium_max_total:
         return DifficultyBand.MEDIUM
     return DifficultyBand.HIGH
 
@@ -1124,10 +1144,19 @@ def estimate_semantic_similarity(
     left_text: str,
     right_text: str,
     *,
-    num_perm: int = MINHASH_NUM_PERM,
+    num_perm: int,
+    shingle_size: int,
 ) -> float:
-    return _build_minhash(left_text, num_perm=num_perm).jaccard(
-        _build_minhash(right_text, num_perm=num_perm)
+    return _build_minhash(
+        left_text,
+        num_perm=num_perm,
+        shingle_size=shingle_size,
+    ).jaccard(
+        _build_minhash(
+            right_text,
+            num_perm=num_perm,
+            shingle_size=shingle_size,
+        )
     )
 
 
@@ -1181,9 +1210,9 @@ def _fallback_semantic_text(
     return "\n".join(parts)
 
 
-def _build_minhash(text: str, *, num_perm: int) -> MinHash:
+def _build_minhash(text: str, *, num_perm: int, shingle_size: int) -> MinHash:
     minhash = MinHash(num_perm=num_perm)
-    for token in _semantic_shingles(text):
+    for token in _semantic_shingles(text, shingle_size=shingle_size):
         minhash.update(token.encode("utf-8"))
     return minhash
 
@@ -1233,13 +1262,16 @@ def _decode_minhash_to_minhash(signature: str, *, num_perm: int) -> MinHash | No
     return minhash
 
 
-def _semantic_shingles(text: str) -> tuple[str, ...]:
+def _semantic_shingles(text: str, *, shingle_size: int) -> tuple[str, ...]:
     normalized = re.sub(r"\s+", " ", text.strip().lower())
     if not normalized:
         return ("<empty>",)
     tokens = re.findall(r"\w+", normalized)
     if not tokens:
         return (normalized,)
-    if len(tokens) < 3:
+    if len(tokens) < shingle_size:
         return tuple(tokens)
-    return tuple(" ".join(tokens[index : index + 3]) for index in range(len(tokens) - 2))
+    return tuple(
+        " ".join(tokens[index : index + shingle_size])
+        for index in range(len(tokens) - (shingle_size - 1))
+    )
