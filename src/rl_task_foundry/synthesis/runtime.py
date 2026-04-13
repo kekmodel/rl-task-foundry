@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from hashlib import sha256
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import Field, model_validator
 
@@ -31,6 +32,7 @@ from rl_task_foundry.synthesis.canonicalize import (
 )
 from rl_task_foundry.synthesis.contracts import (
     RolloutConstraintsContract,
+    RuntimeValue,
     StrictModel,
     TaskBundleContract,
     TaskBundleStatus,
@@ -58,6 +60,37 @@ from rl_task_foundry.synthesis.tool_runtime import (
     load_atomic_tool_module,
     with_tool_shuffle_seed,
 )
+
+if TYPE_CHECKING:
+    from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
+    from rl_task_foundry.synthesis.backend_openai_agents import SynthesisConversationResult
+
+
+class _SynthesisBackendProtocol(Protocol):
+    @property
+    def provider_name(self) -> str: ...
+    @property
+    def model_name(self) -> str: ...
+    def bind_atomic_tools(
+        self,
+        *,
+        tool_definitions: list[dict[str, Any]],
+        tool_executors: dict[str, ToolExecutor],
+    ) -> None: ...
+    def bind_submit_draft_controller(self, controller: SubmitDraftController) -> None: ...
+    async def run_synthesis(
+        self,
+        *,
+        db_id: str,
+        requested_topic: str,
+        domain_name: str,
+        task_language: str,
+        scenario_description: str,
+        schema_summary: dict[str, object],
+        tool_surface_summary: dict[str, object],
+        max_turns: int,
+    ) -> SynthesisConversationResult: ...
+
 
 CURRENT_SYNTHESIS_GENERATOR_VERSION = "milestone-3-runtime-v1"
 RUNTIME_OWNED_TASK_BUNDLE_FIELDS = frozenset(
@@ -395,7 +428,7 @@ class SynthesisAgentRuntime:
     """Single-db synthesis runtime with lock-protected shared state."""
 
     config: AppConfig
-    synthesis_backends: list[object] | None = None
+    synthesis_backends: list[_SynthesisBackendProtocol] | None = None
     _breakers: dict[str, ProviderCircuitBreaker] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -417,7 +450,7 @@ class SynthesisAgentRuntime:
     _atomic_tool_materializer: AtomicToolMaterializer | None = field(
         default=None, init=False, repr=False
     )
-    _solver_orchestrator: object | None = field(default=None, init=False, repr=False)
+    _solver_orchestrator: SolverOrchestrator | None = field(default=None, init=False, repr=False)
     _category_state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _conversation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     phase_monitor: PipelinePhaseMonitorLogger | None = None
@@ -490,6 +523,7 @@ class SynthesisAgentRuntime:
             requested_topic,
             datetime.now(timezone.utc).isoformat(),
         )
+        assert self._solver_orchestrator is not None, "SolverOrchestrator not initialized"
         controller = SubmitDraftController(
             config=self.config,
             requested_topic=requested_topic,
@@ -733,7 +767,7 @@ class SynthesisAgentRuntime:
         requested_topic: str,
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
-    ) -> object:
+    ) -> SynthesisConversationResult:
         candidate_backends = self.synthesis_backends or []
         if not candidate_backends:
             raise SynthesisPhaseExecutionError(
@@ -825,7 +859,7 @@ class SynthesisAgentRuntime:
             output_schema=output_schema,
             constraint_summary=[],
             difficulty_vector=submission.difficulty_vector,
-            instance_parameters=dict(submission.anchor_entity),
+            instance_parameters=cast(dict[str, RuntimeValue], submission.anchor_entity),
         )
         canonical_answer, canonical_answer_json, label_signature, rendered_user_prompt = (
             self._materialize_task_artifacts(
@@ -981,7 +1015,7 @@ class SynthesisAgentRuntime:
             task_signature=task_signature,
             tool_signature=tool_signature,
         )
-        payload = {"task": task.model_dump(mode="python")}
+        payload: dict[str, Any] = {"task": task.model_dump(mode="python")}
         payload.update(
             {
                 "task_id": task_id,
