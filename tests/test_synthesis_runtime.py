@@ -363,6 +363,38 @@ def _id_chain_payload() -> SubmitDraftPayload:
     )
 
 
+def _opaque_identifier_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "record_history",
+            "canonical_answer_json": '{"tracking_token": "550e8400-e29b-41d4-a716-446655440000"}',
+            "anchor_entity": anchor_entity,
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 1.0,
+                "constraint_density": 1.0,
+            },
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "제 기록과 연결된 추적 정보를 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_self",
+                    "kind": "membership",
+                    "summary": "Answer must stay within the anchored customer.",
+                }
+            ],
+            "anchor_query": {
+                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                "outputs": ["customer_id"],
+            },
+            "label_summary": "The record history label is grounded in the selected topic and anchored evidence.",
+        }
+    )
+
+
 def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
     payload = SubmitDraftPayload.model_validate(_accepted_payload().model_dump(mode="json"))
     cached_answer = payload.canonical_answer
@@ -583,6 +615,32 @@ async def test_submit_draft_calls_out_id_only_identifier_chain_path(
 
     assert "current anchored evidence path is still id-only" in message
     assert "Do not submit another answer made only of *_id fields" in message
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_opaque_identifier_values(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="record_history",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_id": 1, "tracking_token": "550e8400-e29b-41d4-a716-446655440000"},
+    )
+
+    message = await controller.submit(_opaque_identifier_payload())
+
+    assert "opaque identifier values" in message
+    assert "UUIDs, hashes, encrypted tokens" in message
 
 
 @pytest.mark.asyncio

@@ -99,6 +99,7 @@ def build_synthesis_agent_instructions() -> str:
         "Do not write a request that assumes the user understands hidden database structure. If a relationship is only visible because you explored it with tools, express it as a natural business need rather than as an internal linkage or data-model fact. "
         "Make label_summary an English explanation that explicitly includes the selected topic phrase and explains why the label is grounded and unique. "
         "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. Do not invent placeholders such as Unknown or Entity #1. "
+        "Do not use opaque identifiers such as UUIDs, hashes, encrypted tokens, or other random-looking reference strings as answer values, even if they were observed in tool results. "
         "Do not submit blank or placeholder string fields in the canonical answer. Every answer field must carry a grounded, non-empty value. "
         "Before choosing text answer fields such as names, titles, labels, or statuses, confirm that the observed tool results for the chosen surface actually expose those readable fields. "
         "If the observed surface is id-only, do not ask for unreadable text fields from it. Keep the same anchor and either switch to grounded counts, dates, amounts, statuses, ordering, or make new anchored tool calls through related entities whose observed rows expose readable fields. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. "

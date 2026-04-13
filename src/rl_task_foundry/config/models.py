@@ -96,6 +96,8 @@ class SynthesisRuntimeConfig(StrictModel):
     payload_preview_max_string_length: int = Field(default=400, ge=1)
     payload_preview_max_list_items: int = Field(default=3, ge=1)
     payload_preview_max_dict_items: int = Field(default=6, ge=1)
+    opaque_identifier_hex_min_length: int = Field(default=16, ge=1)
+    opaque_identifier_token_min_length: int = Field(default=20, ge=1)
 
 
 class SynthesisCoveragePlannerConfig(StrictModel):

@@ -94,6 +94,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "question must already be the full user-facing prompt in this exact shape" in instructions
     assert "The JSON inside the <entity> block must exactly match anchor_entity" in instructions
     assert "Only use names, titles, labels, statuses" in instructions
+    assert "Do not use opaque identifiers such as UUIDs, hashes, encrypted tokens" in instructions
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
     assert "Before choosing text answer fields such as names, titles, labels, or statuses" in instructions
     assert "If the observed surface is id-only" in instructions

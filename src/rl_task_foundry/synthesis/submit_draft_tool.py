@@ -74,6 +74,7 @@ class SubmitDraftErrorCode(StrEnum):
     LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
     LABEL_IDENTIFIER_CHAIN_FORBIDDEN = "label_identifier_chain_forbidden"
+    LABEL_OPAQUE_IDENTIFIER_FORBIDDEN = "label_opaque_identifier_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
     SELECTED_TOPIC_MISALIGNED = "selected_topic_misaligned"
     DIFFICULTY_WEAKENED = "difficulty_weakened"
@@ -113,6 +114,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY,
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN,
+        SubmitDraftErrorCode.LABEL_OPAQUE_IDENTIFIER_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
         SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED,
         SubmitDraftErrorCode.DIFFICULTY_WEAKENED,
@@ -650,6 +652,60 @@ def _blank_string_paths(value: object, *, path: str = "$") -> list[str]:
             blank_paths.extend(_blank_string_paths(item, path=f"{path}[{index}]"))
         return blank_paths
     return []
+
+
+_UUID_VALUE_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_HEX_VALUE_RE = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
+_OPAQUE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _looks_like_opaque_identifier_string(
+    value: str,
+    *,
+    config: AppConfig,
+) -> bool:
+    normalized = value.strip()
+    if not normalized or any(character.isspace() for character in normalized):
+        return False
+    lowered = normalized.lower()
+    if _UUID_VALUE_RE.fullmatch(lowered):
+        return True
+    if (
+        len(lowered) >= config.synthesis.runtime.opaque_identifier_hex_min_length
+        and _HEX_VALUE_RE.fullmatch(lowered)
+    ):
+        return True
+    if (
+        len(normalized) >= config.synthesis.runtime.opaque_identifier_token_min_length
+        and _OPAQUE_TOKEN_RE.fullmatch(normalized)
+        and any(character.isalpha() for character in normalized)
+        and any(character.isdigit() for character in normalized)
+    ):
+        return True
+    return False
+
+
+def _opaque_identifier_value_paths(
+    value: object,
+    *,
+    config: AppConfig,
+    path: str = "$",
+) -> list[str]:
+    opaque_paths: list[str] = []
+    if isinstance(value, str):
+        return [path] if _looks_like_opaque_identifier_string(value, config=config) else []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            opaque_paths.extend(_opaque_identifier_value_paths(item, config=config, path=f"{path}.{key}"))
+        return opaque_paths
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            opaque_paths.extend(_opaque_identifier_value_paths(item, config=config, path=f"{path}[{index}]"))
+        return opaque_paths
+    return opaque_paths
 
 
 def _ungrounded_answer_strings(
@@ -1280,6 +1336,15 @@ class SubmitDraftController:
             invalid_diagnostics["blank_string_paths"] = blank_paths[
                 : self.config.synthesis.runtime.diagnostic_item_limit
             ]
+        opaque_identifier_paths = _opaque_identifier_value_paths(
+            canonical_answer,
+            config=self.config,
+        )
+        if opaque_identifier_paths:
+            error_codes.append(SubmitDraftErrorCode.LABEL_OPAQUE_IDENTIFIER_FORBIDDEN)
+            invalid_diagnostics["opaque_identifier_paths"] = opaque_identifier_paths[
+                : self.config.synthesis.runtime.diagnostic_item_limit
+            ]
         derivation_record = _single_tool_derivation_record(
             canonical_answer,
             self._raw_atomic_tool_calls,
@@ -1675,6 +1740,9 @@ class SubmitDraftController:
             SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN: (
                 "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead. If the current hinted topic keeps forcing id-only answers, choose a better grounded topic for the same anchored user need before resubmitting."
             ),
+            SubmitDraftErrorCode.LABEL_OPAQUE_IDENTIFIER_FORBIDDEN: (
+                "Rejected. The canonical answer contains opaque identifier values such as UUIDs, hashes, encrypted tokens, or other random-looking reference strings. Even if those values were observed, they are not user-facing business labels. Return readable business values, dates, amounts, counts, statuses, or ordered records instead."
+            ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
                 "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."
             ),
@@ -1978,6 +2046,7 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "The JSON inside the <entity> block must exactly match anchor_entity. "
             "label_summary must be English, must explicitly include the selected topic phrase, and must explain why the label is grounded and unique. "
             "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "
+            "Do not submit opaque identifier values such as UUIDs, hashes, encrypted tokens, or random-looking reference strings as answer labels, even if they were observed. "
             "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "
             "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "
             "After any rejection, make at least one new atomic tool call before calling submit_draft again. "
