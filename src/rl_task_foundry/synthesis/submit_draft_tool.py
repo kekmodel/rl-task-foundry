@@ -207,6 +207,18 @@ def _preview_payload(value: object) -> object:
     return value
 
 
+def _constraint_summary_payload(
+    items: list[object],
+) -> list[dict[str, object]]:
+    payload: list[dict[str, object]] = []
+    for item in items:
+        if hasattr(item, "model_dump"):
+            payload.append(item.model_dump(mode="json"))
+        elif isinstance(item, dict):
+            payload.append({str(key): value for key, value in item.items()})
+    return payload
+
+
 def _stable_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
 
@@ -270,7 +282,7 @@ def _answer_uses_only_identifier_fields(answer: object) -> bool:
     def _keys_are_identifier_only(mapping: dict[str, object]) -> bool:
         if not mapping:
             return False
-        return all(isinstance(key, str) and key.endswith("_id") for key in mapping)
+        return all(isinstance(key, str) and _is_identifier_field_name(key) for key in mapping)
 
     if isinstance(answer, dict):
         return _keys_are_identifier_only(answer)
@@ -351,6 +363,20 @@ _ASSIGNMENT_TOPIC_MARKERS = (
     "할당",
     "책임",
 )
+
+_IDENTIFIER_FIELD_TOKEN_RE = re.compile(
+    r"(?<![a-z0-9_])[a-z][a-z0-9_]*_ids?(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _is_identifier_field_name(value: str) -> bool:
+    normalized = value.strip().lower()
+    return normalized.endswith("_id") or normalized.endswith("_ids")
+
+
+def _contains_raw_identifier_token(text: str) -> bool:
+    return _IDENTIFIER_FIELD_TOKEN_RE.search(text.lower()) is not None
 
 
 def _question_matches_requested_topic(*, requested_topic: str, question: str) -> bool:
@@ -439,7 +465,7 @@ class SubmitDraftController:
             else:
                 error_codes.append("submit_payload_invalid")
         raw_question = parsed.get("question")
-        if isinstance(raw_question, str) and re.search(r"\b[a-z][a-z0-9_]*_id\b", raw_question.lower()):
+        if isinstance(raw_question, str) and _contains_raw_identifier_token(raw_question):
             error_codes.append("question_raw_identifier_leak")
         raw_canonical = parsed.get("canonical_answer_json")
         if isinstance(raw_canonical, str):
@@ -486,7 +512,7 @@ class SubmitDraftController:
                 "anchor_entity": payload.anchor_entity,
                 "question": payload.question,
                 "label_summary": payload.label_summary,
-                "constraint_summary": [item.model_dump(mode="json") for item in payload.constraint_summary],
+                "constraint_summary": _constraint_summary_payload(payload.constraint_summary),
                 "instance_space": payload.instance_space.model_dump(mode="json"),
             }
         )
@@ -512,7 +538,7 @@ class SubmitDraftController:
                 error_codes.append("label_values_not_grounded")
                 invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[:5]
         question_lower = payload.question.lower()
-        if re.search(r"\b[a-z][a-z0-9_]*_id\b", question_lower):
+        if _contains_raw_identifier_token(question_lower):
             error_codes.append("question_raw_identifier_leak")
         if _question_repeats_anchor_entity(payload.question):
             error_codes.append("question_anchor_entity_leak")
@@ -808,9 +834,8 @@ class SubmitDraftController:
 
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     from agents import FunctionTool
-    from agents.strict_schema import ensure_strict_json_schema
 
-    params_json_schema = ensure_strict_json_schema(SubmitDraftPayload.model_json_schema())
+    params_json_schema = SubmitDraftPayload.model_json_schema()
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         parsed = json.loads(input_json) if input_json else {}
@@ -834,9 +859,10 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "For assignment tasks, make the assignee relation explicit and use human-readable assignee attributes when possible. "
             "If the candidate assignee surface only exposes opaque ids in tool results, choose a different assignment relation instead of centering the task on that entity. "
             "After any rejection, make at least one new atomic tool call before calling submit_draft again. "
+            "A rejection means keep going in the same conversation, not stop. "
             "All submit_draft arguments are schema-validated; missing required fields and invalid canonical_answer_json values are rejected automatically."
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
-        strict_json_schema=True,
+        strict_json_schema=False,
     )

@@ -77,6 +77,33 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "only chains of internal *_id fields" in instructions
     assert "Do not mention raw table names" in instructions
     assert "keep working inside the same conversation" in instructions
+    assert "Calling submit_draft without anchor_entity is always wrong." in instructions
+    assert "A rejection is not the end of the task." in instructions
     assert "smallest grounded step" in instructions
     assert "When submit_draft returns Accepted, stop." in instructions
     assert "Do not emit markdown fences" in instructions
+
+
+def test_synthesis_input_adds_payment_history_semantics() -> None:
+    prompt = build_synthesis_input(
+        domain_name="service_operations",
+        scenario_description="end-user support requests over a business database",
+        requested_topic="payment_history",
+        task_language="ko",
+        schema_summary={
+            "table_count": 2,
+            "edge_count": 1,
+            "tables": [
+                {
+                    "qualified_name": "public.payment",
+                    "column_names": ["payment_id", "customer_id", "amount", "payment_date"],
+                }
+            ],
+        },
+        tool_surface_summary={"point_lookups": []},
+    )
+
+    assert "# Topic Semantics" in prompt
+    assert "Stay semantically tight to payment_history" in prompt
+    assert "Prefer business-facing payment details such as amounts, timestamps, statuses, titles, or counts" in prompt
+    assert "Do not make the final answer a list of payment_id or rental_id values" in prompt

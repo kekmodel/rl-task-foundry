@@ -348,13 +348,15 @@ def topic_surface_infeasibility_code(
     tool_surface_summary: dict[str, object],
 ) -> str | None:
     normalized_topic = requested_topic.strip().lower()
-    if normalized_topic != "assignment":
+    if normalized_topic not in {"assignment", "payment_history"}:
         return None
     point_lookups = tool_surface_summary.get("point_lookups")
     if not isinstance(point_lookups, list) or not point_lookups:
         return None
     if all(bool(item.get("id_only")) for item in point_lookups if isinstance(item, dict)):
-        return "assignment_topic_requires_readable_surface"
+        if normalized_topic == "assignment":
+            return "assignment_topic_requires_readable_surface"
+        return "payment_history_topic_requires_readable_surface"
     return None
 
 

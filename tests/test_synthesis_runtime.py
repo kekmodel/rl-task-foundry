@@ -492,6 +492,67 @@ async def test_synthesize_environment_draft_rejects_assignment_topic_when_tool_s
 
 
 @pytest.mark.asyncio
+async def test_synthesize_environment_draft_rejects_payment_history_when_tool_surface_is_id_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
+    runtime.synthesis_backends = [_FakeBackend(accept_payload=_accepted_payload())]
+
+    async def _fake_bind_db_id(self, db_id: str):
+        self._bound_db_id = db_id
+
+    async def _fake_ensure_category_available(self, db_id: str, topic: str):
+        return None
+
+    async def _fake_introspect_graph(self):
+        return _sample_graph()
+
+    async def _fake_ensure_atomic_tool_bundle(self, *, db_id: str, graph: SchemaGraph):
+        del db_id, graph
+        return AtomicToolBundle(
+            db_id="sakila",
+            tools=[
+                AtomicToolDefinition(
+                    name="get_payment_by_id",
+                    family=AtomicToolFamily.T1_POINT_LOOKUP,
+                    description="Look up a single payment by its primary key. Returns one row or nothing.",
+                    params_schema={"type": "object", "properties": {"payment_id": {"type": "integer"}}},
+                    returns_schema={"type": "object", "properties": {}},
+                    sql="SELECT 1",
+                    result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
+                    semantic_key="payment:get_by_id",
+                )
+            ],
+            source="async def get_payment_by_id(conn, payment_id):\n    return {'payment_id': 1}\n",
+        )
+
+    monkeypatch.setattr(SynthesisAgentRuntime, "_bind_db_id", _fake_bind_db_id)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_category_available",
+        _fake_ensure_category_available,
+    )
+    monkeypatch.setattr(SynthesisAgentRuntime, "_introspect_graph", _fake_introspect_graph)
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_ensure_atomic_tool_bundle",
+        _fake_ensure_atomic_tool_bundle,
+    )
+
+    with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_topic="payment_history",
+        )
+
+    assert exc_info.value.last_artifact_diagnostics is not None
+    assert exc_info.value.last_artifact_diagnostics.error_codes == [
+        "payment_history_topic_requires_readable_surface"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_questions_that_leak_internal_schema_terms(
     tmp_path: Path,
 ) -> None:
@@ -520,7 +581,7 @@ async def test_submit_draft_rejects_questions_that_leak_internal_schema_terms(
     message = await controller.submit(payload)
 
     assert "raw table names" in message
-    assert controller.attempts[-1].error_codes[0] == "question_internal_schema_leak"
+    assert "question_internal_schema_leak" in controller.attempts[-1].error_codes
 
 
 @pytest.mark.asyncio
@@ -548,6 +609,49 @@ async def test_submit_draft_rejects_questions_that_repeat_raw_identifier_fields(
     )
     payload = _accepted_payload().model_copy(
         update={"question": "customer_id 1의 store_id와 customer_count를 알려 주세요."}
+    )
+
+    message = await controller.submit(payload)
+
+    assert "raw identifier field names" in message
+    assert controller.attempts[-1].error_codes[0] == "question_raw_identifier_leak"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_raw_identifier_fields_with_korean_particles(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="payment_history",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_payment_by_id",
+        params={"payment_id": 800},
+        result={"payment_id": 800, "amount": "2.99"},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_payment_to_customer_by_customer_id",
+        params={"payment_id": 800},
+        result={"customer_id": 29},
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "question": "이 payment_id를 기준으로 같은 고객의 결제 내역을 알려 주세요.",
+            "canonical_answer_json": '{"amount":"2.99","customer_count":5}',
+            "constraint_summary": [
+                {
+                    "key": "ordered",
+                    "kind": "ordering",
+                    "summary": "Return one grounded payment detail.",
+                }
+            ],
+        }
     )
 
     message = await controller.submit(payload)
@@ -656,6 +760,54 @@ async def test_submit_draft_rejects_identifier_only_labels_even_when_multi_obser
             "canonical_answer_json": '{"store_id": 1, "address_id": 1}',
             "question": "내 매장의 기본 정보를 알려 주세요.",
             "label_summary": "The answer combines the customer's store and the store's address.",
+        }
+    )
+
+    message = await controller.submit(payload)
+
+    assert "only a chain of internal identifier fields" in message
+    assert controller.attempts[-1].error_codes[0] == "label_identifier_chain_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_plural_identifier_outputs(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="payment_history",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: (_ for _ in ()).throw(AssertionError("should not build draft")),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_payment_by_customer_id",
+        params={"customer_id": 29, "limit": 5},
+        result=[
+            {"payment_id": 783},
+            {"payment_id": 806},
+        ],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_payment_by_id",
+        params={"payment_id": 783},
+        result={"payment_id": 783, "amount": "2.99"},
+    )
+    payload = _accepted_payload().model_copy(
+        update={
+            "anchor_entity": {"payment_id": 800},
+            "question": "같은 고객의 결제 두 건을 시간 순서대로 알려 주세요.",
+            "canonical_answer_json": '{"payment_ids":[783,806]}',
+            "constraint_summary": [
+                {
+                    "key": "ordered",
+                    "kind": "ordering",
+                    "summary": "Return exactly two payments in order.",
+                }
+            ],
+            "label_summary": "The answer returns two payment ids for the same customer.",
         }
     )
 

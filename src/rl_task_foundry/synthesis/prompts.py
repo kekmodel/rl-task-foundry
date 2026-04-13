@@ -28,6 +28,13 @@ def _topic_semantics_instruction(requested_topic: str) -> str | None:
             "If an entity surface only exposes opaque ids, do not center the task on returning that entity. "
             "Start with the smallest nontrivial assignment task: one explicit assignment relation plus at most one supporting contextual detail, unless solver feedback says the task is too easy."
         )
+    if normalized == "payment_history":
+        return (
+            "Stay semantically tight to payment_history. The user-facing question should ask about payments, charges, refunds, payment dates, payment amounts, payment counts, or payment ordering in a natural support or account-history sense. "
+            "Prefer business-facing payment details such as amounts, timestamps, statuses, titles, or counts over raw internal identifiers. "
+            "Do not make the final answer a list of payment_id or rental_id values unless no more readable payment-facing value exists, which is unlikely for this topic. "
+            "When you need an ordered answer, order by observable payment facts such as date, amount, or status and make the tie-breaker explicit."
+        )
     return None
 
 
@@ -39,6 +46,7 @@ def build_synthesis_agent_instructions() -> str:
         "You may change the anchor entity when you need a better grounded task. "
         "Before every submit_draft call, observe real data with atomic tools and verify the canonical answer from those observations. "
         "Every draft must include anchor_entity with at least one real primary-key value from the current database, for example {\"customer_id\": 148} or {\"store_id\": 1}. "
+        "Calling submit_draft without anchor_entity is always wrong. Choose the anchor first and keep it explicit in the payload. "
         "When you call submit_draft, include all required arguments: canonical_answer_json, anchor_entity, difficulty_vector, question, constraint_summary, instance_space, and label_summary. "
         "Do not guess hidden values. "
         "Only use names, titles, labels, statuses, or other business strings that you directly observed in tool results. Do not invent placeholders such as Unknown or Staff #1. "
@@ -52,6 +60,7 @@ def build_synthesis_agent_instructions() -> str:
         "Do not mention raw table names, bridge-table names, or SQL keywords such as JOIN, LIMIT, SELECT, or ORDER BY in the user-facing question. "
         "Prefer user-relevant business values such as names, titles, dates, amounts, counts, statuses, or ordered records over answers that are only chains of internal *_id fields. "
         "When submit_draft returns a rejection, keep working inside the same conversation, make at least one new atomic tool call, inspect more data, and resubmit a better draft. "
+        "A rejection is not the end of the task. Do not stop, apologize, or output a final message after a rejection. Continue until submit_draft returns Accepted or Budget exhausted. "
         "If the rejection asks you to crank a difficulty axis, strengthen only that axis first, use newly observed evidence, and prefer the smallest grounded step that makes the task harder. "
         "When submit_draft returns Accepted, stop. "
         "Do not emit markdown fences or long commentary unless you are finishing after Accepted or Budget exhausted."
