@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,6 +30,7 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     _count_semantics_present,
     _mentions_global_scope,
     _next_difficulty_crank_axis,
+    _ungrounded_answer_strings,
     _uses_unanchored_global_ranking,
 )
 
@@ -516,6 +518,29 @@ def _opaque_identifier_payload() -> SubmitDraftPayload:
     )
 
 
+def test_ungrounded_answer_strings_accepts_datetime_observations() -> None:
+    tool_calls = [
+        {
+            "tool_name": "get_rental",
+            "params": {"id": 1},
+            "result": {
+                "rental_date": datetime(2005, 8, 22, 20, 3, 46),
+                "return_date": datetime(2005, 8, 30, 1, 51, 46),
+            },
+        }
+    ]
+
+    ungrounded = _ungrounded_answer_strings(
+        {
+            "latest_rental_date": "2005-08-22 20:03:46",
+            "latest_rental_return_date": "2005-08-30 01:51:46",
+        },
+        tool_calls,
+    )
+
+    assert ungrounded == []
+
+
 def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
     payload = SubmitDraftPayload.model_validate(_accepted_payload().model_dump(mode="json"))
     cached_answer = payload.canonical_answer
@@ -773,7 +798,8 @@ async def test_submit_draft_requires_exact_observed_string_values(
 
     assert "copy them exactly as they appeared there" in message
     assert "Do not shorten names" in message
-    assert "normalize timestamp formatting" in message
+    assert "exact raw value from the chosen tool response row" in message
+    assert "Ungrounded values included" in message
 
 
 @pytest.mark.asyncio

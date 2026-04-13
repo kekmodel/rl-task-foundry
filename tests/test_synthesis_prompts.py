@@ -135,6 +135,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not use opaque identifiers such as UUIDs, hashes, encrypted tokens" in instructions
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
     assert "Do not shorten, paraphrase, partially copy, or reformat observed string or date values" in instructions
+    assert "Do not merge separate observed fields into a new readable value" in instructions
     assert "Do not manufacture readable labels by wrapping an id in generic words" in instructions
     assert "If the label returns a count, ground that count with an explicit count or aggregate observation." in instructions
     assert "Do not copy anchor_entity fields into the canonical answer" in instructions

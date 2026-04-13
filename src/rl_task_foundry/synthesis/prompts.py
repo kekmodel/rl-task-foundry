@@ -130,6 +130,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "Do not use opaque identifiers such as UUIDs, hashes, encrypted tokens, or other random-looking reference strings as answer values, even if they were observed. "
             "Do not submit blank or placeholder string fields in the canonical answer. "
             "Do not shorten, paraphrase, partially copy, or reformat observed string or date values. If a value is used in the canonical answer, copy the exact value you saw in the tool response. "
+            "Do not merge separate observed fields into a new readable value, such as combining first_name and last_name into one full-name field, unless that exact combined value was itself observed in a tool response. "
             "Do not ask for unreadable text fields from an id-only surface. "
             "Do not manufacture readable labels by wrapping an id in generic words such as 'member 2' or 'record 17'. "
             "Do not treat the first sampled rows you happened to inspect as the total, the latest item, or the first item unless you directly observed grounded count or ordering evidence. "

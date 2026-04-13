@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import StrEnum
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -594,6 +595,11 @@ def _collect_observed_strings(value: object, *, strings: set[str]) -> None:
         if normalized:
             strings.add(normalized)
         return
+    if isinstance(value, datetime | date):
+        normalized = str(value).strip().lower()
+        if normalized:
+            strings.add(normalized)
+        return
     if isinstance(value, dict):
         for item in value.values():
             _collect_observed_strings(item, strings=strings)
@@ -703,6 +709,39 @@ def _ungrounded_answer_strings(
             continue
         ungrounded.append(value)
     return sorted(dict.fromkeys(ungrounded))
+
+
+_DATETIME_LITERAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ t]\d{2}:\d{2}:\d{2}$")
+
+
+def _format_ungrounded_value_guidance(diagnostics: dict[str, object] | None) -> str:
+    if diagnostics is None:
+        return ""
+    raw_values = diagnostics.get("ungrounded_strings")
+    if not isinstance(raw_values, list):
+        return ""
+    values = [str(value) for value in raw_values if isinstance(value, str)]
+    if not values:
+        return ""
+    preview = ", ".join(repr(value) for value in values[:3])
+    message = f" Ungrounded values included: {preview}."
+    name_like_values = [
+        value
+        for value in values
+        if " " in value
+        and any(character.isalpha() for character in value)
+        and not any(character.isdigit() for character in value)
+    ]
+    datetime_like_values = [value for value in values if _DATETIME_LITERAL_RE.fullmatch(value)]
+    if name_like_values:
+        message += (
+            " If the tool response exposed first_name and last_name separately, keep them as separate answer fields instead of merging them into one full-name string."
+        )
+    if datetime_like_values:
+        message += (
+            " If you use a date or timestamp field, copy the exact raw value from the chosen tool response row without changing its formatting."
+        )
+    return message
 
 
 _IDENTIFIER_FIELD_TOKEN_RE = re.compile(
@@ -1841,6 +1880,8 @@ class SubmitDraftController:
                     "Rejected. The current anchored evidence path does not expose readable text fields in real tool outputs. "
                     "Stop retrying names, titles, or other readable strings on this same path. Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or make new anchored tool calls until you actually observe readable fields."
                 )
+            else:
+                primary += _format_ungrounded_value_guidance(diagnostics)
         if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN:
             if diagnostics is not None and diagnostics.get("anchor_path_has_readable_strings") is False:
                 primary = (
