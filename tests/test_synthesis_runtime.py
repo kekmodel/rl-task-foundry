@@ -26,7 +26,9 @@ from rl_task_foundry.synthesis.runtime import (
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftPayload,
+    _count_semantics_present,
     _label_summary_matches_selected_topic,
+    _mentions_global_scope,
     _next_difficulty_crank_axis,
 )
 
@@ -265,6 +267,102 @@ def _count_without_count_evidence_payload() -> SubmitDraftPayload:
     )
 
 
+def _ungrounded_text_payload(*, customer_id: int = 1) -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": customer_id}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "record_history",
+            "canonical_answer_json": '{"film_title": "Airplane Sierra"}',
+            "anchor_entity": anchor_entity,
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 1.0,
+                "constraint_density": 1.0,
+            },
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "내 기록과 관련된 영화 제목을 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchored_record",
+                    "kind": "membership",
+                    "summary": "Answer must stay within the anchored customer's own records.",
+                }
+            ],
+            "anchor_query": {
+                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                "outputs": ["customer_id"],
+            },
+            "label_summary": "The record history label is grounded in the selected topic and anchored evidence.",
+        }
+    )
+
+
+def _global_count_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "canonical_answer_json": '{"customer_name": "Alice", "customer_count": 5}',
+            "anchor_entity": anchor_entity,
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 1.0,
+                "constraint_density": 1.0,
+            },
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "제 기록을 기준으로 제 이름과 관련 고객 수를 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_self",
+                    "kind": "membership",
+                    "summary": "Answer must stay within the anchored customer.",
+                }
+            ],
+            "anchor_query": {
+                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                "outputs": ["customer_id"],
+            },
+            "label_summary": "The assignment label is grounded in the selected topic and anchored customer evidence.",
+        }
+    )
+
+
+def _id_chain_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "canonical_answer_json": '{"rental_id": 777, "payment_id": 9710}',
+            "anchor_entity": anchor_entity,
+            "difficulty_vector": {
+                "search_cost": 2.0,
+                "solution_space": 1.0,
+                "constraint_density": 1.0,
+            },
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "제 계정과 연결된 대여와 결제 한 건을 알려 주세요.",
+            ),
+            "constraint_summary": [
+                {
+                    "key": "anchor_self",
+                    "kind": "membership",
+                    "summary": "Answer must stay within the anchored customer.",
+                }
+            ],
+            "anchor_query": {
+                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+                "outputs": ["customer_id"],
+            },
+            "label_summary": "The assignment label is grounded in the selected topic and anchored payment evidence.",
+        }
+    )
+
+
 def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
     payload = SubmitDraftPayload.model_validate(_accepted_payload().model_dump(mode="json"))
     cached_answer = payload.canonical_answer
@@ -293,6 +391,32 @@ def test_next_difficulty_crank_axis_rotates_after_two_attempts() -> None:
     assert _next_difficulty_crank_axis(
         [DifficultyAxis.SEARCH_COST, DifficultyAxis.SEARCH_COST]
     ) is DifficultyAxis.SOLUTION_SPACE
+
+
+def test_count_semantics_present_does_not_match_account_substrings() -> None:
+    assert not _count_semantics_present(
+        {"customer_id": 360},
+        [
+            {
+                "key": "anchor_self",
+                "kind": "identity",
+                "summary": "Use the anchored customer's own account.",
+            }
+        ],
+    )
+
+
+def test_mentions_global_scope_does_not_treat_local_total_as_global() -> None:
+    assert not _mentions_global_scope(
+        "제 계정의 전체 결제 건수를 알려주세요.",
+        [
+            {
+                "key": "payment_total",
+                "kind": "count",
+                "summary": "Return the total number of payments for the anchored customer.",
+            }
+        ],
+    )
 
 
 @pytest.mark.asyncio
@@ -341,6 +465,124 @@ async def test_submit_draft_rejects_mixed_count_label_without_count_evidence(
     message = await controller.submit(_count_without_count_evidence_payload())
 
     assert "count-like label needs explicit count evidence" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_keeps_locked_self_anchor_across_feedback_retries(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="record_history",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+        self_anchor_surface_names=("get_customer_by_id",),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_id": 1, "store_id": 2},
+    )
+
+    first = await controller.submit(_ungrounded_text_payload(customer_id=1))
+    second = await controller.submit(_ungrounded_text_payload(customer_id=2))
+
+    assert "readable text fields" in first
+    assert "same anchored user entity across retries" in second
+    assert controller._locked_anchor_entity == {"customer_id": 1}
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="record_history",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+        self_anchor_surface_names=("get_customer_by_id",),
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_id": 1, "store_id": 2},
+    )
+
+    message = await controller.submit(_ungrounded_text_payload())
+
+    assert "does not expose readable text fields" in message
+    assert "Stop retrying names, titles" in message
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_pushes_self_scoped_count_back_to_anchor_evidence(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="get_customer_by_id",
+        params={"customer_id": 1},
+        result={"customer_name": "Alice"},
+    )
+    controller.record_atomic_tool_call(
+        tool_name="count_customer",
+        params={},
+        result=5,
+    )
+
+    message = await controller.submit(_global_count_payload())
+
+    assert "only keep a count field if you observed a count or aggregate tool call" in message
+    assert "drop the count field" in message
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_calls_out_id_only_identifier_chain_path(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_customer_to_rental_by_customer_id",
+        params={"customer_id": 1, "limit": 3},
+        result=[{"rental_id": 777}],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="traverse_rental_to_payment_by_rental_id",
+        params={"rental_id": 777, "limit": 3},
+        result=[{"payment_id": 9710}],
+    )
+
+    message = await controller.submit(_id_chain_payload())
+
+    assert "current anchored evidence path is still id-only" in message
+    assert "Do not submit another answer made only of *_id fields" in message
 
 
 @pytest.mark.asyncio

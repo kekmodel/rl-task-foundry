@@ -64,6 +64,7 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_ANCHOR_ENTITY_LEAK = "question_anchor_entity_leak"
     QUESTION_SELF_PERSPECTIVE_REQUIRED = "question_self_perspective_required"
     SELF_ENTITY_ANCHOR_REQUIRED = "self_entity_anchor_required"
+    ANCHOR_ENTITY_CHANGED = "anchor_entity_changed"
     TEMPORAL_ORDERING_NOT_GROUNDED = "temporal_ordering_not_grounded"
     GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE = "global_ranking_outside_anchor_scope"
     COUNT_LABEL_REQUIRES_COUNT_EVIDENCE = "count_label_requires_count_evidence"
@@ -102,6 +103,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK,
         SubmitDraftErrorCode.QUESTION_SELF_PERSPECTIVE_REQUIRED,
         SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED,
+        SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED,
         SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED,
         SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE,
         SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE,
@@ -695,10 +697,14 @@ _GLOBAL_SCOPE_TOKENS = (
     "across all",
     "among all",
     "entire database",
-    "전체",
     "전역",
-    "모든",
+    "전체 데이터베이스",
+    "전체 고객",
+    "전체 사용자",
+    "모든 고객",
+    "모든 사용자",
 )
+_COUNT_SEMANTIC_TOKENS = frozenset({"count", "counting", "cardinality"})
 
 
 def _is_identifier_field_name(value: str) -> bool:
@@ -823,8 +829,12 @@ def _count_semantics_present(
                     str(item.get("summary", "")),
                 ]
             )
-    combined = " ".join(normalize_words(part, lowercase=True) for part in text_parts if part)
-    return any(token in combined for token in ("count", "counting", "cardinality"))
+    combined_tokens: set[str] = set()
+    for part in text_parts:
+        if not part:
+            continue
+        combined_tokens.update(normalize_words(part, lowercase=True).split())
+    return not combined_tokens.isdisjoint(_COUNT_SEMANTIC_TOKENS)
 
 
 def _observed_count_evidence(tool_calls: list[dict[str, object]]) -> bool:
@@ -847,6 +857,24 @@ def _observed_anchor_scoped_count_evidence(
         if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
             return True
     return False
+
+
+def _observed_anchor_readable_string_surface(
+    tool_calls: list[dict[str, object]],
+    *,
+    anchor_entity: dict[str, object],
+) -> bool:
+    observed_strings: set[str] = set()
+    observed_tokens: set[str] = set()
+    for record in tool_calls:
+        if not _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
+            continue
+        _collect_observed_string_tokens(
+            record.get("result"),
+            strings=observed_strings,
+            tokens=observed_tokens,
+        )
+    return bool(observed_strings)
 
 
 def _answer_has_multi_item_collection(value: object) -> bool:
@@ -1065,6 +1093,7 @@ class SubmitDraftController:
     _feedback_events: int = field(default=0, init=False)
     _last_primary_error_code: SubmitDraftErrorCode | None = field(default=None, init=False)
     _consecutive_primary_error_count: int = field(default=0, init=False)
+    _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
 
     def submissions_left(self) -> int:
         return max(0, self.max_submissions - (len(self.attempts) + self._feedback_events))
@@ -1200,6 +1229,13 @@ class SubmitDraftController:
                     : self.config.synthesis.runtime.diagnostic_item_limit
                 ]
             )
+        elif self._locked_anchor_entity is not None and payload.anchor_entity != self._locked_anchor_entity:
+            error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED)
+            invalid_diagnostics["locked_anchor_entity"] = self._locked_anchor_entity
+        elif payload.anchor_entity and (
+            not self.self_anchor_surface_names or _anchor_entity_is_person_like(payload.anchor_entity)
+        ):
+            self._locked_anchor_entity = dict(payload.anchor_entity)
         if (
             _uses_temporal_ordering_language(payload.constraint_summary)
             and not _observed_temporal_surface(self._raw_atomic_tool_calls)
@@ -1272,6 +1308,12 @@ class SubmitDraftController:
             invalid_diagnostics["ungrounded_strings"] = ungrounded_strings[
                 : self.config.synthesis.runtime.diagnostic_item_limit
             ]
+            invalid_diagnostics["anchor_path_has_readable_strings"] = (
+                _observed_anchor_readable_string_surface(
+                    self._raw_atomic_tool_calls,
+                    anchor_entity=payload.anchor_entity,
+                )
+            )
         if question_body is not None:
             question_lower = question_body.lower()
             if _contains_entity_placeholder_token(question_lower):
@@ -1300,6 +1342,12 @@ class SubmitDraftController:
                 error_codes.append(SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK)
         if _answer_uses_only_identifier_fields(canonical_answer):
             error_codes.append(SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN)
+            invalid_diagnostics["anchor_path_has_readable_strings"] = (
+                _observed_anchor_readable_string_surface(
+                    self._raw_atomic_tool_calls,
+                    anchor_entity=payload.anchor_entity,
+                )
+            )
         if (
             _count_semantics_present(canonical_answer, payload.constraint_summary)
             and not _observed_count_evidence(self._raw_atomic_tool_calls)
@@ -1597,6 +1645,9 @@ class SubmitDraftController:
             SubmitDraftErrorCode.SELF_ENTITY_ANCHOR_REQUIRED: (
                 "Rejected. A person-like self entity surface is available in the observed tool set. Anchor the task on the requesting user's own record instead of anchoring it on a content object, and keep the content object as related evidence or answer content."
             ),
+            SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED: (
+                "Rejected. Keep the same anchored user entity across retries. The requesting user has not changed, so do not switch anchor_entity to a different person or role while repairing this draft."
+            ),
             SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED: (
                 "Rejected. Do not use recent, latest, earliest, first, or similar ordering language unless you directly observed a temporal or sequence field that grounds that ordering. The current evidence path only shows ids or unordered rows, so sampled rows are not a valid notion of recency or priority."
             ),
@@ -1607,7 +1658,7 @@ class SubmitDraftController:
                 "Rejected. A count-like label needs explicit count evidence. Do not infer a total from the first sampled rows you happened to inspect; use a grounded count or aggregate observation for that anchored scope."
             ),
             SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE: (
-                "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, use a count or aggregate tool call that depends on anchor_entity instead of a global total."
+                "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, only keep a count field if you observed a count or aggregate tool call whose parameters depend on anchor_entity. Otherwise drop the count field or gather anchored count evidence on the same user path instead of using a global total."
             ),
             SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD: (
                 "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."
@@ -1619,13 +1670,13 @@ class SubmitDraftController:
                 "Rejected. Do not repeat anchor_entity fields inside the canonical answer. The entity block already provides that grounding, so use the answer slots for new grounded information."
             ),
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
-                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, or choose a different anchor with readable fields."
+                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, keep the same anchored user and switch to grounded counts, dates, amounts, statuses, ordering, or make new anchored tool calls until you observe readable fields."
             ),
             SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN: (
                 "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead. If the current hinted topic keeps forcing id-only answers, choose a better grounded topic for the same anchored user need before resubmitting."
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, switch to counts, dates, amounts, statuses, ordering, choose a different anchor with readable fields, or choose a better grounded topic for the same anchored user need."
+                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings you actually observed in real tool outputs. Do not manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."
             ),
             SubmitDraftErrorCode.SELECTED_TOPIC_MISALIGNED: (
                 "Rejected. label_summary must explicitly name the selected topic and keep the draft semantically centered on that topic."
@@ -1659,6 +1710,18 @@ class SubmitDraftController:
                 primary = (
                     "Rejected. The canonical answer can be recovered from a single global tool call that does not depend on the anchor entity. "
                     "Keep the label anchored to the selected entity and combine multiple anchored observations."
+                )
+        if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED:
+            if diagnostics is not None and diagnostics.get("anchor_path_has_readable_strings") is False:
+                primary = (
+                    "Rejected. The current anchored evidence path does not expose readable text fields in real tool outputs. "
+                    "Stop retrying names, titles, or other readable strings on this same path. Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or make new anchored tool calls until you actually observe readable fields."
+                )
+        if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN:
+            if diagnostics is not None and diagnostics.get("anchor_path_has_readable_strings") is False:
+                primary = (
+                    "Rejected. The current anchored evidence path is still id-only. Do not submit another answer made only of *_id fields on this same path. "
+                    "Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or pivot to a better grounded topic for that same user need."
                 )
         if feedback_only and primary.startswith("Rejected. "):
             primary = primary.replace("Rejected. ", "Feedback. ", 1)
@@ -1872,6 +1935,7 @@ class SubmitDraftController:
                     self.required_axis_mode.value if self.required_axis_mode is not None else None
                 ),
                 "required_axis_reference_value": self.required_axis_reference_value,
+                "locked_anchor_entity": self._locked_anchor_entity,
                 "difficulty_crank_history": [axis.value for axis in self.difficulty_crank_history],
                 "recent_tool_calls": self._atomic_tool_calls[
                     -self.config.synthesis.runtime.diagnostic_item_limit :
@@ -1906,10 +1970,10 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         description=(
             "Submit a grounded RLVR task draft after inspecting real database rows. "
             "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
-            "natural user-facing question, constraint summary, instance space, and label summary. "
+            "natural user-facing question, constraint summary, anchor query, and label summary. "
             "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "
             "anchor_entity is mandatory and must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
-            "Do not call submit_draft until anchor_entity is present and final for that draft. "
+            "Do not call submit_draft until anchor_entity is present and final for that draft. After the first valid self anchor is established, keep that same anchor_entity across retries. "
             "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
             "The JSON inside the <entity> block must exactly match anchor_entity. "
             "label_summary must be English, must explicitly include the selected topic phrase, and must explain why the label is grounded and unique. "

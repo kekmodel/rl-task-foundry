@@ -86,6 +86,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Start from a believable first-person need of that anchored user" in instructions
     assert "requested topic is only a soft coverage hint" in instructions
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
+    assert "After you submit a draft with a valid self anchor, keep that same anchor_entity across retries." in instructions
     assert "Before every submit_draft call" in instructions
     assert "label_summary" in instructions
     assert "explicitly includes the selected topic phrase" in instructions
@@ -96,6 +97,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not submit blank or placeholder string fields in the canonical answer" in instructions
     assert "Before choosing text answer fields such as names, titles, labels, or statuses" in instructions
     assert "If the observed surface is id-only" in instructions
+    assert "Keep the same anchor and either switch to grounded counts" in instructions
     assert "Do not manufacture readable labels by wrapping an id in generic words" in instructions
     assert "If the label returns a count, ground that count with an explicit count or aggregate observation." in instructions
     assert "Do not copy anchor_entity fields into the canonical answer" in instructions
