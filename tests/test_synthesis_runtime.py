@@ -277,10 +277,6 @@ def _accepted_payload() -> SubmitDraftPayload:
                     "summary": "배정 매장은 하나여야 한다.",
                 }
             ],
-            "anchor_query": {
-                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                "outputs": ["customer_id"],
-            },
             "label_summary": "The assignment label is grounded in customer lookup and count evidence.",
         }
     )
@@ -315,10 +311,6 @@ def _count_without_count_evidence_payload() -> SubmitDraftPayload:
                     "summary": "Answer must be about the anchored customer.",
                 }
             ],
-            "anchor_query": {
-                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                "outputs": ["customer_id"],
-            },
             "label_summary": "The assignment label is grounded in anchored customer evidence.",
         }
     )
@@ -347,10 +339,6 @@ def _ungrounded_text_payload(*, customer_id: int = 1) -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer's own records.",
                 }
             ],
-            "anchor_query": {
-                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                "outputs": ["customer_id"],
-            },
             "label_summary": "The record history label is grounded in the selected topic and anchored evidence.",
         }
     )
@@ -379,10 +367,6 @@ def _global_count_payload() -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer.",
                 }
             ],
-            "anchor_query": {
-                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                "outputs": ["customer_id"],
-            },
             "label_summary": "The assignment label is grounded in the selected topic and anchored customer evidence.",
         }
     )
@@ -411,10 +395,6 @@ def _id_chain_payload() -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer.",
                 }
             ],
-            "anchor_query": {
-                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                "outputs": ["customer_id"],
-            },
             "label_summary": "The assignment label is grounded in the selected topic and anchored payment evidence.",
         }
     )
@@ -443,10 +423,6 @@ def _opaque_identifier_payload() -> SubmitDraftPayload:
                     "summary": "Answer must stay within the anchored customer.",
                 }
             ],
-            "anchor_query": {
-                "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
-                "outputs": ["customer_id"],
-            },
             "label_summary": "The record history label is grounded in the selected topic and anchored evidence.",
         }
     )
@@ -459,6 +435,17 @@ def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
     with patch("rl_task_foundry.synthesis.submit_draft_tool.json.loads") as mocked_loads:
         assert payload.canonical_answer == cached_answer
         mocked_loads.assert_not_called()
+
+
+def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
+    payload = _accepted_payload().model_dump(mode="json")
+    payload["anchor_query"] = {
+        "sql": "SELECT customer_id FROM customer ORDER BY customer_id",
+        "outputs": ["customer_id"],
+    }
+
+    with pytest.raises(ValidationError):
+        SubmitDraftPayload.model_validate(payload)
 
 
 def test_selected_topic_matching_normalizes_word_separators() -> None:

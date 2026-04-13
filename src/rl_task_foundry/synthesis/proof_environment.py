@@ -28,7 +28,6 @@ from rl_task_foundry.synthesis.atomic_tools import (
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
-    AnchorQueryContract,
     ConstraintKind,
     ConstraintSummaryItem,
     DifficultyVectorContract,
@@ -432,13 +431,6 @@ def build_proof_task_draft(
             max_tool_rows=config.atomic_tools.bounded_result_limit,
         ),
         task=task,
-        anchor_query=AnchorQueryContract(
-            sql=(
-                "SELECT anchor_id, season, budget_bucket "
-                "FROM proof_anchors ORDER BY anchor_id"
-            ),
-            outputs=["anchor_id", "season", "budget_bucket"],
-        ),
     )
     anchor_entity = {"anchor_id": 1}
     rendered_prompt = build_rendered_user_prompt(

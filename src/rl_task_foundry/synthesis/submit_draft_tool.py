@@ -15,7 +15,6 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
-    AnchorQueryContract,
     DIFFICULTY_CRANK_ORDER,
     DifficultyAxis,
     DifficultyVectorContract,
@@ -55,7 +54,6 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
     QUESTION_BODY_REQUIRED = "question_body_required"
     CONSTRAINT_SUMMARY_REQUIRED = "constraint_summary_required"
-    ANCHOR_QUERY_REQUIRED = "anchor_query_required"
     LABEL_SUMMARY_REQUIRED = "label_summary_required"
     PLACEHOLDER_TOKENS_NOT_ALLOWED = "placeholder_tokens_not_allowed"
     QUESTION_INTERNAL_SCHEMA_LEAK = "question_internal_schema_leak"
@@ -187,9 +185,6 @@ class SubmitDraftPayload(StrictModel):
     constraint_summary: list["SubmitConstraintSummaryItem"] = Field(
         min_length=1,
         description="List of grounded hard constraints or tie-break rules expressed in plain language.",
-    )
-    anchor_query: AnchorQueryContract = Field(
-        description="Grounded SQL query that resolves the anchor entity values used for this task."
     )
     label_summary: str = Field(
         min_length=1,
@@ -1348,7 +1343,6 @@ class SubmitDraftController:
                 "question": payload.question,
                 "label_summary": payload.label_summary,
                 "constraint_summary": _constraint_summary_payload(payload.constraint_summary),
-                "anchor_query": payload.anchor_query.model_dump(mode="json"),
             }
         )
         if placeholder_tokens:
@@ -1727,7 +1721,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.CONSTRAINT_SUMMARY_REQUIRED: (
                 "Rejected. constraint_summary must include at least one grounded constraint or tie-break rule."
             ),
-            SubmitDraftErrorCode.ANCHOR_QUERY_REQUIRED: "Rejected. anchor_query is required.",
             SubmitDraftErrorCode.LABEL_SUMMARY_REQUIRED: "Rejected. label_summary is required.",
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. canonical_answer_json must be a valid JSON string."
@@ -2090,9 +2083,11 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     return FunctionTool(
         name="submit_draft",
         description=(
-            "Submit a grounded RLVR task draft after inspecting real database rows. "
+            "Submit a grounded RLVR task draft after inspecting real database rows with tools. "
             "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
-            "natural user-facing question, constraint summary, anchor query, and label summary. "
+            "natural user-facing question, constraint summary, and label summary. "
+            "Use only tool-observed evidence. Do not write SQL, do not invent hidden joins, and do not include SQL queries in the submission. "
+            "Trace many relationships and interesting grounded paths with tools first, then choose one path and build a unique, verifiable label from that path. "
             "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "
             "Call submit_draft only when you fully understand the anchored user, the relevant evidence path, which observed fields are readable, which paths are id-only dead ends, and why every answer slot is needed. "
             "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "

@@ -698,10 +698,6 @@ class TaskRegistryWriter:
             draft.task_bundle.task.model_dump_json(indent=2),
             encoding="utf-8",
         )
-        (directory / "anchor_query.json").write_text(
-            draft.task_bundle.anchor_query.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
         (directory / "instance.json").write_text(
             json.dumps(
                 {

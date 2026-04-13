@@ -11,7 +11,6 @@ from rl_task_foundry.config.models import TaskRegistryConfig
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
-    AnchorQueryContract,
     ConstraintKind,
     ConstraintSummaryItem,
     DifficultyVectorContract,
@@ -98,10 +97,6 @@ def _sample_draft(
             max_tool_rows=100,
         ),
         task=task,
-        anchor_query=AnchorQueryContract(
-            sql="SELECT customer_id FROM customer ORDER BY customer_id",
-            outputs=["customer_id"],
-        ),
     )
     anchor_entity = {"customer_id": 1}
     return SynthesisTaskDraft(
@@ -174,7 +169,6 @@ def test_task_registry_writer_commits_single_task_layout(tmp_path: Path) -> None
     task_dir = writer.root_dir / draft.task_bundle.task_id
     assert (task_dir / "task.yaml").exists()
     assert (task_dir / "task.json").exists()
-    assert (task_dir / "anchor_query.json").exists()
     assert (task_dir / "instance.json").exists()
     assert (task_dir / "canonical_answer.json").exists()
     assert (task_dir / "tools.py").read_text(encoding="utf-8") == draft.atomic_tool_bundle.source

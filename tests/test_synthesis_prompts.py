@@ -94,8 +94,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
     assert "Research the database broadly before drafting anything." in instructions
     assert "Map the database relationships first." in instructions
+    assert "trace many relationships and interesting grounded data paths across the database" in instructions
     assert "understand the exposed relationships across the database" in instructions
     assert "Analyze the anchored user's reachable surfaces." in instructions
+    assert "Compare candidate paths before you choose a label." in instructions
+    assert "choose one path before you draft" in instructions
     assert "Choose the label first, then derive topic and anchor framing from it." in instructions
     assert "Retry intelligently after feedback." in instructions
     assert "Stop only on Accepted or Budget exhausted." in instructions
@@ -107,9 +110,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Use that research phase to classify nearby paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends" in instructions
     assert "distinct tool names" in instructions
     assert "anchor-scoped observations whose parameters depend on anchor_entity" in instructions
-    assert "Use your research to identify the strongest grounded label candidates" in instructions
+    assert "identify multiple grounded label candidates" in instructions
+    assert "pick one path to turn into the final label" in instructions
     assert "Calling submit_draft without anchor_entity is always wrong." not in instructions
     assert "Do not call submit_draft without anchor_entity." in instructions
+    assert "Do not write SQL, draft SQL, or include SQL queries in the submission." in instructions
     assert "label_summary" in instructions
     assert "explicitly includes the selected topic phrase" in instructions
     assert "anchor_entity must be a flat JSON object" in instructions
@@ -127,7 +132,9 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Do not repeat the raw anchor entity key or raw anchor entity id" in instructions
     assert "Do not reveal internal tool paths, raw table names" in instructions
     assert "Jumping to a global count for a self-scoped request." in instructions
+    assert 'Returning a label such as {"store_id": 1}, {"customer_id": 42}' in instructions
     assert "Returning *_id fields, UUIDs, hashes, tokens" in instructions
+    assert "Writing SQL or describing the answer path as a SQL query" in instructions
     assert "Which of my recent requests is still open, and when was it created?" in instructions
     assert "When you strengthen search_cost" in instructions
     assert "When you strengthen solution_space" in instructions

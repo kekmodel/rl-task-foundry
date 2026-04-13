@@ -38,7 +38,6 @@ Current output includes:
 
 - `canonical_answer_json`
 - `anchor_entity`
-- `anchor_query`
 - `difficulty_vector`
 - `label_summary`
 

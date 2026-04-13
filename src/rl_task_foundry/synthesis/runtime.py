@@ -20,7 +20,6 @@ from rl_task_foundry.pipeline.provider_resilience import (
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.synthesis.contracts import (
-    AnchorQueryContract,
     ConstraintKind,
     ConstraintSummaryItem,
     DifficultyVectorContract,
@@ -854,7 +853,6 @@ class SynthesisAgentRuntime:
             requested_topic=selected_topic,
             created_at=materialized_at,
             task=task,
-            anchor_query=submission.anchor_query,
         )
         del canonical_answer
         return SynthesisTaskDraft(
@@ -985,7 +983,6 @@ class SynthesisAgentRuntime:
         requested_topic: str,
         created_at: datetime,
         task: TaskContract,
-        anchor_query: AnchorQueryContract,
     ) -> TaskBundleContract:
         task_payload = task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
@@ -996,10 +993,7 @@ class SynthesisAgentRuntime:
             task_signature=task_signature,
             tool_signature=tool_signature,
         )
-        payload = {
-            "anchor_query": anchor_query,
-            "task": task.model_dump(mode="python"),
-        }
+        payload = {"task": task.model_dump(mode="python")}
         payload.update(
             {
                 "task_id": task_id,

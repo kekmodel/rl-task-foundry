@@ -34,7 +34,6 @@ def test_task_bundle_exporter_writes_single_task_layout(tmp_path: Path) -> None:
     assert (database_dir / "atomic_tool_definitions.json").exists()
     assert (task_dir / "task.yaml").exists()
     assert (task_dir / "task.json").exists()
-    assert (task_dir / "anchor_query.json").exists()
     assert (task_dir / "instance.json").exists()
     assert (task_dir / "canonical_answer.json").exists()
 

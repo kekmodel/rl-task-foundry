@@ -14,7 +14,6 @@ bundle_root/
     <task_id>/
       task.yaml
       task.json
-      anchor_query.json
       instance.json
       canonical_answer.json
 ```
@@ -51,7 +50,6 @@ Key fields:
 - `quality_metrics`
 - `rollout_constraints`
 - `task`
-- `anchor_query`
 
 ### Materialized Instance Record
 

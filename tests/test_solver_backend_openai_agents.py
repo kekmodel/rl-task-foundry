@@ -12,7 +12,6 @@ from rl_task_foundry.solver import backend_openai_agents as backend_module
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
 from rl_task_foundry.synthesis.contracts import (
-    AnchorQueryContract,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
@@ -60,10 +59,6 @@ def _sample_episode() -> SolverEpisodeInput:
                 ),
                 primary_output_format="json_object",
             ),
-        ),
-        anchor_query=AnchorQueryContract(
-            sql="SELECT order_id FROM orders ORDER BY order_id",
-            outputs=["order_id"],
         ),
     )
     return SolverEpisodeInput(

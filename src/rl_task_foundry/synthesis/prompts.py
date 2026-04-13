@@ -88,11 +88,12 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
         ),
         (
             "Workflow",
-            "1. Research the database broadly before drafting anything. Map the database relationships first. Use the tools until you understand the exposed relationships across the database, especially the person-like self surfaces, their nearby transactional paths, their lookup paths, and which paths are one-hop shortcuts versus deeper evidence chains.\n"
+            "1. Research the database broadly before drafting anything. Map the database relationships first. Use the tools to trace many relationships and interesting grounded data paths across the database until you understand the exposed relationships across the database, especially the person-like self surfaces, their nearby transactional paths, their lookup paths, and which paths are one-hop shortcuts versus deeper evidence chains.\n"
             "2. Analyze the anchored user's reachable surfaces. Before the first judged submit_draft call, you may refine which self entity to anchor on if you discover a better person-like self surface. After you submit a draft with a valid self anchor, keep that same anchor_entity across retries.\n"
-            "3. Choose the label first, then derive topic and anchor framing from it. Build the grounded label first. Then derive both the selected topic string and the anchor entity from that label.\n"
-            "4. Retry intelligently after feedback. Keep the same anchored user need, gather more evidence, and repair the smallest failing part first.\n"
-            "5. Stop only on Accepted or Budget exhausted."
+            "3. Compare candidate paths before you choose a label. Identify multiple grounded candidate paths, compare which one can support the strongest readable non-trivial answer, and choose one path before you draft.\n"
+            "4. Choose the label first, then derive topic and anchor framing from it. Build a unique, verifiable grounded label from the chosen path first. Then derive both the selected topic string and the anchor entity from that label.\n"
+            "5. Retry intelligently after feedback. Keep the same anchored user need, gather more evidence, and repair the smallest failing part first.\n"
+            "6. Stop only on Accepted or Budget exhausted."
         ),
         (
             "IMPORTANT",
@@ -101,7 +102,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
             "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary, then you do not understand the task well enough yet and must keep exploring. "
             f"Before the first judged submit_draft call, stay in exploration mode until you have gathered at least {runtime_config.initial_submit_min_atomic_observations} atomic observations across at least {runtime_config.initial_submit_min_distinct_tools} distinct tool names, including at least {runtime_config.initial_submit_min_anchor_scoped_observations} anchor-scoped observations whose parameters depend on anchor_entity. "
             "Use that research phase to classify nearby paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends before you commit to a label. "
-            "Use your research to identify the strongest grounded label candidates for the anchored user. "
+            "Use your research to identify multiple grounded label candidates for the anchored user, compare them, and then pick one path to turn into the final label. "
             "Every draft must include anchor_entity with at least one real primary-key value from the current database. "
             "anchor_entity must be a flat JSON object from one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
             "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
@@ -116,6 +117,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
         (
             "DO NOT",
             "Do not call submit_draft without anchor_entity. "
+            "Do not write SQL, draft SQL, or include SQL queries in the submission. Use only tool-observed evidence. "
             "Do not guess hidden values. "
             "Do not treat schema orientation as proof that a field is answerable; a field is usable in the canonical answer only if you directly observed it in actual tool results on the chosen evidence path. "
             "Do not write a request that assumes the user understands hidden database structure. "
@@ -134,7 +136,7 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
         ),
         (
             "Example",
-            "A strong run looks like this: first map the nearby relationships around the anchored user, then classify which paths are readable versus id-only, then identify a few grounded label candidates, then choose the strongest non-trivial candidate, and only then call submit_draft."
+            "A strong run looks like this: first trace many nearby relationships around the anchored user with tools, then classify which paths are readable versus id-only, then identify a few grounded label candidates, then choose one path that supports a unique verifiable label, and only then call submit_draft."
         ),
         (
             "GOOD",
@@ -144,11 +146,15 @@ def build_synthesis_agent_instructions(runtime_config: SynthesisRuntimeConfig) -
         ),
         (
             "BAD",
-            "Returning *_id fields, UUIDs, hashes, tokens, or random-looking references as the answer. "
-            "Submitting a label from the first path you happened to inspect before you understand the nearby relationships. "
-            "Using the first sampled row as 'latest', 'earliest', or 'first' without grounded temporal or sequence evidence. "
-            "Jumping to a global count for a self-scoped request. "
-            "Submitting a draft before you can explain why each answer slot is grounded and needed."
+            "BAD: Returning a label such as {\"store_id\": 1}, {\"customer_id\": 42}, or any other single internal identifier object as the answer. "
+            "BAD: Returning *_id fields, UUIDs, hashes, tokens, or other random-looking references as the answer. "
+            "BAD: Writing SQL or describing the answer path as a SQL query instead of using tool observations. "
+            "BAD: Asking for unreadable text from an id-only path, then inventing a readable label such as 'member 2' or 'record 17'. "
+            "BAD: Submitting a label from the first path you happened to inspect before you understand the nearby relationships. "
+            "BAD: Using the first sampled row as 'latest', 'earliest', or 'first' without grounded temporal or sequence evidence. "
+            "BAD: Jumping to a global count for a self-scoped request. "
+            "BAD: Repeating raw identifier field names or raw anchor ids in the user-facing request. "
+            "BAD: Submitting a draft before you can explain why each answer slot is grounded and needed."
         ),
     ]
     return "\n\n".join(f"{title}\n{body}" for title, body in sections)

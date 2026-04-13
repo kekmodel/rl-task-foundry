@@ -123,10 +123,6 @@ class TaskBundleExporter:
 
         self._copy_required_file(source_dir / "task.yaml", target_dir / "task.yaml")
         self._copy_required_file(source_dir / "task.json", target_dir / "task.json")
-        self._copy_required_file(
-            source_dir / "anchor_query.json",
-            target_dir / "anchor_query.json",
-        )
         self._copy_required_file(source_dir / "instance.json", target_dir / "instance.json")
         self._copy_required_file(
             source_dir / "canonical_answer.json",

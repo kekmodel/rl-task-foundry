@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from rl_task_foundry.synthesis.contracts import (
-    AnchorQueryContract,
     ConstraintKind,
     ConstraintSummaryItem,
     DIFFICULTY_CRANK_ORDER,
@@ -59,16 +58,6 @@ def test_output_schema_rejects_invalid_scalar_children() -> None:
             type=OutputFieldType.STRING,
             fields=[OutputFieldContract(name="nested", type=OutputFieldType.STRING)],
         )
-
-
-def test_anchor_query_requires_unique_outputs() -> None:
-    with pytest.raises(ValidationError):
-        AnchorQueryContract(
-            sql="SELECT anchor_id, anchor_id FROM proof_anchors",
-            outputs=["anchor_id", "anchor_id"],
-        )
-
-
 def test_task_bundle_contract_round_trips_without_generated_artifacts() -> None:
     output_schema = _build_output_schema()
     difficulty_vector = build_difficulty_vector(
@@ -109,10 +98,6 @@ def test_task_bundle_contract_round_trips_without_generated_artifacts() -> None:
             max_tool_rows=100,
         ),
         task=task,
-        anchor_query=AnchorQueryContract(
-            sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
-            outputs=["anchor_id"],
-        ),
     )
 
     round_tripped = TaskBundleContract.model_validate_json(contract.model_dump_json())
@@ -150,10 +135,6 @@ def test_task_bundle_contract_rejects_task_topic_mismatch() -> None:
                 max_tool_rows=100,
             ),
             task=task,
-            anchor_query=AnchorQueryContract(
-                sql="SELECT anchor_id FROM proof_anchors ORDER BY anchor_id",
-                outputs=["anchor_id"],
-            ),
         )
 
 

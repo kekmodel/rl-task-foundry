@@ -323,19 +323,6 @@ class RolloutConstraintsContract(StrictModel):
     max_tool_rows: int = Field(default=1000, ge=1)
 
 
-class AnchorQueryContract(StrictModel):
-    sql: str = Field(min_length=1)
-    outputs: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _validate_outputs(self) -> AnchorQueryContract:
-        if not self.outputs:
-            raise ValueError("anchor_query must declare at least one output column")
-        if len(set(self.outputs)) != len(self.outputs):
-            raise ValueError("anchor_query outputs must be unique")
-        return self
-
-
 class TaskQualityMetrics(StrictModel):
     solver_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_low: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -371,7 +358,6 @@ class TaskBundleContract(StrictModel):
     )
     rollout_constraints: RolloutConstraintsContract
     task: TaskContract
-    anchor_query: AnchorQueryContract
 
     @model_validator(mode="after")
     def _validate_contract_consistency(self) -> TaskBundleContract:
