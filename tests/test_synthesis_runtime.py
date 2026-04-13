@@ -130,10 +130,11 @@ class _FakeBackend:
     model_name: str = "gpt-5.4-mini"
     bound_controller: object | None = None
     bound_tool_definitions: list[dict[str, object]] | None = None
+    bound_tool_executors: dict[str, object] | None = None
 
     def bind_atomic_tools(self, *, tool_definitions, tool_executors) -> None:
-        del tool_executors
         self.bound_tool_definitions = tool_definitions
+        self.bound_tool_executors = tool_executors
 
     def bind_submit_draft_controller(self, controller) -> None:
         self.bound_controller = controller
@@ -209,6 +210,57 @@ def _accepted_payload() -> SubmitDraftPayload:
             "label_summary": "The store_id comes from the customer lookup and the total customer count comes from a separate aggregate.",
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_prime_synthesis_backends_injects_one_shuffle_seed_per_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SynthesisAgentRuntime(_config_with_synthesis_output(tmp_path))
+    backend = _FakeBackend()
+    runtime.synthesis_backends = [backend]
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        environment_orchestrator=_FakeEnvironmentOrchestrator(
+            matched_solver_runs=2,
+            total_solver_runs=4,
+        ),
+        build_draft=lambda payload: payload,
+    )
+    seen_payloads: list[dict[str, object]] = []
+
+    async def _recording_executor(kwargs: dict[str, object]) -> dict[str, object]:
+        seen_payloads.append(dict(kwargs))
+        return {"store_id": 1}
+
+    async def _fake_tool_executors(self, *, db_id: str, bundle: AtomicToolBundle):
+        del db_id, bundle
+        return {"get_customer_by_id": _recording_executor}
+
+    monkeypatch.setattr(
+        SynthesisAgentRuntime,
+        "_tool_executors_for_bundle",
+        _fake_tool_executors,
+    )
+
+    await runtime._prime_synthesis_backends_with_context(
+        db_id="sakila",
+        bundle=_sample_atomic_tool_bundle(),
+        controller=controller,
+        shuffle_seed="seed-run-123",
+    )
+
+    assert backend.bound_tool_executors is not None
+    executor = backend.bound_tool_executors["get_customer_by_id"]
+    await executor({"customer_id": 1})
+    await executor({"customer_id": 2})
+
+    assert [payload["_shuffle_seed"] for payload in seen_payloads] == [
+        "seed-run-123",
+        "seed-run-123",
+    ]
 
 
 def test_submit_draft_payload_schema_requires_nonempty_anchor_and_constraints() -> None:

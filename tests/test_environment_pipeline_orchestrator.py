@@ -61,6 +61,37 @@ class _FakeRuntime:
         )
 
 
+class _SeedCapturingRuntime:
+    def __init__(
+        self,
+        *,
+        raw_output_text: str,
+        executor: object,
+        seen_payloads: list[dict[str, object]],
+    ) -> None:
+        self.raw_output_text = raw_output_text
+        self.executor = executor
+        self.seen_payloads = seen_payloads
+
+    async def run(self, episode, replica_index: int = 0) -> SolverResult:
+        result = self.executor({"customer_id": 1})
+        if hasattr(result, "__await__"):
+            result = await result
+        if isinstance(result, dict):
+            self.seen_payloads.append(result)
+        return SolverResult(
+            task_id=episode.task_id,
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+            replica_index=replica_index,
+            transcript_ref="memory://transcript",
+            tool_trace_ref="memory://tools",
+            raw_output_text=self.raw_output_text,
+            status="completed",
+        )
+
+
 @pytest.mark.asyncio
 async def test_environment_orchestrator_scores_against_canonical_answer(tmp_path: Path) -> None:
     draft = _sample_draft()
@@ -83,6 +114,47 @@ async def test_environment_orchestrator_scores_against_canonical_answer(tmp_path
     assert summary.matched_solver_runs == 1
     assert summary.pass_rate == 1.0
     assert seen_max_turns == [draft.environment.rollout_constraints.max_turns]
+
+
+@pytest.mark.asyncio
+async def test_environment_orchestrator_injects_distinct_shuffle_seed_per_solver_replica(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+            replicas=2,
+        )
+    ]
+    recorded_kwargs: list[dict[str, object]] = []
+
+    async def _recording_executor(kwargs: dict[str, object]) -> dict[str, object]:
+        recorded_kwargs.append(dict(kwargs))
+        return dict(kwargs)
+
+    orchestrator = EnvironmentOrchestrator(
+        config,
+        runtime_factory=lambda _solver, _provider, _env, _defs, tool_executors: _SeedCapturingRuntime(
+            raw_output_text='{"customer":"Alice","day":"2026-04-12"}',
+            executor=next(iter(tool_executors.values())),
+            seen_payloads=[],
+        ),
+        tool_executor_factory=lambda _bundle: {"get_customer_by_id": _recording_executor},
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.total_solver_runs == 2
+    shuffle_seeds = [str(kwargs["_shuffle_seed"]) for kwargs in recorded_kwargs]
+    assert len(shuffle_seeds) == 2
+    assert len(set(shuffle_seeds)) == 2
 
 
 def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> None:
