@@ -559,11 +559,13 @@ async def test_submit_draft_requires_more_first_submit_exploration(
     message = await controller.submit(_accepted_payload())
 
     assert "Do not submit yet" in message
-    assert "Research and analyze first." in message
+    assert "Go back to research mode first." in message
+    assert "map the database relationships around the anchored user" in message
     assert "until you fully understand the nearby evidence paths" in message
     assert "at least 6 atomic observations" in message
     assert "at least 4 distinct tool names" in message
     assert "at least 3 anchor-scoped observations" in message
+    assert "classify nearby relationships and paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends" in message
     assert "why every answer slot is grounded and needed" in message
 
 

@@ -86,13 +86,21 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Start from a believable first-person need of that anchored user" in instructions
     assert "requested topic is only a soft coverage hint" in instructions
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
+    assert "Role: You are a synthesis agent" in instructions
+    assert "Workflow step 1: Research the database broadly before drafting anything." in instructions
+    assert "Map the database relationships first." in instructions
+    assert "understand the exposed relationships across the database" in instructions
+    assert "Workflow step 2: Analyze the anchored user's reachable surfaces." in instructions
+    assert "Workflow step 3: Choose the label first, then derive topic and anchor framing from it." in instructions
+    assert "Workflow step 4: Retry intelligently after feedback." in instructions
+    assert "Workflow step 5: Stop only on Accepted or Budget exhausted." in instructions
     assert "After you submit a draft with a valid self anchor, keep that same anchor_entity across retries." in instructions
     assert "Before every submit_draft call" in instructions
     assert "Do research and analysis first." in instructions
     assert "Submit only when you fully understand the anchored user, the relevant evidence path" in instructions
     assert "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary" in instructions
     assert "Before the first judged submit_draft call, stay in exploration mode until you have gathered at least" in instructions
-    assert "Use that research phase to learn what is interesting and grounded for this anchored user before you commit to a label." in instructions
+    assert "Use that research phase to classify nearby paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends" in instructions
     assert "distinct tool names" in instructions
     assert "anchor-scoped observations whose parameters depend on anchor_entity" in instructions
     assert "label_summary" in instructions

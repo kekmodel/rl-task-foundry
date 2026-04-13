@@ -1841,11 +1841,11 @@ class SubmitDraftController:
             primary = primary.replace("Rejected. ", "Feedback. ", 1)
         if error_codes and error_codes[0] is SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT:
             primary = (
-                "Feedback. Do not submit yet. Research and analyze first. Before the first judged draft, keep exploring the same anchored user until you fully understand the nearby evidence paths and have enough grounded context: "
+                "Feedback. Do not submit yet. Go back to research mode first. Before the first judged draft, map the database relationships around the anchored user and keep exploring until you fully understand the nearby evidence paths and have enough grounded context: "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_atomic_observations} atomic observations, "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_distinct_tools} distinct tool names, and "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_anchor_scoped_observations} anchor-scoped observations tied to anchor_entity. "
-                "Use that research phase to decide whether each nearby path is readable, id-only, local-only, or countable, and submit only after you understand why every answer slot is grounded and needed."
+                "Use that research phase to classify nearby relationships and paths as readable, id-only, local-only, countable, aggregate-capable, or dead ends, and submit only after you understand why every answer slot is grounded and needed."
             )
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
