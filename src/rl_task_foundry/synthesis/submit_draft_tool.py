@@ -1769,7 +1769,7 @@ class SubmitDraftController:
                 "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, only keep a count field if you observed a count or aggregate tool call whose parameters depend on anchor_entity. Otherwise drop the count field or gather anchored count evidence on the same user path instead of using a global total."
             ),
             SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT: (
-                "Rejected. You tried to submit the first judged draft too early. Keep exploring the same anchored user before drafting: gather more atomic observations, use more distinct tools, and inspect more anchor-scoped evidence paths before the first submit_draft call."
+                "Rejected. You tried to submit the first judged draft before you had fully understood the anchored user and the evidence path. Keep researching the same anchored user before drafting: gather more atomic observations, use more distinct tools, and inspect more anchor-scoped evidence paths before the first submit_draft call."
             ),
             SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD: (
                 "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."
@@ -1841,11 +1841,11 @@ class SubmitDraftController:
             primary = primary.replace("Rejected. ", "Feedback. ", 1)
         if error_codes and error_codes[0] is SubmitDraftErrorCode.INITIAL_EXPLORATION_INSUFFICIENT:
             primary = (
-                "Feedback. Do not submit yet. Before the first judged draft, keep exploring the same anchored user until you have enough grounded context: "
+                "Feedback. Do not submit yet. Research and analyze first. Before the first judged draft, keep exploring the same anchored user until you fully understand the nearby evidence paths and have enough grounded context: "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_atomic_observations} atomic observations, "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_distinct_tools} distinct tool names, and "
                 f"at least {self.config.synthesis.runtime.initial_submit_min_anchor_scoped_observations} anchor-scoped observations tied to anchor_entity. "
-                "Use that extra exploration to decide whether this path is readable, id-only, local-only, or countable before drafting."
+                "Use that research phase to decide whether each nearby path is readable, id-only, local-only, or countable, and submit only after you understand why every answer slot is grounded and needed."
             )
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
@@ -2093,6 +2093,8 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
             "Submit a grounded RLVR task draft after inspecting real database rows. "
             "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
             "natural user-facing question, constraint summary, anchor query, and label summary. "
+            "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "
+            "Call submit_draft only when you fully understand the anchored user, the relevant evidence path, which observed fields are readable, which paths are id-only dead ends, and why every answer slot is needed. "
             "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "
             "anchor_entity is mandatory and must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
             "Do not call submit_draft until anchor_entity is present and final for that draft. After the first valid self anchor is established, keep that same anchor_entity across retries. "

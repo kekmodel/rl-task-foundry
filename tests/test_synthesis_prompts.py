@@ -88,7 +88,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "If the hint would force an id-only, trivial, or weak label" in instructions
     assert "After you submit a draft with a valid self anchor, keep that same anchor_entity across retries." in instructions
     assert "Before every submit_draft call" in instructions
+    assert "Do research and analysis first." in instructions
+    assert "Submit only when you fully understand the anchored user, the relevant evidence path" in instructions
+    assert "If you are still unsure whether a label field is grounded, readable, anchor-scoped, or necessary" in instructions
     assert "Before the first judged submit_draft call, stay in exploration mode until you have gathered at least" in instructions
+    assert "Use that research phase to learn what is interesting and grounded for this anchored user before you commit to a label." in instructions
     assert "distinct tool names" in instructions
     assert "anchor-scoped observations whose parameters depend on anchor_entity" in instructions
     assert "label_summary" in instructions
@@ -106,6 +110,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "If the label returns a count, ground that count with an explicit count or aggregate observation." in instructions
     assert "Do not copy anchor_entity fields into the canonical answer" in instructions
     assert "Before the first judged submit_draft call, start with the smallest non-trivial anchored label" in instructions
+    assert "Do not rush into a draft just because you found one possible answer." in instructions
     assert "Do not start with a multi-item set, top-few list, or paired bundle" in instructions
     assert "prefer local grounded orderings inside the anchored scope" in instructions
     assert "Single-call labels are forbidden." in instructions
