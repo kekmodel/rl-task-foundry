@@ -588,7 +588,7 @@ def _collect_observed_strings(value: object, *, strings: set[str]) -> None:
             strings.add(normalized)
         return
     if isinstance(value, datetime | date):
-        normalized = str(value).strip().lower()
+        normalized = value.isoformat().strip().lower()
         if normalized:
             strings.add(normalized)
         return

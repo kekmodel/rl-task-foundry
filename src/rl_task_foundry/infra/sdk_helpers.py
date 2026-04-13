@@ -6,6 +6,8 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable
+from datetime import date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +16,22 @@ from rl_task_foundry.config.models import ProviderConfig
 
 ToolExecutor = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 ToolInvokeCallback = Callable[[str, dict[str, Any], Any], Any | Awaitable[Any]]
+
+
+def normalize_tool_result(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date | time):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): normalize_tool_result(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_tool_result(item) for item in value]
+    if isinstance(value, tuple):
+        return [normalize_tool_result(item) for item in value]
+    return value
 
 
 def load_sdk_components(
@@ -179,6 +197,7 @@ def make_sdk_tool(
             result = executor(payload)
             if hasattr(result, "__await__"):
                 result = await result
+            result = normalize_tool_result(result)
         except Exception as exc:
             result = (
                 f"ToolError: {type(exc).__name__}: {exc}. "
