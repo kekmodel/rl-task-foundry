@@ -65,8 +65,14 @@ def build_synthesis_agent_instructions(
             "string, then write a question that asks for "
             "every non-anchor slot — no more, no less.\n"
             "- Crank: after each too-easy rejection, make "
-            "the task harder by changing the label. Add a "
-            "hop, a filter, a comparison, or more slots.",
+            "the task harder by changing the label.\n"
+            "  - hop: follow one more FK "
+            "(e.g. A→B → A→B→C)\n"
+            "  - filter: add a grounded condition\n"
+            "  - slots: widen the answer "
+            "(e.g. {a,b} → {a,b,c,d})\n"
+            "  - items: deepen the answer "
+            "(e.g. {a,b} → [{a,b},{a,b}])",
         ),
         (
             "Label Rules",
