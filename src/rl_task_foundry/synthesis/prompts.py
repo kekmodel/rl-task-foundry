@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from rl_task_foundry.config.models import SynthesisRuntimeConfig
-from rl_task_foundry.synthesis.contracts import DifficultyAxis, topic_phrase
+from rl_task_foundry.synthesis.contracts import topic_phrase
 
 LANGUAGE_NAMES = {
     "ko": "Korean",
@@ -16,51 +16,6 @@ TASK_LANGUAGE_INSTRUCTION = (
     "Generate the user-facing question in {language}. "
     "Schema field names, JSON keys, and tool names "
     "must remain in English."
-)
-
-_DIFFICULTY_AXIS_GUIDANCE_BY_AXIS: dict[DifficultyAxis, str] = {
-    DifficultyAxis.SEARCH_COST: (
-        "deepen the evidence path: add one more linked "
-        "entity or require one more hop before the label "
-        "is fixed. Preserve existing readable fields and "
-        "extend the chain rather than replacing it."
-    ),
-    DifficultyAxis.SOLUTION_SPACE: (
-        "enlarge the answer: add more fields, return a "
-        "list instead of a scalar, or require choosing "
-        "among candidates with a grounded tie-breaker. "
-        "Preserve existing grounded slots and extend them."
-    ),
-    DifficultyAxis.CONSTRAINT_DENSITY: (
-        "tighten the label: add a uniqueness rule, a "
-        "stricter ordering, a subset condition, or combine "
-        "filters so fewer answers remain valid. Keep the "
-        "same path and add one extra grounded rule."
-    ),
-}
-
-
-def difficulty_axis_guidance(axis: DifficultyAxis) -> str:
-    return _DIFFICULTY_AXIS_GUIDANCE_BY_AXIS[axis]
-
-
-def difficulty_axis_feedback(axis: DifficultyAxis) -> str:
-    guidance = difficulty_axis_guidance(axis)
-    return (
-        f"Strengthen the label through {axis.value}. "
-        f"{guidance[:1].upper()}{guidance[1:]}"
-    )
-
-
-DIFFICULTY_AXIS_GUIDANCE = (
-    "Difficulty axes change the label itself, not just "
-    "the question wording. "
-    + " ".join(
-        f"{axis.value}: {difficulty_axis_guidance(axis)}"
-        for axis in DifficultyAxis
-    )
-    + " After a too-easy result, strengthen the label "
-    "itself rather than only rewriting the question."
 )
 
 

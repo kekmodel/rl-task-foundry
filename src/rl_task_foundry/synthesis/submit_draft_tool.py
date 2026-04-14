@@ -16,10 +16,8 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
-    DifficultyAxis,
     DifficultyVectorContract,
     StrictModel,
-    flatten_difficulty_vector,
     normalize_words,
 )
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
@@ -118,9 +116,9 @@ class SubmitDraftErrorCode(StrEnum):
     LABEL_IDENTIFIER_CHAIN_FORBIDDEN = "label_identifier_chain_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
     LABEL_VALUES_FROM_DISCONNECTED_CALL = "label_values_from_disconnected_call"
-    DIFFICULTY_WEAKENED = "difficulty_weakened"
-    REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED = "required_difficulty_axis_not_strengthened"
-    REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED = "required_difficulty_axis_not_relaxed"
+    # difficulty_weakened, required_difficulty_axis_not_strengthened,
+    # required_difficulty_axis_not_relaxed removed — solver pass rate
+    # is the authoritative difficulty measure.
     SEARCH_COST_IDENTIFIER_SHORTCUT_FORBIDDEN = "search_cost_identifier_shortcut_forbidden"
     REQUIRED_LABEL_AXIS_NOT_STRENGTHENED = "required_label_axis_not_strengthened"
     LABEL_NOT_STRENGTHENED = "label_not_strengthened"
@@ -155,9 +153,6 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
-        SubmitDraftErrorCode.DIFFICULTY_WEAKENED,
-        SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED,
-        SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED,
         SubmitDraftErrorCode.SEARCH_COST_IDENTIFIER_SHORTCUT_FORBIDDEN,
         SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED,
         SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
@@ -280,49 +275,6 @@ class SubmitDraftAttemptRecord:
     pass_rate: float | None = None
     matched_solver_runs: int | None = None
     total_solver_runs: int | None = None
-
-
-def _merge_strongest_difficulty_vector(
-    previous: DifficultyVectorContract,
-    current: DifficultyVectorContract,
-) -> DifficultyVectorContract:
-    return DifficultyVectorContract(
-        search_cost=max(previous.search_cost, current.search_cost),
-        solution_space=max(previous.solution_space, current.solution_space),
-        constraint_density=max(previous.constraint_density, current.constraint_density),
-    )
-
-
-def _weakened_difficulty_axes(
-    *,
-    previous: DifficultyVectorContract,
-    current: DifficultyVectorContract,
-) -> list[str]:
-    weakened: list[str] = []
-    previous_flat = flatten_difficulty_vector(previous)
-    current_flat = flatten_difficulty_vector(current)
-    for axis, previous_value in previous_flat.items():
-        if current_flat.get(axis, 0.0) < previous_value:
-            weakened.append(axis.value)
-    return weakened
-
-
-def _difficulty_axis_deltas(
-    *,
-    previous: DifficultyVectorContract,
-    current: DifficultyVectorContract,
-) -> tuple[list[DifficultyAxis], list[DifficultyAxis]]:
-    previous_flat = flatten_difficulty_vector(previous)
-    current_flat = flatten_difficulty_vector(current)
-    increased: list[DifficultyAxis] = []
-    decreased: list[DifficultyAxis] = []
-    for axis, previous_value in previous_flat.items():
-        current_value = current_flat.get(axis, previous_value)
-        if current_value > previous_value:
-            increased.append(axis)
-        elif current_value < previous_value:
-            decreased.append(axis)
-    return increased, decreased
 
 
 def _placeholder_tokens(payload: object) -> list[str]:
@@ -1184,12 +1136,7 @@ class SubmitDraftController:
     forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
     accepted_draft: SynthesisTaskDraft | None = None
     attempts: list[SubmitDraftAttemptRecord] = field(default_factory=list)
-    strongest_difficulty_vector: DifficultyVectorContract = field(
-        default_factory=DifficultyVectorContract
-    )
-    required_axis: DifficultyAxis | None = None
     required_axis_mode: DifficultyAdjustmentMode | None = None
-    required_axis_reference_vector: DifficultyVectorContract | None = None
     last_quality_gate_status: str | None = None
     last_quality_gate_pass_rate: float | None = None
     _atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
@@ -1470,7 +1417,6 @@ class SubmitDraftController:
             error_codes.append(SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE)
         if (
             not self.attempts
-            and self.required_axis is None
             and _answer_has_multi_item_collection(canonical_answer)
         ):
             error_codes.append(SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD)
@@ -1714,15 +1660,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
                 "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings, dates, and other readable values that you actually observed in real tool outputs, and copy them exactly as they appeared there. Do not shorten names, paraphrase labels, normalize timestamp formatting, or manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."  # noqa: E501
             ),
-            SubmitDraftErrorCode.DIFFICULTY_WEAKENED: (
-                "Rejected. Do not weaken the declared difficulty vector relative to the strongest prior attempt."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED: (
-                "Rejected. The requested difficulty axis was not strengthened."
-            ),
-            SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED: (
-                "Rejected. The requested difficulty axis was not reduced. Keep the same anchored user need and simplify only that axis by one grounded step."  # noqa: E501
-            ),
             SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED: (
                 "Rejected. Strengthen the label itself along the requested axis by one grounded step before resubmitting."  # noqa: E501
             ),
@@ -1937,15 +1874,10 @@ class SubmitDraftController:
                 "atomic_tool_calls_seen": len(self._atomic_tool_calls),
             },
             diagnostics={
-                "required_axis": self.required_axis.value
-                if self.required_axis is not None
-                else None,
+                "required_axis": None,
                 "required_axis_mode": (
-                    self.required_axis_mode.value if self.required_axis_mode is not None else None
-                ),
-                "required_axis_reference_vector": (
-                    self.required_axis_reference_vector.model_dump(mode="json")
-                    if self.required_axis_reference_vector is not None
+                    self.required_axis_mode.value
+                    if self.required_axis_mode is not None
                     else None
                 ),
                 "locked_anchor_entity": self._locked_anchor_entity,
