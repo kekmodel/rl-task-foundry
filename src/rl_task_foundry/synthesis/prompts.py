@@ -109,13 +109,9 @@ def build_synthesis_agent_instructions(
             "- Render: name the task with a short topic "
             "string, then write a question that asks for "
             "every non-anchor slot — no more, no less.\n"
-            "- Crank: after each too-easy rejection, "
-            "strengthen exactly one difficulty axis "
-            "(search_cost, solution_space, or "
-            "constraint_density) by changing the label "
-            "itself. Add a hop, a filter, a comparison, "
-            "or an aggregation — not just more fields from "
-            "the same path.",
+            "- Crank: after each too-easy rejection, make "
+            "the task harder by changing the label. Add a "
+            "hop, a filter, a comparison, or more slots.",
         ),
         (
             "Label Rules",

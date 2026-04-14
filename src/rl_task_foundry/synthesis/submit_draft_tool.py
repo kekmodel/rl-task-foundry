@@ -210,7 +210,8 @@ class SubmitDraftPayload(StrictModel):
         ),
     )
     difficulty_vector: DifficultyVectorContract = Field(
-        description="Declared difficulty levels for search_cost, solution_space, and constraint_density."  # noqa: E501
+        default_factory=DifficultyVectorContract,
+        description="Optional. Runtime uses solver pass rate as the authoritative difficulty measure.",  # noqa: E501
     )
     question: str = Field(
         min_length=1,
@@ -1085,14 +1086,9 @@ def _field_preservation_guidance(
     )
 
 
-def _too_easy_retry_guidance(
-    *,
-    label_data: dict[str, object] | None,
-) -> str:
-    preserve = _field_preservation_guidance(label_data)
+def _too_easy_retry_guidance() -> str:
     return (
         " Keep the same anchor and readable path."
-        f"{preserve}"
         " Pick ONE concrete change: "
         "(a) follow one more FK hop to reach a new entity, "
         "(b) add a filter condition (date range, status, "
@@ -1479,30 +1475,17 @@ class SubmitDraftController:
         ):
             error_codes.append(SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD)
 
-        reference_vector = self.required_axis_reference_vector or self.strongest_difficulty_vector
-        increased_axes, decreased_axes = _difficulty_axis_deltas(
-            previous=reference_vector,
-            current=payload.difficulty_vector,
-        )
-        self.required_axis = None
-        if self.required_axis_mode is None:
-            if decreased_axes:
-                error_codes.append(SubmitDraftErrorCode.DIFFICULTY_WEAKENED)
-        elif self.required_axis_mode is DifficultyAdjustmentMode.STRENGTHEN:
-            if decreased_axes or len(increased_axes) != 1:
-                error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED)
-            else:
-                self.required_axis = increased_axes[0]
-                if (
-                    self._last_label_signature is not None
-                    and label_signature == self._last_label_signature
-                ):
-                    error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
-        elif self.required_axis_mode is DifficultyAdjustmentMode.RELAX:
-            if increased_axes or len(decreased_axes) != 1:
-                error_codes.append(SubmitDraftErrorCode.REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED)
-            else:
-                self.required_axis = decreased_axes[0]
+        # After a too-easy rejection, check that the label
+        # actually changed — no difficulty vector math.
+        if (
+            self.required_axis_mode
+            is DifficultyAdjustmentMode.STRENGTHEN
+            and self._last_label_signature is not None
+            and label_signature == self._last_label_signature
+        ):
+            error_codes.append(
+                SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED
+            )
 
         if error_codes:
             deduped_error_codes = list(dict.fromkeys(error_codes))
@@ -1554,11 +1537,6 @@ class SubmitDraftController:
         self._tool_call_count_at_last_submission = len(self._raw_atomic_tool_calls)
         self._last_label_signature = label_signature
         self._last_label_slot_count = label_slot_count
-        self.strongest_difficulty_vector = _merge_strongest_difficulty_vector(
-            self.strongest_difficulty_vector,
-            payload.difficulty_vector,
-        )
-
         if quality_gate_summary.status is TaskQualityGateStatus.ACCEPT:
             accepted_draft = accepted_draft_with_quality_metrics(
                 draft,
@@ -1594,14 +1572,8 @@ class SubmitDraftController:
 
         attempts_left_after = self.submissions_left() - 1
         if quality_gate_summary.status is TaskQualityGateStatus.REJECT_TOO_EASY:
-            self.required_axis = None
             self.required_axis_mode = DifficultyAdjustmentMode.STRENGTHEN
-            self.required_axis_reference_vector = self.strongest_difficulty_vector
-            strengthening_guidance = _too_easy_retry_guidance(
-                label_data=_monitor_label_data(
-                    payload, config=self.config
-                ),
-            )
+            strengthening_guidance = _too_easy_retry_guidance()
             return self._record_rejection(
                 submission_index=submission_index,
                 message=_render_structured_message(
@@ -1793,9 +1765,7 @@ class SubmitDraftController:
             SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED,
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
         ):
-            primary += _too_easy_retry_guidance(
-                label_data=self._last_monitored_label_data,
-            )
+            primary += _too_easy_retry_guidance()
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (

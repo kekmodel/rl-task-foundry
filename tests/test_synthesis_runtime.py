@@ -782,9 +782,8 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "Pick ONE concrete change" in message
     assert "follow one more FK hop" in message
     assert "filter condition" in message
-    # adaptive field preservation from current session label
-    assert "staff_name" in message
-    assert "staff_email" in message
+    # no DB-specific field names in feedback
+    assert "staff_name" not in message
 
 
 @pytest.mark.asyncio
