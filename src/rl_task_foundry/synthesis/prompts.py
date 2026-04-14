@@ -102,13 +102,19 @@ def build_synthesis_agent_instructions(
             "orderable, dead-end).\n"
             "- Compare: evaluate multiple candidate paths "
             "before committing.\n"
-            "- Label: pick the strongest path and build "
-            "the canonical answer.\n"
+            "- Label: pick a 2-hop path for the first "
+            "draft — not a single lookup, but not the most "
+            "complex path you found. Build the canonical "
+            "answer from that path.\n"
             "- Render: write a question that asks for every "
             "non-anchor slot — no more, no less.\n"
-            "- Retry: on feedback, keep the anchor, repair "
-            "the smallest failing part, and change exactly "
-            "one difficulty axis when asked.",
+            "- Crank: after each too-easy rejection, "
+            "strengthen exactly one difficulty axis "
+            "(search_cost, solution_space, or "
+            "constraint_density) by changing the label "
+            "itself. Add a hop, a filter, a comparison, "
+            "or an aggregation — not just more fields from "
+            "the same path.",
         ),
         (
             "Label Rules",

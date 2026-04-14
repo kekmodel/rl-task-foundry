@@ -107,7 +107,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Research" in instructions
     assert "Compare" in instructions
     assert "Render" in instructions
-    assert "Retry" in instructions
+    assert "Crank" in instructions
 
     # label rules
     assert "directly observed tool result" in instructions
