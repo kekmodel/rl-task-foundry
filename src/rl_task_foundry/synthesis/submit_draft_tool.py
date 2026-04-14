@@ -1900,49 +1900,63 @@ class SubmitDraftController:
         self._last_monitored_label_data = label_data
 
 
+def _strict_submit_draft_schema() -> dict[str, Any]:
+    """Build a strict-mode-compatible JSON schema for submit_draft."""
+    from agents.strict_schema import ensure_strict_json_schema
+
+    schema = SubmitDraftPayload.model_json_schema()
+    # anchor_entity needs additionalProperties for arbitrary PK names,
+    # but strict mode forbids it — remove and rely on runtime validation.
+    anchor = schema["properties"]["anchor_entity"]
+    anchor.pop("additionalProperties", None)
+    anchor.pop("minProperties", None)
+    # strict mode forbids minLength / default / minimum
+    for prop in schema["properties"].values():
+        prop.pop("minLength", None)
+    for def_schema in schema.get("$defs", {}).values():
+        for prop in def_schema.get("properties", {}).values():
+            prop.pop("default", None)
+            prop.pop("minimum", None)
+    return ensure_strict_json_schema(schema)
+
+
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     from agents import FunctionTool
 
-    params_json_schema = SubmitDraftPayload.model_json_schema()
+    params_json_schema = _strict_submit_draft_schema()
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         parsed = json.loads(input_json) if input_json else {}
         if "anchor_entity" not in parsed:
             raw_question = parsed.get("question")
             if isinstance(raw_question, str):
-                parsed_anchor_entity, _, prompt_error = _split_entity_wrapped_prompt(raw_question)
-                if prompt_error is None and parsed_anchor_entity is not None:
+                parsed_anchor_entity, _, prompt_error = (
+                    _split_entity_wrapped_prompt(raw_question)
+                )
+                if (
+                    prompt_error is None
+                    and parsed_anchor_entity is not None
+                ):
                     parsed["anchor_entity"] = parsed_anchor_entity
         try:
             payload = SubmitDraftPayload.model_validate(parsed)
         except ValidationError as exc:
-            return controller.reject_invalid_payload(parsed=parsed, error=exc)
+            return controller.reject_invalid_payload(
+                parsed=parsed, error=exc
+            )
         return await controller.submit(payload)
 
     return FunctionTool(
         name="submit_draft",
         description=(
-            "Submit a grounded RLVR task draft after inspecting real database rows with tools. "
-            "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "  # noqa: E501
-            "and the natural user-facing question. "
-            "Use only tool-observed evidence. Do not write SQL, do not invent hidden joins, and do not include SQL queries in the submission. "  # noqa: E501
-            "Trace many relationships and interesting grounded paths with tools first, then choose one path and build a unique, verifiable label from that path. "  # noqa: E501
-            "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "  # noqa: E501
-            "Call submit_draft only when you fully understand the anchored user, the relevant evidence path, which observed fields are readable, which paths are id-only dead ends, and why every answer slot is needed. "  # noqa: E501
-            "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "  # noqa: E501
-            'anchor_entity is mandatory and must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {"customer_id": 123} or {"order_id": 7, "line_no": 2}. '  # noqa: E501
-            "Do not call submit_draft until anchor_entity is present and final for that draft. After the first valid self anchor is established, keep that same anchor_entity across retries. "  # noqa: E501
-            "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "  # noqa: E501
-            "The JSON inside the <entity> block must exactly match anchor_entity. "
-            "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "  # noqa: E501
-            "Do not submit opaque identifier values such as UUIDs, hashes, encrypted tokens, or random-looking reference strings as answer labels, even if they were observed. "  # noqa: E501
-            "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "  # noqa: E501
-            "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "  # noqa: E501
-            "After any rejection, make at least one new atomic tool call before calling submit_draft again. "  # noqa: E501
-            "A rejection means keep going in the same conversation, not stop. "
-            "All submit_draft arguments are schema-validated; missing required fields and invalid canonical_answer_json values are rejected automatically."  # noqa: E501
+            "Submit a task draft. Include topic, "
+            "canonical_answer_json, anchor_entity, "
+            "difficulty_vector, and question. "
+            "Explore paths with tools first — do not "
+            "call this until you understand the anchor, "
+            "the evidence path, and every answer slot."
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
-        strict_json_schema=False,
+        strict_json_schema=True,
     )
