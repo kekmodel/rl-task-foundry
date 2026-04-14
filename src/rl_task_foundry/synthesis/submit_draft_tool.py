@@ -1010,12 +1010,18 @@ def _too_easy_retry_guidance(
 ) -> str:
     preserve_guidance = _field_preservation_guidance(label_data)
     return (
-        " Stay inside the same connected anchored neighborhood and keep the same anchored user need."  # noqa: E501
-        f"{preserve_guidance} Choose exactly one axis from the observed data and current label. "
-        "Use search_cost if the path is too shallow and needs one more connected grounded hop or fact. "  # noqa: E501
-        "Use solution_space if the answer needs one more grounded slot or one more connected ordered item. "  # noqa: E501
-        "Use constraint_density if the same path needs one more grounded rule, tie-breaker, or filter. "  # noqa: E501
-        "Do not replace the current readable path with a disconnected lookup, an id-only fallback, or a simpler global count."  # noqa: E501
+        " Keep the same anchor and readable path."
+        f"{preserve_guidance}"
+        " Pick ONE concrete change: "
+        "(a) follow one more FK hop to reach a new entity, "
+        "(b) add a filter condition (date range, status, "
+        "amount threshold) so the answer is not the first "
+        "row returned, "
+        "(c) require an aggregation (count, sum, min/max) "
+        "that needs scanning multiple rows, or "
+        "(d) return a sorted list instead of a single "
+        "record. "
+        "Do not just add more fields from the same record."
     )
 
 
@@ -1519,15 +1525,15 @@ class SubmitDraftController:
                         f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
                     ),
                     primary=(
-                        "Choose exactly one difficulty axis yourself from the observed data and current label. "  # noqa: E501
-                        "Increase exactly one of search_cost, solution_space, or constraint_density above the previous level, and leave the other two unchanged."  # noqa: E501
+                        "Too easy — all solvers passed. "
+                        "Make the task harder by changing "
+                        "the label, not just the wording."
                     ),
-                    important=(
-                        "Keep the same anchored user need and preserve the other two axes at least as strong as before. "  # noqa: E501
-                        f"{strengthening_guidance.strip()}"
-                    ),
+                    important=strengthening_guidance.strip(),
                     next_step=(
-                        "Make at least one new atomic tool call, gather new grounded evidence, and strengthen only that one axis before resubmitting."  # noqa: E501
+                        "Make at least one new tool call "
+                        "for the new evidence, then "
+                        "resubmit."
                     ),
                     attempts_left=max(0, attempts_left_after),
                 ),

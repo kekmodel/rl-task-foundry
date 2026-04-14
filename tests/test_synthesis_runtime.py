@@ -778,18 +778,13 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
 
     message = await controller.submit(_too_easy_readable_payload())
 
-    assert (
-        "Choose exactly one difficulty axis yourself from the observed data and current label."
-        in message
-    )
-    assert "Stay inside the same connected anchored neighborhood" in message
-    assert (
-        "Preserve grounded readable answer slots such as"
-        " staff_name, staff_email, and latest_rental_count"
-        in message
-    )
-    assert "Use search_cost if the path is too shallow" in message
-    assert "Do not replace the current readable path with a disconnected lookup" in message
+    assert "Too easy" in message
+    assert "Pick ONE concrete change" in message
+    assert "follow one more FK hop" in message
+    assert "filter condition" in message
+    # preserves readable slot names from previous label
+    assert "staff_name" in message
+    assert "staff_email" in message
 
 
 @pytest.mark.asyncio
