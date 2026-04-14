@@ -912,3 +912,55 @@ def test_submit_draft_payload_rejects_blank_text() -> None:
 
     with pytest.raises(ValidationError):
         SubmitDraftPayload.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
+    tmp_path: Path,
+) -> None:
+    """Values observed only in global/unanchored calls must not appear in the label."""
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="itinerary",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    # anchor-connected call: customer_id=1 → rental with inventory_id=3021
+    controller.record_atomic_tool_call(
+        tool_name="find_rental_by_customer_id",
+        params={"op": "eq", "value": 1, "sort_by": "rental_date", "direction": "asc", "limit": 1},
+        result=[
+            {"rental_id": 76, "inventory_id": 3021, "rental_date": "2005-05-25T11:30:37"}
+        ],
+    )
+    # disconnected global scan — not connected to anchor entity
+    controller.record_atomic_tool_call(
+        tool_name="find_film_by_language_id",
+        params={"op": "any", "value": None, "sort_by": "film_id", "direction": "asc", "limit": 3},
+        result=[
+            {"film_id": 1, "title": "ACADEMY DINOSAUR"},
+            {"film_id": 2, "title": "ACE GOLDFINGER"},
+        ],
+    )
+    # submit label using value from disconnected call
+    payload = SubmitDraftPayload(
+        topic="itinerary",
+        anchor_entity={"customer_id": 1},
+        canonical_answer_json='{"film_title":"ACADEMY DINOSAUR","rental_date":"2005-05-25T11:30:37"}',
+        difficulty_vector={"search_cost": 2.0, "solution_space": 1.0, "constraint_density": 1.0},
+        question=(
+            "<entity>\n{\"customer_id\":1}\n</entity>\n\n"
+            "이 고객의 첫 대여 영화 제목과 대여 시각을 알려주세요."
+        ),
+    )
+    message = await controller.submit(payload)
+
+    # Should get feedback (not reach solver) and consume no submission budget
+    assert "FeedbackError" in message
+    assert controller._feedback_events >= 1
+    assert len(controller.attempts) == 0  # feedback, not rejection

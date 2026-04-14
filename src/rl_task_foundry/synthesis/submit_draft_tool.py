@@ -117,6 +117,7 @@ class SubmitDraftErrorCode(StrEnum):
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
     LABEL_IDENTIFIER_CHAIN_FORBIDDEN = "label_identifier_chain_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
+    LABEL_VALUES_FROM_DISCONNECTED_CALL = "label_values_from_disconnected_call"
     DIFFICULTY_WEAKENED = "difficulty_weakened"
     REQUIRED_DIFFICULTY_AXIS_NOT_STRENGTHENED = "required_difficulty_axis_not_strengthened"
     REQUIRED_DIFFICULTY_AXIS_NOT_RELAXED = "required_difficulty_axis_not_relaxed"
@@ -145,6 +146,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED,
         SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED,
         SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE,
+        SubmitDraftErrorCode.LABEL_VALUES_FROM_DISCONNECTED_CALL,
         SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE,
         SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE,
         SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD,
@@ -613,6 +615,104 @@ def _collect_observed_strings(value: object, *, strings: set[str]) -> None:
     if isinstance(value, list):
         for item in value:
             _collect_observed_strings(item, strings=strings)
+
+
+def _collect_scalar_values(value: object, *, sink: set[object]) -> None:
+    """Collect all scalar values from a tool result for anchor-chain tracking."""
+    if isinstance(value, (str, int, float, bool)):
+        sink.add(value)
+        if isinstance(value, str):
+            sink.add(value.strip().lower())
+        return
+    if isinstance(value, datetime | date):
+        sink.add(value.isoformat())
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_scalar_values(item, sink=sink)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_scalar_values(item, sink=sink)
+
+
+def _is_anchor_connected_call(
+    *,
+    tool_name: str,
+    params: dict[str, object],
+    result: object,
+    anchor_entity: dict[str, object] | None,
+    known_anchor_values: set[object],
+) -> bool:
+    """Check if a tool call is connected to the anchor entity chain.
+
+    A call is anchor-connected if any of its parameter values appear in
+    the anchor entity or in any previously observed anchor-connected result.
+    GET calls with an ``id`` param matching a known anchor value count.
+    FIND/CALC/RANK calls with a ``value`` param matching count.
+    """
+    if anchor_entity is None:
+        return True  # no anchor locked yet — assume connected
+    # anchor entity values themselves
+    anchor_values: set[object] = set()
+    for v in anchor_entity.values():
+        anchor_values.add(v)
+        if isinstance(v, str):
+            anchor_values.add(v.strip().lower())
+    all_known = anchor_values | known_anchor_values
+    # check if any param value is in the known set
+    for param_value in params.values():
+        if param_value in all_known:
+            return True
+        if isinstance(param_value, str) and param_value.strip().lower() in all_known:
+            return True
+    return False
+
+
+def _disconnected_answer_strings(
+    answer: object,
+    *,
+    observed_strings: set[str],
+    anchor_connected_strings: set[str],
+) -> list[str]:
+    """Find answer strings observed only in anchor-disconnected tool calls."""
+    answer_strings: list[str] = []
+    _collect_answer_strings(answer, sink=answer_strings)
+    disconnected: list[str] = []
+    for value in answer_strings:
+        if value not in observed_strings:
+            continue  # ungrounded — caught by other check
+        if value not in anchor_connected_strings:
+            disconnected.append(value)
+    return sorted(dict.fromkeys(disconnected))
+
+
+def _rebuild_anchor_connected_strings(
+    tool_calls: list[dict[str, object]],
+    *,
+    anchor_entity: dict[str, object],
+) -> set[str]:
+    """Replay tool calls and collect strings only from anchor-connected ones."""
+    known_values: set[object] = set()
+    connected_strings: set[str] = set()
+    for call in tool_calls:
+        name = str(call.get("tool_name", ""))
+        params = call.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        result = call.get("result")
+        if _is_anchor_connected_call(
+            tool_name=name,
+            params=params,
+            result=result,
+            anchor_entity=anchor_entity,
+            known_anchor_values=known_values,
+        ):
+            _collect_observed_strings(
+                result, strings=connected_strings
+            )
+            _collect_scalar_values(result, sink=known_values)
+    return connected_strings
 
 
 def _collect_answer_strings(value: object, *, sink: list[str]) -> None:
@@ -1229,6 +1329,23 @@ class SubmitDraftController:
                     anchor_entity=payload.anchor_entity,
                 )
             )
+        if not ungrounded_strings and self._locked_anchor_entity:
+            anchor_strings = _rebuild_anchor_connected_strings(
+                self._raw_atomic_tool_calls,
+                anchor_entity=self._locked_anchor_entity,
+            )
+            disconnected = _disconnected_answer_strings(
+                canonical_answer,
+                observed_strings=self._observed_response_strings,
+                anchor_connected_strings=anchor_strings,
+            )
+            if disconnected:
+                error_codes.append(
+                    SubmitDraftErrorCode.LABEL_VALUES_FROM_DISCONNECTED_CALL
+                )
+                invalid_diagnostics["disconnected_strings"] = disconnected[
+                    : self.config.synthesis.runtime.diagnostic_item_limit
+                ]
         if question_body is not None:
             question_lower = question_body.lower()
             if _contains_entity_placeholder_token(question_lower):
