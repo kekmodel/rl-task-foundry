@@ -160,9 +160,6 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
 )
 
 
-class DifficultyAdjustmentMode(StrEnum):
-    STRENGTHEN = "strengthen"
-    RELAX = "relax"
 
 
 class _ParsedCanonicalAnswerJson(str):
@@ -1136,7 +1133,7 @@ class SubmitDraftController:
     forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
     accepted_draft: SynthesisTaskDraft | None = None
     attempts: list[SubmitDraftAttemptRecord] = field(default_factory=list)
-    required_axis_mode: DifficultyAdjustmentMode | None = None
+    _needs_label_change: bool = field(default=False, init=False)
     last_quality_gate_status: str | None = None
     last_quality_gate_pass_rate: float | None = None
     _atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
@@ -1424,8 +1421,7 @@ class SubmitDraftController:
         # After a too-easy rejection, check that the label
         # actually changed — no difficulty vector math.
         if (
-            self.required_axis_mode
-            is DifficultyAdjustmentMode.STRENGTHEN
+            self._needs_label_change
             and self._last_label_signature is not None
             and label_signature == self._last_label_signature
         ):
@@ -1518,7 +1514,7 @@ class SubmitDraftController:
 
         attempts_left_after = self.submissions_left() - 1
         if quality_gate_summary.status is TaskQualityGateStatus.REJECT_TOO_EASY:
-            self.required_axis_mode = DifficultyAdjustmentMode.STRENGTHEN
+            self._needs_label_change = True
             strengthening_guidance = _too_easy_retry_guidance()
             return self._record_rejection(
                 submission_index=submission_index,
@@ -1874,12 +1870,7 @@ class SubmitDraftController:
                 "atomic_tool_calls_seen": len(self._atomic_tool_calls),
             },
             diagnostics={
-                "required_axis": None,
-                "required_axis_mode": (
-                    self.required_axis_mode.value
-                    if self.required_axis_mode is not None
-                    else None
-                ),
+                "needs_label_change": self._needs_label_change,
                 "locked_anchor_entity": self._locked_anchor_entity,
                 "recent_tool_calls": self._atomic_tool_calls[
                     -self.config.synthesis.runtime.diagnostic_item_limit :
