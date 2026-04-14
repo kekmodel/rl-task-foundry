@@ -89,57 +89,42 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
         load_config("rl_task_foundry.yaml").synthesis.runtime
     )
 
+    # preamble (no heading)
+    assert instructions.startswith("You build grounded RLVR tasks")
+    assert "knows nothing about the schema" in instructions
+
     # sections present
-    assert "# Role" in instructions
-    assert "# Principles" in instructions
     assert "# Workflow" in instructions
     assert "# Label Rules" in instructions
     assert "# Prohibitions" in instructions
 
-    # core identity — DB-agnostic
-    assert "grounded RLVR tasks" in instructions
-    assert "database evidence" in instructions
-    assert "knows nothing about the schema" in instructions
-
-    # label-first principle
-    assert "Label before request" in instructions
-    assert "Groundedness over style" in instructions
+    # removed sections
+    assert "# Role" not in instructions
+    assert "# Principles" not in instructions
 
     # workflow steps
     assert "Research" in instructions
     assert "Compare" in instructions
-    assert "Label" in instructions
     assert "Render" in instructions
     assert "Retry" in instructions
 
-    # label rules — grounding
+    # label rules
     assert "directly observed tool result" in instructions
-    assert "Copy observed strings exactly" in instructions
     assert "anchor_entity must be a flat JSON object" in instructions
-
-    # label rules — structure
     assert "<entity>" in instructions
-    assert "every non-anchor" in instructions
 
-    # difficulty axis guidance
-    assert "search_cost" in instructions
-    assert "solution_space" in instructions
-    assert "constraint_density" in instructions
-    assert "strengthen the label" in instructions.lower()
+    # difficulty guidance removed from system prompt (delivered via feedback)
+    assert "search_cost:" not in instructions
+    assert "solution_space:" not in instructions
+    assert "constraint_density:" not in instructions
 
     # prohibitions
     assert "Do not submit single-call labels" in instructions
-    assert "Do not write or include SQL" in instructions
-    assert "Do not manufacture readable values from ids" in instructions
-    assert "Do not stop or apologize after rejection" in instructions
     assert "Accepted or Budget exhausted" in instructions
 
-    # no DB-specific examples (customer, rental, film, staff)
+    # no DB-specific examples
     assert "customer-name" not in instructions
-    assert "first_name and last_name" not in instructions
-    assert "full-name" not in instructions
     assert "assigned staff" not in instructions
-    assert "recent item's title" not in instructions
 
 
 def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules() -> None:

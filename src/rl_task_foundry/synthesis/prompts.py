@@ -85,27 +85,15 @@ def _topic_semantics_instruction(
 def build_synthesis_agent_instructions(
     runtime_config: SynthesisRuntimeConfig,
 ) -> str:
+    preamble = (
+        "You build grounded RLVR tasks from real "
+        "database evidence. Discover a verifiable label, "
+        "then render it as a natural user request. "
+        "The end user sees only the <entity> block and "
+        "the request — write as if for someone who knows "
+        "nothing about the schema."
+    )
     sections = [
-        (
-            "Role",
-            "You build grounded RLVR tasks from real "
-            "database evidence. Discover a verifiable label, "
-            "then render it as a natural user request. "
-            "The end user sees only the <entity> block and "
-            "the request — write as if for someone who knows "
-            "nothing about the schema.",
-        ),
-        (
-            "Principles",
-            "1. Label before request — the request renders "
-            "the label, not the other way around.\n"
-            "2. Groundedness over style — a plain but exact "
-            "task beats a polished but invented one.\n"
-            "3. Topic hints are soft — ignore them if they "
-            "lead to weak labels.\n"
-            "4. Feedback is a signal — use rejections to "
-            "repair, not to stop.",
-        ),
         (
             "Workflow",
             "1. Research: inspect the anchor entry and map "
@@ -123,29 +111,23 @@ def build_synthesis_agent_instructions(
         ),
         (
             "Label Rules",
-            # grounding
             "Every answer slot must come from a directly "
             "observed tool result — never guess, infer, or "
             "reformat values. "
             "Copy observed strings exactly; do not merge, "
             "shorten, or paraphrase them. "
-            # anchor
             "anchor_entity must be a flat JSON object of "
             "primary-key fields to scalar values. "
             "The <entity> block identifies the subject, so "
             "do not duplicate anchor fields in the label "
             "unless the request explicitly asks for them. "
-            # structure
             "question must follow: <entity>\\n{json}\\n"
             "</entity>\\n\\nuser request. "
             "The request must cover every non-anchor label "
             "slot and nothing extra. If a slot cannot be "
             "asked for naturally, remove it from the label. "
-            # counts
             "Ground counts with an explicit anchor-scoped "
-            "aggregate observation — not a global total. "
-            # difficulty
-            f"{DIFFICULTY_AXIS_GUIDANCE}",
+            "aggregate observation — not a global total.",
         ),
         (
             "Prohibitions",
@@ -163,7 +145,11 @@ def build_synthesis_agent_instructions(
             "proves the current path is ungroundable.",
         ),
     ]
-    return "\n\n".join(f"# {title}\n{body}" for title, body in sections)
+    return (
+        preamble
+        + "\n\n"
+        + "\n\n".join(f"# {title}\n{body}" for title, body in sections)
+    )
 
 
 def build_synthesis_input(
