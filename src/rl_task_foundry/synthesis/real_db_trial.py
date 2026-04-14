@@ -134,6 +134,8 @@ class RealDbTrialRunner:
                 materializer=self.registry.atomic_tool_materializer,
             )
 
+    max_conversations: int = 3
+
     async def run(
         self,
         output_root: Path,
@@ -163,11 +165,15 @@ class RealDbTrialRunner:
             checks={"debug_root_ready": debug_root.exists()},
             diagnostics={},
         )
-        runtime = self._synthesis_runtime_for_trial(debug_traces_dir, phase_monitor)
+        runtime = self._synthesis_runtime_for_trial(
+            debug_traces_dir, phase_monitor
+        )
         try:
-            draft = await runtime.synthesize_environment_draft(
+            draft = await self._synthesize_with_restart(
+                runtime,
                 db_id=db_id,
-                requested_topic=topic,
+                topic=topic,
+                phase_monitor=phase_monitor,
             )
         except SynthesisArtifactGenerationError as exc:
             phase_monitor.emit(
@@ -352,6 +358,60 @@ class RealDbTrialRunner:
         )
         phase_monitor.close()
         return summary
+
+    async def _synthesize_with_restart(
+        self,
+        runtime: SynthesisAgentRuntime,
+        *,
+        db_id: str,
+        topic: str,
+        phase_monitor: PipelinePhaseMonitorLogger,
+    ) -> object:
+        """Try up to max_conversations fresh conversations.
+
+        Each conversation is a full new synthesis attempt with a new
+        anchor and new exploration. If a conversation ends with
+        reject_too_hard, discard it and start fresh instead of
+        oscillating within the same conversation.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(self.max_conversations):
+            try:
+                return await runtime.synthesize_environment_draft(
+                    db_id=db_id,
+                    requested_topic=topic,
+                )
+            except SynthesisArtifactGenerationError as exc:
+                last_exc = exc
+                is_too_hard = any(
+                    "reject_too_hard" in str(code)
+                    for code in (
+                        exc.last_artifact_diagnostics.error_codes
+                        if exc.last_artifact_diagnostics
+                        else ()
+                    )
+                )
+                if (
+                    is_too_hard
+                    and attempt < self.max_conversations - 1
+                ):
+                    phase_monitor.emit(
+                        phase="conversation_restart",
+                        status="too_hard_retry",
+                        actual_data={
+                            "conversation_index": attempt,
+                            "remaining": (
+                                self.max_conversations
+                                - attempt
+                                - 1
+                            ),
+                        },
+                        checks={},
+                        diagnostics={},
+                    )
+                    continue
+                raise
+        raise last_exc  # type: ignore[misc]
 
     async def close(self) -> None:
         if self.synthesis_runtime is not None:
