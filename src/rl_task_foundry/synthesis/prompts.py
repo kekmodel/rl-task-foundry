@@ -150,8 +150,9 @@ def build_synthesis_agent_instructions(
         (
             "Prohibitions",
             "Do not submit while still exploring. "
-            "Do not reveal table names, bridge tables, "
-            "column names, or SQL in the request. "
+            "Do not use raw column names (first_name, "
+            "rental_date, etc.) in the request — rephrase "
+            "as natural language the end user would say. "
             "Do not submit single-call labels (one tool "
             "call returns the full answer). "
             "Do not write or include SQL. "
