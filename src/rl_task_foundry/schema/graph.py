@@ -20,6 +20,12 @@ class ColumnProfile:
     is_foreign_key: bool = False
     is_unique: bool = False
     n_distinct: float | None = None
+    null_fraction: float | None = None
+    has_default: bool = False
+    default_expression: str | None = None
+    is_identity: bool = False
+    identity_generation: str | None = None
+    is_generated: bool = False
 
     @property
     def qualified_name(self) -> str:

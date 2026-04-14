@@ -534,6 +534,32 @@ def test_generated_atomic_tool_source_is_ast_valid_and_tool_functions_are_async(
         assert async_defs[tool.name].args.args[0].arg == "conn"
 
 
+def test_generated_atomic_tool_source_trims_fixed_width_char_padding_only() -> None:
+    bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
+    namespace: dict[str, object] = {}
+    exec(bundle.source, namespace)
+
+    row_to_dict = namespace["_row_to_dict"]
+    assert callable(row_to_dict)
+
+    normalized = row_to_dict(
+        {"code": "AB   ", "title": "Seoul   ", "note": "  keep-leading"},
+        {
+            "column_types": {
+                "code": "bpchar",
+                "title": "varchar",
+                "note": "character varying",
+            }
+        },
+    )
+
+    assert normalized == {
+        "code": "AB",
+        "title": "Seoul   ",
+        "note": "  keep-leading",
+    }
+
+
 def test_generated_atomic_tool_sql_templates_parse_under_postgres_dialect() -> None:
     bundle = AtomicToolGenerator(AtomicToolConfig()).generate_bundle(_sample_graph(), db_id="sakila")
 

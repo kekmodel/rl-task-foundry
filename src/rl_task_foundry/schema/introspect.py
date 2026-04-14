@@ -35,7 +35,11 @@ SELECT
   cols.column_name,
   cols.ordinal_position,
   (cols.is_nullable = 'YES') AS is_nullable,
-  COALESCE(NULLIF(cols.udt_name, ''), cols.data_type) AS data_type
+  COALESCE(NULLIF(cols.udt_name, ''), cols.data_type) AS data_type,
+  cols.column_default,
+  (cols.is_identity = 'YES') AS is_identity,
+  cols.identity_generation,
+  (cols.is_generated <> 'NEVER') AS is_generated
 FROM information_schema.columns AS cols
 JOIN information_schema.tables AS tbl
   ON tbl.table_schema = cols.table_schema
@@ -114,7 +118,8 @@ SELECT
   schemaname AS schema_name,
   tablename AS table_name,
   attname AS column_name,
-  n_distinct
+  n_distinct,
+  null_frac
 FROM pg_stats
 WHERE schemaname = ANY($1::text[])
 ORDER BY schemaname, tablename, attname
@@ -212,6 +217,15 @@ class PostgresSchemaIntrospector:
             for row in stats_rows
             if row["n_distinct"] is not None
         }
+        null_fraction_by_column = {
+            (
+                row["schema_name"],
+                row["table_name"],
+                row["column_name"],
+            ): float(row["null_frac"])
+            for row in stats_rows
+            if row["null_frac"] is not None
+        }
 
         edges: list[ForeignKeyEdge] = []
         for row in fk_rows:
@@ -258,6 +272,14 @@ class PostgresSchemaIntrospector:
                     n_distinct=n_distinct_by_column.get(
                         (row["schema_name"], row["table_name"], column_name)
                     ),
+                    null_fraction=null_fraction_by_column.get(
+                        (row["schema_name"], row["table_name"], column_name)
+                    ),
+                    has_default=row["column_default"] is not None,
+                    default_expression=row["column_default"],
+                    is_identity=bool(row["is_identity"]),
+                    identity_generation=row["identity_generation"],
+                    is_generated=bool(row["is_generated"]),
                 )
             )
 

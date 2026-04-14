@@ -299,7 +299,167 @@ def summarize_schema_graph(
         "included_table_count": len(limited_tables),
         "truncated": len(limited_tables) != len(graph.tables),
         "tables": table_summaries,
+        "introspection_rules": summarize_introspection_rules(graph),
     }
+
+
+def summarize_introspection_rules(graph: SchemaGraph) -> list[str]:
+    rules: list[str] = []
+
+    composite_key_tables = [
+        table.qualified_name
+        for table in graph.tables
+        if len(table.primary_key) > 1
+    ]
+    if composite_key_tables:
+        rules.append(
+            "Composite-key tables exist: "
+            + _render_preview_list(composite_key_tables)
+            + ". Keep every primary-key field together when anchoring or identifying a row."
+        )
+
+    nullable_reference_columns = [
+        column.qualified_name
+        for table in graph.tables
+        for column in table.columns
+        if column.is_foreign_key and column.is_nullable
+    ]
+    if nullable_reference_columns:
+        rules.append(
+            "Nullable reference columns exist: "
+            + _render_preview_list(nullable_reference_columns)
+            + ". Verify that the downstream row exists before using target-side fields."
+        )
+
+    sparse_columns = [
+        column.qualified_name
+        for table in graph.tables
+        for column in table.columns
+        if (
+            column.null_fraction is not None
+            and column.null_fraction >= 0.5
+            and not column.is_primary_key
+        )
+    ]
+    if sparse_columns:
+        rules.append(
+            "High-null columns exist: "
+            + _render_preview_list(sparse_columns)
+            + ". Check that these values are actually present before building them into a label."
+        )
+
+    defaulted_business_columns = [
+        column.qualified_name
+        for table in graph.tables
+        for column in table.columns
+        if (
+            column.has_default
+            and not column.is_primary_key
+            and not _is_low_signal_surface_field(column.column_name)
+        )
+    ]
+    if defaulted_business_columns:
+        rules.append(
+            "Columns with stored defaults exist: "
+            + _render_preview_list(defaulted_business_columns)
+            + ". A defaulted value may be schema-supplied rather than evidence of a meaningful event."
+        )
+
+    bridge_like_tables: list[str] = []
+    for table in graph.tables:
+        reference_columns = [column.column_name for column in table.columns if column.is_foreign_key]
+        non_reference_business_columns = _business_readable_columns(table)
+        non_key_non_reference_columns = [
+            column.column_name
+            for column in table.columns
+            if not column.is_primary_key and not column.is_foreign_key
+        ]
+        if (
+            len(reference_columns) >= 2
+            and len(non_reference_business_columns) <= 2
+            and len(non_key_non_reference_columns) <= 3
+        ):
+            bridge_like_tables.append(
+                f"{table.qualified_name}(refs={reference_columns[:3]})"
+            )
+    if bridge_like_tables:
+        rules.append(
+            "Bridge-like or reference-heavy tables exist: "
+            + _render_preview_list(bridge_like_tables)
+            + ". These tables often require another verified hop before a user-facing value appears."
+        )
+
+    unique_reference_edges: list[str] = []
+    for edge in graph.edges:
+        if not edge.source_is_unique:
+            continue
+        column_pairs = ", ".join(
+            f"{source}->{target}"
+            for source, target in zip(edge.source_columns, edge.target_columns, strict=False)
+        )
+        unique_reference_edges.append(
+            f"{edge.source_qualified_name}[{column_pairs}]->{edge.target_qualified_name}"
+        )
+    if unique_reference_edges:
+        rules.append(
+            "Source-unique reference paths exist: "
+            + _render_preview_list(unique_reference_edges)
+            + ". These behave closer to one-to-one from the source side."
+        )
+
+    generated_columns = [
+        column.qualified_name
+        for table in graph.tables
+        for column in table.columns
+        if column.is_generated or column.is_identity
+    ]
+    if generated_columns:
+        rules.append(
+            "System-generated columns exist: "
+            + _render_preview_list(generated_columns)
+            + ". Treat them as stored attributes, not as evidence of user intent."
+        )
+
+    inbound_degree_by_table = {
+        table.qualified_name: len(graph.edges_to(table.table_name, schema_name=table.schema_name))
+        for table in graph.tables
+    }
+    hub_tables = [
+        f"{table_name}(inbound={degree})"
+        for table_name, degree in sorted(
+            inbound_degree_by_table.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        if degree >= 4
+    ]
+    if hub_tables:
+        rules.append(
+            "High-inbound hub tables exist: "
+            + _render_preview_list(hub_tables)
+            + ". Multiple anchored paths can converge on them, so do not skip intermediate evidence."
+        )
+
+    return rules
+
+
+def _business_readable_columns(table: TableProfile) -> list[str]:
+    return [
+        column.column_name
+        for column in table.columns
+        if (
+            not column.is_primary_key
+            and not column.is_foreign_key
+            and str(column.visibility) == "user_visible"
+            and not _is_low_signal_surface_field(column.column_name)
+        )
+    ]
+
+
+def _render_preview_list(items: list[str], *, limit: int = 3) -> str:
+    preview = items[:limit]
+    if len(items) > limit:
+        preview = [*preview, f"... +{len(items) - limit} more"]
+    return ", ".join(preview)
 
 
 def summarize_atomic_tool_surface(
@@ -309,6 +469,8 @@ def summarize_atomic_tool_surface(
 ) -> dict[str, object]:
     entity_surfaces: list[dict[str, object]] = []
     family_counts: dict[str, int] = {}
+    business_ready_get_surface_count = 0
+    reference_heavy_get_surface_count = 0
     for tool in bundle.tools:
         family_counts[tool.family.value] = family_counts.get(tool.family.value, 0) + 1
         if tool.family is not AtomicToolFamily.GET:
@@ -317,7 +479,15 @@ def summarize_atomic_tool_surface(
         if not isinstance(properties, dict):
             continue
         field_names = [str(key) for key in properties.keys()]
-        readable_fields = [name for name in field_names if not name.endswith("_id")]
+        readable_fields = [
+            name
+            for name in field_names
+            if not name.endswith("_id") and not _is_low_signal_surface_field(name)
+        ]
+        if readable_fields:
+            business_ready_get_surface_count += 1
+        else:
+            reference_heavy_get_surface_count += 1
         entity_surfaces.append(
             {
                 "tool_name": tool.name,
@@ -336,8 +506,25 @@ def summarize_atomic_tool_surface(
     return {
         "tool_count": len(bundle.tools),
         "family_counts": family_counts,
+        "business_ready_get_surface_count": business_ready_get_surface_count,
+        "reference_heavy_get_surface_count": reference_heavy_get_surface_count,
         "entity_surfaces": entity_surfaces[:max_entity_surfaces],
     }
+
+
+_LOW_SIGNAL_SURFACE_FIELDS = {
+    "last_update",
+    "updated_at",
+    "modified_at",
+    "last_modified_at",
+}
+
+
+def _is_low_signal_surface_field(name: str) -> bool:
+    normalized = name.lower()
+    if normalized in _LOW_SIGNAL_SURFACE_FIELDS:
+        return True
+    return normalized.endswith(("_last_update", "_updated_at", "_modified_at"))
 
 
 def _tool_return_properties(returns_schema: dict[str, object]) -> dict[str, object] | None:

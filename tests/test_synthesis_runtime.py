@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
 import pytest
@@ -11,7 +13,7 @@ from pydantic import ValidationError
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
-from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
+from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
 from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolBundle,
     AtomicToolDefinition,
@@ -21,10 +23,14 @@ from rl_task_foundry.synthesis.atomic_tools import (
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
+    summarize_atomic_tool_surface,
+    summarize_schema_graph,
 )
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftPayload,
+    SubmitDraftToolPayload,
+    build_submit_draft_sdk_tool,
     _count_semantics_present,
     _mentions_global_scope,
     _ungrounded_answer_strings,
@@ -157,6 +163,310 @@ def _sample_atomic_tool_bundle(db_id: str = "sakila") -> AtomicToolBundle:
             )
         ],
         source="async def get_customer(conn, id):\n    return {'store_id': 1}\n",
+    )
+
+
+def test_summarize_atomic_tool_surface_excludes_low_signal_audit_fields() -> None:
+    bundle = AtomicToolBundle(
+        db_id="sakila",
+        tools=[
+            AtomicToolDefinition(
+                name="get_inventory",
+                family=AtomicToolFamily.GET,
+                description="Retrieve one inventory by ID. Returns all fields or nothing.",
+                params_schema={
+                    "type": "object",
+                    "properties": {"id": {"type": "integer"}},
+                    "required": ["id"],
+                    "additionalProperties": False,
+                },
+                returns_schema={
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "inventory_id": {"type": "integer"},
+                                "film_id": {"type": "integer"},
+                                "store_id": {"type": "integer"},
+                                "last_update": {"type": "string"},
+                            },
+                            "required": ["inventory_id", "film_id", "store_id", "last_update"],
+                            "additionalProperties": False,
+                        },
+                        {"type": "null"},
+                    ],
+                },
+                sql="SELECT 1",
+                result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
+                semantic_key="inventory:get",
+            )
+        ],
+        source="async def get_inventory(conn, id):\n    return {'inventory_id': id}\n",
+    )
+
+    summary = summarize_atomic_tool_surface(bundle, max_entity_surfaces=4)
+
+    assert summary["entity_surfaces"] == [
+        {
+            "tool_name": "get_inventory",
+            "family": "get",
+            "field_names": ["inventory_id", "film_id", "store_id", "last_update"],
+            "readable_fields": [],
+            "id_only": True,
+        }
+    ]
+    assert summary["business_ready_get_surface_count"] == 0
+    assert summary["reference_heavy_get_surface_count"] == 1
+
+
+def test_summarize_schema_graph_adds_rule_based_introspection_notes() -> None:
+    graph = SchemaGraph(
+        tables=[
+            TableProfile(
+                schema_name="public",
+                table_name="membership",
+                primary_key=("user_id", "group_id"),
+                row_estimate=20,
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="membership",
+                        column_name="user_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                        is_foreign_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="membership",
+                        column_name="group_id",
+                        data_type="integer",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                        is_foreign_key=True,
+                    ),
+                ],
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="profile",
+                primary_key=("profile_id",),
+                row_estimate=10,
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="profile",
+                        column_name="profile_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="profile",
+                        column_name="user_id",
+                        data_type="integer",
+                        ordinal_position=2,
+                        is_nullable=True,
+                        visibility="blocked",
+                        is_foreign_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="profile",
+                        column_name="display_name",
+                        data_type="text",
+                        ordinal_position=3,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        has_default=True,
+                        default_expression="'anonymous'::text",
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="profile",
+                        column_name="nickname",
+                        data_type="text",
+                        ordinal_position=4,
+                        is_nullable=True,
+                        visibility="user_visible",
+                        null_fraction=0.9,
+                    ),
+                ],
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="user_account",
+                primary_key=("user_id",),
+                row_estimate=100,
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="user_account",
+                        column_name="user_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="user_account",
+                        column_name="email",
+                        data_type="text",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                ],
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="staff_directory",
+                primary_key=("staff_id",),
+                row_estimate=5,
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="staff_directory",
+                        column_name="staff_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="staff_directory",
+                        column_name="name",
+                        data_type="text",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                ],
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="store",
+                primary_key=("store_id",),
+                row_estimate=2,
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="store",
+                        column_name="store_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="store",
+                        column_name="manager_staff_id",
+                        data_type="integer",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="blocked",
+                        is_foreign_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="store",
+                        column_name="label",
+                        data_type="text",
+                        ordinal_position=3,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                ],
+            ),
+        ],
+        edges=[
+            ForeignKeyEdge(
+                constraint_name="membership_user_fk",
+                source_schema="public",
+                source_table="membership",
+                source_columns=("user_id",),
+                target_schema="public",
+                target_table="user_account",
+                target_columns=("user_id",),
+                source_is_unique=False,
+                fanout_estimate=1.0,
+            ),
+            ForeignKeyEdge(
+                constraint_name="membership_group_fk",
+                source_schema="public",
+                source_table="membership",
+                source_columns=("group_id",),
+                target_schema="public",
+                target_table="staff_directory",
+                target_columns=("staff_id",),
+                source_is_unique=False,
+                fanout_estimate=1.0,
+            ),
+            ForeignKeyEdge(
+                constraint_name="profile_user_fk",
+                source_schema="public",
+                source_table="profile",
+                source_columns=("user_id",),
+                target_schema="public",
+                target_table="user_account",
+                target_columns=("user_id",),
+                source_is_unique=False,
+                fanout_estimate=1.0,
+            ),
+            ForeignKeyEdge(
+                constraint_name="store_manager_staff_fk",
+                source_schema="public",
+                source_table="store",
+                source_columns=("manager_staff_id",),
+                target_schema="public",
+                target_table="staff_directory",
+                target_columns=("staff_id",),
+                source_is_unique=True,
+                fanout_estimate=1.0,
+            ),
+        ],
+    )
+
+    summary = summarize_schema_graph(graph, max_tables=8)
+    rules = summary["introspection_rules"]
+
+    assert any(
+        "Composite-key tables exist: public.membership." in rule
+        for rule in rules
+    )
+    assert any(
+        "Nullable reference columns exist: public.profile.user_id." in rule
+        for rule in rules
+    )
+    assert any(
+        "High-null columns exist: public.profile.nickname." in rule
+        for rule in rules
+    )
+    assert any(
+        "Columns with stored defaults exist: public.profile.display_name." in rule
+        for rule in rules
+    )
+    assert any(
+        "Bridge-like or reference-heavy tables exist: public.membership(refs=['user_id', 'group_id'])" in rule
+        for rule in rules
+    )
+    assert any(
+        "Source-unique reference paths exist: public.store[manager_staff_id->staff_id]->public.staff_directory." in rule
+        for rule in rules
     )
 
 
@@ -489,6 +799,86 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
     required_fields = set(SubmitDraftPayload.model_json_schema().get("required", []))
 
     assert "constraint_summary" not in required_fields
+
+
+def test_submit_draft_tool_payload_parses_anchor_entity_json_string() -> None:
+    tool_payload = SubmitDraftToolPayload.model_validate(
+        {
+            "topic": "assignment",
+            "canonical_answer_json": '{"first_name":"Mary"}',
+            "anchor_entity": '{"customer_id": 1}',
+            "difficulty_vector": {
+                "search_cost": 1.0,
+                "solution_space": 0.0,
+                "constraint_density": 0.0,
+            },
+            "question": _wrap_user_prompt({"customer_id": 1}, "제 이름을 알려주세요."),
+        }
+    )
+
+    assert tool_payload.anchor_entity == {"customer_id": 1}
+    assert tool_payload.to_submit_payload().anchor_entity == {"customer_id": 1}
+    question_schema = SubmitDraftToolPayload.model_json_schema()["properties"]["question"]
+    assert "exact literal tags <entity> ... </entity>" in question_schema["description"]
+    assert "Never replace <entity> with an entity-specific tag" in question_schema["description"]
+
+
+def test_build_submit_draft_sdk_tool_uses_strict_schema_path(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeFunctionTool:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_agents = ModuleType("agents")
+    fake_agents.FunctionTool = FakeFunctionTool
+    fake_strict_schema = ModuleType("agents.strict_schema")
+
+    def _fake_ensure_strict_json_schema(schema: dict[str, object]) -> dict[str, object]:
+        captured["raw_schema"] = schema
+        return {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+
+    fake_strict_schema.ensure_strict_json_schema = _fake_ensure_strict_json_schema
+
+    monkeypatch.setitem(sys.modules, "agents", fake_agents)
+    monkeypatch.setitem(sys.modules, "agents.strict_schema", fake_strict_schema)
+
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(Path("/tmp") / "submit_draft_schema_test"),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(matched_solver_runs=1, total_solver_runs=1),
+        build_draft=lambda payload: payload,
+        max_submissions=1,
+    )
+
+    build_submit_draft_sdk_tool(controller)
+
+    assert captured["name"] == "submit_draft"
+    assert captured["strict_json_schema"] is True
+    assert captured["params_json_schema"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+    assert isinstance(captured["raw_schema"], dict)
+    raw_anchor_entity = captured["raw_schema"]["properties"]["anchor_entity"]
+    assert raw_anchor_entity["type"] == "string"
+    assert raw_anchor_entity["contentMediaType"] == "application/json"
+    assert "exact literal tags <entity> and </entity>" in captured["description"]
+    assert "never substitute <customer>, <film>" in captured["description"]
+
+
+def test_build_submit_draft_sdk_tool_real_sdk_accepts_schema() -> None:
+    pytest.importorskip("agents")
+    from agents.strict_schema import ensure_strict_json_schema
+
+    schema = SubmitDraftToolPayload.model_json_schema()
+    strict_schema = ensure_strict_json_schema(schema)
+
+    assert strict_schema["type"] == "object"
+    assert strict_schema["additionalProperties"] is False
+    assert strict_schema["properties"]["anchor_entity"]["type"] == "string"
 
 
 def test_count_semantics_present_does_not_match_account_substrings() -> None:

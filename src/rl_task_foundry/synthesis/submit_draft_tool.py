@@ -10,7 +10,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, Json, ValidationError, field_validator
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
@@ -213,7 +213,8 @@ class SubmitDraftPayload(StrictModel):
         min_length=1,
         description=(
             "Full user-facing prompt in the configured task language, starting with "
-            "<entity> ... </entity> on its own lines, followed by a blank line and the natural user request body. "
+            "the exact literal tags <entity> ... </entity> on its own lines, followed by a blank line and the natural user request body. "
+            "Never replace <entity> with an entity-specific tag such as <customer> or <film>. "
             "The entity block must exactly match anchor_entity."
         ),
     )
@@ -252,6 +253,58 @@ class SubmitDraftPayload(StrictModel):
 
 
 SubmitDraftPayload.model_rebuild()
+
+
+type AnchorEntityScalar = str | int | float | bool | None
+
+
+class SubmitDraftToolPayload(StrictModel):
+    topic: str = Field(
+        min_length=1,
+        description="Selected topic string derived from the grounded label and evidence.",
+    )
+    canonical_answer_json: str = Field(
+        min_length=1,
+        description="Canonical answer as a JSON string. This is the exact label used for EM scoring.",
+    )
+    anchor_entity: Json[dict[str, AnchorEntityScalar]] = Field(
+        description=(
+            "Mandatory anchor entity encoded as a compact JSON object string from primary-key field name "
+            'to scalar value, for example "{\\"<pk_name>\\": 123}". Never omit this field and do not '
+            "nest it under keys such as entity_type, primary_key, primary_keys, or metadata."
+        )
+    )
+    difficulty_vector: DifficultyVectorContract = Field(
+        description="Declared difficulty levels for search_cost, solution_space, and constraint_density."
+    )
+    question: str = Field(
+        min_length=1,
+        description=(
+            "Full user-facing prompt in the configured task language, starting with "
+            "the exact literal tags <entity> ... </entity> on its own lines, followed by a blank line and the natural user request body. "
+            "Never replace <entity> with an entity-specific tag such as <customer> or <film>. "
+            "The entity block must exactly match anchor_entity."
+        ),
+    )
+
+    @field_validator("anchor_entity")
+    @classmethod
+    def _validate_anchor_entity(cls, value: dict[str, AnchorEntityScalar]) -> dict[str, AnchorEntityScalar]:
+        return _normalize_anchor_entity_map(dict(value))
+
+    def to_submit_payload(self) -> SubmitDraftPayload:
+        return SubmitDraftPayload.model_validate(
+            {
+                "topic": self.topic,
+                "canonical_answer_json": self.canonical_answer_json,
+                "anchor_entity": dict(self.anchor_entity),
+                "difficulty_vector": self.difficulty_vector.model_dump(mode="json"),
+                "question": self.question,
+            }
+        )
+
+
+SubmitDraftToolPayload.model_rebuild()
 
 
 def _normalize_anchor_entity_map(value: dict[str, object]) -> dict[str, object]:
@@ -1059,11 +1112,16 @@ class SubmitDraftController:
                 error_codes.append(required_code)
             elif location == ("canonical_answer_json",):
                 error_codes.append(SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID)
-            elif location == ("anchor_entity",):
+            elif location and location[0] == "anchor_entity":
                 if error_type == "value_error":
                     error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED)
                 else:
-                    error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
+                    anchor_code = (
+                        SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED
+                        if error_type == "missing" and len(location) == 1
+                        else SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED
+                    )
+                    error_codes.append(anchor_code)
             else:
                 error_codes.append(SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID)
         raw_question = parsed.get("question")
@@ -1773,19 +1831,31 @@ class SubmitDraftController:
 
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     from agents import FunctionTool
+    from agents.strict_schema import ensure_strict_json_schema
 
-    params_json_schema = SubmitDraftPayload.model_json_schema()
+    params_json_schema = ensure_strict_json_schema(SubmitDraftToolPayload.model_json_schema())
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         parsed = json.loads(input_json) if input_json else {}
+        if isinstance(parsed.get("anchor_entity"), dict):
+            parsed["anchor_entity"] = json.dumps(
+                parsed["anchor_entity"],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         if "anchor_entity" not in parsed:
             raw_question = parsed.get("question")
             if isinstance(raw_question, str):
                 parsed_anchor_entity, _, prompt_error = _split_entity_wrapped_prompt(raw_question)
                 if prompt_error is None and parsed_anchor_entity is not None:
-                    parsed["anchor_entity"] = parsed_anchor_entity
+                    parsed["anchor_entity"] = json.dumps(
+                        parsed_anchor_entity,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
         try:
-            payload = SubmitDraftPayload.model_validate(parsed)
+            tool_payload = SubmitDraftToolPayload.model_validate(parsed)
+            payload = tool_payload.to_submit_payload()
         except ValidationError as exc:
             return controller.reject_invalid_payload(parsed=parsed, error=exc)
         return await controller.submit(payload)
@@ -1793,27 +1863,19 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     return FunctionTool(
         name="submit_draft",
         description=(
-            "Submit a grounded RLVR task draft after inspecting real database rows with tools. "
-            "Include the selected topic string, canonical answer JSON, anchor entity, declared difficulty vector, "
-            "and the natural user-facing question. "
-            "Use only tool-observed evidence. Do not write SQL, do not invent hidden joins, and do not include SQL queries in the submission. "
-            "Trace many relationships and interesting grounded paths with tools first, then choose one path and build a unique, verifiable label from that path. "
-            "Do research and analysis first; do not call submit_draft while you are still figuring out the anchored user, the evidence path, or the label. "
-            "Call submit_draft only when you fully understand the anchored user, the relevant evidence path, which observed fields are readable, which paths are id-only dead ends, and why every answer slot is needed. "
-            "Choose topic from the grounded label and observed evidence, not by copying a planning hint. "
-            "anchor_entity is mandatory and must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {\"customer_id\": 123} or {\"order_id\": 7, \"line_no\": 2}. "
-            "Do not call submit_draft until anchor_entity is present and final for that draft. After the first valid self anchor is established, keep that same anchor_entity across retries. "
-            "question must already be the full user-facing prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request. "
-            "The JSON inside the <entity> block must exactly match anchor_entity. "
-            "Do not submit blank or placeholder string fields in the canonical answer; every answer field must contain a grounded, non-empty value. "
-            "Do not submit opaque identifier values such as UUIDs, hashes, encrypted tokens, or random-looking reference strings as answer labels, even if they were observed. "
-            "Do not submit labels that can be read from a single atomic tool call or a direct projection of a single tool result. "
-            "Do not submit questions or labels that are only chains of internal *_id fields. Prefer business-facing values. "
-            "After any rejection, make at least one new atomic tool call before calling submit_draft again. "
-            "A rejection means keep going in the same conversation, not stop. "
-            "All submit_draft arguments are schema-validated; missing required fields and invalid canonical_answer_json values are rejected automatically."
+            "Submit a grounded RLVR task draft. "
+            "Include topic, canonical_answer_json, anchor_entity, difficulty_vector, and question. "
+            "anchor_entity must be a compact JSON object string. "
+            "Use only tool-observed evidence; do not invent hidden joins, hidden values, or SQL. "
+            "Call this only after you have one verified evidence chain for the label. "
+            "If a row gives only references, resolve that chain before using downstream readable fields. "
+            "Keep anchor_entity fixed across retries. "
+            "question must start with the exact literal tags <entity> and </entity>, then a blank line, then the request body; never substitute <customer>, <film>, or any entity-specific tag. The entity block must match anchor_entity. "
+            "Do not submit blank strings, opaque identifiers, identifier-only labels, or labels derivable from one atomic tool call. "
+            "After any rejection, make at least one new atomic tool call before resubmitting. "
+            "Continue until accepted or budget exhausted."
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
-        strict_json_schema=False,
+        strict_json_schema=True,
     )

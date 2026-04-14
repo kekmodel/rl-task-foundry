@@ -602,7 +602,7 @@ class TaskRegistryWriter:
                     task_id=str(row["task_id"]),
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
-                    topic=normalize_topic(str(row["category"])),
+                    topic=normalize_topic(str(row["topic"])),
                     difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                     question=question,
                     constraint_summaries=constraint_summaries,

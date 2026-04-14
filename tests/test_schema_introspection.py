@@ -68,12 +68,19 @@ async def test_postgres_schema_introspector_reads_sakila_schema():
     assert customer.primary_key == ("customer_id",)
     assert customer.get_column("customer_id").is_primary_key is True
     assert customer.get_column("email").visibility == "internal"
+    assert customer.get_column("create_date").has_default is True
+    assert customer.get_column("create_date").default_expression is not None
 
     language = graph.get_table("language", schema_name="public")
     assert language.get_column("name").visibility == "internal"
 
     film_actor = graph.get_table("film_actor", schema_name="public")
     assert film_actor.primary_key == ("actor_id", "film_id")
+
+    film = graph.get_table("film", schema_name="public")
+    original_language_id = film.get_column("original_language_id")
+    assert original_language_id.null_fraction is not None
+    assert original_language_id.null_fraction >= 0.9
 
     payment_customer_edge = next(
         edge

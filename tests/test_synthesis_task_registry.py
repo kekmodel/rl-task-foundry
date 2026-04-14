@@ -198,6 +198,21 @@ def test_task_registry_writer_reuses_cached_connection(tmp_path: Path) -> None:
     assert first is not third
 
 
+def test_task_registry_semantic_dedup_candidates_reads_topic_column(tmp_path: Path) -> None:
+    writer = TaskRegistryWriter(
+        root_dir=tmp_path / "tasks",
+        index_db_path=tmp_path / "task_registry.db",
+    )
+    draft = _sample_draft()
+
+    writer.commit_draft(draft)
+    candidates = writer.semantic_dedup_candidates()
+
+    assert len(candidates) == 1
+    assert candidates[0].topic == "assignment"
+    assert candidates[0].question == "내 배정 계획을 알려 주세요."
+
+
 def test_task_registry_close_clears_semantic_scope_indexes(tmp_path: Path) -> None:
     writer = TaskRegistryWriter(
         root_dir=tmp_path / "tasks",

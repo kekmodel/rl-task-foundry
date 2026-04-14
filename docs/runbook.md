@@ -53,6 +53,17 @@ rewrite 진행 중에는 아래를 확인한다.
 
 정성 평가는 review pack이 아니라 아래 artifact를 본다.
 
+현재 qualitative baseline snapshot:
+
+- [`artifacts/evals/real_db_assignment_entity_literal_20260414`](/Users/jd/Documents/workspace/rl-data-harness/.dev/worktree/quick-harbor/artifacts/evals/real_db_assignment_entity_literal_20260414)
+- baseline phase monitor: [phase_monitors.jsonl](/Users/jd/Documents/workspace/rl-data-harness/.dev/worktree/quick-harbor/artifacts/evals/real_db_assignment_entity_literal_20260414/debug/phase_monitors.jsonl:1)
+- latest status: `accepted`
+- latest accepted task: `task_assignment_a032aeb7b99d95a8`
+- latest notable behavior:
+  - strict `submit_draft` schema no longer fails at SDK setup time
+  - literal `<entity>` prompt guidance removed `question_entity_block_required` as the dominant failure mode
+  - the accepted run passed through one `reject_too_easy` turn before succeeding on a one-axis strengthening step
+
 - synthesis loop / rejection 흐름:
   - [`artifacts/.../debug/phase_monitors.jsonl`](/Users/jd/Documents/workspace/rl-data-harness/artifacts)
 - synthesis agent 대화 / tool 사용:
