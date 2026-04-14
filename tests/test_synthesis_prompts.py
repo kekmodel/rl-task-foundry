@@ -50,9 +50,9 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     )
 
     # structural sections present
-    assert "BOUNDARY" in prompt
-    assert "Session Context" in prompt
-    assert "Environment and State" in prompt
+    assert "# BOUNDARY" in prompt
+    assert "# Session Context" in prompt
+    assert "# Environment and State" in prompt
 
     # session context populated
     assert "- Domain: service_operations" in prompt
@@ -90,11 +90,11 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     )
 
     # sections present
-    assert "Role" in instructions
-    assert "Principles" in instructions
-    assert "Workflow" in instructions
-    assert "Label Rules" in instructions
-    assert "Prohibitions" in instructions
+    assert "# Role" in instructions
+    assert "# Principles" in instructions
+    assert "# Workflow" in instructions
+    assert "# Label Rules" in instructions
+    assert "# Prohibitions" in instructions
 
     # core identity — DB-agnostic
     assert "grounded RLVR tasks" in instructions
@@ -163,9 +163,9 @@ def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules(
         tool_surface_summary={"tool_count": 0, "family_counts": {}, "entity_surfaces": []},
     )
 
-    assert "BOUNDARY" in prompt
-    assert "Session Context" in prompt
-    assert "Environment and State" in prompt
+    assert "# BOUNDARY" in prompt
+    assert "# Session Context" in prompt
+    assert "# Environment and State" in prompt
     assert "Coverage hint: payment history" in prompt
     assert "soft hint" in prompt
     assert "grounded" in prompt

@@ -162,7 +162,7 @@ def build_synthesis_agent_instructions(
             "proves the current path is ungroundable.",
         ),
     ]
-    return "\n\n".join(f"{title}\n{body}" for title, body in sections)
+    return "\n\n".join(f"# {title}\n{body}" for title, body in sections)
 
 
 def build_synthesis_input(
@@ -345,16 +345,17 @@ def build_synthesis_input(
         )
 
     sections: list[str] = [
-        "BOUNDARY\n"
+        "# BOUNDARY\n"
         "Static rules end here. "
         "Everything below is specific to this session.",
-        "Session Context\n" + "\n".join(session_lines),
-        "Environment and State\n"
+        "# Session Context\n" + "\n".join(session_lines),
+        "# Environment and State\n"
         + "\n".join(environment_lines),
     ]
     if topology_lines:
         sections.append(
-            "Schema Topology\n" + "\n".join(topology_lines)
+            "# Schema Topology\n"
+            + "\n".join(topology_lines)
         )
     return "\n\n".join(
         section.strip()
