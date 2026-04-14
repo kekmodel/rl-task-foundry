@@ -844,19 +844,38 @@ def _uses_temporal_ordering_language(text: str | None) -> bool:
 
 
 def _observed_temporal_surface(tool_calls: list[dict[str, object]]) -> bool:
-    def _walk(value: object) -> bool:
+    """Check that at least one tool call both returns temporal fields
+    AND sorts by a temporal field.  Having a date column in the result
+    is not enough — the sort_by parameter must reference a temporal
+    column to ground claims like "earliest" or "most recent"."""
+
+    def _result_has_temporal_field(value: object) -> bool:
         if isinstance(value, dict):
             for key, item in value.items():
                 if _TEMPORAL_FIELD_TOKEN_RE.search(str(key)):
                     return True
-                if _walk(item):
+                if _result_has_temporal_field(item):
                     return True
             return False
         if isinstance(value, list):
-            return any(_walk(item) for item in value)
+            return any(
+                _result_has_temporal_field(item) for item in value
+            )
         return False
 
-    return any(_walk(record.get("result")) for record in tool_calls)
+    def _sorts_by_temporal(record: dict[str, object]) -> bool:
+        params = record.get("params")
+        if not isinstance(params, dict):
+            return False
+        sort_by = params.get("sort_by")
+        if isinstance(sort_by, str) and _TEMPORAL_FIELD_TOKEN_RE.search(sort_by):
+            return True
+        return False
+
+    for record in tool_calls:
+        if _result_has_temporal_field(record.get("result")) and _sorts_by_temporal(record):
+            return True
+    return False
 
 
 def _uses_unanchored_global_ranking(

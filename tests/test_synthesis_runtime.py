@@ -971,3 +971,55 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
         anchor_connected_strings=anchor_strings,
     )
     assert "academy dinosaur" in disconnected
+
+
+def test_temporal_ordering_requires_sort_by_temporal_field() -> None:
+    """sort_by=rental_id does not ground 'earliest' even if
+    rental_date appears in the result."""
+    from rl_task_foundry.synthesis.submit_draft_tool import (
+        _observed_temporal_surface,
+    )
+
+    # sort_by=rental_id — NOT temporal, even though result has rental_date
+    calls_bad = [
+        {
+            "tool_name": "find_rental_by_inventory_id",
+            "params": {
+                "op": "eq",
+                "value": 1,
+                "sort_by": "rental_id",
+                "direction": "asc",
+                "limit": 1,
+            },
+            "result": [
+                {
+                    "rental_id": 4863,
+                    "rental_date": "2005-07-08T19:03:15",
+                    "return_date": "2005-07-11T21:29:15",
+                }
+            ],
+        }
+    ]
+    assert not _observed_temporal_surface(calls_bad)
+
+    # sort_by=rental_date — temporal, properly grounded
+    calls_good = [
+        {
+            "tool_name": "find_rental_by_inventory_id",
+            "params": {
+                "op": "eq",
+                "value": 1,
+                "sort_by": "rental_date",
+                "direction": "asc",
+                "limit": 1,
+            },
+            "result": [
+                {
+                    "rental_id": 4863,
+                    "rental_date": "2005-07-08T19:03:15",
+                    "return_date": "2005-07-11T21:29:15",
+                }
+            ],
+        }
+    ]
+    assert _observed_temporal_surface(calls_good)
