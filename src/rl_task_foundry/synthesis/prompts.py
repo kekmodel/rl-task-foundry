@@ -248,6 +248,72 @@ def build_synthesis_input(
                     f"- {family_name}: {count} tools — "
                     f"{meaning}."
                 )
+    # Schema topology hints — adaptive, derived from introspection
+    topology_lines: list[str] = []
+    hub_tables = schema_summary.get("hub_tables")
+    if isinstance(hub_tables, list) and hub_tables:
+        topology_lines.append(
+            f"- Hub tables (many inbound FKs): "
+            f"{hub_tables}. These are central entities — "
+            "good anchors for multi-hop exploration."
+        )
+    bridge_tables = schema_summary.get("bridge_tables")
+    if isinstance(bridge_tables, list) and bridge_tables:
+        topology_lines.append(
+            f"- Bridge tables (id-only, 2+ FKs): "
+            f"{bridge_tables}. These connect entities but "
+            "have no readable fields — traverse through "
+            "them, do not use their fields in the label."
+        )
+    if isinstance(tables, list):
+        readable_tables = []
+        id_only_tables = []
+        for table in tables[:max_tables]:
+            if not isinstance(table, dict):
+                continue
+            name = table.get("qualified_name") or ""
+            surface = table.get("surface", "")
+            readable_cols = table.get("readable_columns")
+            if surface == "id-only":
+                id_only_tables.append(str(name))
+            elif isinstance(readable_cols, list) and readable_cols:
+                readable_tables.append(
+                    f"{name}({len(readable_cols)} fields)"
+                )
+        if readable_tables:
+            topology_lines.append(
+                f"- Readable entity tables: "
+                f"{', '.join(readable_tables[:8])}"
+            )
+        if id_only_tables:
+            topology_lines.append(
+                f"- Id-only tables (no readable fields): "
+                f"{', '.join(id_only_tables[:8])}"
+            )
+        # high-fanout edges
+        fanout_hints: list[str] = []
+        for table in tables[:max_tables]:
+            if not isinstance(table, dict):
+                continue
+            fanout_in = table.get("fanout_in")
+            if isinstance(fanout_in, list):
+                for entry in fanout_in:
+                    if isinstance(entry, dict):
+                        src = entry.get("from", "")
+                        fan = entry.get("fanout")
+                        tgt = table.get("qualified_name", "")
+                        if fan is not None:
+                            fanout_hints.append(
+                                f"{src}->{tgt} (~{fan}x)"
+                            )
+        if fanout_hints:
+            topology_lines.append(
+                "- High-fanout edges (one-to-many): "
+                + ", ".join(fanout_hints[:6])
+                + ". Paths through these expand the "
+                "candidate set — useful for search_cost."
+            )
+
     surfaces = tool_surface_summary.get("entity_surfaces")
     if isinstance(surfaces, list):
         hint_limit = (
@@ -286,6 +352,10 @@ def build_synthesis_input(
         "Environment and State\n"
         + "\n".join(environment_lines),
     ]
+    if topology_lines:
+        sections.append(
+            "Schema Topology\n" + "\n".join(topology_lines)
+        )
     return "\n\n".join(
         section.strip()
         for section in sections

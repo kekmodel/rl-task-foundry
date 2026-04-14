@@ -305,28 +305,79 @@ def summarize_schema_graph(
     table_summaries: list[dict[str, object]] = []
     limited_tables = graph.tables[:max_tables]
     for table in limited_tables:
+        columns = table.columns
+        readable = [
+            c.column_name
+            for c in columns
+            if not c.is_primary_key
+            and not c.is_foreign_key
+            and not c.column_name.endswith("_id")
+        ]
+        fk_cols = [
+            c.column_name for c in columns if c.is_foreign_key
+        ]
+        outbound = graph.edges_from(
+            table.table_name, schema_name=table.schema_name
+        )
+        inbound = graph.edges_to(
+            table.table_name, schema_name=table.schema_name
+        )
+        surface = "readable" if readable else "id-only"
         table_summaries.append(
             {
                 "qualified_name": table.qualified_name,
                 "row_estimate": table.row_estimate,
                 "primary_key": list(table.primary_key),
-                "column_names": [column.column_name for column in table.columns],
+                "column_names": [
+                    c.column_name for c in columns
+                ],
+                "readable_columns": readable,
+                "fk_columns": fk_cols,
+                "surface": surface,
                 "outbound_edges": [
-                    f"{edge.source_qualified_name}->{edge.target_qualified_name}"
-                    for edge in graph.edges_from(table.table_name, schema_name=table.schema_name)
+                    f"{e.source_qualified_name}"
+                    f"->{e.target_qualified_name}"
+                    for e in outbound
                 ],
                 "inbound_edges": [
-                    f"{edge.source_qualified_name}->{edge.target_qualified_name}"
-                    for edge in graph.edges_to(table.table_name, schema_name=table.schema_name)
+                    f"{e.source_qualified_name}"
+                    f"->{e.target_qualified_name}"
+                    for e in inbound
+                ],
+                "fanout_in": [
+                    {
+                        "from": e.source_qualified_name,
+                        "fanout": round(e.fanout_estimate, 1)
+                        if e.fanout_estimate
+                        else None,
+                    }
+                    for e in inbound
+                    if e.fanout_estimate
+                    and e.fanout_estimate > 1.5
                 ],
             }
         )
+    # identify hub tables (high inbound degree)
+    hub_tables = [
+        t["qualified_name"]
+        for t in table_summaries
+        if len(t.get("inbound_edges") or []) >= 3  # type: ignore[arg-type]
+    ]
+    # identify bridge tables (id-only, 2+ FK columns)
+    bridge_tables = [
+        t["qualified_name"]
+        for t in table_summaries
+        if t.get("surface") == "id-only"
+        and len(t.get("fk_columns") or []) >= 2  # type: ignore[arg-type]
+    ]
     return {
         "table_count": len(graph.tables),
         "edge_count": len(graph.edges),
         "included_table_count": len(limited_tables),
         "truncated": len(limited_tables) != len(graph.tables),
         "tables": table_summaries,
+        "hub_tables": hub_tables,
+        "bridge_tables": bridge_tables,
     }
 
 
