@@ -61,3 +61,36 @@ async def test_make_sdk_tool_normalizes_datetime_and_decimal_results() -> None:
         "amount": "5.99",
         "items": ["2025-08-23T01:02:03", "1.50"],
     }
+
+
+@pytest.mark.asyncio
+async def test_make_sdk_tool_strips_trailing_whitespace_from_char_columns() -> None:
+    """PostgreSQL char(N) columns return fixed-width strings with trailing spaces."""
+
+    def _result(_payload: dict[str, object]) -> object:
+        return {
+            "name": "English             ",
+            "code": "EN  ",
+            "normal": "Hello",
+        }
+
+    tool = make_sdk_tool(
+        {
+            "name": "char_tool",
+            "description": "Tool with char(N) columns.",
+            "params_schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+        _result,
+    )
+
+    result = await tool.on_invoke_tool(None, json.dumps({}))
+
+    assert result == {
+        "name": "English",
+        "code": "EN",
+        "normal": "Hello",
+    }

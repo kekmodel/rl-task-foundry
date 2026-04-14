@@ -25,6 +25,8 @@ def normalize_tool_result(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)
+    if isinstance(value, str):
+        return value.rstrip()
     if isinstance(value, dict):
         return {str(key): normalize_tool_result(item) for key, item in value.items()}
     if isinstance(value, list):
