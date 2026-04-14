@@ -1101,8 +1101,7 @@ def _too_easy_retry_guidance(
         "(c) require an aggregation (count, sum, min/max) "
         "that needs scanning multiple rows, or "
         "(d) return a sorted list instead of a single "
-        "record. "
-        "Do not just add more fields from the same record."
+        "record."
     )
 
 
