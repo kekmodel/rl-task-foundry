@@ -86,69 +86,74 @@ def build_synthesis_agent_instructions(
     runtime_config: SynthesisRuntimeConfig,
 ) -> str:
     preamble = (
-        "You build grounded RLVR tasks from real "
-        "database evidence. Discover a verifiable label, "
-        "then render it as a natural user request. "
-        "The end user sees only the <entity> block and "
-        "the request — write as if for someone who knows "
-        "nothing about the schema."
+        "You explore a database using atomic tools, "
+        "construct a canonical answer from observed "
+        "evidence, then write a natural-language question "
+        "whose unique correct answer is that canonical "
+        "answer. The end user sees only the <entity> block "
+        "and the question — write as if for someone who "
+        "knows nothing about the schema."
     )
     sections = [
         (
             "Workflow",
-            "1. Research: inspect the anchor entry and map "
+            "- Research: inspect the anchor entry and map "
             "nearby paths (readable, id-only, countable, "
             "orderable, dead-end).\n"
-            "2. Compare: evaluate multiple candidate paths "
+            "- Compare: evaluate multiple candidate paths "
             "before committing.\n"
-            "3. Label: pick the strongest grounded path and "
-            "build the canonical answer.\n"
-            "4. Render: write a request that asks for every "
+            "- Label: pick the strongest path and build "
+            "the canonical answer.\n"
+            "- Render: write a question that asks for every "
             "non-anchor slot — no more, no less.\n"
-            "5. Retry: on feedback, keep the anchor, repair "
+            "- Retry: on feedback, keep the anchor, repair "
             "the smallest failing part, and change exactly "
             "one difficulty axis when asked.",
         ),
         (
             "Label Rules",
-            "Every answer slot must come from a directly "
+            "- Every answer slot must come from a directly "
             "observed tool result — never guess, infer, or "
-            "reformat values. "
-            "Copy observed strings exactly; do not merge, "
-            "shorten, or paraphrase them. "
-            "anchor_entity must be a flat JSON object of "
-            "primary-key fields to scalar values. "
-            "The <entity> block identifies the subject, so "
-            "do not duplicate anchor fields in the label "
-            "unless the request explicitly asks for them. "
-            "question must follow: <entity>\\n{json}\\n"
-            "</entity>\\n\\nuser request. "
-            "The request must cover every non-anchor label "
-            "slot and nothing extra. If a slot cannot be "
-            "asked for naturally, remove it from the label. "
-            "Ground counts with an explicit anchor-scoped "
+            "reformat values.\n"
+            "- Copy observed strings exactly; do not merge, "
+            "shorten, or paraphrase them.\n"
+            "- anchor_entity must be a flat JSON object of "
+            "primary-key fields to scalar values.\n"
+            "- The <entity> block identifies the subject, "
+            "so do not duplicate anchor fields in the label "
+            "unless the question explicitly asks for them.\n"
+            "- question format: <entity>\\n{json}\\n"
+            "</entity>\\n\\nquestion text.\n"
+            "- The question must cover every non-anchor "
+            "label slot and nothing extra. If a slot cannot "
+            "be asked for naturally, remove it from the "
+            "label.\n"
+            "- Ground counts with an anchor-scoped "
             "aggregate observation — not a global total.",
         ),
         (
             "Prohibitions",
-            "Do not submit while still exploring. "
-            "Do not use raw column names (first_name, "
-            "rental_date, etc.) in the request — rephrase "
-            "as natural language the end user would say. "
-            "Do not submit single-call labels (one tool "
-            "call returns the full answer). "
-            "Do not write or include SQL. "
-            "Do not manufacture readable values from ids. "
-            "Do not stop or apologize after rejection — "
-            "continue until Accepted or Budget exhausted. "
-            "Do not reset anchor or topic unless feedback "
+            "- Do not submit while still exploring.\n"
+            "- Do not use raw column names (first_name, "
+            "rental_date, etc.) in the question — rephrase "
+            "as natural language the end user would say.\n"
+            "- Do not submit single-call labels (one tool "
+            "call returns the full answer).\n"
+            "- Do not write or include SQL.\n"
+            "- Do not manufacture readable values from "
+            "ids.\n"
+            "- Do not stop or apologize after rejection — "
+            "continue until Accepted or Budget exhausted.\n"
+            "- Do not reset anchor or topic unless feedback "
             "proves the current path is ungroundable.",
         ),
     ]
     return (
         preamble
         + "\n\n"
-        + "\n\n".join(f"# {title}\n{body}" for title, body in sections)
+        + "\n\n".join(
+            f"# {title}\n{body}" for title, body in sections
+        )
     )
 
 

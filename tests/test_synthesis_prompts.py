@@ -90,7 +90,8 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     )
 
     # preamble (no heading)
-    assert instructions.startswith("You build grounded RLVR tasks")
+    assert instructions.startswith("You explore a database")
+    assert "canonical answer" in instructions
     assert "knows nothing about the schema" in instructions
 
     # sections present
