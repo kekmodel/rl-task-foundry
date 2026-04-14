@@ -855,12 +855,17 @@ def _label_has_temporal_value(answer: object) -> bool:
     return False
 
 
-def _sort_by_uses_temporal_column(
+def _has_non_temporal_sort_on_temporal_result(
     tool_calls: list[dict[str, object]],
 ) -> bool:
-    """Check that at least one sorted tool call sorts by a column
-    whose actual value is a date/datetime type — not by an integer
-    id that happens to correlate with time."""
+    """Return True if any sorted tool call sorts by a non-temporal
+    column while the result contains temporal values.  This catches
+    sort_by=rental_id when the result has rental_date — the ordering
+    is not grounded in time even though a date is present.
+
+    If no tool call uses sort_by at all, returns False (no ordering
+    claim to validate)."""
+    found_any_sort = False
     for record in tool_calls:
         params = record.get("params")
         if not isinstance(params, dict):
@@ -868,7 +873,6 @@ def _sort_by_uses_temporal_column(
         sort_by = params.get("sort_by")
         if not isinstance(sort_by, str):
             continue
-        # Look at the result to check the type of the sort_by column
         result = record.get("result")
         sample: dict[str, object] | None = None
         if isinstance(result, list) and result:
@@ -879,10 +883,19 @@ def _sort_by_uses_temporal_column(
             sample = result
         if sample is None:
             continue
+        # Check if result has any temporal value
+        has_temporal_in_result = any(
+            _is_temporal_value(v) for v in sample.values()
+        )
+        if not has_temporal_in_result:
+            continue
+        found_any_sort = True
         sort_value = sample.get(sort_by)
-        if sort_value is not None and _is_temporal_value(sort_value):
-            return True
-    return False
+        if sort_value is not None and _is_temporal_value(
+            sort_value
+        ):
+            return False  # at least one sort is temporal — OK
+    return found_any_sort  # True only if all sorts are non-temporal
 
 
 def _uses_unanchored_global_ranking(
@@ -1312,9 +1325,7 @@ class SubmitDraftController:
         if placeholder_tokens:
             error_codes.append(SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED)
         canonical_answer = payload.canonical_answer
-        if _label_has_temporal_value(
-            canonical_answer
-        ) and not _sort_by_uses_temporal_column(
+        if _has_non_temporal_sort_on_temporal_result(
             self._raw_atomic_tool_calls
         ):
             error_codes.append(

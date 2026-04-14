@@ -976,11 +976,10 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
 def test_temporal_ordering_checks_sort_by_column_type() -> None:
     """sort_by column type determines temporal grounding, not column name."""
     from rl_task_foundry.synthesis.submit_draft_tool import (
-        _sort_by_uses_temporal_column,
-        _label_has_temporal_value,
+        _has_non_temporal_sort_on_temporal_result,
     )
 
-    # sort_by=rental_id (integer) — NOT temporal
+    # sort_by=rental_id (integer) on result with datetime → flagged
     calls_bad = [
         {
             "tool_name": "find_rental_by_inventory_id",
@@ -993,9 +992,9 @@ def test_temporal_ordering_checks_sort_by_column_type() -> None:
             ],
         }
     ]
-    assert not _sort_by_uses_temporal_column(calls_bad)
+    assert _has_non_temporal_sort_on_temporal_result(calls_bad)
 
-    # sort_by=rental_date (datetime value) — temporal
+    # sort_by=rental_date (datetime value) → OK
     calls_good = [
         {
             "tool_name": "find_rental_by_inventory_id",
@@ -1008,13 +1007,19 @@ def test_temporal_ordering_checks_sort_by_column_type() -> None:
             ],
         }
     ]
-    assert _sort_by_uses_temporal_column(calls_good)
+    assert not _has_non_temporal_sort_on_temporal_result(calls_good)
 
-    # label with date value triggers the check
-    assert _label_has_temporal_value(
-        {"rental_date": "2005-07-08T19:03:15", "name": "Alice"}
-    )
-    # label without date does not
-    assert not _label_has_temporal_value(
-        {"name": "Alice", "amount": 2.99}
+    # no sort_by at all → not flagged (no ordering claim)
+    calls_no_sort = [
+        {
+            "tool_name": "get_rental",
+            "params": {"id": 4863},
+            "result": {
+                "rental_id": 4863,
+                "rental_date": "2005-07-08T19:03:15",
+            },
+        }
+    ]
+    assert not _has_non_temporal_sort_on_temporal_result(
+        calls_no_sort
     )
