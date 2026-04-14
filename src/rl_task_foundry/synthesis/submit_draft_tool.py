@@ -984,34 +984,9 @@ def _human_join(items: list[str]) -> str:
     return f"{', '.join(items[:-1])}, and {items[-1]}"
 
 
-def _field_preservation_guidance(label_data: dict[str, object] | None) -> str:
-    if not isinstance(label_data, dict):
-        return ""
-    raw_field_names = label_data.get("canonical_answer_field_names")
-    if not isinstance(raw_field_names, list):
-        return ""
-    readable_field_names = [
-        str(field_name)
-        for field_name in raw_field_names
-        if isinstance(field_name, str) and not _is_identifier_field_name(field_name)
-    ]
-    if not readable_field_names:
-        return ""
-    preview = readable_field_names[:3]
-    return (
-        " Preserve grounded readable answer slots such as "
-        f"{_human_join(preview)} if they still fit the same anchored user need."
-    )
-
-
-def _too_easy_retry_guidance(
-    *,
-    label_data: dict[str, object] | None,
-) -> str:
-    preserve_guidance = _field_preservation_guidance(label_data)
+def _too_easy_retry_guidance() -> str:
     return (
         " Keep the same anchor and readable path."
-        f"{preserve_guidance}"
         " Pick ONE concrete change: "
         "(a) follow one more FK hop to reach a new entity, "
         "(b) add a filter condition (date range, status, "
@@ -1513,9 +1488,7 @@ class SubmitDraftController:
             self.required_axis = None
             self.required_axis_mode = DifficultyAdjustmentMode.STRENGTHEN
             self.required_axis_reference_vector = self.strongest_difficulty_vector
-            strengthening_guidance = _too_easy_retry_guidance(
-                label_data=_monitor_label_data(payload, config=self.config),
-            )
+            strengthening_guidance = _too_easy_retry_guidance()
             return self._record_rejection(
                 submission_index=submission_index,
                 message=_render_structured_message(
@@ -1546,33 +1519,29 @@ class SubmitDraftController:
                 search_cost_observations=search_cost_observations,
             )
 
-        self.required_axis = None
-        self.required_axis_mode = DifficultyAdjustmentMode.RELAX
-        self.required_axis_reference_vector = payload.difficulty_vector
+        # Too hard is terminal — discard and let the outer
+        # loop start fresh rather than oscillating.
         return self._record_rejection(
             submission_index=submission_index,
             message=_render_structured_message(
                 kind="RejectedError",
                 result=(
                     "solver pass rate "
-                    f"{quality_gate_summary.matched_solver_runs}/{quality_gate_summary.total_solver_runs}."
+                    f"{quality_gate_summary.matched_solver_runs}"
+                    f"/{quality_gate_summary.total_solver_runs}."
                 ),
                 primary=(
-                    "This draft is too hard for the configured band. Choose exactly one difficulty axis yourself from the current label and observed data. "  # noqa: E501
-                    "Reduce exactly one of search_cost, solution_space, or constraint_density by one grounded step, and leave the other two unchanged."  # noqa: E501
+                    "Too hard — no solver passed. "
+                    "This draft is discarded."
                 ),
-                important=(
-                    "Keep the same anchored user need while simplifying only that one axis before changing topic or anchor."  # noqa: E501
-                ),
-                attempts_left=max(0, attempts_left_after),
+                attempts_left=0,
             ),
             error_codes=[SubmitDraftErrorCode.REJECT_TOO_HARD],
             pass_rate=quality_gate_summary.pass_rate,
             matched_solver_runs=quality_gate_summary.matched_solver_runs,
             total_solver_runs=quality_gate_summary.total_solver_runs,
             diagnostics={
-                "terminal_rejection": False,
-                "requested_axis": None,
+                "terminal_rejection": True,
             },
             payload=payload,
             search_cost_observations=search_cost_observations,
@@ -1711,9 +1680,7 @@ class SubmitDraftController:
             SubmitDraftErrorCode.REQUIRED_LABEL_AXIS_NOT_STRENGTHENED,
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
         ):
-            primary += _too_easy_retry_guidance(
-                label_data=self._last_monitored_label_data,
-            )
+            primary += _too_easy_retry_guidance()
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (
