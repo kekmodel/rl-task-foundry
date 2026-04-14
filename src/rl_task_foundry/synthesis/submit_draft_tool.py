@@ -797,6 +797,29 @@ _ISO_DATETIME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}",
 )
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TEMPORAL_ORDERING_TOKENS: dict[str, tuple[str, ...]] = {
+    "en": (
+        "earliest",
+        "latest",
+        "most recent",
+        "oldest",
+        "newest",
+        "first",
+        "last",
+    ),
+    "ko": (
+        "가장 이른",
+        "가장 먼저",
+        "가장 최근",
+        "가장 늦은",
+        "첫 번째",
+        "첫번째",
+        "처음",
+        "마지막",
+        "최신",
+        "최초",
+    ),
+}
 _GLOBAL_SCOPE_TOKENS = (
     "global",
     "overall",
@@ -855,16 +878,30 @@ def _label_has_temporal_value(answer: object) -> bool:
     return False
 
 
+def _question_claims_temporal_ordering(
+    question_body: str | None,
+    *,
+    languages: tuple[str, ...] = ("en", "ko"),
+) -> bool:
+    """Check if the question text claims temporal ordering."""
+    if not question_body:
+        return False
+    lowered = question_body.lower()
+    for lang in languages:
+        tokens = _TEMPORAL_ORDERING_TOKENS.get(lang, ())
+        if any(token in lowered for token in tokens):
+            return True
+    return False
+
+
 def _has_non_temporal_sort_on_temporal_result(
     tool_calls: list[dict[str, object]],
 ) -> bool:
     """Return True if any sorted tool call sorts by a non-temporal
-    column while the result contains temporal values.  This catches
-    sort_by=rental_id when the result has rental_date — the ordering
-    is not grounded in time even though a date is present.
+    column while the result contains temporal values.
 
-    If no tool call uses sort_by at all, returns False (no ordering
-    claim to validate)."""
+    Only meaningful when the question claims temporal ordering —
+    caller should check _question_claims_temporal_ordering first."""
     found_any_sort = False
     for record in tool_calls:
         params = record.get("params")
@@ -883,7 +920,6 @@ def _has_non_temporal_sort_on_temporal_result(
             sample = result
         if sample is None:
             continue
-        # Check if result has any temporal value
         has_temporal_in_result = any(
             _is_temporal_value(v) for v in sample.values()
         )
@@ -895,7 +931,7 @@ def _has_non_temporal_sort_on_temporal_result(
             sort_value
         ):
             return False  # at least one sort is temporal — OK
-    return found_any_sort  # True only if all sorts are non-temporal
+    return found_any_sort
 
 
 def _uses_unanchored_global_ranking(
@@ -1325,7 +1361,9 @@ class SubmitDraftController:
         if placeholder_tokens:
             error_codes.append(SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED)
         canonical_answer = payload.canonical_answer
-        if _has_non_temporal_sort_on_temporal_result(
+        if _question_claims_temporal_ordering(
+            question_body
+        ) and _has_non_temporal_sort_on_temporal_result(
             self._raw_atomic_tool_calls
         ):
             error_codes.append(

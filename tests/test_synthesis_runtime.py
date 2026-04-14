@@ -973,53 +973,53 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
     assert "academy dinosaur" in disconnected
 
 
-def test_temporal_ordering_checks_sort_by_column_type() -> None:
-    """sort_by column type determines temporal grounding, not column name."""
+def test_temporal_ordering_combines_question_and_sort_type() -> None:
+    """Temporal check requires BOTH a temporal claim in the question
+    AND a non-temporal sort_by in tool calls."""
     from rl_task_foundry.synthesis.submit_draft_tool import (
         _has_non_temporal_sort_on_temporal_result,
+        _question_claims_temporal_ordering,
     )
 
-    # sort_by=rental_id (integer) on result with datetime → flagged
-    calls_bad = [
+    calls_bad_sort = [
         {
             "tool_name": "find_rental_by_inventory_id",
             "params": {"sort_by": "rental_id", "direction": "asc"},
             "result": [
-                {
-                    "rental_id": 4863,
-                    "rental_date": "2005-07-08T19:03:15",
-                }
+                {"rental_id": 4863, "rental_date": "2005-07-08T19:03:15"}
             ],
         }
     ]
-    assert _has_non_temporal_sort_on_temporal_result(calls_bad)
-
-    # sort_by=rental_date (datetime value) → OK
-    calls_good = [
+    calls_good_sort = [
         {
             "tool_name": "find_rental_by_inventory_id",
             "params": {"sort_by": "rental_date", "direction": "asc"},
             "result": [
-                {
-                    "rental_id": 4863,
-                    "rental_date": "2005-07-08T19:03:15",
-                }
+                {"rental_id": 4863, "rental_date": "2005-07-08T19:03:15"}
             ],
         }
     ]
-    assert not _has_non_temporal_sort_on_temporal_result(calls_good)
-
-    # no sort_by at all → not flagged (no ordering claim)
     calls_no_sort = [
         {
             "tool_name": "get_rental",
             "params": {"id": 4863},
-            "result": {
-                "rental_id": 4863,
-                "rental_date": "2005-07-08T19:03:15",
-            },
+            "result": {"rental_id": 4863, "rental_date": "2005-07-08T19:03:15"},
         }
     ]
-    assert not _has_non_temporal_sort_on_temporal_result(
-        calls_no_sort
-    )
+
+    # Korean temporal claim + bad sort → flag
+    assert _question_claims_temporal_ordering("가장 이른 대여 기록을 알려주세요")
+    assert _has_non_temporal_sort_on_temporal_result(calls_bad_sort)
+
+    # Korean temporal claim + good sort → pass
+    assert not _has_non_temporal_sort_on_temporal_result(calls_good_sort)
+
+    # English temporal claim
+    assert _question_claims_temporal_ordering("Show the earliest rental")
+
+    # No temporal claim → pass regardless of sort
+    assert not _question_claims_temporal_ordering("대여 목록을 알려주세요")
+    assert not _question_claims_temporal_ordering("Show rentals for this customer")
+
+    # No sort_by → pass
+    assert not _has_non_temporal_sort_on_temporal_result(calls_no_sort)
