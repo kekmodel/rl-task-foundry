@@ -93,7 +93,11 @@ class RealDbTrialSummary:
     ) -> None:
         resolved_topic = requested_topic if requested_topic is not None else requested_category
         object.__setattr__(self, "db_id", db_id)
-        object.__setattr__(self, "requested_topic", normalize_topic(resolved_topic))
+        object.__setattr__(
+            self,
+            "requested_topic",
+            normalize_topic(resolved_topic) if resolved_topic else "",
+        )
         object.__setattr__(self, "trial_status", trial_status)
         object.__setattr__(self, "flow_id", flow_id)
         object.__setattr__(self, "phase_monitor_log_path", phase_monitor_log_path)
