@@ -141,9 +141,10 @@ class RealDbTrialRunner:
         output_root: Path,
         *,
         db_id: str,
-        topic: str,
+        topic: str | None = None,
     ) -> RealDbTrialSummary:
-        topic = normalize_topic(topic)
+        if topic:
+            topic = normalize_topic(topic)
         output_root.mkdir(parents=True, exist_ok=True)
         debug_root = output_root / "debug"
         debug_traces_dir = debug_root / "traces"

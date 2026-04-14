@@ -240,7 +240,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     output_dir = tmp_path / "real_trial_output"
     result = CliRunner().invoke(
         app,
-        ["run-real-db-trial", "sakila", "assignment", str(output_dir)],
+        ["run-real-db-trial", "sakila", str(output_dir), "--topic", "assignment"],
     )
 
     assert result.exit_code == 0

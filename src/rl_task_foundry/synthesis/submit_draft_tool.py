@@ -1180,7 +1180,7 @@ def _anchor_entity_patterns(
 @dataclass(slots=True)
 class SubmitDraftController:
     config: AppConfig
-    requested_topic: str
+    requested_topic: str | None
     solver_orchestrator: SolverOrchestrator
     build_draft: Any
     max_submissions: int

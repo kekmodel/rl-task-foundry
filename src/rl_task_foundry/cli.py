@@ -326,15 +326,17 @@ def run_proof_task(
 @app.command("run-real-db-trial")
 def run_real_db_trial(
     db_id: str,
-    topic: str,
     output_dir: Path,
+    topic: str | None = None,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
     """Run a real-database single-task trial."""
 
     async def _run() -> None:
         config = load_config(config_path)
-        resolved_topic = normalize_topic(topic)
+        resolved_topic = (
+            normalize_topic(topic) if topic else None
+        )
 
         runner = RealDbTrialRunner(config)
         try:

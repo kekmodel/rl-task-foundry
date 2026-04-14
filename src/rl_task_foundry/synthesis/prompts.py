@@ -167,7 +167,7 @@ def build_synthesis_input(
     *,
     domain_name: str,
     scenario_description: str,
-    requested_topic: str,
+    requested_topic: str | None,
     task_language: str,
     schema_summary: dict[str, object],
     tool_surface_summary: dict[str, object],
@@ -178,16 +178,17 @@ def build_synthesis_input(
 
     session_lines.append(f"- Domain: {domain_name}")
     session_lines.append(f"- Scenario: {scenario_description}")
-    session_lines.append(
-        f"- Requested topic hint: {requested_topic}"
-    )
-    topic_semantics = _topic_semantics_instruction(
-        requested_topic,
-    )
-    if topic_semantics is not None:
+    if requested_topic:
         session_lines.append(
-            f"- Topic semantics: {topic_semantics}"
+            f"- Requested topic hint: {requested_topic}"
         )
+        topic_semantics = _topic_semantics_instruction(
+            requested_topic,
+        )
+        if topic_semantics is not None:
+            session_lines.append(
+                f"- Topic semantics: {topic_semantics}"
+            )
     language_name = LANGUAGE_NAMES.get(
         task_language, task_language
     )

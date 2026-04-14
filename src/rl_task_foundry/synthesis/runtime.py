@@ -82,7 +82,7 @@ class _SynthesisBackendProtocol(Protocol):
         self,
         *,
         db_id: str,
-        requested_topic: str,
+        requested_topic: str | None,
         domain_name: str,
         task_language: str,
         scenario_description: str,
@@ -159,7 +159,7 @@ class SynthesisCategoryStatus(StrictModel):
 class SynthesisTaskDraft(StrictModel):
     created_at: datetime
     db_id: str
-    requested_topic: str
+    requested_topic: str | None = None
     schema_summary: dict[str, object] = Field(default_factory=dict)
     selected_topic: str
     task_bundle: TaskBundleContract
@@ -549,12 +549,16 @@ class SynthesisAgentRuntime:
         self,
         *,
         db_id: str,
-        requested_topic: str,
+        requested_topic: str | None = None,
         graph: SchemaGraph | None = None,
     ) -> SynthesisTaskDraft:
-        requested_topic = normalize_topic(requested_topic)
+        if requested_topic:
+            requested_topic = normalize_topic(requested_topic)
         await self._bind_db_id(db_id)
-        await self._ensure_category_available(db_id, requested_topic)
+        if requested_topic:
+            await self._ensure_category_available(
+                db_id, requested_topic
+            )
         resolved_graph = graph if graph is not None else await self._introspect_graph()
         atomic_tool_bundle = await self._ensure_atomic_tool_bundle(
             db_id=db_id,
@@ -571,7 +575,7 @@ class SynthesisAgentRuntime:
         shuffle_seed = build_shuffle_seed(
             "synthesis",
             db_id,
-            requested_topic,
+            requested_topic or "",
             datetime.now(timezone.utc).isoformat(),
         )
         assert self._solver_orchestrator is not None, "SolverOrchestrator not initialized"
@@ -668,7 +672,10 @@ class SynthesisAgentRuntime:
                 "tool_trace_ref": conversation_result.tool_trace_ref,
             },
         )
-        await self._reset_category_failure_state(db_id, requested_topic)
+        if requested_topic:
+            await self._reset_category_failure_state(
+                db_id, requested_topic
+            )
         return accepted_draft
 
     async def close(self) -> None:
@@ -815,7 +822,7 @@ class SynthesisAgentRuntime:
         self,
         *,
         db_id: str,
-        requested_topic: str,
+        requested_topic: str | None,
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
     ) -> SynthesisConversationResult:
@@ -896,7 +903,7 @@ class SynthesisAgentRuntime:
         self,
         *,
         db_id: str,
-        requested_topic: str,
+        requested_topic: str | None,
         atomic_tool_bundle: AtomicToolBundle,
         submission: SubmitDraftPayload,
         schema_summary: dict[str, object],
@@ -1053,7 +1060,7 @@ class SynthesisAgentRuntime:
         *,
         atomic_tool_bundle: AtomicToolBundle,
         db_id: str,
-        requested_topic: str,
+        requested_topic: str | None,
         created_at: datetime,
         task: TaskContract,
     ) -> TaskBundleContract:

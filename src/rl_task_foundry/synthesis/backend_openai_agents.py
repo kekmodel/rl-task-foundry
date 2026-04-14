@@ -217,7 +217,7 @@ class OpenAIAgentsSynthesisBackend:
         *,
         kind: str,
         db_id: str,
-        requested_topic: str,
+        requested_topic: str | None,
         payload: dict[str, Any],
     ) -> str:
         if self.traces_dir is None:
@@ -237,7 +237,7 @@ class OpenAIAgentsSynthesisBackend:
         self,
         *,
         db_id: str,
-        requested_topic: str,
+        requested_topic: str | None,
         domain_name: str,
         task_language: str,
         scenario_description: str,
