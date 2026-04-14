@@ -1352,9 +1352,9 @@ class SubmitDraftController:
                 anchor_connected_strings=anchor_strings,
             )
             if disconnected:
-                error_codes.append(
-                    SubmitDraftErrorCode.LABEL_VALUES_FROM_DISCONNECTED_CALL
-                )
+                # Diagnostic only — integer ID collision causes
+                # false positives until param-name-aware tracking
+                # is implemented.
                 invalid_diagnostics["disconnected_strings"] = disconnected[
                     : self.config.synthesis.runtime.diagnostic_item_limit
                 ]

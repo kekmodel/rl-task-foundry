@@ -953,9 +953,21 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
             "이 고객의 첫 대여 영화 제목과 대여 시각을 알려주세요."
         ),
     )
-    message = await controller.submit(payload)
+    # Disconnected check is diagnostic-only (not blocking) due to
+    # integer ID collision false positives. Verify the detection works
+    # by checking _rebuild_anchor_connected_strings directly.
+    from rl_task_foundry.synthesis.submit_draft_tool import (
+        _rebuild_anchor_connected_strings,
+        _disconnected_answer_strings,
+    )
 
-    # Should get feedback (not reach solver) and consume no submission budget
-    assert "FeedbackError" in message
-    assert controller._feedback_events >= 1
-    assert len(controller.attempts) == 0  # feedback, not rejection
+    anchor_strings = _rebuild_anchor_connected_strings(
+        controller._raw_atomic_tool_calls,
+        anchor_entity=payload.anchor_entity,
+    )
+    disconnected = _disconnected_answer_strings(
+        {"film_title": "ACADEMY DINOSAUR", "rental_date": "2005-05-25T11:30:37"},
+        observed_strings=controller._observed_response_strings,
+        anchor_connected_strings=anchor_strings,
+    )
+    assert "academy dinosaur" in disconnected
