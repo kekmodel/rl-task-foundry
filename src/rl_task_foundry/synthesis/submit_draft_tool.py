@@ -793,19 +793,10 @@ _IDENTIFIER_FIELD_TOKEN_RE = re.compile(
     r"(?<![a-z0-9_])[a-z][a-z0-9_]*_ids?(?![a-z0-9_])",
     re.IGNORECASE,
 )
-_TEMPORAL_FIELD_TOKEN_RE = re.compile(
-    r"(?:^|_)(?:date|time|timestamp|created|updated|start|end|due|expires?|expiry|scheduled|last_update)(?:$|_)",
-    re.IGNORECASE,
+_ISO_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}",
 )
-_TEMPORAL_CONSTRAINT_TOKENS = (
-    "recent",
-    "latest",
-    "earliest",
-    "oldest",
-    "newest",
-    "first",
-    "last",
-)
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _GLOBAL_SCOPE_TOKENS = (
     "global",
     "overall",
@@ -836,44 +827,60 @@ def _contains_entity_placeholder_token(text: str) -> bool:
     return "<entity>" in lowered or "&lt;entity&gt;" in lowered
 
 
-def _uses_temporal_ordering_language(text: str | None) -> bool:
-    if not text:
-        return False
-    combined = normalize_words(text, lowercase=True)
-    return any(token in combined for token in _TEMPORAL_CONSTRAINT_TOKENS)
+def _is_temporal_value(value: object) -> bool:
+    """Check if a value is a date or datetime by its actual type."""
+    if isinstance(value, (datetime, date)):
+        return True
+    if isinstance(value, str):
+        return bool(
+            _ISO_DATETIME_RE.match(value)
+            or _ISO_DATE_RE.match(value)
+        )
+    return False
 
 
-def _observed_temporal_surface(tool_calls: list[dict[str, object]]) -> bool:
-    """Check that at least one tool call both returns temporal fields
-    AND sorts by a temporal field.  Having a date column in the result
-    is not enough — the sort_by parameter must reference a temporal
-    column to ground claims like "earliest" or "most recent"."""
+def _label_has_temporal_value(answer: object) -> bool:
+    """Check if the canonical answer contains any date/datetime value."""
+    if _is_temporal_value(answer):
+        return True
+    if isinstance(answer, dict):
+        return any(
+            _label_has_temporal_value(v)
+            for v in answer.values()
+        )
+    if isinstance(answer, list):
+        return any(
+            _label_has_temporal_value(v) for v in answer
+        )
+    return False
 
-    def _result_has_temporal_field(value: object) -> bool:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if _TEMPORAL_FIELD_TOKEN_RE.search(str(key)):
-                    return True
-                if _result_has_temporal_field(item):
-                    return True
-            return False
-        if isinstance(value, list):
-            return any(
-                _result_has_temporal_field(item) for item in value
-            )
-        return False
 
-    def _sorts_by_temporal(record: dict[str, object]) -> bool:
+def _sort_by_uses_temporal_column(
+    tool_calls: list[dict[str, object]],
+) -> bool:
+    """Check that at least one sorted tool call sorts by a column
+    whose actual value is a date/datetime type — not by an integer
+    id that happens to correlate with time."""
+    for record in tool_calls:
         params = record.get("params")
         if not isinstance(params, dict):
-            return False
+            continue
         sort_by = params.get("sort_by")
-        if isinstance(sort_by, str) and _TEMPORAL_FIELD_TOKEN_RE.search(sort_by):
-            return True
-        return False
-
-    for record in tool_calls:
-        if _result_has_temporal_field(record.get("result")) and _sorts_by_temporal(record):
+        if not isinstance(sort_by, str):
+            continue
+        # Look at the result to check the type of the sort_by column
+        result = record.get("result")
+        sample: dict[str, object] | None = None
+        if isinstance(result, list) and result:
+            first = result[0]
+            if isinstance(first, dict):
+                sample = first
+        elif isinstance(result, dict):
+            sample = result
+        if sample is None:
+            continue
+        sort_value = sample.get(sort_by)
+        if sort_value is not None and _is_temporal_value(sort_value):
             return True
     return False
 
@@ -1294,10 +1301,6 @@ class SubmitDraftController:
             invalid_diagnostics["locked_anchor_entity"] = self._locked_anchor_entity
         elif payload.anchor_entity:
             self._locked_anchor_entity = dict(payload.anchor_entity)
-        if _uses_temporal_ordering_language(question_body) and not _observed_temporal_surface(
-            self._raw_atomic_tool_calls
-        ):
-            error_codes.append(SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED)
         placeholder_tokens = _placeholder_tokens(
             {
                 "topic": payload.topic,
@@ -1309,6 +1312,14 @@ class SubmitDraftController:
         if placeholder_tokens:
             error_codes.append(SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED)
         canonical_answer = payload.canonical_answer
+        if _label_has_temporal_value(
+            canonical_answer
+        ) and not _sort_by_uses_temporal_column(
+            self._raw_atomic_tool_calls
+        ):
+            error_codes.append(
+                SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED
+            )
         if prompt_error is not None:
             error_codes.append(prompt_error)
         elif prompt_anchor_entity != payload.anchor_entity:

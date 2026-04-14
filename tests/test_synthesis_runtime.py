@@ -973,53 +973,48 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
     assert "academy dinosaur" in disconnected
 
 
-def test_temporal_ordering_requires_sort_by_temporal_field() -> None:
-    """sort_by=rental_id does not ground 'earliest' even if
-    rental_date appears in the result."""
+def test_temporal_ordering_checks_sort_by_column_type() -> None:
+    """sort_by column type determines temporal grounding, not column name."""
     from rl_task_foundry.synthesis.submit_draft_tool import (
-        _observed_temporal_surface,
+        _sort_by_uses_temporal_column,
+        _label_has_temporal_value,
     )
 
-    # sort_by=rental_id — NOT temporal, even though result has rental_date
+    # sort_by=rental_id (integer) — NOT temporal
     calls_bad = [
         {
             "tool_name": "find_rental_by_inventory_id",
-            "params": {
-                "op": "eq",
-                "value": 1,
-                "sort_by": "rental_id",
-                "direction": "asc",
-                "limit": 1,
-            },
+            "params": {"sort_by": "rental_id", "direction": "asc"},
             "result": [
                 {
                     "rental_id": 4863,
                     "rental_date": "2005-07-08T19:03:15",
-                    "return_date": "2005-07-11T21:29:15",
                 }
             ],
         }
     ]
-    assert not _observed_temporal_surface(calls_bad)
+    assert not _sort_by_uses_temporal_column(calls_bad)
 
-    # sort_by=rental_date — temporal, properly grounded
+    # sort_by=rental_date (datetime value) — temporal
     calls_good = [
         {
             "tool_name": "find_rental_by_inventory_id",
-            "params": {
-                "op": "eq",
-                "value": 1,
-                "sort_by": "rental_date",
-                "direction": "asc",
-                "limit": 1,
-            },
+            "params": {"sort_by": "rental_date", "direction": "asc"},
             "result": [
                 {
                     "rental_id": 4863,
                     "rental_date": "2005-07-08T19:03:15",
-                    "return_date": "2005-07-11T21:29:15",
                 }
             ],
         }
     ]
-    assert _observed_temporal_surface(calls_good)
+    assert _sort_by_uses_temporal_column(calls_good)
+
+    # label with date value triggers the check
+    assert _label_has_temporal_value(
+        {"rental_date": "2005-07-08T19:03:15", "name": "Alice"}
+    )
+    # label without date does not
+    assert not _label_has_temporal_value(
+        {"name": "Alice", "amount": 2.99}
+    )
