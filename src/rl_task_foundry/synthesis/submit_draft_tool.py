@@ -1896,7 +1896,7 @@ def _strict_submit_draft_schema() -> dict[str, Any]:
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     from agents import FunctionTool
 
-    params_json_schema = _strict_submit_draft_schema()
+    params_json_schema = SubmitDraftPayload.model_json_schema()
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         parsed = json.loads(input_json) if input_json else {}
@@ -1931,5 +1931,5 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
-        strict_json_schema=True,
+        strict_json_schema=False,
     )
