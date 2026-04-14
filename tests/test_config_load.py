@@ -16,7 +16,7 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.atomic_tools.bounded_result_limit == 100
     assert config.atomic_tools.max_batch_values == 128
     assert config.atomic_tools.float_precision == 2
-    assert config.synthesis.runtime.max_turns == 50
+    assert config.synthesis.runtime.max_turns == 20
     assert config.synthesis.runtime.max_generation_attempts == 5
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
     assert config.synthesis.runtime.category_backoff_duration_s == 3600

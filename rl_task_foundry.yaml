@@ -89,7 +89,7 @@ atomic_tools:
 
 synthesis:
   runtime:
-    max_turns: 50
+    max_turns: 20
     tracing: true
     sdk_sessions_enabled: false
     max_generation_attempts: 5

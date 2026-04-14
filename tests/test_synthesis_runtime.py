@@ -853,7 +853,7 @@ async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> 
     assert draft.task_bundle.status.value == "accepted"
     assert draft.task_bundle.quality_metrics.solver_pass_rate == 0.5
     assert draft.rendered_user_prompt.startswith("<entity>")
-    assert backend.seen_max_turns == [50]
+    assert backend.seen_max_turns == [20]
 
 
 @pytest.mark.asyncio
