@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, TaskBundleStatus
+from rl_task_foundry.synthesis.contracts import TaskBundleStatus
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.runner import (
     SynthesisRegistryRunner,
     SynthesisRegistryRunOutcome,
     load_synthesis_registry,
 )
-from rl_task_foundry.synthesis.runtime import SynthesisCategoryStatus
 from rl_task_foundry.synthesis.scheduler import SynthesisSelectionStatus
 from rl_task_foundry.synthesis.task_registry import (
     TaskRegistryCommitResult,
@@ -27,16 +26,16 @@ from tests.test_synthesis_task_registry import _sample_draft
 
 @dataclass(slots=True)
 class _FakeRuntime:
-    category_status_payload: dict[str, SynthesisCategoryStatus] = field(default_factory=dict)
+    category_status_payload: dict[str, object] = field(default_factory=dict)
     category_status_calls: list[str | None] = field(default_factory=list)
-    synthesize_calls: list[tuple[str, str, object | None]] = field(default_factory=list)
+    synthesize_calls: list[tuple[str, object, object | None]] = field(default_factory=list)
     closed: bool = False
 
     async def category_status(
         self,
         *,
         db_id: str | None = None,
-    ) -> dict[str, SynthesisCategoryStatus]:
+    ) -> dict[str, object]:
         self.category_status_calls.append(db_id)
         return self.category_status_payload
 
@@ -44,14 +43,14 @@ class _FakeRuntime:
         self,
         *,
         db_id: str,
-        requested_topic: str,
+        requested_topic: object = None,
         graph: object | None = None,
     ) -> object:
         self.synthesize_calls.append((db_id, requested_topic, graph))
         draft = _sample_draft(
-            tmp_task_id=f"task_{db_id}_{requested_topic}_{len(self.synthesize_calls)}",
+            tmp_task_id=f"task_{db_id}_{len(self.synthesize_calls)}",
             db_id=db_id,
-            topic=requested_topic,
+            topic="agent_generated",
             created_at=datetime.now(timezone.utc),
         )
         return draft.model_copy(
@@ -112,21 +111,8 @@ def _config_with_run_db(tmp_path: Path):
     return config.model_copy(update={"output": output}, deep=True)
 
 
-def _backed_off_status(*, db_id: str, category: CategoryTaxonomy) -> SynthesisCategoryStatus:
-    now = datetime.now(timezone.utc)
-    return SynthesisCategoryStatus(
-        db_id=db_id,
-        category=category,
-        consecutive_discards=3,
-        backed_off=True,
-        backoff_until=now + timedelta(seconds=30),
-        backoff_remaining_s=30.0,
-        last_updated_at=now,
-    )
-
-
 @pytest.mark.asyncio
-async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint(
+async def test_synthesis_registry_runner_marks_entries_and_resumes_from_checkpoint(
     tmp_path: Path,
 ) -> None:
     config = _config_with_run_db(tmp_path)
@@ -138,10 +124,7 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
         return runtime
 
     registry = [
-        SynthesisDbRegistryEntry(
-            db_id="sakila",
-            categories=[CategoryTaxonomy.ASSIGNMENT, CategoryTaxonomy.ITINERARY],
-        )
+        SynthesisDbRegistryEntry(db_id="sakila"),
     ]
 
     fake_registry = _FakeRegistry(
@@ -156,21 +139,21 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     try:
         summary = await runner.run_steps(
             registry,
-            max_steps=2,
+            max_steps=1,
             checkpoint_namespace="synthesis_test",
         )
     finally:
         await runner.close()
 
-    assert summary.initially_processed_pairs == 0
+    assert summary.initially_processed_entries == 0
     assert summary.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
-    assert summary.processed_pairs_after_run == 2
-    assert summary.generated_drafts == 2
-    assert summary.quality_accepted_tasks == 2
+    assert summary.processed_entries_after_run == 1
+    assert summary.generated_drafts == 1
+    assert summary.quality_accepted_tasks == 1
     assert summary.quality_rejected_tasks == 0
-    assert summary.registry_committed_tasks == 2
-    assert summary.remaining_pairs == 0
-    assert len(summary.generated_task_ids) == 2
+    assert summary.registry_committed_tasks == 1
+    assert summary.remaining_entries == 0
+    assert len(summary.generated_task_ids) == 1
     assert summary.committed_task_ids == summary.generated_task_ids
     assert summary.phase_monitor_log_path == tmp_path / "phase_monitors.jsonl"
     phase_monitor_lines = [
@@ -179,10 +162,8 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     ]
     assert any(line["phase"] == "quality_gate" for line in phase_monitor_lines)
     assert any(line["phase"] == "registry_commit" for line in phase_monitor_lines)
-    assert created["sakila"].synthesize_calls == [
-        ("sakila", CategoryTaxonomy.ASSIGNMENT, None),
-        ("sakila", CategoryTaxonomy.ITINERARY, None),
-    ]
+    assert len(created["sakila"].synthesize_calls) == 1
+    assert created["sakila"].synthesize_calls[0] == ("sakila", None, None)
     assert fake_registry.closed is True
 
     runner2 = SynthesisRegistryRunner(
@@ -196,30 +177,23 @@ async def test_synthesis_registry_runner_marks_pairs_and_resumes_from_checkpoint
     try:
         resumed = await runner2.run_steps(
             registry,
-            max_steps=2,
+            max_steps=1,
             checkpoint_namespace="synthesis_test",
         )
     finally:
         await runner2.close()
 
-    assert resumed.initially_processed_pairs == 2
+    assert resumed.initially_processed_entries == 1
     assert resumed.outcome == SynthesisRegistryRunOutcome.COMPLETED_ALL
     assert resumed.generated_drafts == 0
 
 
 @pytest.mark.asyncio
-async def test_synthesis_registry_runner_cold_start_ignores_backoff_until_runtime_is_cached(
+async def test_synthesis_registry_runner_cold_start_produces_draft(
     tmp_path: Path,
 ) -> None:
     config = _config_with_run_db(tmp_path)
-    runtime = _FakeRuntime(
-        category_status_payload={
-            CategoryTaxonomy.ASSIGNMENT: _backed_off_status(
-                db_id="sakila",
-                category=CategoryTaxonomy.ASSIGNMENT,
-            )
-        }
-    )
+    runtime = _FakeRuntime()
     fake_registry = _FakeRegistry(
         root_dir=tmp_path / "tasks",
         index_db_path=tmp_path / "task_registry.db",
@@ -230,10 +204,7 @@ async def test_synthesis_registry_runner_cold_start_ignores_backoff_until_runtim
         task_registry=fake_registry,
     )
     registry = [
-        SynthesisDbRegistryEntry(
-            db_id="sakila",
-            categories=[CategoryTaxonomy.ASSIGNMENT],
-        )
+        SynthesisDbRegistryEntry(db_id="sakila"),
     ]
 
     try:
@@ -246,7 +217,7 @@ async def test_synthesis_registry_runner_cold_start_ignores_backoff_until_runtim
     assert summary.generated_drafts == 1
 
 
-def test_load_synthesis_registry_supports_topics_and_legacy_categories(tmp_path: Path) -> None:
+def test_load_synthesis_registry_supports_plain_db_ids_and_legacy_topics(tmp_path: Path) -> None:
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(
         json.dumps(
@@ -279,17 +250,9 @@ def test_load_synthesis_registry_supports_topics_and_legacy_categories(tmp_path:
 
     entries = load_synthesis_registry(registry_path)
 
-    assert [(entry.db_id, entry.topics) for entry in entries] == [
-        ("sakila", ["assignment"]),
-        ("northwind", ["itinerary"]),
-    ]
+    assert [entry.db_id for entry in entries] == ["sakila", "northwind"]
     assert isinstance(entries[0].database, DatabaseConfig)
     assert isinstance(entries[1].domain, DomainConfig)
-
-
-def test_synthesis_registry_entry_requires_topics() -> None:
-    with pytest.raises(ValueError):
-        SynthesisDbRegistryEntry(db_id="sakila", topics=[])
 
 
 def test_synthesis_registry_run_outcome_exposes_ready_status_name() -> None:

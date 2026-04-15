@@ -64,7 +64,7 @@ def test_cli_validate_config_command():
 def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(
-        json.dumps([{"db_id": "sakila", "categories": ["assignment"]}]),
+        json.dumps([{"db_id": "sakila"}]),
         encoding="utf-8",
     )
     captured: dict[str, object] = {}
@@ -82,15 +82,15 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                 checkpoint_namespace=checkpoint_namespace,
                 requested_steps=max_steps,
                 executed_steps=1,
-                total_pairs=1,
-                initially_processed_pairs=0,
-                processed_pairs_after_run=1,
+                total_entries=1,
+                initially_processed_entries=0,
+                processed_entries_after_run=1,
                 generated_drafts=1,
                 quality_accepted_tasks=1,
                 quality_rejected_tasks=0,
                 registry_committed_tasks=1,
                 registry_duplicate_tasks=0,
-                remaining_pairs=0,
+                remaining_entries=0,
                 flow_id="flow_registry_test",
                 phase_monitor_log_path=Path("artifacts/phase_monitors.jsonl"),
                 generated_task_ids=["task_assignment_deadbeef"],
@@ -103,8 +103,7 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
                         decision=SynthesisSchedulerDecision(
                             status=SynthesisSelectionStatus.READY,
                             db_id="sakila",
-                            topic=CategoryTaxonomy.ASSIGNMENT,
-                            reason="selected next available db/topic pair",
+                            reason="selected next available db",
                         ),
                         draft_task_id="task_assignment_deadbeef",
                         draft_created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
@@ -140,7 +139,7 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert "quality_rejected_tasks=0" in result.stdout
     assert "registry_committed_tasks=1" in result.stdout
     assert "registry_duplicate_tasks=0" in result.stdout
-    assert "remaining_pairs=0" in result.stdout
+    assert "remaining_entries=0" in result.stdout
     assert "flow_id=flow_registry_test" in result.stdout
     assert "phase_monitor_log_path=artifacts/phase_monitors.jsonl" in result.stdout
     assert "last_status=ready" in result.stdout
@@ -335,7 +334,7 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
 def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> None:
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(
-        json.dumps([{"db_id": "sakila", "categories": ["assignment", "itinerary"]}]),
+        json.dumps([{"db_id": "sakila"}, {"db_id": "northwind"}]),
         encoding="utf-8",
     )
 
@@ -369,8 +368,8 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
     assert "deficit_cells=2" in result.stdout
     assert "deficit_pairs=2" in result.stdout
     assert "total_deficit=4" in result.stdout
-    assert "pair_gap=sakila|itinerary|deficit=3" in result.stdout
-    assert "cell_gap=sakila|assignment|current=2|target=3|deficit=1" in result.stdout
+    assert "pair_gap=northwind|northwind|deficit=3" in result.stdout
+    assert "cell_gap=sakila|sakila|current=2|target=3|deficit=1" in result.stdout
 
 
 def test_cli_export_bundle_writes_task_layout(monkeypatch, tmp_path: Path) -> None:

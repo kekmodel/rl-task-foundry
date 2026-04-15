@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.synthesis.contracts import TopicName
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.task_registry import (
     TaskRegistryCoverageEntry,
@@ -77,7 +76,7 @@ class SynthesisCoveragePlan:
 
 @dataclass(slots=True)
 class SynthesisCoveragePlanner:
-    """Compute per-db/topic coverage deficits against the registry inventory."""
+    """Compute per-db coverage deficits against the registry inventory."""
 
     target_count_per_pair: int = 3
 
@@ -93,46 +92,44 @@ class SynthesisCoveragePlanner:
         registry: Sequence[SynthesisDbRegistryEntry],
         coverage_entries: Sequence[TaskRegistryCoverageEntry],
     ) -> SynthesisCoveragePlan:
-        counts = {
-            (entry.db_id, entry.category): entry.count
-            for entry in coverage_entries
-        }
+        # Build a lookup of existing coverage by db_id (sum across all topics)
+        db_counts: dict[str, int] = {}
+        for cov_entry in coverage_entries:
+            db_counts[cov_entry.db_id] = db_counts.get(cov_entry.db_id, 0) + cov_entry.count
+
         pair_plans: list[SynthesisCoveragePairPlan] = []
         cell_plans: list[SynthesisCoverageCellPlan] = []
         for entry in registry:
-            for topic in entry.topics:
-                current_count = counts.get((entry.db_id, TopicName(topic)), 0)
-                deficit = max(0, self.target_count_per_pair - current_count)
-                cell = SynthesisCoverageCellPlan(
+            current_count = db_counts.get(entry.db_id, 0)
+            deficit = max(0, self.target_count_per_pair - current_count)
+            cell = SynthesisCoverageCellPlan(
+                db_id=entry.db_id,
+                topic=entry.db_id,
+                current_count=current_count,
+                target_count=self.target_count_per_pair,
+                deficit=deficit,
+            )
+            cell_plans.append(cell)
+            pair_plans.append(
+                SynthesisCoveragePairPlan(
                     db_id=entry.db_id,
-                    topic=topic,
-                    current_count=current_count,
-                    target_count=self.target_count_per_pair,
-                    deficit=deficit,
+                    topic=entry.db_id,
+                    cells=(cell,),
+                    total_current_count=cell.current_count,
+                    total_target_count=cell.target_count,
+                    total_deficit=cell.deficit,
                 )
-                cell_plans.append(cell)
-                pair_plans.append(
-                    SynthesisCoveragePairPlan(
-                        db_id=entry.db_id,
-                        topic=topic,
-                        cells=(cell,),
-                        total_current_count=cell.current_count,
-                        total_target_count=cell.target_count,
-                        total_deficit=cell.deficit,
-                    )
-                )
+            )
         pair_plans.sort(
             key=lambda pair: (
                 -pair.total_deficit,
                 pair.db_id,
-                pair.topic,
             )
         )
         cell_plans.sort(
             key=lambda cell: (
                 -cell.deficit,
                 cell.db_id,
-                cell.topic,
             )
         )
         return SynthesisCoveragePlan(

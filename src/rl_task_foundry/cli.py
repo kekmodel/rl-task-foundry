@@ -129,15 +129,15 @@ def run_synthesis_registry(
         console.print(f"checkpoint_namespace={summary.checkpoint_namespace}")
         console.print(f"requested_steps={summary.requested_steps}")
         console.print(f"executed_steps={summary.executed_steps}")
-        console.print(f"total_pairs={summary.total_pairs}")
-        console.print(f"initially_processed_pairs={summary.initially_processed_pairs}")
-        console.print(f"processed_pairs_after_run={summary.processed_pairs_after_run}")
+        console.print(f"total_entries={summary.total_entries}")
+        console.print(f"initially_processed_entries={summary.initially_processed_entries}")
+        console.print(f"processed_entries_after_run={summary.processed_entries_after_run}")
         console.print(f"generated_drafts={summary.generated_drafts}")
         console.print(f"quality_accepted_tasks={summary.quality_accepted_tasks}")
         console.print(f"quality_rejected_tasks={summary.quality_rejected_tasks}")
         console.print(f"registry_committed_tasks={summary.registry_committed_tasks}")
         console.print(f"registry_duplicate_tasks={summary.registry_duplicate_tasks}")
-        console.print(f"remaining_pairs={summary.remaining_pairs}")
+        console.print(f"remaining_entries={summary.remaining_entries}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:
@@ -157,7 +157,6 @@ def run_synthesis_registry(
         if summary.last_decision is not None:
             console.print(f"last_status={summary.last_decision.status}")
             console.print(f"last_db_id={summary.last_decision.db_id}")
-            console.print(f"last_topic={summary.last_decision.topic}")
 
     asyncio.run(_run())
 

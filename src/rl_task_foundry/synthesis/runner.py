@@ -6,20 +6,17 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
-
-from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig, DatabaseConfig, DomainConfig
 from rl_task_foundry.infra.checkpoint import CheckpointStore, ensure_checkpoint
 from rl_task_foundry.synthesis.contracts import (
     StrictModel,
     TaskBundleStatus,
-    normalize_topic,
 )
 from rl_task_foundry.synthesis.orchestrator import (
     SynthesisDbRegistryEntry,
@@ -44,28 +41,12 @@ from rl_task_foundry.synthesis.task_registry import (
 
 class SynthesisRegistryFileEntry(StrictModel):
     db_id: str
-    topics: list[str] = Field(min_length=1)
     database: DatabaseConfig | None = None
     domain: DomainConfig | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_categories(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        if "topics" not in payload and "categories" in payload:
-            payload["topics"] = payload.pop("categories")
-        return payload
-
-    @property
-    def categories(self) -> list[str]:
-        return self.topics
 
     def to_registry_entry(self) -> SynthesisDbRegistryEntry:
         return SynthesisDbRegistryEntry(
             db_id=self.db_id,
-            topics=[normalize_topic(topic) for topic in self.topics],
             database=self.database,
             domain=self.domain,
         )
@@ -97,13 +78,13 @@ class SynthesisRegistryRunSummary:
     checkpoint_namespace: str
     requested_steps: int
     executed_steps: int
-    total_pairs: int
-    initially_processed_pairs: int
-    processed_pairs_after_run: int
+    total_entries: int
+    initially_processed_entries: int
+    processed_entries_after_run: int
     generated_drafts: int
     registry_committed_tasks: int
     registry_duplicate_tasks: int
-    remaining_pairs: int
+    remaining_entries: int
     flow_id: str | None = None
     phase_monitor_log_path: Path | None = None
     quality_accepted_tasks: int = 0
@@ -116,6 +97,23 @@ class SynthesisRegistryRunSummary:
     registry_index_db_path: Path | None = None
     steps: list[SynthesisRegistryStepSummary] = field(default_factory=list)
 
+    # Backward-compatible aliases
+    @property
+    def total_pairs(self) -> int:
+        return self.total_entries
+
+    @property
+    def initially_processed_pairs(self) -> int:
+        return self.initially_processed_entries
+
+    @property
+    def processed_pairs_after_run(self) -> int:
+        return self.processed_entries_after_run
+
+    @property
+    def remaining_pairs(self) -> int:
+        return self.remaining_entries
+
     @property
     def last_decision(self) -> SynthesisSchedulerDecision | None:
         if not self.steps:
@@ -127,9 +125,9 @@ class SynthesisRegistryRunSummary:
 class SynthesisRegistryRunner:
     """Drive the synthesis orchestrator over a registry with checkpoint resume.
 
-    The registry must contain unique `db_id` values. Only pairs whose generated
+    The registry must contain unique `db_id` values. Only entries whose generated
     draft passes the solver pass-rate quality gate are flushed to checkpoint,
-    which keeps quality-rejected categories eligible for regeneration on the
+    which keeps quality-rejected entries eligible for regeneration on the
     next bounded run.
     """
 
@@ -175,13 +173,13 @@ class SynthesisRegistryRunner:
                     flow_id=flow_id,
                     requested_steps=max_steps,
                     executed_steps=0,
-                    total_pairs=0,
-                    initially_processed_pairs=0,
-                    processed_pairs_after_run=0,
+                    total_entries=0,
+                    initially_processed_entries=0,
+                    processed_entries_after_run=0,
                     generated_drafts=0,
                     registry_committed_tasks=0,
                     registry_duplicate_tasks=0,
-                    remaining_pairs=0,
+                    remaining_entries=0,
                     phase_monitor_log_path=phase_monitor_log_path,
                     quality_accepted_tasks=0,
                     quality_rejected_tasks=0,
@@ -189,8 +187,8 @@ class SynthesisRegistryRunner:
                     registry_index_db_path=self.task_registry.index_db_path,
                 )
 
-            total_pairs = sum(len(entry.topics) for entry in registry)
-            pending_registry, initially_processed_pairs = self._pending_registry(
+            total_entries = len(registry)
+            pending_registry, initially_processed_entries = self._pending_registry(
                 registry,
                 checkpoint_namespace=checkpoint_namespace,
             )
@@ -205,7 +203,7 @@ class SynthesisRegistryRunner:
             registry_duplicate_tasks = 0
             quality_accepted_tasks = 0
             quality_rejected_tasks = 0
-            processed_pairs_after_run = initially_processed_pairs
+            processed_entries_after_run = initially_processed_entries
             assert self.orchestrator is not None
             assert self.checkpoint is not None
             assert self.task_registry is not None
@@ -218,24 +216,15 @@ class SynthesisRegistryRunner:
             results_lock = asyncio.Lock()
             step_counter = 0
             steps_remaining = max_steps
-            pair_queue: asyncio.Queue[SynthesisDbRegistryEntry | None] = asyncio.Queue()
+            entry_queue: asyncio.Queue[SynthesisDbRegistryEntry | None] = asyncio.Queue()
             for entry in pending_registry:
-                for topic in entry.topics:
-                    pair_queue.put_nowait(
-                        SynthesisDbRegistryEntry(
-                            db_id=entry.db_id,
-                            topics=[topic],
-                            database=entry.database,
-                            domain=entry.domain,
-                            graph=entry.graph,
-                        )
-                    )
+                entry_queue.put_nowait(entry)
 
             async def _run_worker(worker_id: int) -> None:
                 nonlocal step_counter, steps_remaining
                 nonlocal executed_steps, generated_drafts, quality_accepted_tasks
                 nonlocal quality_rejected_tasks, registry_committed_tasks
-                nonlocal registry_duplicate_tasks, processed_pairs_after_run
+                nonlocal registry_duplicate_tasks, processed_entries_after_run
                 nonlocal pending_registry, outcome
 
                 worker_orchestrator = SynthesisOrchestrator(
@@ -248,15 +237,15 @@ class SynthesisRegistryRunner:
                             if steps_remaining <= 0:
                                 return
                             steps_remaining -= 1
-                        if pair_queue.empty():
+                        if entry_queue.empty():
                             return
                         try:
-                            pair_entry = pair_queue.get_nowait()
+                            queue_entry = entry_queue.get_nowait()
                         except asyncio.QueueEmpty:
                             return
 
                         try:
-                            step = await worker_orchestrator.run_next([pair_entry])
+                            step = await worker_orchestrator.run_next([queue_entry])
                         except Exception as exc:
                             log.warning("worker %d step failed: %s", worker_id, exc)
                             async with results_lock:
@@ -274,7 +263,6 @@ class SynthesisRegistryRunner:
                                 return
 
                             assert step.decision.db_id is not None
-                            assert step.decision.topic is not None
                             phase_monitor.emit(
                                 phase="quality_gate",
                                 status="accept",
@@ -323,11 +311,10 @@ class SynthesisRegistryRunner:
                                 )
                             )
                             checkpoint.mark_processed(
-                                self._checkpoint_key(step.decision.db_id, step.decision.topic),
+                                self._checkpoint_key(step.decision.db_id),
                                 namespace=checkpoint_namespace,
                                 payload={
                                     "db_id": step.decision.db_id,
-                                    "topic": step.decision.topic,
                                     "task_id": commit_result.task_id,
                                     "created_at": step.draft.created_at.isoformat(),
                                     "registry_status": commit_result.status.value,
@@ -338,18 +325,17 @@ class SynthesisRegistryRunner:
                                 },
                             )
                             checkpoint.flush()
-                            processed_pairs_after_run += 1
+                            processed_entries_after_run += 1
                             if commit_result.status == TaskRegistryCommitStatus.COMMITTED:
                                 registry_committed_tasks += 1
                                 committed_task_ids.append(commit_result.task_id)
                             else:
                                 registry_duplicate_tasks += 1
                                 duplicate_task_ids.append(commit_result.task_id)
-                            pending_registry = self._strip_processed_pair(
-                                pending_registry,
-                                db_id=step.decision.db_id,
-                                topic=step.decision.topic,
-                            )
+                            pending_registry = [
+                                e for e in pending_registry
+                                if e.db_id != step.decision.db_id
+                            ]
                 finally:
                     await worker_orchestrator.close()
 
@@ -364,14 +350,14 @@ class SynthesisRegistryRunner:
                         "worker %d crashed: %s: %s", i, type(result).__name__, result
                     )
 
-            remaining_pairs = total_pairs - processed_pairs_after_run
+            remaining_entries = total_entries - processed_entries_after_run
             if outcome is None:
                 outcome = (
                     SynthesisRegistryRunOutcome.COMPLETED_ALL
-                    if remaining_pairs == 0
+                    if remaining_entries == 0
                     else SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
                 )
-            assert remaining_pairs == total_pairs - processed_pairs_after_run
+            assert remaining_entries == total_entries - processed_entries_after_run
 
             return SynthesisRegistryRunSummary(
                 outcome=outcome,
@@ -379,13 +365,13 @@ class SynthesisRegistryRunner:
                 flow_id=flow_id,
                 requested_steps=max_steps,
                 executed_steps=executed_steps,
-                total_pairs=total_pairs,
-                initially_processed_pairs=initially_processed_pairs,
-                processed_pairs_after_run=processed_pairs_after_run,
+                total_entries=total_entries,
+                initially_processed_entries=initially_processed_entries,
+                processed_entries_after_run=processed_entries_after_run,
                 generated_drafts=generated_drafts,
                 registry_committed_tasks=registry_committed_tasks,
                 registry_duplicate_tasks=registry_duplicate_tasks,
-                remaining_pairs=remaining_pairs,
+                remaining_entries=remaining_entries,
                 phase_monitor_log_path=phase_monitor_log_path,
                 quality_accepted_tasks=quality_accepted_tasks,
                 quality_rejected_tasks=quality_rejected_tasks,
@@ -429,39 +415,18 @@ class SynthesisRegistryRunner:
         pending_entries: list[SynthesisDbRegistryEntry] = []
         already_processed = 0
         for entry in registry:
-            pending_topics: list[str] = []
-            for topic in entry.topics:
-                if self.checkpoint.is_processed(
-                    self._checkpoint_key(entry.db_id, topic),
-                    namespace=checkpoint_namespace,
-                ):
-                    already_processed += 1
-                else:
-                    pending_topics.append(topic)
-            if pending_topics:
-                pending_entries.append(replace(entry, topics=pending_topics))
+            if self.checkpoint.is_processed(
+                self._checkpoint_key(entry.db_id),
+                namespace=checkpoint_namespace,
+            ):
+                already_processed += 1
+            else:
+                pending_entries.append(entry)
         return pending_entries, already_processed
 
-    def _strip_processed_pair(
-        self,
-        registry: list[SynthesisDbRegistryEntry],
-        *,
-        db_id: str,
-        topic: str,
-    ) -> list[SynthesisDbRegistryEntry]:
-        stripped: list[SynthesisDbRegistryEntry] = []
-        for entry in registry:
-            if entry.db_id != db_id:
-                stripped.append(entry)
-                continue
-            remaining_topics = [item for item in entry.topics if item != topic]
-            if remaining_topics:
-                stripped.append(replace(entry, topics=remaining_topics))
-        return stripped
-
     @staticmethod
-    def _checkpoint_key(db_id: str, topic: str) -> str:
-        return f"{db_id}:{normalize_topic(topic)}"
+    def _checkpoint_key(db_id: str) -> str:
+        return db_id
 
 
 def load_synthesis_registry(path: Path) -> list[SynthesisDbRegistryEntry]:
@@ -480,7 +445,9 @@ def load_synthesis_registry(path: Path) -> list[SynthesisDbRegistryEntry]:
 
 
 def _parse_registry_item(item: dict[str, Any]) -> SynthesisDbRegistryEntry:
-    payload = SynthesisRegistryFileEntry.model_validate(item)
+    # Accept and ignore legacy topics/categories keys
+    cleaned = {k: v for k, v in item.items() if k not in ("topics", "categories")}
+    payload = SynthesisRegistryFileEntry.model_validate(cleaned)
     return payload.to_registry_entry()
 
 
