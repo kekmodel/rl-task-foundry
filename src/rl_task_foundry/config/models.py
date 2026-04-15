@@ -117,6 +117,7 @@ class CalibrationConfig(StrictModel):
     solver_batch_size: int = Field(default=3, ge=1)
     max_solver_runs: int = Field(default=30, ge=1)
     safe_early_termination: bool = True
+    max_divergence_ratio: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 class ProviderResilienceConfig(StrictModel):

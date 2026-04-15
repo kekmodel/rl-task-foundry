@@ -46,7 +46,7 @@ def test_cli_validate_config_command():
     result = CliRunner().invoke(app, ["validate-config"])
     normalized = result.stdout.replace("\n", "")
     assert result.exit_code == 0
-    assert "total_solver_runs=6" in normalized
+    assert "total_solver_runs=30" in normalized
     assert "composer=codex_oauth/gpt-5.4-mini" in normalized
     assert (
         "atomic_tools=max_tools=300,bounded_result_limit=100,max_batch_values=128,float_precision=2"

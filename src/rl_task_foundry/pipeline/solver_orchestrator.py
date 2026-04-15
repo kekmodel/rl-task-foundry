@@ -20,7 +20,7 @@ from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import AgentRuntime, SolverEpisodeInput
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
-from rl_task_foundry.synthesis.canonicalize import RewardResult, compute_reward
+from rl_task_foundry.synthesis.canonicalize import RewardResult, canonical_json, compute_reward
 from rl_task_foundry.synthesis.contracts import TaskBundleContract
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
 from rl_task_foundry.synthesis.tool_runtime import (
@@ -109,6 +109,8 @@ class TaskQualityGateSummary:
     ci_upper: float
     band_lower: float
     band_upper: float
+    unique_answers: int = 0
+    divergence_ratio: float = 0.0
 
 
 @dataclass(slots=True)
@@ -368,6 +370,19 @@ class SolverOrchestrator:
         return self._atomic_tool_materializer
 
 
+def _solver_divergence(summary: TaskRolloutSummary) -> tuple[int, float]:
+    answers: set[str] = set()
+    submitted = 0
+    for run in summary.runs:
+        text = run.solver_result.raw_output_text
+        if text:
+            answers.add(canonical_json(json.loads(text)) if text.strip().startswith(("{", "[")) else text)
+            submitted += 1
+    unique = len(answers)
+    ratio = unique / submitted if submitted > 0 else 0.0
+    return unique, ratio
+
+
 def evaluate_rollout_summary(
     config: AppConfig,
     summary: TaskRolloutSummary,
@@ -412,6 +427,13 @@ def evaluate_rollout_summary(
     else:  # pragma: no cover
         raise ValueError(f"unsupported calibration decision: {decision}")
 
+    unique_answers, divergence_ratio = _solver_divergence(summary)
+    if (
+        status is TaskQualityGateStatus.ACCEPT
+        and divergence_ratio > config.calibration.max_divergence_ratio
+    ):
+        status = TaskQualityGateStatus.REJECT_TOO_HARD
+
     return TaskQualityGateSummary(
         status=status,
         pass_rate=summary.pass_rate,
@@ -421,4 +443,6 @@ def evaluate_rollout_summary(
         ci_upper=interval.upper,
         band_lower=band.lower,
         band_upper=band.upper,
+        unique_answers=unique_answers,
+        divergence_ratio=divergence_ratio,
     )
