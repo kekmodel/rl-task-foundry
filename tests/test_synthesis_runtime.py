@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
 from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
+from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolBundle,
     AtomicToolDefinition,
@@ -208,6 +209,7 @@ class _FakeBackend:
         tool_surface_summary: dict[str, object],
         max_turns: int,
         anchor_hint: dict[str, object] | None = None,
+        data_profile: object | None = None,
     ):
         del (
             db_id,
@@ -662,6 +664,7 @@ async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> 
         total_solver_runs=2,
     )
     runtime._graph_cache = _sample_graph()
+    runtime._data_profile_cache = DataProfile()
     runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle()
 
     async def _get_customer(_kwargs):
@@ -698,6 +701,7 @@ async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: 
         total_solver_runs=2,
     )
     runtime._graph_cache = _sample_graph()
+    runtime._data_profile_cache = DataProfile()
     runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle()
 
     async def _get_customer(_kwargs):

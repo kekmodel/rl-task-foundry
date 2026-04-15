@@ -20,6 +20,7 @@ from rl_task_foundry.pipeline.provider_resilience import (
 )
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
+from rl_task_foundry.schema.profiler import DataProfile, profile_database
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolBundle,
@@ -86,6 +87,7 @@ class _SynthesisBackendProtocol(Protocol):
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
+        data_profile: object | None = None,
         max_turns: int,
     ) -> SynthesisConversationResult: ...
 
@@ -481,6 +483,7 @@ class SynthesisAgentRuntime:
         default_factory=dict, init=False, repr=False
     )
     _graph_cache: SchemaGraph | None = field(default=None, init=False, repr=False)
+    _data_profile_cache: DataProfile | None = field(default=None, init=False, repr=False)
     _atomic_tool_bundles: dict[str, AtomicToolBundle] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -557,6 +560,7 @@ class SynthesisAgentRuntime:
                 db_id, requested_topic
             )
         resolved_graph = graph if graph is not None else await self._introspect_graph()
+        data_profile = await self._ensure_data_profile(resolved_graph)
         atomic_tool_bundle = await self._ensure_atomic_tool_bundle(
             db_id=db_id,
             graph=resolved_graph,
@@ -607,6 +611,7 @@ class SynthesisAgentRuntime:
                 schema_summary=schema_summary,
                 tool_surface_summary=tool_surface_summary,
                 anchor_hint=anchor_hint,
+                data_profile=data_profile,
             )
         if controller.accepted_draft is None:
             attempts = self._generation_attempts_from_submit_records(
@@ -825,6 +830,7 @@ class SynthesisAgentRuntime:
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
+        data_profile: object | None = None,
     ) -> SynthesisConversationResult:
         candidate_backends = self.synthesis_backends or []
         if not candidate_backends:
@@ -849,6 +855,7 @@ class SynthesisAgentRuntime:
                     tool_surface_summary=tool_surface_summary,
                     max_turns=self.config.synthesis.runtime.max_turns,
                     anchor_hint=anchor_hint,
+                    data_profile=data_profile,
                 )
             except Exception as exc:  # pragma: no cover
                 breaker.record_failure()
@@ -997,6 +1004,12 @@ class SynthesisAgentRuntime:
             )
             self._graph_cache = await introspector.introspect()
         return self._graph_cache
+
+    async def _ensure_data_profile(self, graph: SchemaGraph) -> DataProfile:
+        if self._data_profile_cache is not None:
+            return self._data_profile_cache
+        self._data_profile_cache = await profile_database(self.config.database, graph)
+        return self._data_profile_cache
 
     async def _pick_random_anchor(self, graph: SchemaGraph) -> dict[str, object] | None:
         hub_tables = [

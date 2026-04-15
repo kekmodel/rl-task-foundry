@@ -117,6 +117,7 @@ def build_synthesis_input(
     tool_surface_summary: dict[str, object],
     runtime_config: SynthesisRuntimeConfig,
     anchor_hint: dict[str, object] | None = None,
+    data_profile: object | None = None,
 ) -> str:
     sections: list[str] = []
 
@@ -282,6 +283,17 @@ def build_synthesis_input(
             "# Schema Topology\n"
             + "\n".join(topology_lines)
         )
+
+    # ── Data Distributions ──
+    if data_profile is not None and hasattr(data_profile, "render"):
+        rendered = data_profile.render()
+        if rendered.strip():
+            sections.append(
+                "# Data Distributions\n"
+                "Use these to design realistic constraints "
+                "(budget thresholds, quality filters, etc.).\n"
+                + rendered
+            )
 
     # ── Submit Format (bottom for recency) ──
     sections.append(
