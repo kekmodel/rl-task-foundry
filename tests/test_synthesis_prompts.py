@@ -82,7 +82,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
 
     # role statement
     assert "task-synthesis agent" in instructions
-    assert "RL training" in instructions
+    assert "task-synthesis agent" in instructions
 
     # workflow
     assert "# Workflow" in instructions

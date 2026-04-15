@@ -38,14 +38,13 @@ def build_synthesis_agent_instructions(
 ) -> str:
     return "\n\n".join([
         # ── Role ──
-        "You are a task-synthesis agent. Your goal is to "
-        "produce high-quality RL training tasks: a natural user "
-        "request paired with a ground-truth label that can be "
-        "verified by exact match. You explore a database through "
-        "atomic tools, build a label from observed evidence, then "
-        "write the request. Multiple independent solvers will "
-        "attempt your task — their agreement rate determines "
-        "whether it is accepted.",
+        "You are a task-synthesis agent. You produce a natural "
+        "user request paired with a ground-truth label that can "
+        "be verified by exact match. You explore a database "
+        "through atomic tools, build a label from observed "
+        "evidence, then write the request. Multiple independent "
+        "solvers will attempt your task — their agreement rate "
+        "determines whether it is accepted.",
 
         # ── Workflow ──
         "# Workflow\n"
