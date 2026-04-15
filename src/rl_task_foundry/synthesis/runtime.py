@@ -85,6 +85,7 @@ class _SynthesisBackendProtocol(Protocol):
         scenario_description: str,
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
+        anchor_hint: dict[str, object] | None = None,
         max_turns: int,
     ) -> SynthesisConversationResult: ...
 
@@ -568,6 +569,7 @@ class SynthesisAgentRuntime:
             atomic_tool_bundle,
             max_entity_surfaces=self.config.synthesis.runtime.tool_surface_summary_max_entries,
         )
+        anchor_hint = await self._pick_random_anchor(resolved_graph)
         shuffle_seed = build_shuffle_seed(
             "synthesis",
             db_id,
@@ -604,6 +606,7 @@ class SynthesisAgentRuntime:
                 requested_topic=requested_topic,
                 schema_summary=schema_summary,
                 tool_surface_summary=tool_surface_summary,
+                anchor_hint=anchor_hint,
             )
         if controller.accepted_draft is None:
             attempts = self._generation_attempts_from_submit_records(
@@ -821,6 +824,7 @@ class SynthesisAgentRuntime:
         requested_topic: str | None,
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
+        anchor_hint: dict[str, object] | None = None,
     ) -> SynthesisConversationResult:
         candidate_backends = self.synthesis_backends or []
         if not candidate_backends:
@@ -844,6 +848,7 @@ class SynthesisAgentRuntime:
                     schema_summary=schema_summary,
                     tool_surface_summary=tool_surface_summary,
                     max_turns=self.config.synthesis.runtime.max_turns,
+                    anchor_hint=anchor_hint,
                 )
             except Exception as exc:  # pragma: no cover
                 breaker.record_failure()
@@ -992,6 +997,31 @@ class SynthesisAgentRuntime:
             )
             self._graph_cache = await introspector.introspect()
         return self._graph_cache
+
+    async def _pick_random_anchor(self, graph: SchemaGraph) -> dict[str, object] | None:
+        hub_tables = [
+            t for t in graph.tables
+            if t.primary_key
+            and len(t.primary_key) == 1
+            and (t.row_estimate or 0) >= 100
+        ]
+        if not hub_tables:
+            return None
+        import random
+        table = random.choice(hub_tables)
+        pk_col = table.primary_key[0]
+        try:
+            pools = await ensure_attached_database_pools(self.config.database)
+            async with pools.control_connection() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT {pk_col} FROM {table.qualified_name} "
+                    f"ORDER BY random() LIMIT 1"
+                )
+                if row:
+                    return {pk_col: row[pk_col]}
+        except Exception:
+            pass
+        return None
 
     async def _ensure_atomic_tool_bundle(
         self,

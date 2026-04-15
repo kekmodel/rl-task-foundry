@@ -244,6 +244,7 @@ class OpenAIAgentsSynthesisBackend:
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
         max_turns: int,
+        anchor_hint: dict[str, object] | None = None,
     ) -> SynthesisConversationResult:
         sdk = self._sdk_components()
         if hasattr(sdk, "set_tracing_disabled"):
@@ -267,6 +268,7 @@ class OpenAIAgentsSynthesisBackend:
             schema_summary=schema_summary,
             tool_surface_summary=tool_surface_summary,
             runtime_config=self.runtime_config,
+            anchor_hint=anchor_hint,
         )
         started_at = perf_counter()
         try:

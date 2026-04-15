@@ -207,6 +207,7 @@ class _FakeBackend:
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
         max_turns: int,
+        anchor_hint: dict[str, object] | None = None,
     ):
         del (
             db_id,

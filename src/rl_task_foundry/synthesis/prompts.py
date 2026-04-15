@@ -52,8 +52,10 @@ def build_synthesis_agent_instructions(
     sections = [
         (
             "Workflow",
-            "- Research: inspect the anchor entry and map "
-            "nearby paths (readable, id-only, countable, "
+            "- Research: pick a random anchor entity — do not "
+            "always start with ID=1. Use a find or rank tool "
+            "to discover a diverse ID, then inspect it and "
+            "map nearby paths (readable, id-only, countable, "
             "orderable, dead-end).\n"
             "- Compare: evaluate multiple candidate paths "
             "before committing.\n"
@@ -194,6 +196,7 @@ def build_synthesis_input(
     schema_summary: dict[str, object],
     tool_surface_summary: dict[str, object],
     runtime_config: SynthesisRuntimeConfig,
+    anchor_hint: dict[str, object] | None = None,
 ) -> str:
     session_lines: list[str] = []
     environment_lines: list[str] = []
@@ -211,6 +214,12 @@ def build_synthesis_input(
             session_lines.append(
                 f"- Topic semantics: {topic_semantics}"
             )
+    if anchor_hint is not None:
+        import json as _json
+        session_lines.append(
+            f"- REQUIRED starting entity: {_json.dumps(anchor_hint, ensure_ascii=False)}. "
+            "Use this entity as your anchor. Do not pick a different one."
+        )
     language_name = LANGUAGE_NAMES.get(
         task_language, task_language
     )
