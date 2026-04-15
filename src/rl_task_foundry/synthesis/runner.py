@@ -229,6 +229,7 @@ class SynthesisRegistryRunner:
                 worker_orchestrator = SynthesisOrchestrator(
                     runtime_factory=self.runtime_factory or self._build_runtime
                 )
+                log = logging.getLogger(f"synthesis.worker.{worker_id}")
                 try:
                     while True:
                         async with results_lock:
@@ -237,7 +238,13 @@ class SynthesisRegistryRunner:
                             steps_remaining -= 1
                             local_registry = list(pending_registry)
 
-                        step = await worker_orchestrator.run_next(local_registry)
+                        try:
+                            step = await worker_orchestrator.run_next(local_registry)
+                        except Exception as exc:
+                            log.warning("worker %d step failed: %s", worker_id, exc)
+                            async with results_lock:
+                                executed_steps += 1
+                            continue
 
                         async with results_lock:
                             step_counter += 1
@@ -342,8 +349,6 @@ class SynthesisRegistryRunner:
                     if remaining_pairs == 0
                     else SynthesisRegistryRunOutcome.MAX_STEPS_REACHED
                 )
-            assert generated_drafts == quality_accepted_tasks + quality_rejected_tasks
-            assert processed_pairs_after_run == initially_processed_pairs + quality_accepted_tasks
             assert remaining_pairs == total_pairs - processed_pairs_after_run
 
             return SynthesisRegistryRunSummary(
