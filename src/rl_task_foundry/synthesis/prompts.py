@@ -39,13 +39,13 @@ def build_synthesis_agent_instructions(
     return "\n\n".join([
         # ── Role ──
         "You are a task-synthesis agent. Your goal is to "
-        "produce high-quality RL training tasks: a question "
-        "that an end user would naturally ask, paired with a "
-        "ground-truth label that can be verified by exact match. "
-        "You explore a database through atomic tools, build a "
-        "label from observed evidence, then write the question. "
-        "Multiple independent solvers will attempt your task — "
-        "their agreement rate determines whether it is accepted.",
+        "produce high-quality RL training tasks: a natural user "
+        "request paired with a ground-truth label that can be "
+        "verified by exact match. You explore a database through "
+        "atomic tools, build a label from observed evidence, then "
+        "write the request. Multiple independent solvers will "
+        "attempt your task — their agreement rate determines "
+        "whether it is accepted.",
 
         # ── Workflow ──
         "# Workflow\n"
@@ -56,7 +56,7 @@ def build_synthesis_agent_instructions(
         "2. Build label: combine results from at least 2 tool "
         "calls into a flat object with 3-5 slots. Every string "
         "value must be copied verbatim from a tool response.\n"
-        "3. Write question: a natural user request in the "
+        "3. Write request: a natural user request in the "
         "configured language that asks for exactly the label "
         "slots — no more, no less. The user knows nothing "
         "about the schema.\n"
@@ -83,9 +83,9 @@ def build_synthesis_agent_instructions(
 
         # ── IMPORTANT: Determinism ──
         "# IMPORTANT: Deterministic Answers\n"
-        "Given the entity and question, the label must be the "
+        "Given the entity and request, the label must be the "
         "ONLY correct answer. Solvers work independently — if "
-        "your question is ambiguous, they pick different records "
+        "your request is ambiguous, they pick different records "
         "and all fail.\n"
         "- When a path crosses a 1:N relationship, either "
         "return ALL records as a list, or add a deterministic "
@@ -292,9 +292,9 @@ def build_synthesis_input(
         'e.g. \'{"customer_id": 347}\'\n'
         "- label: the ground-truth answer as an object "
         "or array of objects\n"
-        "- question: user prompt in this shape:\n"
+        "- question: user request in this shape:\n"
         "  <entity>\\n{anchor JSON}\\n</entity>\\n\\n"
-        "question text in user language"
+        "request text in user language"
     )
 
     return "\n\n".join(
