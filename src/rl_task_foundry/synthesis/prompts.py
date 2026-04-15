@@ -112,7 +112,18 @@ def build_synthesis_agent_instructions(
             "- Anchor-scoped counts: ground counts with an "
             "anchor-scoped aggregate, not a global total. "
             "WHY — global totals are trivial single-call "
-            "lookups that bypass the multi-hop requirement.",
+            "lookups that bypass the multi-hop requirement.\n"
+            "- IMPORTANT — Deterministic label: given the "
+            "entity and the question, the answer must be "
+            "uniquely determined. When traversing a 1:N "
+            "relationship, either return ALL matching records "
+            "as a list, or add a filter that selects exactly "
+            "one (e.g. highest amount, specific date). NEVER "
+            "ask for 'a customer' or 'one rental' when "
+            "multiple exist. WHY — solvers independently "
+            "follow the same question; if the answer is "
+            "ambiguous they each pick a different record "
+            "and fail EM matching.",
         ),
         (
             "Prohibitions",
