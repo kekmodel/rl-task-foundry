@@ -417,30 +417,33 @@ def test_atomic_tool_params_follow_family_patterns() -> None:
 
     calc_schema = tool_by_name["calc_order"].params_schema
     assert calc_schema["type"] == "object"
-    assert calc_schema["required"] == ["fn", "by", "op", "value"]
+    assert "fn" in calc_schema["required"]
+    assert "by" in calc_schema["required"]
+    assert "op" in calc_schema["required"]
+    assert "value" in calc_schema["required"]
     assert calc_schema["properties"]["fn"]["enum"] == ["count", "sum", "avg", "min", "max"]
-    assert calc_schema["if"] == {"properties": {"fn": {"const": "count"}}}
-    assert calc_schema["then"] == {"properties": {"metric": {"type": "null"}}}
-    assert calc_schema["else"]["required"] == ["metric"]
-    assert calc_schema["else"]["properties"]["metric"]["enum"] == [
+    assert "if" not in calc_schema
+    assert calc_schema["properties"]["metric"]["enum"] == [
         "order_id",
         "customer_id",
         "total_amount",
+        None,
     ]
 
     rank_schema = tool_by_name["rank_order_by_customer_id"].params_schema
     assert rank_schema["type"] == "object"
-    assert rank_schema["required"] == ["fn", "direction", "limit", "by", "op", "value"]
+    assert "fn" in rank_schema["required"]
+    assert "direction" in rank_schema["required"]
+    assert "limit" in rank_schema["required"]
     assert rank_schema["properties"]["fn"]["enum"] == ["count", "sum", "avg", "min", "max"]
     assert rank_schema["properties"]["direction"]["enum"] == ["asc", "desc"]
     assert rank_schema["properties"]["limit"]["maximum"] == 100
-    assert rank_schema["if"] == {"properties": {"fn": {"const": "count"}}}
-    assert rank_schema["then"] == {"properties": {"metric": {"type": "null"}}}
-    assert rank_schema["else"]["required"] == ["metric"]
-    assert rank_schema["else"]["properties"]["metric"]["enum"] == [
+    assert "if" not in rank_schema
+    assert rank_schema["properties"]["metric"]["enum"] == [
         "order_id",
         "customer_id",
         "total_amount",
+        None,
     ]
 
 

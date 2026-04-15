@@ -633,14 +633,14 @@ def _calc_params_schema(
         ),
     }
     metric_fns = [fn for fn in allowed_fns if fn != "count"]
-    schema = _object_schema(properties, required=("fn", "by", "op", "value"))
     if metric_columns and metric_fns:
-        schema["if"] = {"properties": {"fn": {"const": "count"}}}
-        schema["then"] = {"properties": {"metric": {"type": "null"}}}
-        schema["else"] = {
-            "required": ["metric"],
-            "properties": {"metric": {"type": "string", "enum": metric_columns}},
-        }
+        properties["metric"] = _described_schema(
+            {"type": ["string", "null"], "enum": [*metric_columns, None]},
+            "Column to aggregate. Required for sum/avg/min/max. Use null for count.",
+        )
+        schema = _object_schema(properties, required=("fn", "metric", "by", "op", "value"))
+    else:
+        schema = _object_schema(properties, required=("fn", "by", "op", "value"))
     return schema
 
 
@@ -684,17 +684,20 @@ def _rank_params_schema(
         ),
     }
     metric_fns = [fn for fn in allowed_fns if fn != "count"]
-    schema = _object_schema(
-        properties,
-        required=("fn", "direction", "limit", "by", "op", "value"),
-    )
     if metric_columns and metric_fns:
-        schema["if"] = {"properties": {"fn": {"const": "count"}}}
-        schema["then"] = {"properties": {"metric": {"type": "null"}}}
-        schema["else"] = {
-            "required": ["metric"],
-            "properties": {"metric": {"type": "string", "enum": metric_columns}},
-        }
+        properties["metric"] = _described_schema(
+            {"type": ["string", "null"], "enum": [*metric_columns, None]},
+            "Column to aggregate. Required for sum/avg/min/max. Use null for count.",
+        )
+        schema = _object_schema(
+            properties,
+            required=("fn", "metric", "direction", "limit", "by", "op", "value"),
+        )
+    else:
+        schema = _object_schema(
+            properties,
+            required=("fn", "direction", "limit", "by", "op", "value"),
+        )
     return schema
 
 
