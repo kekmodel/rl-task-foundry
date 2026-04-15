@@ -218,6 +218,18 @@ class SynthesisRegistryRunner:
             results_lock = asyncio.Lock()
             step_counter = 0
             steps_remaining = max_steps
+            pair_queue: asyncio.Queue[SynthesisDbRegistryEntry | None] = asyncio.Queue()
+            for entry in pending_registry:
+                for topic in entry.topics:
+                    pair_queue.put_nowait(
+                        SynthesisDbRegistryEntry(
+                            db_id=entry.db_id,
+                            topics=[topic],
+                            database=entry.database,
+                            domain=entry.domain,
+                            graph=entry.graph,
+                        )
+                    )
 
             async def _run_worker(worker_id: int) -> None:
                 nonlocal step_counter, steps_remaining
@@ -233,13 +245,18 @@ class SynthesisRegistryRunner:
                 try:
                     while True:
                         async with results_lock:
-                            if steps_remaining <= 0 or not pending_registry:
+                            if steps_remaining <= 0:
                                 return
                             steps_remaining -= 1
-                            local_registry = list(pending_registry)
+                        if pair_queue.empty():
+                            return
+                        try:
+                            pair_entry = pair_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            return
 
                         try:
-                            step = await worker_orchestrator.run_next(local_registry)
+                            step = await worker_orchestrator.run_next([pair_entry])
                         except Exception as exc:
                             log.warning("worker %d step failed: %s", worker_id, exc)
                             async with results_lock:
@@ -337,10 +354,15 @@ class SynthesisRegistryRunner:
                     await worker_orchestrator.close()
 
             worker_count = min(parallel_workers, max_steps, len(pending_registry) or 1)
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *(_run_worker(i) for i in range(worker_count)),
                 return_exceptions=True,
             )
+            for i, result in enumerate(results):
+                if isinstance(result, BaseException):
+                    logging.getLogger("synthesis.runner").error(
+                        "worker %d crashed: %s: %s", i, type(result).__name__, result
+                    )
 
             remaining_pairs = total_pairs - processed_pairs_after_run
             if outcome is None:
