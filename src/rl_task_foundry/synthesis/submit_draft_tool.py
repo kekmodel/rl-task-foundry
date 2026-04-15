@@ -298,16 +298,15 @@ def _monitor_answer_snapshot(
         }
     if isinstance(value, list):
         field_names: list[str] = []
-        if value and isinstance(value[0], dict):
-            field_names = [
-                str(key)
-                for key in list(value[0].keys())[
-                    : config.synthesis.runtime.label_preview_field_limit
-                ]
-            ]
+        all_keys: set[str] = set()
+        for item in value:
+            if isinstance(item, dict):
+                all_keys.update(item.keys())
+        field_names = sorted(all_keys)[: config.synthesis.runtime.label_preview_field_limit]
         return {
             "root_type": "array",
-            "slot_count": len(value),
+            "slot_count": len(all_keys),
+            "item_count": len(value),
             "field_names": field_names,
             "preview": _preview_runtime_payload(value, config=config),
         }
@@ -323,9 +322,11 @@ def _answer_slot_count(value: object) -> int:
     if isinstance(value, dict):
         return len(value)
     if isinstance(value, list):
-        if not value:
-            return 0
-        return sum(_answer_slot_count(item) for item in value)
+        all_keys: set[str] = set()
+        for item in value:
+            if isinstance(item, dict):
+                all_keys.update(item.keys())
+        return len(all_keys) if all_keys else len(value)
     return 1
 
 
