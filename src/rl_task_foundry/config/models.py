@@ -102,6 +102,7 @@ class SynthesisConfig(StrictModel):
     coverage_planner: SynthesisCoveragePlannerConfig = Field(
         default_factory=SynthesisCoveragePlannerConfig
     )
+    parallel_workers: int = Field(default=1, ge=1)
 
 
 class SolverRuntimeConfig(StrictModel):

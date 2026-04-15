@@ -250,6 +250,7 @@ synthesis:
     payload_preview_max_string_length: 400
     payload_preview_max_list_items: 3
     payload_preview_max_dict_items: 6
+  parallel_workers: 4
   coverage_planner:
     target_count_per_band: 3
 

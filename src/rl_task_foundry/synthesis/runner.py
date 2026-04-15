@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -212,101 +214,126 @@ class SynthesisRegistryRunner:
             task_registry = self.task_registry
             outcome: SynthesisRegistryRunOutcome | None = None
 
-            for _ in range(max_steps):
-                if not pending_registry:
-                    outcome = SynthesisRegistryRunOutcome.COMPLETED_ALL
-                    break
-                step = await orchestrator.run_next(pending_registry)
-                executed_steps += 1
+            parallel_workers = self.base_config.synthesis.parallel_workers
+            results_lock = asyncio.Lock()
+            step_counter = 0
+            steps_remaining = max_steps
 
-                if step.decision.status != SynthesisSelectionStatus.READY:
-                    steps.append(SynthesisRegistryStepSummary(decision=step.decision))
-                    outcome = (
-                        SynthesisRegistryRunOutcome.ALL_BACKED_OFF
-                        if step.decision.status == SynthesisSelectionStatus.BACKOFF
-                        else SynthesisRegistryRunOutcome.COMPLETED_ALL
-                    )
-                    break
-                if step.draft is None:
-                    raise RuntimeError("synthesis orchestrator returned READY without a draft")
+            async def _run_worker(worker_id: int) -> None:
+                nonlocal step_counter, steps_remaining
+                nonlocal executed_steps, generated_drafts, quality_accepted_tasks
+                nonlocal quality_rejected_tasks, registry_committed_tasks
+                nonlocal registry_duplicate_tasks, processed_pairs_after_run
+                nonlocal pending_registry, outcome
 
-                assert step.decision.db_id is not None
-                assert step.decision.topic is not None
-                phase_monitor.emit(
-                    phase="quality_gate",
-                    status="accept",
-                    expected_contract={
-                        "step_index": executed_steps,
-                        "internal_submit_draft_acceptance": True,
-                    },
-                    actual_data={
-                        "task_id": step.draft.task_bundle.task_id,
-                        "pass_rate": step.draft.task_bundle.quality_metrics.solver_pass_rate,
-                        "ci_low": step.draft.task_bundle.quality_metrics.solver_ci_low,
-                        "ci_high": step.draft.task_bundle.quality_metrics.solver_ci_high,
-                    },
-                    checks={
-                        "accepted": step.draft.task_bundle.status is TaskBundleStatus.ACCEPTED,
-                    },
-                    diagnostics={"step_index": executed_steps},
+                worker_orchestrator = SynthesisOrchestrator(
+                    runtime_factory=self.runtime_factory or self._build_runtime
                 )
-                generated_drafts += 1
-                generated_task_ids.append(step.draft.task_bundle.task_id)
-                quality_accepted_tasks += 1
-                commit_result = task_registry.commit_draft(step.draft)
-                phase_monitor.emit(
-                    phase="registry_commit",
-                    status=commit_result.status.value,
-                    expected_contract={"step_index": executed_steps},
-                    actual_data={
-                        "task_id": step.draft.task_bundle.task_id,
-                        "registry_task_id": commit_result.task_id,
-                        "status": commit_result.status.value,
-                    },
-                    checks={},
-                    diagnostics={"step_index": executed_steps},
-                )
-                steps.append(
-                    SynthesisRegistryStepSummary(
-                        decision=step.decision,
-                        draft_task_id=step.draft.task_bundle.task_id,
-                        draft_created_at=step.draft.created_at,
-                        quality_gate_status="accept",
-                        quality_gate_pass_rate=step.draft.task_bundle.quality_metrics.solver_pass_rate,
-                        quality_gate_ci_low=step.draft.task_bundle.quality_metrics.solver_ci_low,
-                        quality_gate_ci_high=step.draft.task_bundle.quality_metrics.solver_ci_high,
-                        registry_status=commit_result.status,
-                        registry_task_id=commit_result.task_id,
-                    )
-                )
-                checkpoint.mark_processed(
-                    self._checkpoint_key(step.decision.db_id, step.decision.topic),
-                    namespace=checkpoint_namespace,
-                    payload={
-                        "db_id": step.decision.db_id,
-                        "topic": step.decision.topic,
-                        "task_id": commit_result.task_id,
-                        "created_at": step.draft.created_at.isoformat(),
-                        "registry_status": commit_result.status.value,
-                        "quality_gate_status": "accept",
-                        "solver_pass_rate": step.draft.task_bundle.quality_metrics.solver_pass_rate,
-                        "solver_ci_low": step.draft.task_bundle.quality_metrics.solver_ci_low,
-                        "solver_ci_high": step.draft.task_bundle.quality_metrics.solver_ci_high,
-                    },
-                )
-                checkpoint.flush()
-                processed_pairs_after_run += 1
-                if commit_result.status == TaskRegistryCommitStatus.COMMITTED:
-                    registry_committed_tasks += 1
-                    committed_task_ids.append(commit_result.task_id)
-                else:
-                    registry_duplicate_tasks += 1
-                    duplicate_task_ids.append(commit_result.task_id)
-                pending_registry = self._strip_processed_pair(
-                    pending_registry,
-                    db_id=step.decision.db_id,
-                    topic=step.decision.topic,
-                )
+                try:
+                    while True:
+                        async with results_lock:
+                            if steps_remaining <= 0 or not pending_registry:
+                                return
+                            steps_remaining -= 1
+                            local_registry = list(pending_registry)
+
+                        step = await worker_orchestrator.run_next(local_registry)
+
+                        async with results_lock:
+                            step_counter += 1
+                            executed_steps += 1
+
+                            if step.decision.status != SynthesisSelectionStatus.READY:
+                                steps.append(SynthesisRegistryStepSummary(decision=step.decision))
+                                return
+                            if step.draft is None:
+                                return
+
+                            assert step.decision.db_id is not None
+                            assert step.decision.topic is not None
+                            phase_monitor.emit(
+                                phase="quality_gate",
+                                status="accept",
+                                expected_contract={
+                                    "step_index": step_counter,
+                                    "internal_submit_draft_acceptance": True,
+                                },
+                                actual_data={
+                                    "task_id": step.draft.task_bundle.task_id,
+                                    "pass_rate": step.draft.task_bundle.quality_metrics.solver_pass_rate,
+                                    "ci_low": step.draft.task_bundle.quality_metrics.solver_ci_low,
+                                    "ci_high": step.draft.task_bundle.quality_metrics.solver_ci_high,
+                                },
+                                checks={
+                                    "accepted": step.draft.task_bundle.status is TaskBundleStatus.ACCEPTED,
+                                },
+                                diagnostics={"step_index": step_counter},
+                            )
+                            generated_drafts += 1
+                            generated_task_ids.append(step.draft.task_bundle.task_id)
+                            quality_accepted_tasks += 1
+                            commit_result = task_registry.commit_draft(step.draft)
+                            phase_monitor.emit(
+                                phase="registry_commit",
+                                status=commit_result.status.value,
+                                expected_contract={"step_index": step_counter},
+                                actual_data={
+                                    "task_id": step.draft.task_bundle.task_id,
+                                    "registry_task_id": commit_result.task_id,
+                                    "status": commit_result.status.value,
+                                },
+                                checks={},
+                                diagnostics={"step_index": step_counter},
+                            )
+                            steps.append(
+                                SynthesisRegistryStepSummary(
+                                    decision=step.decision,
+                                    draft_task_id=step.draft.task_bundle.task_id,
+                                    draft_created_at=step.draft.created_at,
+                                    quality_gate_status="accept",
+                                    quality_gate_pass_rate=step.draft.task_bundle.quality_metrics.solver_pass_rate,
+                                    quality_gate_ci_low=step.draft.task_bundle.quality_metrics.solver_ci_low,
+                                    quality_gate_ci_high=step.draft.task_bundle.quality_metrics.solver_ci_high,
+                                    registry_status=commit_result.status,
+                                    registry_task_id=commit_result.task_id,
+                                )
+                            )
+                            checkpoint.mark_processed(
+                                self._checkpoint_key(step.decision.db_id, step.decision.topic),
+                                namespace=checkpoint_namespace,
+                                payload={
+                                    "db_id": step.decision.db_id,
+                                    "topic": step.decision.topic,
+                                    "task_id": commit_result.task_id,
+                                    "created_at": step.draft.created_at.isoformat(),
+                                    "registry_status": commit_result.status.value,
+                                    "quality_gate_status": "accept",
+                                    "solver_pass_rate": step.draft.task_bundle.quality_metrics.solver_pass_rate,
+                                    "solver_ci_low": step.draft.task_bundle.quality_metrics.solver_ci_low,
+                                    "solver_ci_high": step.draft.task_bundle.quality_metrics.solver_ci_high,
+                                },
+                            )
+                            checkpoint.flush()
+                            processed_pairs_after_run += 1
+                            if commit_result.status == TaskRegistryCommitStatus.COMMITTED:
+                                registry_committed_tasks += 1
+                                committed_task_ids.append(commit_result.task_id)
+                            else:
+                                registry_duplicate_tasks += 1
+                                duplicate_task_ids.append(commit_result.task_id)
+                            pending_registry = self._strip_processed_pair(
+                                pending_registry,
+                                db_id=step.decision.db_id,
+                                topic=step.decision.topic,
+                            )
+                finally:
+                    await worker_orchestrator.close()
+
+            worker_count = min(parallel_workers, max_steps, len(pending_registry) or 1)
+            await asyncio.gather(
+                *(_run_worker(i) for i in range(worker_count)),
+                return_exceptions=True,
+            )
 
             remaining_pairs = total_pairs - processed_pairs_after_run
             if outcome is None:
