@@ -30,7 +30,6 @@ from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
-    DifficultyVectorContract,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
@@ -39,7 +38,6 @@ from rl_task_foundry.synthesis.contracts import (
     TaskBundleStatus,
     TaskContract,
     TaskQualityMetrics,
-    difficulty_vector_json,
 )
 from rl_task_foundry.synthesis.phase_monitor import (
     PipelinePhaseMonitorLogger,
@@ -190,9 +188,6 @@ class ProofTaskRunner:
                 },
                 actual_data={
                     "task_id": draft.task_bundle.task_id,
-                    "difficulty_vector": difficulty_vector_json(
-                        draft.task_bundle.task.difficulty_vector
-                    ),
                     "rendered_user_prompt": draft.rendered_user_prompt,
                     "canonical_answer_json": draft.canonical_answer_json,
                 },
@@ -401,13 +396,6 @@ def build_proof_task_draft(
                 summary="연속된 day의 city는 proof_city_links 기준으로 인접해야 한다.",
             ),
         ],
-        difficulty_vector=DifficultyVectorContract.model_validate(
-            {
-                "search_cost": 3.0,
-                "solution_space": 3.0,
-                "constraint_density": 4.0,
-            }
-        ),
         instance_parameters={
             "anchor_id": 1,
             "season": "spring",
@@ -420,7 +408,6 @@ def build_proof_task_draft(
         domain="travel_planning",
         topic="itinerary",
         atomic_tool_set_ref=f"db://{PROOF_DB_ID}",
-        difficulty_vector=task.difficulty_vector,
         created_at=created_at,
         generator_version=CURRENT_SYNTHESIS_GENERATOR_VERSION,
         tool_signature=_sha256_hex(_proof_atomic_tool_bundle().source),

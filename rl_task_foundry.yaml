@@ -108,7 +108,6 @@ synthesis:
     payload_preview_max_dict_items: 6
   coverage_planner:
     target_count_per_band: 3
-    include_unset_band: false
 
 solver_runtime:
   max_turns: 16
@@ -130,8 +129,6 @@ dedup:
 
 task_registry:
   minhash_num_perm: 128
-  difficulty_band_low_max_total: 3.0
-  difficulty_band_medium_max_total: 8.0
   default_query_limit: 20
   semantic_shingle_size: 3
 

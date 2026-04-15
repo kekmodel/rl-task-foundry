@@ -19,7 +19,6 @@ from rl_task_foundry.synthesis.runner import (
 from rl_task_foundry.synthesis.runtime import SynthesisCategoryStatus
 from rl_task_foundry.synthesis.scheduler import SynthesisSelectionStatus
 from rl_task_foundry.synthesis.task_registry import (
-    DifficultyBand,
     TaskRegistryCommitResult,
     TaskRegistryCommitStatus,
 )
@@ -93,7 +92,6 @@ class _FakeRegistry:
             status=TaskRegistryCommitStatus.COMMITTED,
             task_id=task_id,
             exact_signature=f"sha256:{task_id}",
-            difficulty_band=DifficultyBand.UNSET,
             filesystem_path=self.root_dir / task_id,
         )
 

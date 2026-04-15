@@ -109,9 +109,10 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Render" in instructions
     assert "Crank" in instructions
 
-    # label rules
-    assert "directly observed tool result" in instructions
-    assert "anchor_entity must be a flat JSON object" in instructions
+    # label rules — key-value format with WHY
+    assert "Exact grounding" in instructions
+    assert "WHY" in instructions
+    assert "entity must be a flat JSON object" in instructions
     assert "<entity>" in instructions
 
     # difficulty guidance removed from system prompt (delivered via feedback)
@@ -120,7 +121,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "constraint_density:" not in instructions
 
     # prohibitions
-    assert "Do not submit single-call labels" in instructions
+    assert "No single-call labels" in instructions
     assert "Accepted or Budget exhausted" in instructions
 
     # no DB-specific examples

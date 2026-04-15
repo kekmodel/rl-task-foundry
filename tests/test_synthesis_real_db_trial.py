@@ -19,7 +19,6 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisGenerationOutcome,
 )
 from rl_task_foundry.synthesis.task_registry import (
-    DifficultyBand,
     TaskRegistryCommitResult,
     TaskRegistryCommitStatus,
 )
@@ -129,7 +128,7 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
             status=TaskRegistryCommitStatus.COMMITTED,
             task_id=accepted_draft.task_bundle.task_id,
             exact_signature="sha256:trial",
-            difficulty_band=DifficultyBand.UNSET,
+
             filesystem_path=tmp_path / "tasks" / accepted_draft.task_bundle.task_id,
         )
     )
@@ -190,7 +189,7 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
                 status=TaskRegistryCommitStatus.COMMITTED,
                 task_id="unused",
                 exact_signature="sha256:unused",
-                difficulty_band=DifficultyBand.UNSET,
+    
                 filesystem_path=tmp_path / "unused",
             )
         ),

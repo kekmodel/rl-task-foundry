@@ -26,10 +26,7 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
     AtomicToolGenerator,
 )
-from rl_task_foundry.synthesis.canonicalize import (
-    canonical_json,
-    canonicalize_output,
-)
+from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     RolloutConstraintsContract,
     RuntimeValue,
@@ -100,7 +97,6 @@ RUNTIME_OWNED_TASK_BUNDLE_FIELDS = frozenset(
         "domain",
         "topic",
         "atomic_tool_set_ref",
-        "difficulty_vector",
         "created_at",
         "generator_version",
         "tool_signature",
@@ -916,15 +912,14 @@ class SynthesisAgentRuntime:
             topic=selected_topic,
             output_schema=output_schema,
             constraint_summary=[],
-            difficulty_vector=submission.difficulty_vector,
-            instance_parameters=cast(dict[str, RuntimeValue], submission.anchor_entity),
+            instance_parameters=cast(dict[str, RuntimeValue], submission.parsed_entity),
         )
-        canonical_answer, canonical_answer_json, label_signature, rendered_user_prompt = (
-            self._materialize_task_artifacts(
-                task=task,
-                canonical_answer_input=canonical_input,
-                anchor_entity=submission.anchor_entity,
-            )
+        canonical_answer_json = canonical_json(canonical_input, default=str)
+        label_signature = self._signature_for_text(canonical_answer_json)
+        rendered_user_prompt = build_rendered_user_prompt(
+            task,
+            anchor_entity=submission.parsed_entity,
+            canonical_answer=canonical_input,
         )
         materialized_at = datetime.now(timezone.utc)
         task_bundle = self._materialize_task_bundle(
@@ -934,7 +929,6 @@ class SynthesisAgentRuntime:
             created_at=materialized_at,
             task=task,
         )
-        del canonical_answer
         return SynthesisTaskDraft(
             created_at=materialized_at,
             db_id=db_id,
@@ -944,7 +938,7 @@ class SynthesisAgentRuntime:
             task_bundle=task_bundle,
             atomic_tool_bundle=atomic_tool_bundle,
             rendered_user_prompt=rendered_user_prompt,
-            anchor_entity=dict(submission.anchor_entity),
+            anchor_entity=dict(submission.parsed_entity),
             canonical_answer_json=canonical_answer_json,
             label_signature=label_signature,
             generation_attempts=[],
@@ -1081,7 +1075,6 @@ class SynthesisAgentRuntime:
                 "domain": self.config.domain.name,
                 "topic": requested_topic,
                 "atomic_tool_set_ref": f"db://{db_id}",
-                "difficulty_vector": task.difficulty_vector,
                 "created_at": created_at,
                 "generator_version": CURRENT_SYNTHESIS_GENERATOR_VERSION,
                 "tool_signature": tool_signature,
@@ -1101,26 +1094,6 @@ class SynthesisAgentRuntime:
             ),
             max_tool_rows=self.config.atomic_tools.bounded_result_limit,
         )
-
-    def _materialize_task_artifacts(
-        self,
-        *,
-        task: TaskContract,
-        canonical_answer_input: object,
-        anchor_entity: dict[str, object],
-    ) -> tuple[object, str, str, str]:
-        canonical_answer = canonicalize_output(
-            task.output_schema,
-            canonical_answer_input,
-        )
-        canonical_answer_json = canonical_json(canonical_answer)
-        label_signature = self._signature_for_text(canonical_answer_json)
-        rendered_user_prompt = build_rendered_user_prompt(
-            task,
-            anchor_entity=anchor_entity,
-            canonical_answer=canonical_answer,
-        )
-        return canonical_answer, canonical_answer_json, label_signature, rendered_user_prompt
 
     async def _bind_db_id(self, db_id: str) -> None:
         async with self._bind_lock:

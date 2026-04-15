@@ -7,13 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from rl_task_foundry.config.models import TaskRegistryConfig
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
-    DifficultyVectorContract,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
@@ -22,17 +20,14 @@ from rl_task_foundry.synthesis.contracts import (
     TaskBundleStatus,
     TaskContract,
     TaskQualityMetrics,
-    build_difficulty_vector,
 )
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
 from rl_task_foundry.synthesis.task_registry import (
-    DifficultyBand,
     TaskRegistryCommitStatus,
     TaskRegistryDuplicateReason,
     TaskRegistryWriter,
     _SemanticScopeIndex,
-    bucketize_difficulty_vector,
     build_semantic_dedup_text,
 )
 
@@ -44,7 +39,6 @@ def _sample_draft(
     topic: str = "assignment",
     question: str = "내 배정 계획을 알려 주세요.",
     created_at: datetime | None = None,
-    difficulty_vector: DifficultyVectorContract | None = None,
     tool_signature: str = "sha256:tool",
     task_signature: str = "sha256:task",
     canonical_answer: dict[str, object] | None = None,
@@ -74,8 +68,6 @@ def _sample_draft(
                 summary="같은 고객을 중복 배정하지 않는다.",
             )
         ],
-        difficulty_vector=difficulty_vector
-        or build_difficulty_vector(solution_space=2.0, constraint_density=2.0),
         instance_parameters={"customer_id": 1},
     )
     task_bundle = TaskBundleContract(
@@ -84,7 +76,6 @@ def _sample_draft(
         domain="service_operations",
         topic=topic,
         atomic_tool_set_ref=f"db://{db_id}",
-        difficulty_vector=task.difficulty_vector,
         created_at=created_at,
         generator_version="test-version",
         tool_signature=tool_signature,
@@ -121,38 +112,6 @@ def _sample_draft(
         label_signature=label_signature,
         generation_attempts=[],
         provider_status={},
-    )
-
-
-def test_bucketize_difficulty_vector() -> None:
-    registry_config = TaskRegistryConfig()
-    assert (
-        bucketize_difficulty_vector(
-            build_difficulty_vector(),
-            registry_config=registry_config,
-        )
-        == DifficultyBand.UNSET
-    )
-    assert (
-        bucketize_difficulty_vector(
-            build_difficulty_vector(solution_space=2.0),
-            registry_config=registry_config,
-        )
-        == DifficultyBand.LOW
-    )
-    assert (
-        bucketize_difficulty_vector(
-            build_difficulty_vector(solution_space=4.0),
-            registry_config=registry_config,
-        )
-        == DifficultyBand.MEDIUM
-    )
-    assert (
-        bucketize_difficulty_vector(
-            build_difficulty_vector(solution_space=9.0),
-            registry_config=registry_config,
-        )
-        == DifficultyBand.HIGH
     )
 
 

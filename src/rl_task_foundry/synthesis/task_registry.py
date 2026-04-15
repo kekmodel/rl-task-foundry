@@ -21,14 +21,11 @@ from datasketch import MinHash, MinHashLSH
 from rl_task_foundry.config.models import AppConfig, TaskRegistryConfig
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.contracts import (
-    DifficultyVectorContract,
     OutputFieldContract,
     OutputFieldType,
     TaskBundleContract,
     TaskBundleStatus,
     TopicName,
-    difficulty_vector_json,
-    flatten_difficulty_vector,
     normalize_topic,
 )
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
@@ -42,7 +39,6 @@ SCHEMA_STATEMENTS = (
         db_id TEXT NOT NULL,
         domain TEXT NOT NULL,
         topic TEXT NOT NULL,
-        difficulty_band TEXT NOT NULL,
         created_at TEXT NOT NULL,
         status TEXT NOT NULL,
         generator_version TEXT NOT NULL,
@@ -82,19 +78,11 @@ class TaskRegistryDuplicateReason(StrEnum):
     MINHASH = "minhash"
 
 
-class DifficultyBand(StrEnum):
-    UNSET = "unset"
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
 @dataclass(slots=True)
 class TaskRegistryCommitResult:
     status: TaskRegistryCommitStatus
     task_id: str
     exact_signature: str
-    difficulty_band: DifficultyBand
     filesystem_path: Path
     duplicate_of_task_id: str | None = None
     duplicate_reason: TaskRegistryDuplicateReason | None = None
@@ -107,7 +95,6 @@ class TaskRegistryRecord:
     db_id: str
     domain: str
     topic: str
-    difficulty_band: DifficultyBand
     created_at: datetime
     status: TaskBundleStatus
     generator_version: str
@@ -123,20 +110,19 @@ class TaskRegistryRecord:
         domain: str,
         topic: str | None = None,
         category: object | None = None,
-        difficulty_band: DifficultyBand,
         created_at: datetime,
         status: TaskBundleStatus,
         generator_version: str,
         exact_signature: str,
         filesystem_path: Path,
         question: str | None = None,
+        **_kwargs: object,
     ) -> None:
         resolved_topic = topic if topic is not None else category
         self.task_id = task_id
         self.db_id = db_id
         self.domain = domain
         self.topic = normalize_topic(resolved_topic)
-        self.difficulty_band = difficulty_band
         self.created_at = created_at
         self.status = status
         self.generator_version = generator_version
@@ -153,7 +139,6 @@ class TaskRegistryRecord:
 class TaskRegistryCoverageEntry:
     db_id: str
     topic: str
-    difficulty_band: DifficultyBand
     count: int
 
     def __init__(
@@ -162,13 +147,12 @@ class TaskRegistryCoverageEntry:
         db_id: str,
         topic: str | None = None,
         category: object | None = None,
-        difficulty_band: DifficultyBand,
         count: int,
+        **_kwargs: object,
     ) -> None:
         resolved_topic = topic if topic is not None else category
         self.db_id = db_id
         self.topic = normalize_topic(resolved_topic)
-        self.difficulty_band = difficulty_band
         self.count = count
 
     @property
@@ -182,7 +166,6 @@ class SemanticDedupCandidate:
     db_id: str
     domain: str
     topic: str
-    difficulty_band: DifficultyBand
     question: str | None
     constraint_summaries: tuple[str, ...]
     semantic_text: str
@@ -196,18 +179,17 @@ class SemanticDedupCandidate:
         domain: str,
         topic: str | None = None,
         category: object | None = None,
-        difficulty_band: DifficultyBand,
         question: str | None,
         constraint_summaries: tuple[str, ...],
         semantic_text: str,
         filesystem_path: Path,
+        **_kwargs: object,
     ) -> None:
         resolved_topic = topic if topic is not None else category
         self.task_id = task_id
         self.db_id = db_id
         self.domain = domain
         self.topic = normalize_topic(resolved_topic)
-        self.difficulty_band = difficulty_band
         self.question = question
         self.constraint_summaries = constraint_summaries
         self.semantic_text = semantic_text
@@ -282,10 +264,6 @@ class TaskRegistryWriter:
     ) -> TaskRegistryCommitResult:
         task_bundle = draft.task_bundle
         exact_signature = self._exact_signature(draft)
-        difficulty_band = bucketize_difficulty_vector(
-            task_bundle.difficulty_vector,
-            registry_config=self.registry_config,
-        )
         semantic_text = build_semantic_dedup_text(task_bundle)
         semantic_signature = _encode_minhash_signature(
             _build_minhash(
@@ -306,7 +284,6 @@ class TaskRegistryWriter:
             temp_dir,
             draft,
             exact_signature,
-            difficulty_band,
             semantic_text,
         )
         assert self.atomic_tool_materializer is not None
@@ -317,7 +294,7 @@ class TaskRegistryWriter:
                 conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute(
                     """
-                    SELECT task_id, difficulty_band, filesystem_path
+                    SELECT task_id, filesystem_path
                     FROM tasks
                     WHERE exact_signature = ?
                     """,
@@ -330,7 +307,6 @@ class TaskRegistryWriter:
                         status=TaskRegistryCommitStatus.DUPLICATE,
                         task_id=row["task_id"],
                         exact_signature=exact_signature,
-                        difficulty_band=DifficultyBand(row["difficulty_band"]),
                         filesystem_path=Path(row["filesystem_path"]),
                         duplicate_of_task_id=row["task_id"],
                         duplicate_reason=TaskRegistryDuplicateReason.EXACT,
@@ -350,7 +326,6 @@ class TaskRegistryWriter:
                             status=TaskRegistryCommitStatus.DUPLICATE,
                             task_id=str(semantic_duplicate["task_id"]),
                             exact_signature=exact_signature,
-                            difficulty_band=DifficultyBand(str(semantic_duplicate["difficulty_band"])),
                             filesystem_path=Path(str(semantic_duplicate["filesystem_path"])),
                             duplicate_of_task_id=str(semantic_duplicate["task_id"]),
                             duplicate_reason=TaskRegistryDuplicateReason.MINHASH,
@@ -365,7 +340,6 @@ class TaskRegistryWriter:
                         db_id,
                         domain,
                         topic,
-                        difficulty_band,
                         created_at,
                         status,
                         generator_version,
@@ -378,14 +352,13 @@ class TaskRegistryWriter:
                         filesystem_path,
                         payload_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_bundle.task_id,
                         task_bundle.db_id,
                         task_bundle.domain,
                         task_bundle.topic,
-                        difficulty_band.value,
                         task_bundle.created_at.isoformat(),
                         task_bundle.status.value,
                         task_bundle.generator_version,
@@ -400,7 +373,6 @@ class TaskRegistryWriter:
                             self._build_registry_payload(
                                 draft=draft,
                                 exact_signature=exact_signature,
-                                difficulty_band=difficulty_band,
                                 semantic_text=semantic_text,
                             ),
                             ensure_ascii=False,
@@ -410,7 +382,7 @@ class TaskRegistryWriter:
                 )
                 self._increment_coverage_counter(
                     conn,
-                    f"db={task_bundle.db_id}|topic={task_bundle.topic}|difficulty_band={difficulty_band.value}",
+                    f"db={task_bundle.db_id}|topic={task_bundle.topic}",
                 )
                 conn.commit()
         except Exception:
@@ -435,7 +407,6 @@ class TaskRegistryWriter:
                 db_id=task_bundle.db_id,
                 topic=task_bundle.topic,
                 task_id=task_bundle.task_id,
-                difficulty_band=difficulty_band,
                 filesystem_path=final_dir,
                 semantic_signature=semantic_signature,
             )
@@ -443,7 +414,6 @@ class TaskRegistryWriter:
             status=TaskRegistryCommitStatus.COMMITTED,
             task_id=task_bundle.task_id,
             exact_signature=exact_signature,
-            difficulty_band=difficulty_band,
             filesystem_path=final_dir,
         )
 
@@ -457,10 +427,7 @@ class TaskRegistryWriter:
 
     def coverage_snapshot(self) -> dict[str, int]:
         return {
-            (
-                f"db={entry.db_id}|topic={entry.topic}"
-                f"|difficulty_band={entry.difficulty_band.value}"
-            ): entry.count
+            f"db={entry.db_id}|topic={entry.topic}": entry.count
             for entry in self.coverage_entries()
         }
 
@@ -473,13 +440,13 @@ class TaskRegistryWriter:
         where_sql, params = self._build_filters(db_id=db_id, topic=topic)
         query = (
             """
-            SELECT db_id, topic, difficulty_band, COUNT(*) AS count
+            SELECT db_id, topic, COUNT(*) AS count
             FROM tasks
             """
             + where_sql
             + """
-            GROUP BY db_id, topic, difficulty_band
-            ORDER BY db_id, topic, difficulty_band
+            GROUP BY db_id, topic
+            ORDER BY db_id, topic
             """
         )
         with self._connect() as conn:
@@ -488,7 +455,6 @@ class TaskRegistryWriter:
             TaskRegistryCoverageEntry(
                 db_id=str(row["db_id"]),
                 topic=normalize_topic(str(row["topic"])),
-                difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                 count=int(row["count"]),
             )
             for row in rows
@@ -512,7 +478,6 @@ class TaskRegistryWriter:
                 db_id,
                 domain,
                 topic,
-                difficulty_band,
                 created_at,
                 status,
                 generator_version,
@@ -538,7 +503,6 @@ class TaskRegistryWriter:
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
                     topic=normalize_topic(str(row["topic"])),
-                    difficulty_band=DifficultyBand(str(row["difficulty_band"])),
                     created_at=datetime.fromisoformat(str(row["created_at"])),
                     status=TaskBundleStatus(str(row["status"])),
                     generator_version=str(row["generator_version"]),
@@ -567,7 +531,6 @@ class TaskRegistryWriter:
                 db_id,
                 domain,
                 topic,
-                difficulty_band,
                 filesystem_path,
                 payload_json
             FROM tasks
@@ -597,8 +560,7 @@ class TaskRegistryWriter:
                     task_id=str(row["task_id"]),
                     db_id=str(row["db_id"]),
                     domain=str(row["domain"]),
-                    topic=normalize_topic(str(row["category"])),
-                    difficulty_band=DifficultyBand(str(row["difficulty_band"])),
+                    topic=normalize_topic(str(row["topic"])),
                     question=question,
                     constraint_summaries=constraint_summaries,
                     semantic_text=semantic_text,
@@ -659,7 +621,6 @@ class TaskRegistryWriter:
             if best_match is None or similarity > float(str(best_match["semantic_similarity"])):
                 best_match = {
                     "task_id": str(task_id),
-                    "difficulty_band": str(metadata["difficulty_band"]),
                     "filesystem_path": str(metadata["filesystem_path"]),
                     "semantic_similarity": similarity,
                 }
@@ -678,13 +639,11 @@ class TaskRegistryWriter:
         directory: Path,
         draft: SynthesisTaskDraft,
         exact_signature: str,
-        difficulty_band: DifficultyBand,
         semantic_text: str,
     ) -> None:
         directory.mkdir(parents=True, exist_ok=False)
         task_bundle_payload = draft.task_bundle.model_dump(mode="json")
         task_bundle_payload["exact_signature"] = exact_signature
-        task_bundle_payload["difficulty_band"] = difficulty_band.value
         (directory / "task.yaml").write_text(
             yaml.safe_dump(task_bundle_payload, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
@@ -725,7 +684,6 @@ class TaskRegistryWriter:
             json.dumps(
                 {
                     "exact_signature": exact_signature,
-                    "difficulty_band": difficulty_band.value,
                     "semantic_dedup_text": semantic_text,
                     "semantic_dedup_text_version": SEMANTIC_DEDUP_TEXT_VERSION,
                     "generation_attempts": [
@@ -761,7 +719,6 @@ class TaskRegistryWriter:
         *,
         draft: SynthesisTaskDraft,
         exact_signature: str,
-        difficulty_band: DifficultyBand,
         semantic_text: str,
     ) -> dict[str, Any]:
         task_bundle = draft.task_bundle
@@ -770,13 +727,11 @@ class TaskRegistryWriter:
             "db_id": task_bundle.db_id,
             "domain": task_bundle.domain,
             "topic": task_bundle.topic,
-            "difficulty_band": difficulty_band.value,
             "created_at": task_bundle.created_at.isoformat(),
             "status": task_bundle.status.value,
             "generator_version": task_bundle.generator_version,
             "exact_signature": exact_signature,
             "question": task_bundle.task.question,
-            "difficulty_vector": difficulty_vector_json(task_bundle.difficulty_vector),
             "constraint_summary": [
                 item.model_dump(mode="json") for item in task_bundle.task.constraint_summary
             ],
@@ -806,7 +761,6 @@ class TaskRegistryWriter:
             """
             SELECT
                 task_id,
-                difficulty_band,
                 filesystem_path,
                 semantic_dedup_text,
                 semantic_dedup_text_version,
@@ -828,7 +782,6 @@ class TaskRegistryWriter:
                 continue
             lsh.insert(task_id, minhash, check_duplication=False)
             metadata_by_task_id[task_id] = {
-                "difficulty_band": str(row["difficulty_band"]),
                 "filesystem_path": str(row["filesystem_path"]),
                 "semantic_signature": signature,
             }
@@ -842,7 +795,6 @@ class TaskRegistryWriter:
         db_id: str,
         topic: str,
         task_id: str,
-        difficulty_band: DifficultyBand,
         filesystem_path: Path,
         semantic_signature: str,
     ) -> None:
@@ -858,7 +810,6 @@ class TaskRegistryWriter:
             return
         scope.lsh.insert(task_id, minhash, check_duplication=False)
         scope.metadata_by_task_id[task_id] = {
-            "difficulty_band": difficulty_band.value,
             "filesystem_path": str(filesystem_path),
             "semantic_signature": semantic_signature,
         }
@@ -987,7 +938,6 @@ class TaskRegistryWriter:
                 db_id TEXT NOT NULL,
                 domain TEXT NOT NULL,
                 topic TEXT NOT NULL,
-                difficulty_band TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 status TEXT NOT NULL,
                 generator_version TEXT NOT NULL,
@@ -1010,7 +960,6 @@ class TaskRegistryWriter:
                 db_id,
                 domain,
                 topic,
-                difficulty_band,
                 created_at,
                 status,
                 generator_version,
@@ -1028,7 +977,6 @@ class TaskRegistryWriter:
                 db_id,
                 domain,
                 category,
-                difficulty_band,
                 created_at,
                 status,
                 generator_version,
@@ -1085,38 +1033,11 @@ class TaskRegistryWriter:
         self._connection = None
 
 
-def bucketize_difficulty_vector(
-    difficulty_vector: object,
-    *,
-    registry_config: TaskRegistryConfig,
-) -> DifficultyBand:
-    if difficulty_vector is None:
-        return DifficultyBand.UNSET
-    if isinstance(difficulty_vector, DifficultyVectorContract):
-        total = sum(float(value) for value in flatten_difficulty_vector(difficulty_vector).values())
-    elif isinstance(difficulty_vector, dict):
-        total = sum(float(value) for value in difficulty_vector.values())
-    else:
-        return DifficultyBand.UNSET
-    if total == 0.0:
-        return DifficultyBand.UNSET
-    if total <= registry_config.difficulty_band_low_max_total:
-        return DifficultyBand.LOW
-    if total <= registry_config.difficulty_band_medium_max_total:
-        return DifficultyBand.MEDIUM
-    return DifficultyBand.HIGH
-
-
 def build_semantic_dedup_text(task_bundle: TaskBundleContract) -> str:
     task = task_bundle.task
     output_shape = ", ".join(_flatten_output_schema(task.output_schema.root))
     constraints = " | ".join(
         f"{item.kind.value}:{item.key}:{item.summary}" for item in task.constraint_summary
-    )
-    difficulty = ", ".join(
-        f"{metric.value}={float(value):g}"
-        for metric, value in flatten_difficulty_vector(task.difficulty_vector).items()
-        if value > 0.0
     )
     lines = [
         f"db_id:{task_bundle.db_id}",
@@ -1125,7 +1046,6 @@ def build_semantic_dedup_text(task_bundle: TaskBundleContract) -> str:
         f"question:{task.question}",
         f"output_schema:{output_shape or '<empty>'}",
         f"constraints:{constraints or '<none>'}",
-        f"difficulty:{difficulty or '<unset>'}",
     ]
     return "\n".join(lines)
 

@@ -32,13 +32,10 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.synthesis.runtime.payload_preview_max_list_items == 3
     assert config.synthesis.runtime.payload_preview_max_dict_items == 6
     assert config.synthesis.coverage_planner.target_count_per_band == 3
-    assert config.synthesis.coverage_planner.include_unset_band is False
     assert config.calibration.solver_batch_size == 3
     assert config.calibration.max_solver_runs == 30
     assert config.provider_resilience.minimum_request_count == 2
     assert config.task_registry.minhash_num_perm == 128
-    assert config.task_registry.difficulty_band_low_max_total == 3.0
-    assert config.task_registry.difficulty_band_medium_max_total == 8.0
     assert config.task_registry.default_query_limit == 20
     assert config.task_registry.semantic_shingle_size == 3
     assert config.budget.min_accept_rate_attempts == 10

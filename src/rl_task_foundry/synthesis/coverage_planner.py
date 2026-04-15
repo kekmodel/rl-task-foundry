@@ -9,7 +9,6 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.synthesis.contracts import TopicName
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.task_registry import (
-    DifficultyBand,
     TaskRegistryCoverageEntry,
 )
 
@@ -18,7 +17,6 @@ from rl_task_foundry.synthesis.task_registry import (
 class SynthesisCoverageCellPlan:
     db_id: str
     topic: str
-    difficulty_band: DifficultyBand
     current_count: int
     target_count: int
     deficit: int
@@ -40,8 +38,6 @@ class SynthesisCoveragePairPlan:
     total_current_count: int
     total_target_count: int
     total_deficit: int
-    missing_bands: tuple[DifficultyBand, ...]
-    max_band_deficit: int
 
     @property
     def category(self) -> str:
@@ -50,8 +46,7 @@ class SynthesisCoveragePairPlan:
 
 @dataclass(slots=True)
 class SynthesisCoveragePlan:
-    target_count_per_band: int
-    tracked_bands: tuple[DifficultyBand, ...]
+    target_count_per_pair: int
     pair_plans: list[SynthesisCoveragePairPlan]
     cell_plans: list[SynthesisCoverageCellPlan]
 
@@ -84,27 +79,14 @@ class SynthesisCoveragePlan:
 class SynthesisCoveragePlanner:
     """Compute per-db/topic coverage deficits against the registry inventory."""
 
-    target_count_per_band: int = 3
-    include_unset_band: bool = False
+    target_count_per_pair: int = 3
 
     @classmethod
     def for_config(cls, config: AppConfig) -> "SynthesisCoveragePlanner":
         planner_config = config.synthesis.coverage_planner
         return cls(
-            target_count_per_band=planner_config.target_count_per_band,
-            include_unset_band=planner_config.include_unset_band,
+            target_count_per_pair=planner_config.target_count_per_band,
         )
-
-    @property
-    def tracked_bands(self) -> tuple[DifficultyBand, ...]:
-        bands = (
-            DifficultyBand.LOW,
-            DifficultyBand.MEDIUM,
-            DifficultyBand.HIGH,
-        )
-        if self.include_unset_band:
-            return bands + (DifficultyBand.UNSET,)
-        return bands
 
     def build_plan(
         self,
@@ -112,39 +94,31 @@ class SynthesisCoveragePlanner:
         coverage_entries: Sequence[TaskRegistryCoverageEntry],
     ) -> SynthesisCoveragePlan:
         counts = {
-            (entry.db_id, entry.category, entry.difficulty_band): entry.count
+            (entry.db_id, entry.category): entry.count
             for entry in coverage_entries
         }
         pair_plans: list[SynthesisCoveragePairPlan] = []
         cell_plans: list[SynthesisCoverageCellPlan] = []
         for entry in registry:
             for topic in entry.topics:
-                pair_cells: list[SynthesisCoverageCellPlan] = []
-                for difficulty_band in self.tracked_bands:
-                    current_count = counts.get((entry.db_id, TopicName(topic), difficulty_band), 0)
-                    deficit = max(0, self.target_count_per_band - current_count)
-                    cell = SynthesisCoverageCellPlan(
-                        db_id=entry.db_id,
-                        topic=topic,
-                        difficulty_band=difficulty_band,
-                        current_count=current_count,
-                        target_count=self.target_count_per_band,
-                        deficit=deficit,
-                    )
-                    pair_cells.append(cell)
-                    cell_plans.append(cell)
+                current_count = counts.get((entry.db_id, TopicName(topic)), 0)
+                deficit = max(0, self.target_count_per_pair - current_count)
+                cell = SynthesisCoverageCellPlan(
+                    db_id=entry.db_id,
+                    topic=topic,
+                    current_count=current_count,
+                    target_count=self.target_count_per_pair,
+                    deficit=deficit,
+                )
+                cell_plans.append(cell)
                 pair_plans.append(
                     SynthesisCoveragePairPlan(
                         db_id=entry.db_id,
                         topic=topic,
-                        cells=tuple(pair_cells),
-                        total_current_count=sum(cell.current_count for cell in pair_cells),
-                        total_target_count=sum(cell.target_count for cell in pair_cells),
-                        total_deficit=sum(cell.deficit for cell in pair_cells),
-                        missing_bands=tuple(
-                            cell.difficulty_band for cell in pair_cells if cell.deficit > 0
-                        ),
-                        max_band_deficit=max((cell.deficit for cell in pair_cells), default=0),
+                        cells=(cell,),
+                        total_current_count=cell.current_count,
+                        total_target_count=cell.target_count,
+                        total_deficit=cell.deficit,
                     )
                 )
         pair_plans.sort(
@@ -159,22 +133,10 @@ class SynthesisCoveragePlanner:
                 -cell.deficit,
                 cell.db_id,
                 cell.topic,
-                _difficulty_band_order(cell.difficulty_band),
             )
         )
         return SynthesisCoveragePlan(
-            target_count_per_band=self.target_count_per_band,
-            tracked_bands=self.tracked_bands,
+            target_count_per_pair=self.target_count_per_pair,
             pair_plans=pair_plans,
             cell_plans=cell_plans,
         )
-
-
-def _difficulty_band_order(difficulty_band: DifficultyBand) -> int:
-    order = {
-        DifficultyBand.LOW: 0,
-        DifficultyBand.MEDIUM: 1,
-        DifficultyBand.HIGH: 2,
-        DifficultyBand.UNSET: 3,
-    }
-    return order[difficulty_band]

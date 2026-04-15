@@ -57,12 +57,6 @@ def topic_phrase(value: object, *, lowercase: bool = False) -> str:
     return normalize_words(normalize_topic(value), lowercase=lowercase)
 
 
-class DifficultyAxis(StrEnum):
-    SEARCH_COST = "search_cost"
-    SOLUTION_SPACE = "solution_space"
-    CONSTRAINT_DENSITY = "constraint_density"
-
-
 class TaskBundleStatus(StrEnum):
     DRAFT = "draft"
     ACCEPTED = "accepted"
@@ -91,57 +85,6 @@ class OutputFieldType(StrEnum):
     ENUM = "enum"
     OBJECT = "object"
     LIST = "list"
-
-
-class DifficultyVectorContract(StrictModel):
-    search_cost: float = Field(default=0.0, ge=0.0)
-    solution_space: float = Field(default=0.0, ge=0.0)
-    constraint_density: float = Field(default=0.0, ge=0.0)
-
-    def flatten(self) -> dict[DifficultyAxis, float]:
-        return {
-            DifficultyAxis.SEARCH_COST: float(self.search_cost),
-            DifficultyAxis.SOLUTION_SPACE: float(self.solution_space),
-            DifficultyAxis.CONSTRAINT_DENSITY: float(self.constraint_density),
-        }
-
-    def total_score(self) -> float:
-        return sum(self.flatten().values())
-
-    def nonzero_axes(self) -> dict[DifficultyAxis, float]:
-        return {axis: value for axis, value in self.flatten().items() if value > 0.0}
-
-
-DIFFICULTY_CRANK_ORDER: tuple[DifficultyAxis, ...] = (
-    DifficultyAxis.SEARCH_COST,
-    DifficultyAxis.SOLUTION_SPACE,
-    DifficultyAxis.CONSTRAINT_DENSITY,
-)
-
-
-def flatten_difficulty_vector(
-    difficulty_vector: DifficultyVectorContract,
-) -> dict[DifficultyAxis, float]:
-    return difficulty_vector.flatten()
-
-
-def difficulty_vector_json(
-    difficulty_vector: DifficultyVectorContract,
-) -> dict[str, object]:
-    return difficulty_vector.model_dump(mode="json")
-
-
-def build_difficulty_vector(
-    *,
-    search_cost: float = 0.0,
-    solution_space: float = 0.0,
-    constraint_density: float = 0.0,
-) -> DifficultyVectorContract:
-    return DifficultyVectorContract(
-        search_cost=search_cost,
-        solution_space=solution_space,
-        constraint_density=constraint_density,
-    )
 
 
 ScalarRuntimeValue = str | int | float | bool | date | datetime | None
@@ -249,7 +192,6 @@ class TaskContract(StrictModel):
     topic: str
     output_schema: OutputSchemaContract
     constraint_summary: list[ConstraintSummaryItem] = Field(default_factory=list)
-    difficulty_vector: DifficultyVectorContract = Field(default_factory=DifficultyVectorContract)
     instance_parameters: dict[str, RuntimeValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -292,7 +234,6 @@ class TaskBundleContract(StrictModel):
     domain: str
     topic: str
     atomic_tool_set_ref: str
-    difficulty_vector: DifficultyVectorContract
     created_at: datetime
     generator_version: str
     tool_signature: str
@@ -307,8 +248,6 @@ class TaskBundleContract(StrictModel):
         self.topic = normalize_topic(self.topic)
         if self.task.topic != self.topic:
             raise ValueError("task bundle topic must match task topic")
-        if self.task.difficulty_vector != self.difficulty_vector:
-            raise ValueError("task bundle difficulty_vector must match task difficulty_vector")
         return self
 
     @property

@@ -95,7 +95,6 @@ class SynthesisRuntimeConfig(StrictModel):
 
 class SynthesisCoveragePlannerConfig(StrictModel):
     target_count_per_band: int = Field(default=3, ge=1)
-    include_unset_band: bool = False
 
 
 class SynthesisConfig(StrictModel):
@@ -136,8 +135,6 @@ class DedupConfig(StrictModel):
 
 class TaskRegistryConfig(StrictModel):
     minhash_num_perm: int = Field(default=128, ge=1)
-    difficulty_band_low_max_total: float = Field(default=3.0, ge=0.0)
-    difficulty_band_medium_max_total: float = Field(default=8.0, ge=0.0)
     default_query_limit: int = Field(default=20, ge=1)
     semantic_shingle_size: int = Field(default=3, ge=1)
 

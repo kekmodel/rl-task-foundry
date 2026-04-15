@@ -6,10 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from rl_task_foundry.synthesis.contracts import (
-    DIFFICULTY_CRANK_ORDER,
     ConstraintKind,
     ConstraintSummaryItem,
-    DifficultyAxis,
     OutputFieldContract,
     OutputFieldType,
     OutputSchemaContract,
@@ -18,7 +16,6 @@ from rl_task_foundry.synthesis.contracts import (
     TaskBundleStatus,
     TaskContract,
     TaskQualityMetrics,
-    build_difficulty_vector,
 )
 
 
@@ -62,11 +59,6 @@ def test_output_schema_rejects_invalid_scalar_children() -> None:
 
 def test_task_bundle_contract_round_trips_without_generated_artifacts() -> None:
     output_schema = _build_output_schema()
-    difficulty_vector = build_difficulty_vector(
-        search_cost=2.0,
-        solution_space=3.0,
-        constraint_density=4.0,
-    )
     task = TaskContract(
         question="3일 일정표를 만들어 주세요.",
         topic="itinerary",
@@ -78,7 +70,6 @@ def test_task_bundle_contract_round_trips_without_generated_artifacts() -> None:
                 summary="도시는 전체 일정에서 중복되면 안 된다.",
             )
         ],
-        difficulty_vector=difficulty_vector,
         instance_parameters={"budget_bucket": "mid"},
     )
     contract = TaskBundleContract(
@@ -87,7 +78,6 @@ def test_task_bundle_contract_round_trips_without_generated_artifacts() -> None:
         domain="travel",
         topic="itinerary",
         atomic_tool_set_ref="db://proof_trip_fixture",
-        difficulty_vector=difficulty_vector,
         created_at=datetime(2026, 4, 11, 13, 40, 0, tzinfo=timezone.utc),
         generator_version="rewrite-v1",
         tool_signature="toolhash",
@@ -116,7 +106,6 @@ def test_task_bundle_contract_rejects_task_topic_mismatch() -> None:
         question="일정표를 만들어 주세요.",
         topic="assignment",
         output_schema=output_schema,
-        difficulty_vector=build_difficulty_vector(solution_space=3.0),
     )
 
     with pytest.raises(ValidationError):
@@ -126,7 +115,6 @@ def test_task_bundle_contract_rejects_task_topic_mismatch() -> None:
             domain="travel",
             topic="itinerary",
             atomic_tool_set_ref="db://proof_trip_fixture",
-            difficulty_vector=build_difficulty_vector(solution_space=3.0),
             created_at=datetime(2026, 4, 11, 13, 40, 0, tzinfo=timezone.utc),
             generator_version="rewrite-v1",
             tool_signature="toolhash",
@@ -140,6 +128,3 @@ def test_task_bundle_contract_rejects_task_topic_mismatch() -> None:
         )
 
 
-def test_difficulty_crank_order_covers_every_axis_once() -> None:
-    assert set(DIFFICULTY_CRANK_ORDER) == set(DifficultyAxis)
-    assert len(DIFFICULTY_CRANK_ORDER) == len(set(DIFFICULTY_CRANK_ORDER))

@@ -32,7 +32,6 @@ from rl_task_foundry.synthesis.scheduler import (
     SynthesisSelectionStatus,
 )
 from rl_task_foundry.synthesis.task_registry import (
-    DifficultyBand,
     SemanticDedupCandidate,
     TaskRegistryCommitStatus,
     TaskRegistryCoverageEntry,
@@ -59,10 +58,7 @@ def test_cli_validate_config_command():
     ) in normalized
     assert "estimated_total_db_connections=40" in normalized
     assert "dedup=exact_enabled=True,near_dup_enabled=True,minhash_threshold=0.9" in normalized
-    assert (
-        "synthesis_coverage=target_count_per_band=3,include_unset_band=False,"
-        "tracked_bands=low|medium|high"
-    ) in normalized
+    assert "synthesis_coverage=target_count_per_pair=3" in normalized
 
 
 def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
@@ -273,7 +269,6 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
                     TaskRegistryCoverageEntry(
                         db_id="sakila",
                         category=CategoryTaxonomy.ASSIGNMENT,
-                        difficulty_band=DifficultyBand.MEDIUM,
                         count=2,
                     )
                 ],
@@ -283,7 +278,6 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
                         db_id="sakila",
                         domain="service_operations",
                         category=CategoryTaxonomy.ASSIGNMENT,
-                        difficulty_band=DifficultyBand.MEDIUM,
                         created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
                         status=TaskBundleStatus.DRAFT,
                         generator_version="milestone-test",
@@ -304,7 +298,6 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
                     db_id="sakila",
                     domain="service_operations",
                     category=CategoryTaxonomy.ASSIGNMENT,
-                    difficulty_band=DifficultyBand.MEDIUM,
                     question="내 배정을 해줘",
                     constraint_summaries=("같은 고객을 중복 배정하지 않는다.",),
                     semantic_text="question:내 배정을 해줘",
@@ -335,8 +328,8 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
     assert "task_count=2" in result.stdout
     assert "coverage_cells=1" in result.stdout
     assert "semantic_candidates=1" in result.stdout
-    assert "coverage=sakila|assignment|medium|2" in result.stdout
-    assert "task=task_assignment_deadbeef|sakila|assignment|medium|draft" in result.stdout
+    assert "coverage=sakila|assignment|2" in result.stdout
+    assert "task=task_assignment_deadbeef|sakila|assignment|draft" in result.stdout
 
 
 def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> None:
@@ -355,7 +348,6 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
                 TaskRegistryCoverageEntry(
                     db_id="sakila",
                     category=CategoryTaxonomy.ASSIGNMENT,
-                    difficulty_band=DifficultyBand.MEDIUM,
                     count=2,
                 )
             ]
@@ -372,14 +364,13 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
 
     assert result.exit_code == 0
     assert "synthesis coverage plan" in result.stdout
-    assert "tracked_bands=low|medium|high" in result.stdout
-    assert "target_count_per_band=3" in result.stdout
+    assert "target_count_per_pair=3" in result.stdout
     assert "total_pairs=2" in result.stdout
-    assert "deficit_cells=6" in result.stdout
+    assert "deficit_cells=2" in result.stdout
     assert "deficit_pairs=2" in result.stdout
-    assert "total_deficit=16" in result.stdout
-    assert "pair_gap=sakila|itinerary|deficit=9" in result.stdout
-    assert "cell_gap=sakila|assignment|medium|current=2|target=3|deficit=1" in result.stdout
+    assert "total_deficit=4" in result.stdout
+    assert "pair_gap=sakila|itinerary|deficit=3" in result.stdout
+    assert "cell_gap=sakila|assignment|current=2|target=3|deficit=1" in result.stdout
 
 
 def test_cli_export_bundle_writes_task_layout(monkeypatch, tmp_path: Path) -> None:

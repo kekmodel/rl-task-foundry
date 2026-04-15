@@ -76,7 +76,6 @@ def validate_config(
         "category_backoff_duration_s="
         f"{config.synthesis.runtime.category_backoff_duration_s}"
     )
-    coverage_planner = SynthesisCoveragePlanner.for_config(config)
     console.print(f"estimated_total_db_connections={config.estimated_total_db_connections}")
     console.print(
         "dedup="
@@ -86,12 +85,8 @@ def validate_config(
     )
     console.print(
         "synthesis_coverage="
-        "target_count_per_band="
-        f"{config.synthesis.coverage_planner.target_count_per_band},"
-        "include_unset_band="
-        f"{config.synthesis.coverage_planner.include_unset_band},"
-        "tracked_bands="
-        f"{'|'.join(band.value for band in coverage_planner.tracked_bands)}"
+        "target_count_per_pair="
+        f"{config.synthesis.coverage_planner.target_count_per_band}"
     )
     console.print(f"solvers={_solver_summary(config)}")
 
@@ -194,13 +189,13 @@ def show_task_registry(
     console.print(f"semantic_candidates={len(semantic_candidates)}")
     for entry in snapshot.coverage:
         console.print(
-            f"coverage={entry.db_id}|{entry.topic}|{entry.difficulty_band.value}|{entry.count}"
+            f"coverage={entry.db_id}|{entry.topic}|{entry.count}"
         )
     for record in snapshot.recent_tasks:
         console.print(
             "task="
             f"{record.task_id}|{record.db_id}|{record.topic}"
-            f"|{record.difficulty_band.value}|{record.status.value}"
+            f"|{record.status.value}"
         )
 
 
@@ -221,8 +216,7 @@ def plan_synthesis_coverage(
     plan = planner.build_plan(registry, task_registry.coverage_entries())
 
     console.print(f"[green]synthesis coverage plan[/green]: {registry_path}")
-    console.print(f"tracked_bands={'|'.join(band.value for band in plan.tracked_bands)}")
-    console.print(f"target_count_per_band={plan.target_count_per_band}")
+    console.print(f"target_count_per_pair={plan.target_count_per_pair}")
     console.print(f"total_pairs={plan.total_pairs}")
     console.print(f"total_cells={plan.total_cells}")
     console.print(f"satisfied_cells={plan.satisfied_cells}")
@@ -232,19 +226,17 @@ def plan_synthesis_coverage(
     for pair in plan.pair_plans[: max(0, limit)]:
         if pair.total_deficit == 0:
             continue
-        missing_bands = ",".join(band.value for band in pair.missing_bands) or "-"
         console.print(
             "pair_gap="
             f"{pair.db_id}|{pair.topic}|deficit={pair.total_deficit}"
             f"|current={pair.total_current_count}|target={pair.total_target_count}"
-            f"|missing_bands={missing_bands}"
         )
     for cell in plan.cell_plans[: max(0, limit)]:
         if cell.deficit == 0:
             continue
         console.print(
             "cell_gap="
-            f"{cell.db_id}|{cell.topic}|{cell.difficulty_band.value}"
+            f"{cell.db_id}|{cell.topic}"
             f"|current={cell.current_count}|target={cell.target_count}"
             f"|deficit={cell.deficit}"
         )

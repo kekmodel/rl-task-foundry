@@ -20,7 +20,6 @@ from rl_task_foundry.synthesis.contracts import (
     TaskBundleStatus,
     TaskContract,
     TaskQualityMetrics,
-    build_difficulty_vector,
 )
 
 
@@ -31,7 +30,6 @@ def _sample_episode() -> SolverEpisodeInput:
         domain="customer_support",
         topic="assignment",
         atomic_tool_set_ref="db://sakila",
-        difficulty_vector=build_difficulty_vector(),
         created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
         generator_version="test-version",
         tool_signature="sha256:tool",

@@ -40,7 +40,7 @@ def _infer_output_field(name: str, value: object) -> OutputFieldContract:
             ],
         )
     if isinstance(value, list):
-        sample = value[0] if value else ""
+        sample = _merge_list_samples(value)
         return OutputFieldContract(
             name=name,
             type=OutputFieldType.LIST,
@@ -60,6 +60,12 @@ def _infer_output_field(name: str, value: object) -> OutputFieldContract:
     return OutputFieldContract(name=name, type=OutputFieldType.STRING)
 
 
+def _merge_list_samples(items: list[object]) -> object:
+    if not items:
+        return ""
+    return items[0]
+
+
 def _infer_python_annotation(model_name: str, value: object) -> Any:
     if isinstance(value, dict):
         fields = {
@@ -68,7 +74,7 @@ def _infer_python_annotation(model_name: str, value: object) -> Any:
         }
         return create_model(model_name, **fields)  # type: ignore[call-overload]
     if isinstance(value, list):
-        item_value = value[0] if value else ""
+        item_value = _merge_list_samples(value)
         item_annotation = _infer_python_annotation(f"{model_name}Item", item_value)
         return list[item_annotation]
     if isinstance(value, bool):
