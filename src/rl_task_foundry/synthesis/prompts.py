@@ -56,10 +56,11 @@ def build_synthesis_agent_instructions(
         "2. Build label: combine results from at least 2 tool "
         "calls into a flat object with 3-5 slots. Every string "
         "value must be copied verbatim from a tool response.\n"
-        "3. Write request: a natural user request in the "
-        "configured language that asks for exactly the label "
-        "slots — no more, no less. The user knows nothing "
-        "about the schema.\n"
+        "3. Write request: write as a customer contacting a "
+        "service center — someone who has no idea a database "
+        "exists. Use everyday language in the configured "
+        "language. The request must ask for exactly the label "
+        "slots — no more, no less.\n"
         "4. Submit: call submit_draft with topic, entity, "
         "label, and question.\n"
         "5. If rejected as too-easy, apply exactly ONE "
@@ -292,9 +293,10 @@ def build_synthesis_input(
         'e.g. \'{"customer_id": 347}\'\n'
         "- label: the ground-truth answer as an object "
         "or array of objects\n"
-        "- question: user request in this shape:\n"
+        "- question: what a customer would say to a service "
+        "agent. Format:\n"
         "  <entity>\\n{anchor JSON}\\n</entity>\\n\\n"
-        "request text in user language"
+        "natural request in user language (no DB jargon)"
     )
 
     return "\n\n".join(
