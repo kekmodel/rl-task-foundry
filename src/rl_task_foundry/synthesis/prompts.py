@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json as _json
+
 from rl_task_foundry.config.models import SynthesisRuntimeConfig
 from rl_task_foundry.synthesis.contracts import topic_phrase
 
@@ -11,12 +13,6 @@ LANGUAGE_NAMES = {
     "ja": "Japanese",
     "zh": "Chinese",
 }
-
-TASK_LANGUAGE_INSTRUCTION = (
-    "Generate the user-facing question in {language}. "
-    "Schema field names, JSON keys, and tool names "
-    "must remain in English."
-)
 
 
 def _topic_semantics_instruction(
@@ -40,151 +36,75 @@ def _topic_semantics_instruction(
 def build_synthesis_agent_instructions(
     runtime_config: SynthesisRuntimeConfig,
 ) -> str:
-    preamble = (
-        "You explore a database using atomic tools, "
-        "construct a canonical answer from observed "
-        "evidence, then write a natural-language question "
-        "whose unique correct answer is that canonical "
-        "answer. The end user sees only the <entity> block "
-        "and the question — write as if for someone who "
-        "knows nothing about the schema."
-    )
-    sections = [
-        (
-            "Workflow",
-            "- Research: pick a random anchor entity — do not "
-            "always start with ID=1. Use a find or rank tool "
-            "to discover a diverse ID, then inspect it and "
-            "map nearby paths (readable, id-only, countable, "
-            "orderable, dead-end).\n"
-            "- Compare: evaluate multiple candidate paths "
-            "before committing.\n"
-            "- Label: pick a 2-hop path for the first "
-            "draft with 3-5 answer slots. The label must "
-            "combine results from at least 2 different tool "
-            "calls.\n"
-            "- Render: name the task with a short topic "
-            "string, then write a question that asks for "
-            "every non-anchor slot — no more, no less.\n"
-            "- Crank: after each too-easy rejection, apply "
-            "exactly ONE change from the list below. WHY — "
-            "multiple changes at once overshoot and produce "
-            "a too-hard task that is terminally rejected.\n"
-            "  Prefer in this order:\n"
-            "  1. hop: follow one more FK to a new entity "
-            "(e.g. A->B -> A->B->C). This adds depth.\n"
-            "  2. filter: add a grounded condition that "
-            "narrows the result set.\n"
-            "  3. items: return a list instead of one record "
-            "(e.g. {a,b} -> [{a,b},{a,b}]).\n"
-            "  Avoid: adding or removing a single field on "
-            "the same path. Slot-only changes rarely shift "
-            "difficulty enough and cause oscillation.",
-        ),
-        (
-            "Label Rules",
-            "- Exact grounding: every string in "
-            "label must appear verbatim in "
-            "a tool response. WHY — the runtime checks each "
-            "value against observed tool outputs; any string "
-            "not found is rejected as ungrounded.\n"
-            "- One field per observed value: if a tool "
-            "returns two separate fields, keep them as two "
-            "answer slots. Do not concatenate, merge, or "
-            "reformat. WHY — a concatenated string is a new "
-            "value that never appeared in any tool response, "
-            "so it fails the grounding check.\n"
-            "- Preserve types: numbers observed as integers "
-            "must stay integers in the label, not become "
-            "strings. WHY — the grounding check only matches "
-            "strings against strings; a stringified number "
-            "will not match the original integer.\n"
-            "- entity must be a flat JSON object of "
-            "primary-key fields to scalar values.\n"
-            "- No anchor duplication: do not repeat anchor "
-            "fields in the label. WHY — the <entity> block "
-            "already provides that grounding to the end "
-            "user.\n"
-            "- question format: <entity>\\n{json}\\n"
-            "</entity>\\n\\nquestion text.\n"
-            "- Slot-question parity: the question must cover "
-            "every non-anchor label slot and nothing extra. "
-            "WHY — a mismatch makes the task unsolvable or "
-            "ambiguous for the solver.\n"
-            "- Anchor-scoped counts: ground counts with an "
-            "anchor-scoped aggregate, not a global total. "
-            "WHY — global totals are trivial single-call "
-            "lookups that bypass the multi-hop requirement.\n"
-            "- IMPORTANT — Deterministic label: given the "
-            "entity and the question, the answer must be "
-            "uniquely determined. When traversing a 1:N "
-            "relationship, either return ALL matching records "
-            "as a list, or add a filter that selects exactly "
-            "one (e.g. highest amount, specific date). NEVER "
-            "ask for 'a customer' or 'one rental' when "
-            "multiple exist. WHY — solvers independently "
-            "follow the same question; if the answer is "
-            "ambiguous they each pick a different record "
-            "and fail EM matching.",
-        ),
-        (
-            "Prohibitions",
-            "- No premature submission: do not submit while "
-            "still exploring. WHY — incomplete evidence "
-            "leads to ungrounded labels.\n"
-            "- No schema leaks in question: do not use raw "
-            "column names in the question. WHY — the end "
-            "user knows nothing about the schema.\n"
-            "- No single-call labels: the answer must "
-            "require combining multiple tool calls. WHY — "
-            "single-call answers are trivially solvable and "
-            "fail the too-easy quality gate.\n"
-            "- No internal IDs in label: use names, titles, "
-            "dates, amounts, or other user-facing values. "
-            "WHY — id-only labels are rejected as identifier "
-            "chains.\n"
-            "- No ungrounded ordering: do not use ordering "
-            "words (earliest, latest, first, most recent) "
-            "unless you observed a date/time or sequence "
-            "field that proves it. WHY — sampled rows have "
-            "no inherent order; the runtime rejects temporal "
-            "claims without evidence.\n"
-            "- No SQL.\n"
-            "- No stopping: do not stop or apologize after "
-            "rejection — continue until Accepted or Budget "
-            "exhausted.\n"
-            "- No anchor reset: do not change entity "
-            "after first submission. WHY — the requesting "
-            "user has not changed; switching anchor is "
-            "rejected.",
-        ),
-    ]
-    submit_format = (
-        "# Submit Draft Format\n"
-        "submit_draft takes these fields:\n"
-        "- label: the ground-truth answer as an object "
-        "or array of uniform objects.\n"
-        "- topic: a short phrase describing this task. "
-        "The question must be a natural user request "
-        "that fits this topic.\n"
-        "- entity: a JSON string, "
-        'e.g. \'{"<pk_column>": <value>}\'.\n'
-        "- question: the user prompt. Format:\n"
-        "  <entity>\n"
-        "  {anchor as JSON}\n"
-        "  </entity>\n\n"
-        "  A natural request about the topic, written "
-        "for someone who knows nothing about the schema."
-    )
-    return (
-        preamble
-        + "\n\n"
-        + "\n\n".join(
-            f"# {title}\n{body}" for title, body in sections
-        )
-        + "\n\n"
-        + submit_format
-    )
+    return "\n\n".join([
+        # ── Role ──
+        "You are a task-synthesis agent. Your goal is to "
+        "produce high-quality RL training tasks: a question "
+        "that an end user would naturally ask, paired with a "
+        "ground-truth label that can be verified by exact match. "
+        "You explore a database through atomic tools, build a "
+        "label from observed evidence, then write the question. "
+        "Multiple independent solvers will attempt your task — "
+        "their agreement rate determines whether it is accepted.",
+
+        # ── Workflow ──
+        "# Workflow\n"
+        "1. Explore: call get/find tools on the given anchor "
+        "entity. Map at least 3 outgoing paths before choosing "
+        "one. Stop exploring when you have identified a 2+ hop "
+        "path with readable fields at each step.\n"
+        "2. Build label: combine results from at least 2 tool "
+        "calls into a flat object with 3-5 slots. Every string "
+        "value must be copied verbatim from a tool response.\n"
+        "3. Write question: a natural user request in the "
+        "configured language that asks for exactly the label "
+        "slots — no more, no less. The user knows nothing "
+        "about the schema.\n"
+        "4. Submit: call submit_draft with topic, entity, "
+        "label, and question.\n"
+        "5. If rejected as too-easy, apply exactly ONE "
+        "structural change and resubmit. Prefer in order: "
+        "(a) follow one more FK hop, "
+        "(b) add a filter condition, "
+        "(c) return a list instead of one record. "
+        "Do NOT just add or remove a field on the same path.",
+
+        # ── Label Rules ──
+        "# Label Rules\n"
+        "Copy observed values exactly. The runtime verifies "
+        "every string in the label against tool responses.\n"
+        "- Keep fields separate: if a tool returns first_name "
+        "and last_name, use two slots, not one merged string.\n"
+        "- Preserve types: integers stay integers, strings "
+        "stay strings.\n"
+        "- Use user-facing values (names, titles, dates, "
+        "amounts), not internal IDs (*_id fields).\n"
+        "- Do not repeat anchor fields in the label.",
+
+        # ── IMPORTANT: Determinism ──
+        "# IMPORTANT: Deterministic Answers\n"
+        "Given the entity and question, the label must be the "
+        "ONLY correct answer. Solvers work independently — if "
+        "your question is ambiguous, they pick different records "
+        "and all fail.\n"
+        "- When a path crosses a 1:N relationship, either "
+        "return ALL records as a list, or add a deterministic "
+        "filter (highest amount, earliest date by a specific "
+        "date field you observed, etc.).\n"
+        "- NEVER say 'a customer', 'one rental', or similar "
+        "when multiple exist.\n"
+        "- Do not use ordering words (earliest, latest, first) "
+        "unless you observed a date/time field that grounds it.",
+
+        # ── After Rejection ──
+        "# After Rejection\n"
+        "- Too-easy: strengthen the label (see step 5 above). "
+        "Keep the same anchor entity — changing it is rejected.\n"
+        "- Too-hard: this is terminal. The draft is discarded.\n"
+        "- Feedback (ungrounded, format error): fix the "
+        "specific issue and resubmit. Do not stop or apologize.\n"
+        "- Never write SQL. Never stop before Budget exhausted.",
+    ])
 
 
 def build_synthesis_input(
@@ -198,9 +118,18 @@ def build_synthesis_input(
     runtime_config: SynthesisRuntimeConfig,
     anchor_hint: dict[str, object] | None = None,
 ) -> str:
-    session_lines: list[str] = []
-    environment_lines: list[str] = []
+    sections: list[str] = []
 
+    # ── Anchor (top for salience) ──
+    if anchor_hint is not None:
+        sections.append(
+            "# Starting Entity\n"
+            f"Your anchor: {_json.dumps(anchor_hint, ensure_ascii=False)}. "
+            "Build your task around this entity. Do not switch to a different one."
+        )
+
+    # ── Session Context ──
+    session_lines: list[str] = []
     session_lines.append(f"- Domain: {domain_name}")
     session_lines.append(f"- Scenario: {scenario_description}")
     if requested_topic:
@@ -214,86 +143,96 @@ def build_synthesis_input(
             session_lines.append(
                 f"- Topic semantics: {topic_semantics}"
             )
-    if anchor_hint is not None:
-        import json as _json
-        session_lines.append(
-            f"- REQUIRED starting entity: {_json.dumps(anchor_hint, ensure_ascii=False)}. "
-            "Use this entity as your anchor. Do not pick a different one."
-        )
     language_name = LANGUAGE_NAMES.get(
         task_language, task_language
     )
     session_lines.append(
-        "- User-facing language: "
-        + TASK_LANGUAGE_INSTRUCTION.format(language=language_name)
+        f"- User-facing language: Generate the question in "
+        f"{language_name}. Schema field names, JSON keys, and "
+        f"tool names must remain in English."
+    )
+    sections.append(
+        "# Session Context\n" + "\n".join(session_lines)
     )
 
+    # ── Environment ──
+    environment_lines: list[str] = []
     table_count = schema_summary.get("table_count")
     edge_count = schema_summary.get("edge_count")
     if isinstance(table_count, int):
-        environment_lines.append(
-            f"- Table count: {table_count}"
-        )
+        environment_lines.append(f"- Table count: {table_count}")
     if isinstance(edge_count, int):
-        environment_lines.append(
-            f"- Foreign-key edge count: {edge_count}"
-        )
+        environment_lines.append(f"- FK edge count: {edge_count}")
     tables = schema_summary.get("tables")
+    max_tables = runtime_config.prompt_schema_orientation_max_tables
     if isinstance(tables, list):
-        max_tables = (
-            runtime_config.prompt_schema_orientation_max_tables
-        )
+        max_cols = runtime_config.prompt_schema_orientation_max_columns
         for table in tables[:max_tables]:
             if not isinstance(table, dict):
                 continue
-            qualified_name = table.get(
-                "qualified_name"
-            ) or table.get("table_name")
+            qualified_name = (
+                table.get("qualified_name") or table.get("table_name")
+            )
             columns = table.get("column_names") or []
-            max_cols = (
-                runtime_config.prompt_schema_orientation_max_columns
-            )
             environment_lines.append(
-                f"- {qualified_name}: "
-                f"columns={list(columns)[:max_cols]}"
+                f"- {qualified_name}: columns={list(columns)[:max_cols]}"
             )
-
     family_counts = tool_surface_summary.get("family_counts")
     tool_count = tool_surface_summary.get("tool_count")
     if isinstance(tool_count, int):
-        environment_lines.append(
-            f"- Total atomic tools: {tool_count}"
-        )
+        environment_lines.append(f"- Total atomic tools: {tool_count}")
     if isinstance(family_counts, dict):
-        ordered_family_lines = [
+        for family_name, meaning in [
             ("get", "retrieve one entry by ID"),
             ("find", "find entries matching a condition"),
             ("calc", "compute one statistic"),
             ("rank", "rank groups by a statistic"),
-        ]
-        for family_name, meaning in ordered_family_lines:
+        ]:
             count = family_counts.get(family_name)
             if isinstance(count, int) and count > 0:
                 environment_lines.append(
-                    f"- {family_name}: {count} tools — "
-                    f"{meaning}."
+                    f"- {family_name}: {count} tools — {meaning}."
                 )
-    # Schema topology hints — adaptive, derived from introspection
+    surfaces = tool_surface_summary.get("entity_surfaces")
+    if isinstance(surfaces, list):
+        hint_limit = runtime_config.prompt_tool_surface_hint_limit
+        for item in surfaces[:hint_limit]:
+            if not isinstance(item, dict):
+                continue
+            tool_name = str(item.get("tool_name") or "")
+            readable_fields = item.get("readable_fields")
+            if not isinstance(readable_fields, list):
+                continue
+            readable = [str(f) for f in readable_fields]
+            if readable:
+                environment_lines.append(
+                    f"- {tool_name}: readable fields={readable}"
+                )
+            else:
+                environment_lines.append(
+                    f"- {tool_name}: readable fields=[] (id-only)"
+                )
+    environment_lines.append(
+        "- Schema orientation is for navigation only. "
+        "Verify readability in actual tool results before "
+        "using a field in the label."
+    )
+    sections.append(
+        "# Environment\n" + "\n".join(environment_lines)
+    )
+
+    # ── Topology ──
     topology_lines: list[str] = []
     hub_tables = schema_summary.get("hub_tables")
     if isinstance(hub_tables, list) and hub_tables:
         topology_lines.append(
-            f"- Hub tables (many inbound FKs): "
-            f"{hub_tables}. These are central entities — "
-            "good anchors for multi-hop exploration."
+            f"- Hub tables (many inbound FKs): {hub_tables}."
         )
     bridge_tables = schema_summary.get("bridge_tables")
     if isinstance(bridge_tables, list) and bridge_tables:
         topology_lines.append(
-            f"- Bridge tables (id-only, 2+ FKs): "
-            f"{bridge_tables}. These connect entities but "
-            "have no readable fields — traverse through "
-            "them, do not use their fields in the label."
+            f"- Bridge tables (id-only, 2+ FKs): {bridge_tables}. "
+            "Traverse through them, do not use their fields."
         )
     if isinstance(tables, list):
         readable_tables = []
@@ -312,15 +251,12 @@ def build_synthesis_input(
                 )
         if readable_tables:
             topology_lines.append(
-                f"- Readable entity tables: "
-                f"{', '.join(readable_tables[:8])}"
+                f"- Readable: {', '.join(readable_tables[:8])}"
             )
         if id_only_tables:
             topology_lines.append(
-                f"- Id-only tables (no readable fields): "
-                f"{', '.join(id_only_tables[:8])}"
+                f"- Id-only: {', '.join(id_only_tables[:8])}"
             )
-        # high-fanout edges
         fanout_hints: list[str] = []
         for table in tables[:max_tables]:
             if not isinstance(table, dict):
@@ -338,55 +274,29 @@ def build_synthesis_input(
                             )
         if fanout_hints:
             topology_lines.append(
-                "- High-fanout edges (one-to-many): "
+                "- High-fanout: "
                 + ", ".join(fanout_hints[:6])
-                + ". Paths through these expand the "
-                "candidate set — useful for search_cost."
             )
-
-    surfaces = tool_surface_summary.get("entity_surfaces")
-    if isinstance(surfaces, list):
-        hint_limit = (
-            runtime_config.prompt_tool_surface_hint_limit
-        )
-        for item in surfaces[:hint_limit]:
-            if not isinstance(item, dict):
-                continue
-            tool_name = str(item.get("tool_name") or "")
-            readable_fields = item.get("readable_fields")
-            if not isinstance(readable_fields, list):
-                continue
-            readable = [str(f) for f in readable_fields]
-            if readable:
-                environment_lines.append(
-                    f"- {tool_name}: "
-                    f"readable fields={readable}"
-                )
-            else:
-                environment_lines.append(
-                    f"- {tool_name}: "
-                    "readable fields=[] (id-only)"
-                )
-        environment_lines.append(
-            "- Schema orientation is for navigation only. "
-            "A listed column is not automatically "
-            "answerable. Verify readability in actual tool "
-            "results before using a field in the label."
-        )
-
-    sections: list[str] = [
-        "# BOUNDARY\n"
-        "Static rules end here. "
-        "Everything below is specific to this session.",
-        "# Session Context\n" + "\n".join(session_lines),
-        "# Environment and State\n"
-        + "\n".join(environment_lines),
-    ]
     if topology_lines:
         sections.append(
             "# Schema Topology\n"
             + "\n".join(topology_lines)
         )
+
+    # ── Submit Format (bottom for recency) ──
+    sections.append(
+        "# submit_draft Format\n"
+        "Fields:\n"
+        "- topic: short phrase naming the task\n"
+        "- entity: JSON string of anchor PK, "
+        'e.g. \'{"customer_id": 347}\'\n'
+        "- label: the ground-truth answer as an object "
+        "or array of objects\n"
+        "- question: user prompt in this shape:\n"
+        "  <entity>\\n{anchor JSON}\\n</entity>\\n\\n"
+        "question text in user language"
+    )
+
     return "\n\n".join(
         section.strip()
         for section in sections

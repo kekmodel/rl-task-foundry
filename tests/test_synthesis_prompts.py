@@ -49,39 +49,30 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
         },
     )
 
-    # structural sections present
-    assert "# BOUNDARY" in prompt
+    # structural sections
     assert "# Session Context" in prompt
-    assert "# Environment and State" in prompt
+    assert "# Environment" in prompt
 
-    # session context populated
-    assert "- Domain: service_operations" in prompt
-    assert "- Scenario: end-user support requests over a business database" in prompt
-    assert "- Requested topic hint: record_history" in prompt
-    assert "Coverage hint: record history" in prompt
-    assert "soft hint" in prompt
+    # session context
+    assert "Domain: service_operations" in prompt
+    assert "Scenario: end-user support" in prompt
+    assert "record_history" in prompt
     assert "Korean" in prompt
 
-    # schema orientation
+    # schema
     assert "public.customer" in prompt
     assert "public.rental" in prompt
     assert "Total atomic tools: 4" in prompt
     assert "get: 2 tools" in prompt
-    assert "find: 1 tools" in prompt
-    assert "calc: 1 tools" in prompt
 
     # entity surfaces
-    assert "get_customer: readable fields=['first_name', 'last_name']" in prompt
+    assert "get_customer: readable fields=" in prompt
     assert "get_staff: readable fields=[] (id-only)" in prompt
-    assert "find_order_by_customer_id: readable fields=['status', 'total_amount']" in prompt
     assert "navigation only" in prompt
 
-    # no legacy sections
-    assert "Previous Phase Outputs" not in prompt
-    assert "Grounded Evidence" not in prompt
-    assert "Recent Memory" not in prompt
-    assert "One-Shot Example" not in prompt
-    assert "Required Output Contract" not in prompt
+    # submit format at bottom
+    assert "# submit_draft Format" in prompt
+    assert prompt.index("# submit_draft Format") > prompt.index("# Environment")
 
 
 def test_synthesis_agent_instructions_describe_single_conversation_loop() -> None:
@@ -89,70 +80,51 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
         load_config("rl_task_foundry.yaml").synthesis.runtime
     )
 
-    # preamble (no heading)
-    assert instructions.startswith("You explore a database")
-    assert "canonical answer" in instructions
-    assert "knows nothing about the schema" in instructions
+    # role statement
+    assert "task-synthesis agent" in instructions
+    assert "RL training tasks" in instructions
 
-    # sections present
+    # workflow
     assert "# Workflow" in instructions
+    assert "Explore" in instructions
+    assert "Build label" in instructions
+    assert "Write question" in instructions
+    assert "Submit" in instructions
+
+    # label rules
     assert "# Label Rules" in instructions
-    assert "# Prohibitions" in instructions
+    assert "Copy observed values exactly" in instructions
+    assert "Keep fields separate" in instructions
 
-    # removed sections
-    assert "# Role" not in instructions
-    assert "# Principles" not in instructions
+    # determinism section
+    assert "# IMPORTANT: Deterministic Answers" in instructions
+    assert "ONLY correct answer" in instructions
+    assert "NEVER say" in instructions
 
-    # workflow steps
-    assert "Research" in instructions
-    assert "Compare" in instructions
-    assert "Render" in instructions
-    assert "Crank" in instructions
+    # after rejection
+    assert "# After Rejection" in instructions
+    assert "Too-easy" in instructions
+    assert "Too-hard" in instructions
 
-    # label rules — key-value format with WHY
-    assert "Exact grounding" in instructions
-    assert "WHY" in instructions
-    assert "entity must be a flat JSON object" in instructions
-    assert "<entity>" in instructions
-
-    # difficulty guidance removed from system prompt (delivered via feedback)
+    # no legacy
     assert "search_cost:" not in instructions
     assert "solution_space:" not in instructions
-    assert "constraint_density:" not in instructions
-
-    # prohibitions
-    assert "No single-call labels" in instructions
-    assert "Accepted or Budget exhausted" in instructions
-
-    # no DB-specific examples
-    assert "customer-name" not in instructions
-    assert "assigned staff" not in instructions
+    assert "# Prohibitions" not in instructions
 
 
-def test_synthesis_input_humanizes_requested_topic_without_topic_specific_rules() -> None:
+def test_synthesis_input_includes_anchor_hint() -> None:
     config = load_config("rl_task_foundry.yaml")
     prompt = build_synthesis_input(
-        domain_name="service_operations",
-        scenario_description="end-user support requests over a business database",
-        requested_topic="payment_history",
+        domain_name="ops",
+        scenario_description="test",
+        requested_topic=None,
         task_language="ko",
         runtime_config=config.synthesis.runtime,
-        schema_summary={
-            "table_count": 2,
-            "edge_count": 1,
-            "tables": [
-                {
-                    "qualified_name": "public.payment",
-                    "column_names": ["payment_id", "customer_id", "amount", "payment_date"],
-                }
-            ],
-        },
+        schema_summary={"table_count": 1, "tables": []},
         tool_surface_summary={"tool_count": 0, "family_counts": {}, "entity_surfaces": []},
+        anchor_hint={"film_id": 42},
     )
 
-    assert "# BOUNDARY" in prompt
-    assert "# Session Context" in prompt
-    assert "# Environment and State" in prompt
-    assert "Coverage hint: payment history" in prompt
-    assert "soft hint" in prompt
-    assert "grounded" in prompt
+    assert "# Starting Entity" in prompt
+    assert '"film_id": 42' in prompt
+    assert prompt.index("# Starting Entity") < prompt.index("# Session Context")
