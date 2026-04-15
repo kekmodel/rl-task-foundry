@@ -228,7 +228,7 @@ class OpenAIAgentsSynthesisBackend:
             kind=kind,
             filename=(
                 f"{db_id}__{requested_topic}__synthesis__"
-                f"{self.provider_name}__{self.model_name}.json"
+                f"{self.provider_name}__{self.model_name.replace('/', '_')}.json"
             ),
             payload=payload,
         )
