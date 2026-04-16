@@ -49,32 +49,30 @@ def build_synthesis_agent_instructions(
 
         # ── Workflow ──
         "# Workflow\n"
+        "Start simple, then build up through rejections.\n\n"
         "1. Explore: call get/find tools on the given anchor "
         "entity. Map nearby paths and note data distributions "
-        "(price ranges, categories, counts) from the session "
-        "context.\n"
-        "2. Design scenario: invent a realistic customer "
-        "situation with 1-3 constraints. Use data distributions "
-        "to pick natural thresholds. Constraint types:\n"
+        "from the session context.\n"
+        "2. First draft: submit a simple task with NO "
+        "constraints — just a multi-hop lookup (2+ tool calls). "
+        "This will likely be rejected as too-easy. That is "
+        "expected.\n"
+        "3. On each too-easy rejection, keep everything from "
+        "the previous draft and add exactly ONE constraint. "
+        "Constraint types (pick one per round):\n"
         "   - Budget: total cost under/over a threshold\n"
         "   - Preference: specific category, exclude certain types\n"
         "   - Quality: rating or score above a minimum\n"
         "   - Uniqueness: no repeated items across a list\n"
-        "   - Conditional: if X then Y (e.g. if expensive hotel, "
-        "then cheaper meals)\n"
+        "   - Conditional: if X then Y\n"
         "   - Cardinality: find exactly N items\n"
-        "3. Solve: use tools to find the answer that satisfies "
-        "all constraints. The label must come from observed "
-        "tool results — copy values verbatim.\n"
+        "   Use data distributions to pick realistic thresholds.\n"
         "4. Write request: as a customer contacting a service "
         "center. Express constraints as natural preferences, "
         "not technical rules. Use everyday language in the "
         "configured language.\n"
         "5. Submit: call submit_draft with topic, entity, "
-        "label, and question.\n"
-        "6. If rejected as too-easy, add ONE more constraint "
-        "or follow one more FK hop. Keep the same anchor "
-        "entity. Do NOT just add or remove a field.",
+        "label, and question.",
 
         # ── Label Rules ──
         "# Label Rules\n"
@@ -104,12 +102,16 @@ def build_synthesis_agent_instructions(
 
         # ── After Rejection ──
         "# After Rejection\n"
-        "- Too-easy: add a constraint or follow one more hop. "
-        "Keep the same anchor entity — changing it is rejected.\n"
-        "- Too-hard: this is terminal. The draft is discarded.\n"
+        "- Too-easy: keep your previous label and request "
+        "intact. Add exactly ONE new constraint from the list "
+        "above. The goal is gradual escalation — each round "
+        "adds one layer of difficulty.\n"
+        "- Too-hard: this draft is discarded (terminal). To "
+        "avoid this, start simple and escalate gradually.\n"
         "- Feedback (ungrounded, format error): fix the "
-        "specific issue and resubmit. Do not stop or apologize.\n"
-        "- Never write SQL. Never stop before Budget exhausted.",
+        "specific issue and resubmit.\n"
+        "- Keep the same anchor entity across all submissions. "
+        "Never write SQL. Never stop before Budget exhausted.",
     ])
 
 

@@ -87,8 +87,8 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     # workflow
     assert "# Workflow" in instructions
     assert "Explore" in instructions
-    assert "Design scenario" in instructions
-    assert "Solve" in instructions
+    assert "First draft" in instructions
+    assert "too-easy rejection" in instructions
     assert "Write request" in instructions
     assert "Submit" in instructions
 
