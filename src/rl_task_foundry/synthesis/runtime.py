@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -1024,7 +1025,11 @@ class SynthesisAgentRuntime:
         table = random.choice(hub_tables)
         pk_col = table.primary_key[0]
         try:
-            pools = await ensure_attached_database_pools(self.config.database)
+            pools = await ensure_attached_database_pools(
+                self,
+                attr_name="_database_pools",
+                config=self.config.database,
+            )
             async with pools.control_connection() as conn:
                 row = await conn.fetchrow(
                     f"SELECT {pk_col} FROM {table.qualified_name} "
@@ -1033,7 +1038,11 @@ class SynthesisAgentRuntime:
                 if row:
                     return {pk_col: row[pk_col]}
         except Exception:
-            pass
+            logging.getLogger(__name__).warning(
+                "anchor seeding failed for %s",
+                table.qualified_name,
+                exc_info=True,
+            )
         return None
 
     async def _ensure_atomic_tool_bundle(

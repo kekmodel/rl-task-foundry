@@ -14,6 +14,28 @@ from rl_task_foundry.config.models import AppConfig, ModelsConfig, SolverModelCo
 _ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)(?::-(.*?))?\}")
 
 
+def _load_dotenv(env_path: Path) -> None:
+    if not env_path.is_file():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def _expand_env(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _expand_env(v) for k, v in value.items()}
@@ -89,7 +111,9 @@ def load_config(
 ) -> AppConfig:
     """Load and validate application configuration."""
 
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    config_path = Path(path)
+    _load_dotenv(config_path.parent / ".env")
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config = AppConfig.model_validate(_expand_env(data))
     return apply_model_overrides(
         config,
