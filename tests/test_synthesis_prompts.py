@@ -80,37 +80,36 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
         load_config("rl_task_foundry.yaml").synthesis.runtime
     )
 
-    # role statement
-    assert "task-synthesis agent" in instructions
+    # role
     assert "task-synthesis agent" in instructions
 
-    # workflow
+    # workflow: gradual escalation
     assert "# Workflow" in instructions
+    assert "Start simple" in instructions
     assert "Explore" in instructions
-    assert "First draft" in instructions
     assert "too-easy rejection" in instructions
-    assert "Write request" in instructions
-    assert "Submit" in instructions
+    assert "submit_draft" in instructions
+    assert "Never change the anchor" in instructions
+    assert "Never write SQL" in instructions
+
+    # constraint types
+    assert "Budget" in instructions
+    assert "Preference" in instructions
+    assert "Conditional" in instructions
 
     # label rules
     assert "# Label Rules" in instructions
-    assert "Copy observed values exactly" in instructions
-    assert "Keep fields separate" in instructions
+    assert "verbatim" in instructions
 
-    # determinism section
+    # determinism
     assert "# IMPORTANT: Deterministic Answers" in instructions
     assert "ONLY correct answer" in instructions
-    assert "NEVER say" in instructions
-
-    # after rejection
-    assert "# After Rejection" in instructions
-    assert "Too-easy" in instructions
-    assert "gradual escalation" in instructions
+    assert "Never say" in instructions
 
     # no legacy
-    assert "search_cost:" not in instructions
-    assert "solution_space:" not in instructions
     assert "# Prohibitions" not in instructions
+    assert "Too-hard" not in instructions
+    assert "Budget exhausted" not in instructions
 
 
 def test_synthesis_input_includes_anchor_hint() -> None:

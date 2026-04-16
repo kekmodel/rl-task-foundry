@@ -39,77 +39,52 @@ def build_synthesis_agent_instructions(
     return "\n\n".join([
         # ── Role ──
         "You are a task-synthesis agent. You produce a natural "
-        "user request paired with a ground-truth label that can "
-        "be verified by exact match. You design a realistic "
-        "customer scenario with constraints, solve it using "
-        "database tools, then write the request as a customer "
-        "who knows nothing about the database. Multiple "
-        "independent solvers will attempt your task — their "
-        "agreement rate determines whether it is accepted.",
+        "customer request paired with a ground-truth label "
+        "verified by exact match. Multiple independent solvers "
+        "will attempt your task — their agreement rate "
+        "determines acceptance.",
 
         # ── Workflow ──
         "# Workflow\n"
-        "Start simple, then build up through rejections.\n\n"
-        "1. Explore: call get/find tools on the given anchor "
-        "entity. Map nearby paths and note data distributions "
-        "from the session context.\n"
-        "2. First draft: submit a simple task with NO "
-        "constraints — just a multi-hop lookup (2+ tool calls). "
-        "This will likely be rejected as too-easy. That is "
-        "expected.\n"
-        "3. On each too-easy rejection, keep everything from "
-        "the previous draft and add exactly ONE constraint. "
-        "Constraint types (pick one per round):\n"
-        "   - Budget: total cost under/over a threshold\n"
-        "   - Preference: specific category, exclude certain types\n"
-        "   - Quality: rating or score above a minimum\n"
-        "   - Uniqueness: no repeated items across a list\n"
+        "Start simple. Build complexity through rejections.\n\n"
+        "1. Explore the anchor entity with a few get/find "
+        "calls. Check data distributions in the session.\n"
+        "2. Submit a simple multi-hop lookup (2+ tool calls, "
+        "no constraints). Expect too-easy rejection.\n"
+        "3. On each too-easy rejection, keep your previous "
+        "draft and add ONE constraint:\n"
+        "   - Budget: total under/over a threshold\n"
+        "   - Preference: specific category or exclusion\n"
+        "   - Quality: rating/score above a minimum\n"
+        "   - Uniqueness: no repeated items in a list\n"
         "   - Conditional: if X then Y\n"
-        "   - Cardinality: find exactly N items\n"
-        "   Use data distributions to pick realistic thresholds.\n"
-        "4. Write request: as a customer contacting a service "
-        "center. Express constraints as natural preferences, "
-        "not technical rules. Use everyday language in the "
-        "configured language.\n"
-        "5. Submit: call submit_draft with topic, entity, "
-        "label, and question.",
+        "   - Cardinality: exactly N items\n"
+        "   Use data distributions for realistic thresholds.\n"
+        "4. Rewrite the request as a customer who knows "
+        "nothing about databases. Constraints become natural "
+        "preferences in the configured language.\n"
+        "5. call submit_draft.\n\n"
+        "Repeat 3-5 until accepted. Never change the anchor "
+        "entity. Never write SQL.",
 
         # ── Label Rules ──
         "# Label Rules\n"
-        "Copy observed values exactly. The runtime verifies "
-        "every string in the label against tool responses.\n"
-        "- Keep fields separate: if a tool returns first_name "
-        "and last_name, use two slots, not one merged string.\n"
-        "- Preserve types: integers stay integers, strings "
-        "stay strings.\n"
-        "- Use user-facing values (names, titles, dates, "
-        "amounts), not internal IDs (*_id fields).\n"
-        "- Do not repeat anchor fields in the label.",
+        "- Copy every string value verbatim from tool results. "
+        "The runtime rejects unmatched strings.\n"
+        "- One field per value: do not merge first_name + "
+        "last_name into one string.\n"
+        "- Keep original types: integers stay integers.\n"
+        "- Use user-facing values, not internal IDs.",
 
-        # ── IMPORTANT: Determinism ──
+        # ── Deterministic Answers ──
         "# IMPORTANT: Deterministic Answers\n"
-        "Given the entity and request, the label must be the "
-        "ONLY correct answer. Constraints must narrow the "
-        "answer to exactly one possibility.\n"
-        "- When a path crosses a 1:N relationship, add a "
-        "constraint that selects exactly one record (highest "
-        "amount, specific category, etc.) or return ALL as a "
-        "list.\n"
-        "- NEVER say 'a customer' or 'one rental' when "
-        "multiple exist.\n"
-        "- Do not use ordering words (earliest, latest, first) "
-        "unless you observed a date/time field that grounds it.",
-
-        # ── After Rejection ──
-        "# After Rejection\n"
-        "- Too-easy: keep your previous label and request "
-        "intact. Add exactly ONE new constraint from the list "
-        "above. The goal is gradual escalation — each round "
-        "adds one layer of difficulty.\n"
-        "- Feedback (ungrounded, format error): fix the "
-        "specific issue and resubmit.\n"
-        "- Keep the same anchor entity across all submissions. "
-        "Never write SQL. Never stop before Budget exhausted.",
+        "The label must be the ONLY correct answer for the "
+        "given entity and request. Solvers work independently "
+        "— ambiguous answers cause disagreement.\n"
+        "- On 1:N paths, add a constraint that narrows to "
+        "exactly one record, or return ALL as a list.\n"
+        "- Never say 'a customer' or 'one rental' when "
+        "multiple exist.",
     ])
 
 
@@ -131,8 +106,7 @@ def build_synthesis_input(
     if anchor_hint is not None:
         sections.append(
             "# Starting Entity\n"
-            f"Your anchor: {_json.dumps(anchor_hint, ensure_ascii=False)}. "
-            "Build your task around this entity. Do not switch to a different one."
+            f"Anchor: {_json.dumps(anchor_hint, ensure_ascii=False)}"
         )
 
     # ── Session Context ──
