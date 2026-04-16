@@ -71,8 +71,8 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "navigation only" in prompt
 
     # submit format at bottom
-    assert "# submit_draft Format" in prompt
-    assert prompt.index("# submit_draft Format") > prompt.index("# Environment")
+    assert "# submit_draft" in prompt
+    assert prompt.index("# submit_draft") > prompt.index("# Environment")
 
 
 def test_synthesis_agent_instructions_describe_single_conversation_loop() -> None:
@@ -89,8 +89,8 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Explore" in instructions
     assert "too-easy rejection" in instructions
     assert "submit_draft" in instructions
-    assert "Never change the anchor" in instructions
-    assert "Never write SQL" in instructions
+    assert "NEVER change the anchor" in instructions
+    assert "NEVER write SQL" in instructions
 
     # constraint types
     assert "Budget" in instructions
@@ -102,9 +102,10 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "verbatim" in instructions
 
     # determinism
-    assert "# IMPORTANT: Deterministic Answers" in instructions
-    assert "ONLY correct answer" in instructions
-    assert "Never say" in instructions
+    assert "# Deterministic Answers" in instructions
+    assert "IMPORTANT" in instructions
+    assert "**ONLY**" in instructions
+    assert "NEVER say" in instructions
 
     # no legacy
     assert "# Prohibitions" not in instructions

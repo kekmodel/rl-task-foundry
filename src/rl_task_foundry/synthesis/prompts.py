@@ -41,49 +41,51 @@ def build_synthesis_agent_instructions(
         "You are a task-synthesis agent. You produce a natural "
         "customer request paired with a ground-truth label "
         "verified by exact match. Multiple independent solvers "
-        "will attempt your task — their agreement rate "
-        "determines acceptance.",
+        "attempt your task — their agreement rate determines "
+        "acceptance.",
 
         # ── Workflow ──
         "# Workflow\n"
-        "Start simple. Build complexity through rejections.\n\n"
-        "1. Explore the anchor entity with a few get/find "
+        "**Start simple. Build complexity through rejections.**\n\n"
+        "1. **Explore** the anchor entity with a few get/find "
         "calls. Check data distributions in the session.\n"
-        "2. Submit a simple multi-hop lookup (2+ tool calls, "
-        "no constraints). Expect too-easy rejection.\n"
-        "3. On each too-easy rejection, keep your previous "
-        "draft and add ONE constraint:\n"
-        "   - Budget: total under/over a threshold\n"
-        "   - Preference: specific category or exclusion\n"
-        "   - Quality: rating/score above a minimum\n"
-        "   - Uniqueness: no repeated items in a list\n"
-        "   - Conditional: if X then Y\n"
-        "   - Cardinality: exactly N items\n"
-        "   Use data distributions for realistic thresholds.\n"
-        "4. Rewrite the request as a customer who knows "
+        "2. **First submit**: a simple multi-hop lookup "
+        "(2+ tool calls, no constraints). Expect too-easy.\n"
+        "3. **On each too-easy rejection**, keep your previous "
+        "draft and add **ONE** constraint:\n\n"
+        "| Type | Example |\n"
+        "| --- | --- |\n"
+        "| Budget | total rental cost under $10 |\n"
+        "| Preference | only PG-rated films |\n"
+        "| Quality | rating above a threshold |\n"
+        "| Uniqueness | no repeated categories in a list |\n"
+        "| Conditional | if hotel is expensive, cheaper meals |\n"
+        "| Cardinality | exactly 3 items |\n\n"
+        "Use data distributions for realistic thresholds.\n"
+        "4. **Rewrite** the request as a customer who knows "
         "nothing about databases. Constraints become natural "
-        "preferences in the configured language.\n"
-        "5. call submit_draft.\n\n"
-        "Repeat 3-5 until accepted. Never change the anchor "
-        "entity. Never write SQL.",
+        "preferences.\n"
+        "5. **Submit** via submit_draft.\n\n"
+        "Repeat 3-5 until accepted. NEVER change the anchor. "
+        "NEVER write SQL.",
 
         # ── Label Rules ──
         "# Label Rules\n"
-        "- Copy every string value verbatim from tool results. "
-        "The runtime rejects unmatched strings.\n"
-        "- One field per value: do not merge first_name + "
+        "- Copy every string **verbatim** from tool results — "
+        "the runtime rejects unmatched strings.\n"
+        "- **One field per value**: do not merge first_name + "
         "last_name into one string.\n"
         "- Keep original types: integers stay integers.\n"
-        "- Use user-facing values, not internal IDs.",
+        "- Use user-facing values, not internal IDs (*_id).",
 
         # ── Deterministic Answers ──
-        "# IMPORTANT: Deterministic Answers\n"
-        "The label must be the ONLY correct answer for the "
-        "given entity and request. Solvers work independently "
-        "— ambiguous answers cause disagreement.\n"
+        "# Deterministic Answers\n"
+        "IMPORTANT: The label must be the **ONLY** correct "
+        "answer. Solvers work independently — ambiguous "
+        "answers cause disagreement and rejection.\n"
         "- On 1:N paths, add a constraint that narrows to "
         "exactly one record, or return ALL as a list.\n"
-        "- Never say 'a customer' or 'one rental' when "
+        "- NEVER say 'a customer' or 'one rental' when "
         "multiple exist.",
     ])
 
@@ -277,17 +279,16 @@ def build_synthesis_input(
 
     # ── Submit Format (bottom for recency) ──
     sections.append(
-        "# submit_draft Format\n"
-        "Fields:\n"
-        "- topic: short phrase naming the task\n"
-        "- entity: JSON string of anchor PK, "
-        'e.g. \'{"customer_id": 347}\'\n'
-        "- label: the ground-truth answer as an object "
-        "or array of objects\n"
-        "- question: what a customer would say to a service "
-        "agent. Format:\n"
-        "  <entity>\\n{anchor JSON}\\n</entity>\\n\\n"
-        "natural request in user language (no DB jargon)"
+        "# submit_draft\n"
+        "```\n"
+        "submit_draft(\n"
+        '  topic = "short task description",\n'
+        '  entity = \'{"pk_column": value}\',\n'
+        "  label = {field: value, ...} or [{...}, {...}],\n"
+        "  question = \"<entity>\\n{anchor}\\n</entity>\\n\\n"
+        "customer request in user language\"\n"
+        ")\n"
+        "```"
     )
 
     return "\n\n".join(
