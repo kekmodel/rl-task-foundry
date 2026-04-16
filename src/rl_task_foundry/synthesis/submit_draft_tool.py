@@ -1307,13 +1307,7 @@ class SubmitDraftController:
         parsed_anchor = payload.parsed_entity
         if not parsed_anchor:
             error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
-        elif (
-            self._locked_anchor_entity is not None
-            and parsed_anchor != self._locked_anchor_entity
-        ):
-            error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED)
-            invalid_diagnostics["locked_anchor_entity"] = self._locked_anchor_entity
-        elif parsed_anchor:
+        else:
             self._locked_anchor_entity = dict(parsed_anchor)
         canonical_answer = payload.canonical_answer
         if prompt_error is not None:

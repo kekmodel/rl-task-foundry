@@ -484,29 +484,6 @@ async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path
     assert controller.submissions_left() == 0
 
 @pytest.mark.asyncio
-async def test_submit_draft_keeps_locked_self_anchor_across_feedback_retries(
-    tmp_path: Path,
-) -> None:
-    controller = SubmitDraftController(
-        config=_config_with_synthesis_output(tmp_path),
-        requested_topic="record_history",
-        solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=1,
-            total_solver_runs=2,
-        ),
-        build_draft=lambda payload: payload,
-        max_submissions=3,
-    )
-    _seed_min_initial_exploration(controller)
-
-    first = await controller.submit(_ungrounded_text_payload(customer_id=1))
-    second = await controller.submit(_ungrounded_text_payload(customer_id=2))
-
-    assert "readable text fields" in first
-    assert "same anchored user entity across retries" in second
-    assert controller._locked_anchor_entity == {"customer_id": 1}
-
-@pytest.mark.asyncio
 async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings(
     tmp_path: Path,
 ) -> None:

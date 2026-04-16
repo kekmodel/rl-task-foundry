@@ -89,7 +89,6 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "Explore" in instructions
     assert "too-easy rejection" in instructions
     assert "submit_draft" in instructions
-    assert "NEVER change the anchor" in instructions
     assert "NEVER write SQL" in instructions
 
     # constraint types

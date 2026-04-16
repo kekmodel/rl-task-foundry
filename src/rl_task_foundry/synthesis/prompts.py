@@ -66,8 +66,7 @@ def build_synthesis_agent_instructions(
         "nothing about databases. Constraints become natural "
         "preferences.\n"
         "5. **Submit** via submit_draft.\n\n"
-        "Repeat 3-5 until accepted. NEVER change the anchor. "
-        "NEVER write SQL.",
+        "Repeat 3-5 until accepted. NEVER write SQL.",
 
         # ── Label Rules ──
         "# Label Rules\n"
