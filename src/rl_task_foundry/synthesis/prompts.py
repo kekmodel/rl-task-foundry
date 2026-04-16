@@ -68,7 +68,14 @@ def build_synthesis_agent_instructions(
         "nothing about databases. Constraints become natural "
         "preferences.\n"
         "5. **Submit** via submit_draft.\n\n"
-        "Repeat 3-5 until accepted. NEVER write SQL.",
+        "Repeat 3-5 until accepted. NEVER write SQL.\n\n"
+        "**Example escalation:**\n"
+        "Round 1: simple lookup -> too-easy\n"
+        "Round 2: + preference (filter by category) -> too-easy\n"
+        "Round 3: + cardinality (find N items) -> too-easy\n"
+        "Round 4: + uniqueness (no repeats across items) "
+        "-> too-easy\n"
+        "Round 5: + budget (total under threshold) -> accepted",
 
         # ── Label Rules ──
         "# Label Rules\n"
