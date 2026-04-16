@@ -16,6 +16,7 @@ from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
 from rl_task_foundry.synthesis.proof_environment import ProofTaskRunner
+from rl_task_foundry.synthesis.harvest import HarvestOutcome, HarvestRunner
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
@@ -387,6 +388,52 @@ def run_real_db_trial(
             RealDbTrialStatus.ACCEPTED,
             RealDbTrialStatus.REGISTRY_DUPLICATE,
         ):
+            raise typer.Exit(code=1)
+
+    asyncio.run(_run())
+
+
+@app.command("harvest")
+def harvest(
+    db_id: str,
+    output_dir: Path,
+    target: int = 20,
+    stall_timeout_min: float = 10.0,
+    workers: int | None = None,
+    config_path: Path = Path("rl_task_foundry.yaml"),
+) -> None:
+    """Run trials in parallel until target accepted+committed tasks reached.
+
+    Stops early if no new commit lands within --stall-timeout-min minutes.
+    """
+
+    async def _run() -> None:
+        config = load_config(config_path)
+        worker_count = workers or config.synthesis.parallel_workers
+        runner = HarvestRunner(config)
+        try:
+            summary = await runner.run(
+                output_dir,
+                db_id=db_id,
+                target_committed=target,
+                stall_timeout_seconds=stall_timeout_min * 60.0,
+                parallel_workers=worker_count,
+            )
+        finally:
+            await runner.close()
+
+        color = "green" if summary.outcome is HarvestOutcome.TARGET_REACHED else "yellow"
+        console.print(f"[{color}]harvest {summary.outcome.value}[/{color}]: {output_dir}")
+        console.print(f"db_id={summary.db_id}")
+        console.print(f"target_committed={summary.target_committed}")
+        console.print(f"committed={summary.committed}")
+        console.print(f"attempted={summary.attempted}")
+        console.print(f"elapsed_seconds={summary.elapsed_seconds:.1f}")
+        console.print(f"flow_id={summary.flow_id}")
+        console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
+        if summary.accepted_task_ids:
+            console.print(f"accepted_task_ids={list(summary.accepted_task_ids)}")
+        if summary.outcome is not HarvestOutcome.TARGET_REACHED:
             raise typer.Exit(code=1)
 
     asyncio.run(_run())
