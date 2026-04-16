@@ -106,8 +106,6 @@ def build_synthesis_agent_instructions(
         "intact. Add exactly ONE new constraint from the list "
         "above. The goal is gradual escalation — each round "
         "adds one layer of difficulty.\n"
-        "- Too-hard: this draft is discarded (terminal). To "
-        "avoid this, start simple and escalate gradually.\n"
         "- Feedback (ungrounded, format error): fix the "
         "specific issue and resubmit.\n"
         "- Keep the same anchor entity across all submissions. "

@@ -105,7 +105,7 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     # after rejection
     assert "# After Rejection" in instructions
     assert "Too-easy" in instructions
-    assert "Too-hard" in instructions
+    assert "gradual escalation" in instructions
 
     # no legacy
     assert "search_cost:" not in instructions
