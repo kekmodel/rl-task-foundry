@@ -190,8 +190,9 @@ class OpenAIAgentsSynthesisBackend:
         sdk_tools.append(build_submit_draft_sdk_tool(self.submit_draft_controller))
         return sdk_tools
 
-    @staticmethod
-    def _build_tool_use_behavior(sdk: SimpleNamespace) -> Any:
+    def _build_tool_use_behavior(self, sdk: SimpleNamespace) -> Any:
+        controller = self.submit_draft_controller
+
         def _finalize_on_submit(_context_wrapper: Any, tool_results: list[Any]) -> Any:
             for tool_result in tool_results:
                 if getattr(getattr(tool_result, "tool", None), "name", None) != "submit_draft":
@@ -203,6 +204,7 @@ class OpenAIAgentsSynthesisBackend:
                 if (
                     normalized.startswith("Accepted:")
                     or "BudgetExhaustedError: No more attempts." in normalized
+                    or (controller is not None and controller._terminated_too_hard)
                 ):
                     return sdk.ToolsToFinalOutputResult(
                         is_final_output=True,

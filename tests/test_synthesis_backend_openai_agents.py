@@ -314,6 +314,22 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
 
 
+def _make_tool_use_behavior_backend(controller: object) -> OpenAIAgentsSynthesisBackend:
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SynthesisRuntimeConfig(max_turns=50),
+    )
+    backend.bind_submit_draft_controller(controller)
+    return backend
+
+
 def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
     class FakeToolsToFinalOutputResult:
         def __init__(self, *, is_final_output: bool, final_output: str | None):
@@ -321,8 +337,10 @@ def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
             self.final_output = final_output
 
     sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
+    controller = SimpleNamespace(_terminated_too_hard=False)
+    backend = _make_tool_use_behavior_backend(controller)
 
-    finalize = OpenAIAgentsSynthesisBackend._build_tool_use_behavior(sdk)(
+    finalize = backend._build_tool_use_behavior(sdk)(
         None,
         [
             SimpleNamespace(
@@ -348,8 +366,10 @@ def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> No
             self.final_output = final_output
 
     sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
+    controller = SimpleNamespace(_terminated_too_hard=False)
+    backend = _make_tool_use_behavior_backend(controller)
 
-    finalize = OpenAIAgentsSynthesisBackend._build_tool_use_behavior(sdk)(
+    finalize = backend._build_tool_use_behavior(sdk)(
         None,
         [
             SimpleNamespace(
@@ -368,3 +388,31 @@ def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> No
     assert finalize.is_final_output is True
     assert finalize.final_output is not None
     assert "BudgetExhaustedError: No more attempts." in finalize.final_output
+
+
+def test_synthesis_tool_use_behavior_finalizes_on_too_hard_termination() -> None:
+    class FakeToolsToFinalOutputResult:
+        def __init__(self, *, is_final_output: bool, final_output: str | None):
+            self.is_final_output = is_final_output
+            self.final_output = final_output
+
+    sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
+    controller = SimpleNamespace(_terminated_too_hard=True)
+    backend = _make_tool_use_behavior_backend(controller)
+
+    finalize = backend._build_tool_use_behavior(sdk)(
+        None,
+        [
+            SimpleNamespace(
+                tool=SimpleNamespace(name="submit_draft"),
+                output=(
+                    "RejectedError: solver pass rate 0/12. Primary issue: "
+                    "Too hard — no solver passed. This conversation is "
+                    "terminated. Attempts left: 0."
+                ),
+            )
+        ],
+    )
+
+    assert finalize.is_final_output is True
+    assert finalize.final_output is not None

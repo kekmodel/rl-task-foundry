@@ -1169,8 +1169,11 @@ class SubmitDraftController:
     _feedback_events: int = field(default=0, init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
     _observed_response_strings: set[str] = field(default_factory=set, init=False)
+    _terminated_too_hard: bool = field(default=False, init=False)
 
     def submissions_left(self) -> int:
+        if self._terminated_too_hard:
+            return 0
         return max(0, self.max_submissions - (len(self.attempts) + self._feedback_events))
 
     def record_atomic_tool_call(
@@ -1288,6 +1291,11 @@ class SubmitDraftController:
             return _render_structured_message(
                 kind="Accepted",
                 result="Draft already stored.",
+            )
+        if self._terminated_too_hard:
+            return (
+                "TerminatedError: This conversation was discarded after a "
+                "too-hard rejection. Stop calling submit_draft."
             )
         if self.submissions_left() <= 0:
             return "BudgetExhaustedError: No more attempts."
@@ -1489,6 +1497,7 @@ class SubmitDraftController:
 
         # Too hard is terminal — discard and let the outer
         # loop start fresh rather than oscillating.
+        self._terminated_too_hard = True
         return self._record_rejection(
             submission_index=submission_index,
             message=_render_structured_message(
@@ -1500,7 +1509,8 @@ class SubmitDraftController:
                 ),
                 primary=(
                     "Too hard — no solver passed. "
-                    "This draft is discarded."
+                    "This conversation is terminated. "
+                    "Do not call submit_draft again."
                 ),
                 attempts_left=0,
             ),
