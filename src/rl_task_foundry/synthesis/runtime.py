@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -14,19 +13,16 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.infra.db import DatabasePools, ensure_attached_database_pools
+from rl_task_foundry.infra.db import DatabasePools
 from rl_task_foundry.pipeline.provider_resilience import (
     ProviderCircuitBreaker,
     ProviderCircuitSnapshot,
 )
 from rl_task_foundry.schema.graph import SchemaGraph
-from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
-from rl_task_foundry.schema.profiler import DataProfile, profile_database
-from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
+from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolBundle,
     AtomicToolFamily,
-    AtomicToolGenerator,
 )
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
@@ -52,11 +48,10 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftErrorCode,
     SubmitDraftPayload,
 )
+from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
-    bind_atomic_tool_executor,
     build_shuffle_seed,
-    load_atomic_tool_module,
     with_tool_shuffle_seed,
 )
 
@@ -476,40 +471,35 @@ def _snapshot_to_status(snapshot: ProviderCircuitSnapshot) -> SynthesisProviderS
 
 @dataclass(slots=True)
 class SynthesisAgentRuntime:
-    """Single-db synthesis runtime with lock-protected shared state."""
+    """Single-db synthesis runtime.
+
+    All per-database state (schema introspection, data profile, atomic tool
+    bundle, tool executors, anchor sampler, DB pools) lives in the injected
+    or lazily-constructed ``SynthesisDb``. The runtime itself only owns
+    per-conversation orchestration state (provider breakers, category-failure
+    backoff state, conversation lock, optional phase monitor).
+    """
 
     config: AppConfig
     synthesis_backends: list[_SynthesisBackendProtocol] | None = None
+    database_pools: DatabasePools | None = None
+    solver_orchestrator: SolverOrchestrator | None = None
+    synthesis_db: SynthesisDb | None = None
+    phase_monitor: PipelinePhaseMonitorLogger | None = None
     _breakers: dict[str, ProviderCircuitBreaker] = field(
         default_factory=dict, init=False, repr=False
     )
-    _graph_cache: SchemaGraph | None = field(default=None, init=False, repr=False)
-    _data_profile_cache: DataProfile | None = field(default=None, init=False, repr=False)
-    _atomic_tool_bundles: dict[str, AtomicToolBundle] = field(
-        default_factory=dict, init=False, repr=False
-    )
-    _tool_executor_cache: dict[str, dict[str, ToolExecutor]] = field(
-        default_factory=dict, init=False, repr=False
-    )
-    database_pools: DatabasePools | None = None
-    _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
-    _owns_database_pools: bool = field(default=True, init=False, repr=False)
+    _synthesis_db: SynthesisDb | None = field(default=None, init=False, repr=False)
+    _owns_synthesis_db: bool = field(default=True, init=False, repr=False)
+    _solver_orchestrator: SolverOrchestrator | None = field(default=None, init=False, repr=False)
+    _owns_solver_orchestrator: bool = field(default=True, init=False, repr=False)
     _bound_db_id: str | None = field(default=None, init=False, repr=False)
     _category_failures: dict[tuple[str, str], _CategoryFailureState] = field(
         default_factory=dict, init=False, repr=False
     )
     _bind_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _graph_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _atomic_tool_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _atomic_tool_materializer: AtomicToolMaterializer | None = field(
-        default=None, init=False, repr=False
-    )
-    solver_orchestrator: SolverOrchestrator | None = None
-    _solver_orchestrator: SolverOrchestrator | None = field(default=None, init=False, repr=False)
-    _owns_solver_orchestrator: bool = field(default=True, init=False, repr=False)
     _category_state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _conversation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    phase_monitor: PipelinePhaseMonitorLogger | None = None
     _owns_phase_monitor: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -535,10 +525,10 @@ class SynthesisAgentRuntime:
             )
             for provider_name in self.config.providers
         }
-        self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
-        if self.database_pools is not None:
-            self._database_pools = self.database_pools
-            self._owns_database_pools = False
+        if self.synthesis_db is not None:
+            self._synthesis_db = self.synthesis_db
+            self._owns_synthesis_db = False
+            self._bound_db_id = self.synthesis_db.db_id
         if self.solver_orchestrator is not None:
             self._solver_orchestrator = self.solver_orchestrator
             self._owns_solver_orchestrator = False
@@ -547,7 +537,7 @@ class SynthesisAgentRuntime:
 
             self._solver_orchestrator = SolverOrchestrator(
                 self.config,
-                database_pools=self._database_pools,
+                database_pools=self.database_pools,
             )
             self._owns_solver_orchestrator = True
         if self.phase_monitor is None:
@@ -570,16 +560,16 @@ class SynthesisAgentRuntime:
         if requested_topic:
             requested_topic = normalize_topic(requested_topic)
         await self._bind_db_id(db_id)
+        synthesis_db = self._ensure_synthesis_db(db_id)
+        if graph is not None:
+            synthesis_db.adopt_schema_graph(graph)
         if requested_topic:
             await self._ensure_category_available(
                 db_id, requested_topic
             )
-        resolved_graph = graph if graph is not None else await self._introspect_graph()
-        data_profile = await self._ensure_data_profile(resolved_graph)
-        atomic_tool_bundle = await self._ensure_atomic_tool_bundle(
-            db_id=db_id,
-            graph=resolved_graph,
-        )
+        resolved_graph = await synthesis_db.schema_graph()
+        data_profile = await synthesis_db.data_profile()
+        atomic_tool_bundle = await synthesis_db.atomic_tool_bundle()
         schema_summary = summarize_schema_graph(
             resolved_graph,
             max_tables=self.config.synthesis.runtime.schema_summary_max_tables,
@@ -588,7 +578,7 @@ class SynthesisAgentRuntime:
             atomic_tool_bundle,
             max_entity_surfaces=self.config.synthesis.runtime.tool_surface_summary_max_entries,
         )
-        anchor_hint = await self._pick_random_anchor(resolved_graph)
+        anchor_hint = await synthesis_db.random_anchor()
         shuffle_seed = build_shuffle_seed(
             "synthesis",
             db_id,
@@ -702,12 +692,9 @@ class SynthesisAgentRuntime:
         if self._owns_solver_orchestrator and self._solver_orchestrator is not None:
             await self._solver_orchestrator.close()
         self._solver_orchestrator = None
-        if self._database_pools is not None:
-            if self._owns_database_pools:
-                await self._database_pools.close()
-            self._database_pools = None
-        self._atomic_tool_bundles.clear()
-        self._tool_executor_cache.clear()
+        if self._owns_synthesis_db and self._synthesis_db is not None:
+            await self._synthesis_db.close()
+        self._synthesis_db = None
         if self._owns_phase_monitor and self.phase_monitor is not None:
             self.phase_monitor.close()
             self.phase_monitor = None
@@ -908,7 +895,8 @@ class SynthesisAgentRuntime:
         shuffle_seed: str,
     ) -> None:
         tool_definitions = bundle.actor_tool_definitions()
-        base_tool_executors = await self._tool_executors_for_bundle(db_id=db_id, bundle=bundle)
+        synthesis_db = self._ensure_synthesis_db(db_id)
+        base_tool_executors = await synthesis_db.tool_executors()
         tool_executors = {
             name: with_tool_shuffle_seed(executor, shuffle_seed=shuffle_seed)
             for name, executor in base_tool_executors.items()
@@ -1008,114 +996,21 @@ class SynthesisAgentRuntime:
             )
         return attempts
 
-    async def _introspect_graph(self) -> SchemaGraph:
-        if self._graph_cache is not None:
-            return self._graph_cache
-        async with self._graph_lock:
-            if self._graph_cache is not None:
-                return self._graph_cache
-            introspector = PostgresSchemaIntrospector(
-                database=self.config.database,
-                default_visibility=self.config.privacy.default_visibility,
-                visibility_overrides=self.config.privacy.visibility_overrides,
-            )
-            self._graph_cache = await introspector.introspect()
-        return self._graph_cache
-
-    async def _ensure_data_profile(self, graph: SchemaGraph) -> DataProfile:
-        if self._data_profile_cache is not None:
-            return self._data_profile_cache
-        self._data_profile_cache = await profile_database(self.config.database, graph)
-        return self._data_profile_cache
-
-    async def _pick_random_anchor(self, graph: SchemaGraph) -> dict[str, object] | None:
-        hub_tables = [
-            t for t in graph.tables
-            if t.primary_key
-            and len(t.primary_key) == 1
-            and (t.row_estimate or 0) >= 100
-        ]
-        if not hub_tables:
-            return None
-        import random
-        table = random.choice(hub_tables)
-        pk_col = table.primary_key[0]
-        try:
-            pools = await ensure_attached_database_pools(
-                self,
-                attr_name="_database_pools",
-                config=self.config.database,
-            )
-            async with pools.control_connection() as conn:
-                row = await conn.fetchrow(
-                    f"SELECT {pk_col} FROM {table.qualified_name} "
-                    f"ORDER BY random() LIMIT 1"
+    def _ensure_synthesis_db(self, db_id: str) -> SynthesisDb:
+        if self._synthesis_db is not None:
+            if self._synthesis_db.db_id != db_id:
+                raise SynthesisDbBindingError(
+                    "SynthesisAgentRuntime is bound to db_id="
+                    f"{self._synthesis_db.db_id}, refusing request for {db_id}"
                 )
-                if row:
-                    return {pk_col: row[pk_col]}
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "anchor seeding failed for %s",
-                table.qualified_name,
-                exc_info=True,
-            )
-        return None
-
-    async def _ensure_atomic_tool_bundle(
-        self,
-        *,
-        db_id: str,
-        graph: SchemaGraph,
-    ) -> AtomicToolBundle:
-        existing = self._atomic_tool_bundles.get(db_id)
-        if existing is not None:
-            return existing
-        async with self._atomic_tool_lock:
-            existing = self._atomic_tool_bundles.get(db_id)
-            if existing is not None:
-                return existing
-            bundle = AtomicToolGenerator(self.config.atomic_tools).generate_bundle(
-                graph,
-                db_id=db_id,
-            )
-            assert self._atomic_tool_materializer is not None
-            self._atomic_tool_materializer.materialize_bundle(bundle)
-            self._atomic_tool_bundles[db_id] = bundle
-            return bundle
-
-    async def _database_pools_for_tools(self) -> DatabasePools:
-        return await ensure_attached_database_pools(
-            self,
-            attr_name="_database_pools",
-            config=self.config.database,
+            return self._synthesis_db
+        self._synthesis_db = SynthesisDb(
+            db_id=db_id,
+            config=self.config,
+            database_pools=self.database_pools,
         )
-
-    async def _tool_executors_for_bundle(
-        self,
-        *,
-        db_id: str,
-        bundle: AtomicToolBundle,
-    ) -> dict[str, ToolExecutor]:
-        cached = self._tool_executor_cache.get(db_id)
-        if cached is not None:
-            return cached
-        pools = await self._database_pools_for_tools()
-        assert self._atomic_tool_materializer is not None
-        materialization = self._atomic_tool_materializer.materialize_bundle(bundle)
-        module = load_atomic_tool_module(
-            materialization.source_path,
-            module_name=f"rl_task_foundry_synthesis_atomic_tools_{db_id}",
-        )
-        resolved = {
-            tool.name: bind_atomic_tool_executor(
-                module=module,
-                tool_name=tool.name,
-                pools=pools,
-            )
-            for tool in bundle.tools
-        }
-        self._tool_executor_cache[db_id] = resolved
-        return resolved
+        self._owns_synthesis_db = True
+        return self._synthesis_db
 
     def _materialize_task_bundle(
         self,
@@ -1170,7 +1065,8 @@ class SynthesisAgentRuntime:
                 return
             if self._bound_db_id != db_id:
                 raise SynthesisDbBindingError(
-                    "SynthesisAgentRuntime instances are single-db; create a new runtime per db_id"
+                    "SynthesisAgentRuntime instances are single-db; "
+                    "create a new runtime per db_id"
                 )
 
     @staticmethod

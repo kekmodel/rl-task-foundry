@@ -22,6 +22,7 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
 )
+from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftPayload,
@@ -632,24 +633,25 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
 @pytest.mark.asyncio
 async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> None:
     backend = _FakeBackend(accept_payload=_accepted_payload())
+    config = _config_with_synthesis_output(tmp_path)
+    synthesis_db = SynthesisDb(db_id="sakila", config=config)
+    synthesis_db._graph_cache = _sample_graph()
+    synthesis_db._data_profile_cache = DataProfile()
+    synthesis_db._atomic_tool_bundle = _sample_atomic_tool_bundle()
+
+    async def _get_customer(_kwargs):
+        return {"customer_name": "Alice"}
+
+    synthesis_db._tool_executors = {"get_customer": _get_customer}
     runtime = SynthesisAgentRuntime(
-        _config_with_synthesis_output(tmp_path),
+        config,
         synthesis_backends=[backend],
         solver_orchestrator=_FakeSolverOrchestrator(
             matched_solver_runs=1,
             total_solver_runs=2,
         ),
+        synthesis_db=synthesis_db,
     )
-    runtime._graph_cache = _sample_graph()
-    runtime._data_profile_cache = DataProfile()
-    runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle()
-
-    async def _get_customer(_kwargs):
-        return {"customer_name": "Alice"}
-
-    runtime._tool_executor_cache["sakila"] = {
-        "get_customer": _get_customer,
-    }
 
     try:
         draft = await runtime.synthesize_environment_draft(
@@ -669,24 +671,25 @@ async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: Path) -> None:
     backend = _FakeBackend(reject_payload=_feedback_payload())
+    config = _config_with_synthesis_output(tmp_path)
+    synthesis_db = SynthesisDb(db_id="sakila", config=config)
+    synthesis_db._graph_cache = _sample_graph()
+    synthesis_db._data_profile_cache = DataProfile()
+    synthesis_db._atomic_tool_bundle = _sample_atomic_tool_bundle()
+
+    async def _get_customer(_kwargs):
+        return {"customer_name": "Alice"}
+
+    synthesis_db._tool_executors = {"get_customer": _get_customer}
     runtime = SynthesisAgentRuntime(
-        _config_with_synthesis_output(tmp_path),
+        config,
         synthesis_backends=[backend],
         solver_orchestrator=_FakeSolverOrchestrator(
             matched_solver_runs=1,
             total_solver_runs=2,
         ),
+        synthesis_db=synthesis_db,
     )
-    runtime._graph_cache = _sample_graph()
-    runtime._data_profile_cache = DataProfile()
-    runtime._atomic_tool_bundles["sakila"] = _sample_atomic_tool_bundle()
-
-    async def _get_customer(_kwargs):
-        return {"customer_name": "Alice"}
-
-    runtime._tool_executor_cache["sakila"] = {
-        "get_customer": _get_customer,
-    }
 
     try:
         with pytest.raises(SynthesisArtifactGenerationError):
@@ -699,16 +702,37 @@ async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: 
         await runtime.close()
 
 @pytest.mark.asyncio
-async def test_synthesis_runtime_close_clears_cached_tool_executors(tmp_path: Path) -> None:
+async def test_synthesis_runtime_close_clears_owned_synthesis_db(tmp_path: Path) -> None:
+    config = _config_with_synthesis_output(tmp_path)
+    synthesis_db = SynthesisDb(db_id="sakila", config=config)
+    synthesis_db._tool_executors = {"noop": lambda _kwargs: {}}
     runtime = SynthesisAgentRuntime(
-        _config_with_synthesis_output(tmp_path),
+        config,
         synthesis_backends=[_FakeBackend()],
+        synthesis_db=synthesis_db,
     )
-    runtime._tool_executor_cache["sakila"] = {"noop": lambda _kwargs: {}}
 
     await runtime.close()
 
-    assert runtime._tool_executor_cache == {}
+    # injected synthesis_db is preserved (caller owns lifecycle)
+    assert synthesis_db._tool_executors == {"noop": synthesis_db._tool_executors["noop"]}
+    assert runtime._synthesis_db is None
+
+
+@pytest.mark.asyncio
+async def test_synthesis_runtime_close_disposes_owned_synthesis_db(tmp_path: Path) -> None:
+    config = _config_with_synthesis_output(tmp_path)
+    runtime = SynthesisAgentRuntime(
+        config,
+        synthesis_backends=[_FakeBackend()],
+    )
+    synthesis_db = runtime._ensure_synthesis_db("sakila")
+    synthesis_db._tool_executors = {"noop": lambda _kwargs: {}}
+
+    await runtime.close()
+
+    assert runtime._synthesis_db is None
+    assert synthesis_db._tool_executors is None
 
 def test_submit_draft_payload_rejects_blank_text() -> None:
     payload = _accepted_payload().model_dump(mode="json")

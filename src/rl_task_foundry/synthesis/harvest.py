@@ -28,6 +28,7 @@ from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialStatus,
     RealDbTrialSummary,
 )
+from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.task_registry import TaskRegistryWriter
 
 TrialRunnerFactory = Callable[[], RealDbTrialRunner]
@@ -66,6 +67,12 @@ class HarvestRunner:
     _shared_solver_orchestrator: SolverOrchestrator | None = field(
         default=None, init=False, repr=False
     )
+    _synthesis_dbs: dict[str, SynthesisDb] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _synthesis_db_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.registry is None:
@@ -77,7 +84,7 @@ class HarvestRunner:
                 materializer=self.registry.atomic_tool_materializer,
             )
 
-    def _build_trial_runner(self) -> RealDbTrialRunner:
+    def _build_trial_runner(self, *, db_id: str) -> RealDbTrialRunner:
         if self.trial_runner_factory is not None:
             return self.trial_runner_factory()
         return RealDbTrialRunner(
@@ -86,7 +93,24 @@ class HarvestRunner:
             exporter=self.exporter,
             database_pools=self._shared_pools,
             solver_orchestrator=self._shared_solver_orchestrator,
+            synthesis_db=self._synthesis_dbs.get(db_id),
         )
+
+    async def _ensure_synthesis_db(self, db_id: str) -> SynthesisDb:
+        existing = self._synthesis_dbs.get(db_id)
+        if existing is not None:
+            return existing
+        async with self._synthesis_db_lock:
+            existing = self._synthesis_dbs.get(db_id)
+            if existing is not None:
+                return existing
+            synthesis_db = SynthesisDb(
+                db_id=db_id,
+                config=self.config,
+                database_pools=self._shared_pools,
+            )
+            self._synthesis_dbs[db_id] = synthesis_db
+            return synthesis_db
 
     async def run(
         self,
@@ -117,6 +141,8 @@ class HarvestRunner:
                 self.config,
                 database_pools=self._shared_pools,
             )
+        if self.trial_runner_factory is None:
+            await self._ensure_synthesis_db(db_id)
         harvest_monitor_path = output_root / "phase_monitors.jsonl"
         flow_id = build_flow_id("harvest")
         harvest_monitor = PipelinePhaseMonitorLogger(
@@ -157,7 +183,7 @@ class HarvestRunner:
                     attempted += 1
                     trial_idx = attempted
                 trial_root = output_root / "trials" / f"trial_{trial_idx:04d}"
-                trial_runner = self._build_trial_runner()
+                trial_runner = self._build_trial_runner(db_id=db_id)
                 try:
                     summary = await trial_runner.run(
                         trial_root,
@@ -261,6 +287,9 @@ class HarvestRunner:
         if self._shared_solver_orchestrator is not None:
             await self._shared_solver_orchestrator.close()
             self._shared_solver_orchestrator = None
+        for synthesis_db in self._synthesis_dbs.values():
+            await synthesis_db.close()
+        self._synthesis_dbs.clear()
         OpenAIAgentsSynthesisBackend.clear_model_cache()
         close_registry = getattr(self.registry, "close", None)
         if callable(close_registry):
