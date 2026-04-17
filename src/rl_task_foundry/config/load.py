@@ -9,7 +9,12 @@ from typing import Any
 
 import yaml
 
-from rl_task_foundry.config.models import AppConfig, ModelsConfig, SolverModelConfig
+from rl_task_foundry.config.models import (
+    AppConfig,
+    ModelsConfig,
+    SolverModelConfig,
+    derive_solver_id,
+)
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)(?::-(.*?))?\}")
 
@@ -85,11 +90,21 @@ def apply_model_overrides(
 
     if solver_provider is not None or solver_model is not None:
         updated_solvers: list[SolverModelConfig] = []
+        model_counters: dict[str, int] = {}
         for solver in models.solvers:
+            new_model = solver_model if solver_model is not None else solver.model
+            new_provider = solver_provider if solver_provider is not None else solver.provider
+            if solver_model is not None and new_model != solver.model:
+                index = model_counters.get(new_model, 0)
+                model_counters[new_model] = index + 1
+                new_solver_id = derive_solver_id(new_model, index)
+            else:
+                new_solver_id = solver.solver_id
             updated = solver.model_copy(
                 update={
-                    "provider": solver_provider if solver_provider is not None else solver.provider,
-                    "model": solver_model if solver_model is not None else solver.model,
+                    "provider": new_provider,
+                    "model": new_model,
+                    "solver_id": new_solver_id,
                 }
             )
             updated_solvers.append(updated)

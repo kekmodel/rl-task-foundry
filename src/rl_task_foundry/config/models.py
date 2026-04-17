@@ -56,9 +56,46 @@ class SolverModelConfig(StrictModel):
     summarization_mode: Literal["off", "explicit"] = "off"
 
 
+def derive_solver_id(model: str, index: int) -> str:
+    """Derive a stable solver_id from the model name and a per-model index.
+
+    The schema-level source of truth is ``(provider, model, index)``; keeping
+    the model in the id prevents two runs at different models from colliding
+    in ``verification_results (task_id, solver_id)``.
+    """
+    slug = model.replace("/", "-")
+    return f"{slug}_{index:02d}"
+
+
 class ModelsConfig(StrictModel):
     composer: ModelRef
     solvers: list[SolverModelConfig]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_missing_solver_ids(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        solvers = data.get("solvers")
+        if not isinstance(solvers, list):
+            return data
+        counters: dict[str, int] = {}
+        filled: list[object] = []
+        for entry in solvers:
+            if not isinstance(entry, dict):
+                filled.append(entry)
+                continue
+            if entry.get("solver_id"):
+                filled.append(entry)
+                continue
+            model = entry.get("model")
+            if not isinstance(model, str):
+                filled.append(entry)
+                continue
+            index = counters.get(model, 0)
+            counters[model] = index + 1
+            filled.append({**entry, "solver_id": derive_solver_id(model, index)})
+        return {**data, "solvers": filled}
 
     @computed_field  # type: ignore[prop-decorator]
     @property
