@@ -39,7 +39,8 @@ Each task bundle carries:
 - `db_id`
 - `domain`
 - `topic`
-- `difficulty_vector`
+- `created_at`
+- `generator_version`
 - `tool_signature`
 - `task_signature`
 - `status`

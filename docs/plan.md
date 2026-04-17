@@ -1,5 +1,7 @@
 # Plan 4: Synthesis-Agent Hybrid Rewrite Plan
 
+> **HISTORICAL** — 본 문서는 path-centric 스택을 synthesis-agent 스택으로 재설계한 시점의 기획 문서입니다. 이후 difficulty vector 제거(2026-04-12, `02528e1`), heuristic validator strip(2026-04-12, `2b3a61c` 외), throughput-engineering 6단계 리팩터(2026-04-17 진행 중)가 누적되어 현재 모듈 표면과 디테일은 이 문서와 다릅니다. 현재 작업은 `dev/throughput-engineering` 브랜치에서 진행되며, 단계별 진행 상황은 메모리 `project_throughput_engineering_refactor.md`를 참조하세요. 본 문서는 초기 설계 의도 + 삭제된 legacy stack 기록 용도로 보존합니다.
+
 ## Objective
 
 이 계획의 목적은 RL Task Foundry를 `path-centric task generator`에서  

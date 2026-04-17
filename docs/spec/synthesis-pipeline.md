@@ -38,10 +38,9 @@ Current output includes:
 
 - `canonical_answer_json`
 - `anchor_entity`
-- `difficulty_vector`
-- `label_summary`
+- `label_signature` (sha256 of canonical answer JSON)
 
-The runtime derives the output schema from the canonical answer automatically.
+The runtime derives the output schema from the canonical answer automatically. Solver pass rate is the sole difficulty signal — there is no agent-supplied difficulty vector.
 
 ## Task Synthesis
 
@@ -62,10 +61,9 @@ Prompt inputs should stay LLM-friendly.
 Keep:
 
 - domain summary
-- requested topic
-- compact schema orientation
+- requested topic (optional — agent may infer from schema)
+- compact schema orientation (hub/bridge tables, fanout edges, readable vs id-only)
 - tool feedback
-- natural-language difficulty hint
 
 Do not dump internal runtime state, raw debug payloads, or redundant tool-definition JSON into the prompt.
 

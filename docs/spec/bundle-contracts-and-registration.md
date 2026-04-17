@@ -30,7 +30,7 @@ Key fields:
 - `topic`
 - `output_schema`
 - `constraint_summary`
-- `difficulty_vector`
+- `instance_parameters`
 
 ### `TaskBundleContract`
 
@@ -43,7 +43,8 @@ Key fields:
 - `domain`
 - `topic`
 - `atomic_tool_set_ref`
-- `difficulty_vector`
+- `created_at`
+- `generator_version`
 - `tool_signature`
 - `task_signature`
 - `status`
@@ -89,7 +90,6 @@ Quality-rejected drafts are disposable and may be regenerated later.
 Registry deduplication uses:
 
 - exact signatures
-- semantic dedup text
-- difficulty band bucketing
+- semantic dedup text (MinHash LSH over question + topic + output shape)
 
 The exact signature is authoritative for commit-time identity.
