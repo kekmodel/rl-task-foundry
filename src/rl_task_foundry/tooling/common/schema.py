@@ -120,3 +120,129 @@ def snapshot_from_graph(graph: SchemaGraph) -> SchemaSnapshot:
 def _iter_table_names(snapshot: SchemaSnapshot) -> Iterable[str]:
     for table in snapshot.tables:
         yield table.name
+
+
+def snapshot_to_dict(snapshot: SchemaSnapshot) -> dict[str, object]:
+    """Serialize a `SchemaSnapshot` to a JSON-ready dict.
+
+    Round-trips with `snapshot_from_dict` — used by the bundle export
+    flow so env servers can load the snapshot and re-instantiate the
+    atomic calculus tools without re-introspecting the database.
+    """
+    tables: list[dict[str, object]] = []
+    for table in snapshot.tables:
+        tables.append(
+            {
+                "schema": table.schema,
+                "name": table.name,
+                "primary_key": list(table.primary_key),
+                "columns": [
+                    {
+                        "name": column.name,
+                        "data_type": column.data_type,
+                        "is_nullable": column.is_nullable,
+                        "is_primary_key": column.is_primary_key,
+                        "is_foreign_key": column.is_foreign_key,
+                    }
+                    for column in table.columns
+                ],
+            }
+        )
+    edges: list[dict[str, object]] = [
+        {
+            "source_table": edge.source_table,
+            "source_column": edge.source_column,
+            "target_table": edge.target_table,
+            "target_column": edge.target_column,
+        }
+        for edge in snapshot.edges
+    ]
+    return {"tables": tables, "edges": edges}
+
+
+def _require_str(mapping: dict[str, object], key: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str):
+        raise ValueError(
+            f"schema snapshot payload missing string field {key!r}"
+        )
+    return value
+
+
+def _require_bool(mapping: dict[str, object], key: str) -> bool:
+    value = mapping.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"schema snapshot payload missing bool field {key!r}"
+        )
+    return value
+
+
+def snapshot_from_dict(payload: dict[str, object]) -> SchemaSnapshot:
+    """Rebuild a `SchemaSnapshot` from the JSON shape written by
+    `snapshot_to_dict`. Raises `ValueError` on structural mismatch.
+    """
+    tables_raw = payload.get("tables")
+    edges_raw = payload.get("edges")
+    if not isinstance(tables_raw, list):
+        raise ValueError("schema snapshot payload missing 'tables' list")
+    if not isinstance(edges_raw, list):
+        raise ValueError("schema snapshot payload missing 'edges' list")
+    table_specs: list[TableSpec] = []
+    for index, table_entry in enumerate(tables_raw):
+        if not isinstance(table_entry, dict):
+            raise ValueError(f"tables[{index}] must be a mapping")
+        typed_entry: dict[str, object] = {
+            str(key): value for key, value in table_entry.items()
+        }
+        columns_raw = typed_entry.get("columns")
+        if not isinstance(columns_raw, list):
+            raise ValueError(f"tables[{index}].columns must be a list")
+        column_specs: list[ColumnSpec] = []
+        for column_index, column_entry in enumerate(columns_raw):
+            if not isinstance(column_entry, dict):
+                raise ValueError(
+                    f"tables[{index}].columns[{column_index}] must be a mapping"
+                )
+            column_typed: dict[str, object] = {
+                str(key): value for key, value in column_entry.items()
+            }
+            column_specs.append(
+                ColumnSpec(
+                    name=_require_str(column_typed, "name"),
+                    data_type=_require_str(column_typed, "data_type"),
+                    is_nullable=_require_bool(column_typed, "is_nullable"),
+                    is_primary_key=_require_bool(column_typed, "is_primary_key"),
+                    is_foreign_key=_require_bool(column_typed, "is_foreign_key"),
+                )
+            )
+        pk_raw = typed_entry.get("primary_key", [])
+        if not isinstance(pk_raw, list):
+            raise ValueError(
+                f"tables[{index}].primary_key must be a list"
+            )
+        pk_columns = tuple(str(column) for column in pk_raw)
+        table_specs.append(
+            TableSpec(
+                schema=_require_str(typed_entry, "schema"),
+                name=_require_str(typed_entry, "name"),
+                columns=tuple(column_specs),
+                primary_key=pk_columns,
+            )
+        )
+    edge_specs: list[EdgeSpec] = []
+    for index, edge_entry in enumerate(edges_raw):
+        if not isinstance(edge_entry, dict):
+            raise ValueError(f"edges[{index}] must be a mapping")
+        edge_typed: dict[str, object] = {
+            str(key): value for key, value in edge_entry.items()
+        }
+        edge_specs.append(
+            EdgeSpec(
+                source_table=_require_str(edge_typed, "source_table"),
+                source_column=_require_str(edge_typed, "source_column"),
+                target_table=_require_str(edge_typed, "target_table"),
+                target_column=_require_str(edge_typed, "target_column"),
+            )
+        )
+    return SchemaSnapshot(tables=tuple(table_specs), edges=tuple(edge_specs))

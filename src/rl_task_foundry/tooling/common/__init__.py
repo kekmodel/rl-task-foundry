@@ -15,7 +15,9 @@ from rl_task_foundry.tooling.common.schema import (
     EdgeSpec,
     SchemaSnapshot,
     TableSpec,
+    snapshot_from_dict,
     snapshot_from_graph,
+    snapshot_to_dict,
 )
 from rl_task_foundry.tooling.common.sql import (
     coerce_param,
@@ -37,5 +39,7 @@ __all__ = [
     "quote_table",
     "readonly_select",
     "resolve_edge",
+    "snapshot_from_dict",
     "snapshot_from_graph",
+    "snapshot_to_dict",
 ]

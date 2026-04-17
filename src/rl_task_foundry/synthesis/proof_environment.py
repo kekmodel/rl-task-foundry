@@ -54,6 +54,13 @@ from rl_task_foundry.synthesis.task_registry import (
     TaskRegistryCommitStatus,
     TaskRegistryWriter,
 )
+from rl_task_foundry.schema.graph import (
+    ColumnProfile,
+    ForeignKeyEdge,
+    SchemaGraph,
+    TableProfile,
+)
+from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_from_graph
 
 PROOF_DB_ID = "proof_trip_fixture"
 PROOF_TASK_ID = "task_proof_trip_fixture_itinerary_v1"
@@ -159,17 +166,23 @@ class ProofTaskRunner:
     def __post_init__(self) -> None:
         if self.registry is None:
             self.registry = TaskRegistryWriter.for_config(self.config)
-        assert self.registry.atomic_tool_materializer is not None
+        assert self.registry.snapshot_materializer is not None
         if self.exporter is None:
             self.exporter = TaskBundleExporter(
                 registry=self.registry,
-                materializer=self.registry.atomic_tool_materializer,
+                snapshot_materializer=self.registry.snapshot_materializer,
             )
         if self.solver_orchestrator is None:
             self.solver_orchestrator = SolverOrchestrator(self.config)
 
     async def run(self, output_root: Path) -> ProofTaskRunSummary:
         output_root.mkdir(parents=True, exist_ok=True)
+        assert self.registry is not None
+        assert self.registry.snapshot_materializer is not None
+        self.registry.snapshot_materializer.materialize(
+            db_id=PROOF_DB_ID,
+            snapshot=build_proof_schema_snapshot(),
+        )
         flow_id = build_flow_id("proof_task")
         phase_monitor_log_path = output_root / "debug" / "phase_monitors.jsonl"
         phase_monitor = PipelinePhaseMonitorLogger(
@@ -298,6 +311,230 @@ class ProofTaskRunner:
         close_registry = getattr(self.registry, "close", None)
         if callable(close_registry):
             close_registry()
+
+
+def build_proof_schema_snapshot() -> "SchemaSnapshot":
+    """Hand-written snapshot matching `PROOF_FIXTURE_SCHEMA_SQL`.
+
+    Lives next to the fixture SQL so both paths stay in sync. The proof
+    harness feeds this into `SchemaSnapshotMaterializer` before bundle
+    export so the exported proof bundle carries a valid
+    `schema_snapshot.json` without round-tripping through
+    introspection.
+    """
+    graph = SchemaGraph(
+        tables=[
+            TableProfile(
+                schema_name="public",
+                table_name="proof_anchors",
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_anchors",
+                        column_name="anchor_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_anchors",
+                        column_name="season",
+                        data_type="text",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_anchors",
+                        column_name="budget_bucket",
+                        data_type="text",
+                        ordinal_position=3,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_anchors",
+                        column_name="start_city_id",
+                        data_type="integer",
+                        ordinal_position=4,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_foreign_key=True,
+                    ),
+                ],
+                primary_key=("anchor_id",),
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="proof_cities",
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_cities",
+                        column_name="city_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_cities",
+                        column_name="city_name",
+                        data_type="text",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_cities",
+                        column_name="region_name",
+                        data_type="text",
+                        ordinal_position=3,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_cities",
+                        column_name="season",
+                        data_type="text",
+                        ordinal_position=4,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                ],
+                primary_key=("city_id",),
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="proof_lodgings",
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_lodgings",
+                        column_name="lodging_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_lodgings",
+                        column_name="city_id",
+                        data_type="integer",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_foreign_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_lodgings",
+                        column_name="lodging_name",
+                        data_type="text",
+                        ordinal_position=3,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_lodgings",
+                        column_name="nightly_cost",
+                        data_type="integer",
+                        ordinal_position=4,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                ],
+                primary_key=("lodging_id",),
+            ),
+            TableProfile(
+                schema_name="public",
+                table_name="proof_activities",
+                columns=[
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_activities",
+                        column_name="activity_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_primary_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_activities",
+                        column_name="city_id",
+                        data_type="integer",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_foreign_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_activities",
+                        column_name="activity_name",
+                        data_type="text",
+                        ordinal_position=3,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                    ColumnProfile(
+                        schema_name="public",
+                        table_name="proof_activities",
+                        column_name="ticket_cost",
+                        data_type="integer",
+                        ordinal_position=4,
+                        is_nullable=False,
+                        visibility="user_visible",
+                    ),
+                ],
+                primary_key=("activity_id",),
+            ),
+        ],
+        edges=[
+            ForeignKeyEdge(
+                constraint_name="anchors_start_city",
+                source_schema="public",
+                source_table="proof_anchors",
+                source_columns=("start_city_id",),
+                target_schema="public",
+                target_table="proof_cities",
+                target_columns=("city_id",),
+            ),
+            ForeignKeyEdge(
+                constraint_name="lodgings_city",
+                source_schema="public",
+                source_table="proof_lodgings",
+                source_columns=("city_id",),
+                target_schema="public",
+                target_table="proof_cities",
+                target_columns=("city_id",),
+            ),
+            ForeignKeyEdge(
+                constraint_name="activities_city",
+                source_schema="public",
+                source_table="proof_activities",
+                source_columns=("city_id",),
+                target_schema="public",
+                target_table="proof_cities",
+                target_columns=("city_id",),
+            ),
+        ],
+    )
+    return snapshot_from_graph(graph)
 
 
 def write_proof_fixture_sql(root_dir: Path) -> ProofFixtureSqlFiles:

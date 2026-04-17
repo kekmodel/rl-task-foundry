@@ -88,7 +88,7 @@ async def test_proof_task_runner_commits_and_exports_bundle(tmp_path: Path) -> N
     )
     exporter = TaskBundleExporter(
         registry=writer,
-        materializer=writer.atomic_tool_materializer,
+        snapshot_materializer=writer.snapshot_materializer,
     )
 
     class _FakeRuntime:
@@ -170,7 +170,12 @@ async def test_proof_task_runner_commits_and_exports_bundle(tmp_path: Path) -> N
     assert summary.registry_status is TaskRegistryCommitStatus.COMMITTED
     assert summary.bundle_root is not None
     assert (summary.fixture_sql_root / "schema.sql").exists()
-    assert (summary.bundle_root / "databases" / PROOF_DB_ID / "atomic_tools.py").exists()
+    assert (
+        summary.bundle_root / "databases" / PROOF_DB_ID / "schema_snapshot.json"
+    ).exists()
+    assert (
+        summary.bundle_root / "databases" / PROOF_DB_ID / "tooling_version.json"
+    ).exists()
     assert (summary.bundle_root / "tasks" / PROOF_TASK_ID / "task.yaml").exists()
     assert writer.task_count(db_id=PROOF_DB_ID) == 1
     phase_monitor_lines = [
@@ -222,7 +227,7 @@ async def test_proof_task_runner_skips_commit_when_quality_gate_rejects(
         registry=writer,
         exporter=TaskBundleExporter(
             registry=writer,
-            materializer=writer.atomic_tool_materializer,
+            snapshot_materializer=writer.snapshot_materializer,
         ),
     )
     try:

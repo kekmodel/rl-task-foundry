@@ -23,6 +23,9 @@ from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.schema.profiler import DataProfile, profile_database
 from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
+from rl_task_foundry.synthesis.snapshot_materializer import (
+    SchemaSnapshotMaterializer,
+)
 from rl_task_foundry.synthesis.tool_runtime import (
     ToolExecutor,
     bind_atomic_tool_executor,
@@ -39,9 +42,13 @@ class SynthesisDb:
     config: AppConfig
     database_pools: DatabasePools | None = None
     atomic_tool_materializer: AtomicToolMaterializer | None = None
+    snapshot_materializer: SchemaSnapshotMaterializer | None = None
     _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
     _owns_database_pools: bool = field(default=True, init=False, repr=False)
     _atomic_tool_materializer: AtomicToolMaterializer | None = field(
+        default=None, init=False, repr=False
+    )
+    _snapshot_materializer: SchemaSnapshotMaterializer | None = field(
         default=None, init=False, repr=False
     )
     _graph_cache: SchemaGraph | None = field(default=None, init=False, repr=False)
@@ -62,6 +69,12 @@ class SynthesisDb:
             self._atomic_tool_materializer = self.atomic_tool_materializer
         else:
             self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
+        if self.snapshot_materializer is not None:
+            self._snapshot_materializer = self.snapshot_materializer
+        else:
+            self._snapshot_materializer = SchemaSnapshotMaterializer.for_config(
+                self.config
+            )
 
     async def schema_graph(self) -> SchemaGraph:
         if self._graph_cache is not None:
@@ -80,14 +93,18 @@ class SynthesisDb:
     async def schema_snapshot(self) -> SchemaSnapshot:
         """Immutable snapshot of the schema graph for tooling callers.
 
-        Derived from the cached `SchemaGraph` via `snapshot_from_graph`.
-        Cheap to build; re-cached per SynthesisDb so repeated composer
-        sessions share one instance.
+        Derived from the cached `SchemaGraph` via `snapshot_from_graph`
+        and cached per `SynthesisDb`. On first resolution the snapshot
+        is also materialized to disk (see `SchemaSnapshotMaterializer`)
+        so `bundle_exporter` can ship it without touching the DB again.
         """
         if self._schema_snapshot_cache is not None:
             return self._schema_snapshot_cache
         graph = await self.schema_graph()
-        self._schema_snapshot_cache = snapshot_from_graph(graph)
+        snapshot = snapshot_from_graph(graph)
+        assert self._snapshot_materializer is not None
+        self._snapshot_materializer.materialize(db_id=self.db_id, snapshot=snapshot)
+        self._schema_snapshot_cache = snapshot
         return self._schema_snapshot_cache
 
     async def data_profile(self) -> DataProfile:

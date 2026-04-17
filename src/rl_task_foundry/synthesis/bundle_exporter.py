@@ -1,4 +1,15 @@
-"""Export registered task bundles into bundle layout."""
+"""Export registered task bundles into bundle layout.
+
+Per-database artifacts shipped in an exported bundle:
+
+- ``schema_snapshot.json`` — the immutable schema snapshot; env servers
+  rebuild the atomic calculus / composer DSL from it.
+- ``tooling_version.json`` — tooling version identifier + inventory of
+  the primitives the snapshot is expected to drive.
+
+Per-task artifacts are unchanged (task.yaml, task.json, instance.json,
+canonical_answer.json).
+"""
 
 from __future__ import annotations
 
@@ -7,7 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
+from rl_task_foundry.synthesis.snapshot_materializer import (
+    SchemaSnapshotMaterializer,
+)
 from rl_task_foundry.synthesis.task_registry import (
     TaskRegistryRecord,
     TaskRegistryWriter,
@@ -26,13 +39,13 @@ class TaskBundleExportSummary:
 @dataclass(slots=True)
 class TaskBundleExporter:
     registry: TaskRegistryWriter
-    materializer: AtomicToolMaterializer
+    snapshot_materializer: SchemaSnapshotMaterializer
 
     @classmethod
     def for_config(cls, config: AppConfig) -> "TaskBundleExporter":
         return cls(
             registry=TaskRegistryWriter.for_config(config),
-            materializer=AtomicToolMaterializer.for_config(config),
+            snapshot_materializer=SchemaSnapshotMaterializer.for_config(config),
         )
 
     def export_bundle(
@@ -95,23 +108,25 @@ class TaskBundleExporter:
             bundle_root.mkdir(parents=True, exist_ok=True)
 
     def _export_database_bundle(self, bundle_root: Path, db_id: str) -> None:
-        source_dir = self.materializer.root_dir / db_id
-        source_atomic_tools = source_dir / "atomic_tools.py"
-        source_definitions = source_dir / "atomic_tool_definitions.json"
-        if not source_atomic_tools.exists():
+        source_dir = self.snapshot_materializer.root_dir / db_id
+        source_snapshot = source_dir / "schema_snapshot.json"
+        source_version = source_dir / "tooling_version.json"
+        if not source_snapshot.exists():
             raise FileNotFoundError(
-                f"missing materialized atomic tool bundle for"
-                f" db_id={db_id!r}: {source_atomic_tools}"
+                "missing materialized schema snapshot for "
+                f"db_id={db_id!r}: {source_snapshot}. "
+                "Resolve SynthesisDb.schema_snapshot() (or call "
+                "SchemaSnapshotMaterializer.materialize) before exporting."
             )
-        if not source_definitions.exists():
+        if not source_version.exists():
             raise FileNotFoundError(
-                "missing materialized atomic tool definitions for "
-                f"db_id={db_id!r}: {source_definitions}"
+                "missing tooling_version.json for "
+                f"db_id={db_id!r}: {source_version}"
             )
         target_dir = bundle_root / "databases" / db_id
         target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_atomic_tools, target_dir / "atomic_tools.py")
-        shutil.copy2(source_definitions, target_dir / "atomic_tool_definitions.json")
+        shutil.copy2(source_snapshot, target_dir / "schema_snapshot.json")
+        shutil.copy2(source_version, target_dir / "tooling_version.json")
 
     def _export_task_bundle(
         self,

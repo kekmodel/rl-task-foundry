@@ -78,10 +78,10 @@ class HarvestRunner:
         if self.registry is None:
             self.registry = TaskRegistryWriter.for_config(self.config)
         if self.exporter is None:
-            assert self.registry.atomic_tool_materializer is not None
+            assert self.registry.snapshot_materializer is not None
             self.exporter = TaskBundleExporter(
                 registry=self.registry,
-                materializer=self.registry.atomic_tool_materializer,
+                snapshot_materializer=self.registry.snapshot_materializer,
             )
 
     def _build_trial_runner(self, *, db_id: str) -> RealDbTrialRunner:

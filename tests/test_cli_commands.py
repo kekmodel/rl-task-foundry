@@ -373,14 +373,50 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
 
 
 def test_cli_export_bundle_writes_task_layout(monkeypatch, tmp_path: Path) -> None:
+    from rl_task_foundry.schema.graph import (
+        ColumnProfile,
+        SchemaGraph,
+        TableProfile,
+    )
+    from rl_task_foundry.tooling.common import snapshot_from_graph
+
     writer = TaskRegistryWriter(
         root_dir=tmp_path / "registry" / "tasks",
         index_db_path=tmp_path / "registry" / "task_registry.db",
     )
-    writer.commit_draft(_sample_draft())
+    draft = _sample_draft()
+    writer.commit_draft(draft)
+    assert writer.snapshot_materializer is not None
+    writer.snapshot_materializer.materialize(
+        db_id=draft.db_id,
+        snapshot=snapshot_from_graph(
+            SchemaGraph(
+                tables=[
+                    TableProfile(
+                        schema_name="public",
+                        table_name="customer",
+                        columns=[
+                            ColumnProfile(
+                                schema_name="public",
+                                table_name="customer",
+                                column_name="customer_id",
+                                data_type="integer",
+                                ordinal_position=1,
+                                is_nullable=False,
+                                visibility="user_visible",
+                                is_primary_key=True,
+                            )
+                        ],
+                        primary_key=("customer_id",),
+                    )
+                ],
+                edges=[],
+            )
+        ),
+    )
     exporter = TaskBundleExporter(
         registry=writer,
-        materializer=writer.atomic_tool_materializer,
+        snapshot_materializer=writer.snapshot_materializer,
     )
 
     monkeypatch.setattr(
@@ -395,7 +431,8 @@ def test_cli_export_bundle_writes_task_layout(monkeypatch, tmp_path: Path) -> No
     assert "bundle exported" in result.stdout
     assert "database_count=1" in result.stdout
     assert "task_count=1" in result.stdout
-    assert (output_dir / "databases" / "sakila" / "atomic_tools.py").exists()
+    assert (output_dir / "databases" / "sakila" / "schema_snapshot.json").exists()
+    assert (output_dir / "databases" / "sakila" / "tooling_version.json").exists()
     task_dir = output_dir / "tasks" / "task_assignment_registrytest"
     assert (task_dir / "task.yaml").exists()
     assert (task_dir / "instance.json").exists()

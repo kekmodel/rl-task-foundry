@@ -141,10 +141,10 @@ class RealDbTrialRunner:
             self.registry = TaskRegistryWriter.for_config(self.config)
             self._owns_registry = True
         if self.exporter is None:
-            assert self.registry.atomic_tool_materializer is not None
+            assert self.registry.snapshot_materializer is not None
             self.exporter = TaskBundleExporter(
                 registry=self.registry,
-                materializer=self.registry.atomic_tool_materializer,
+                snapshot_materializer=self.registry.snapshot_materializer,
             )
         if self.solver_orchestrator is None and self.synthesis_runtime is None:
             self.solver_orchestrator = SolverOrchestrator(
