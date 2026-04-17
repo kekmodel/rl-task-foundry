@@ -104,7 +104,6 @@ def _config_with_run_db(tmp_path: Path):
         update={
             "run_db_path": tmp_path / "run.db",
             "traces_dir": tmp_path / "traces",
-            "events_jsonl_path": tmp_path / "events.jsonl",
         },
         deep=True,
     )

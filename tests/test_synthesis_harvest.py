@@ -111,7 +111,6 @@ def _config_with_tmp_traces(tmp_path: Path):
         update={
             "traces_dir": tmp_path / "traces",
             "run_db_path": tmp_path / "run.db",
-            "events_jsonl_path": tmp_path / "events.jsonl",
         },
         deep=True,
     )
@@ -243,6 +242,87 @@ async def test_harvest_runner_stalls_when_no_commits(tmp_path: Path) -> None:
     assert summary.committed == 0
     assert summary.attempted >= 1
     assert summary.accepted_task_ids == ()
+
+
+@dataclass(slots=True)
+class _SharedConcurrencyRuntime:
+    """One runtime shared across all trials; tracks peak in-flight trials."""
+
+    outcomes: list[object]
+    step_delay: float = 0.01
+    in_flight: int = 0
+    max_in_flight: int = 0
+    total_calls: int = 0
+    closed_count: int = 0
+
+    async def synthesize_environment_draft(
+        self,
+        *,
+        db_id: str,
+        requested_topic: str | None = None,
+    ) -> object:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        self.total_calls += 1
+        try:
+            await asyncio.sleep(self.step_delay)
+            if not self.outcomes:
+                raise RuntimeError("scripted runtime exhausted")
+            item = self.outcomes.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+        finally:
+            self.in_flight -= 1
+
+    async def close(self) -> None:
+        self.closed_count += 1
+
+
+@pytest.mark.asyncio
+async def test_harvest_runner_executes_trials_concurrently_with_four_workers(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_tmp_traces(tmp_path)
+    registry = _RecordingRegistry()
+    exporter = _NoopExporter()
+    target = 8
+    drafts: list[object] = [_accepted_draft(f"task_par_{i:02d}") for i in range(target * 2)]
+    shared_runtime = _SharedConcurrencyRuntime(outcomes=drafts, step_delay=0.01)
+
+    def factory():
+        return RealDbTrialRunner(
+            config,
+            synthesis_runtime=shared_runtime,
+            registry=registry,
+            exporter=exporter,
+        )
+
+    runner = HarvestRunner(
+        config,
+        registry=registry,
+        exporter=exporter,
+        trial_runner_factory=factory,
+    )
+    out = tmp_path / "harvest_parallel4"
+
+    summary = await runner.run(
+        out,
+        db_id="sakila",
+        target_committed=target,
+        stall_timeout_seconds=10.0,
+        parallel_workers=4,
+    )
+    await runner.close()
+
+    assert summary.outcome is HarvestOutcome.TARGET_REACHED
+    assert summary.committed == target
+    assert shared_runtime.max_in_flight >= 2, (
+        "parallel_workers=4 harvest must overlap trials; "
+        f"observed max_in_flight={shared_runtime.max_in_flight}"
+    )
+    # all four workers should have fetched at least one runtime call
+    assert shared_runtime.total_calls >= target
 
 
 @pytest.mark.asyncio

@@ -11,10 +11,12 @@ from rl_task_foundry.pipeline.solver_orchestrator import (
     SolverOrchestrator,
     TaskQualityGateStatus,
     TaskRolloutSummary,
+    TaskSolverRun,
     evaluate_rollout_summary,
 )
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.synthesis.canonicalize import RewardResult
 from tests.test_synthesis_task_registry import _sample_draft
 
 
@@ -22,9 +24,6 @@ def _config(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
     output = OutputConfig(
         run_db_path=tmp_path / "run.db",
-        accepted_jsonl_path=tmp_path / "accepted.jsonl",
-        rejected_jsonl_path=tmp_path / "rejected.jsonl",
-        events_jsonl_path=tmp_path / "events.jsonl",
         traces_dir=tmp_path / "traces",
     )
     models = config.models.model_copy(
@@ -215,6 +214,54 @@ def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> Non
     gate = evaluate_rollout_summary(config, summary)
 
     assert gate.status is TaskQualityGateStatus.ACCEPT
+
+
+def _make_run(*, solver_id: str, raw: str, matched: bool) -> TaskSolverRun:
+    return TaskSolverRun(
+        task_id="task_divergence_fixture",
+        solver_id=solver_id,
+        solver_index=0,
+        solver_result=SolverResult(
+            task_id="task_divergence_fixture",
+            solver_id=solver_id,
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+            transcript_ref="memory://transcript",
+            tool_trace_ref="memory://tools",
+            raw_output_text=raw,
+            status="completed",
+        ),
+        reward_result=RewardResult(
+            reward=1.0 if matched else 0.0,
+            status="matched" if matched else "em_mismatch",
+        ),
+    )
+
+
+def test_evaluate_rollout_summary_survives_malformed_json_raw_output(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    runs = (
+        _make_run(solver_id="s_a", raw='{"answer":"alice"}', matched=True),
+        _make_run(solver_id="s_b", raw="{not-json", matched=False),
+        _make_run(solver_id="s_c", raw='[1, 2, 3', matched=False),
+        _make_run(solver_id="s_d", raw="alice", matched=True),
+    )
+    summary = TaskRolloutSummary(
+        task_id="task_divergence_fixture",
+        db_id="sakila",
+        planned_solver_runs=4,
+        total_solver_runs=4,
+        matched_solver_runs=2,
+        runs=runs,
+    )
+
+    gate = evaluate_rollout_summary(config, summary)
+
+    assert gate.unique_answers == 4
+    assert gate.divergence_ratio == 1.0
+    assert gate.total_solver_runs == 4
 
 
 def test_solver_orchestrator_module_has_no_legacy_imports() -> None:

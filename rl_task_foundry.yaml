@@ -306,7 +306,4 @@ privacy:
 
 output:
   run_db_path: "./artifacts/run.db"
-  accepted_jsonl_path: "./artifacts/accepted.jsonl"
-  rejected_jsonl_path: "./artifacts/rejected.jsonl"
-  events_jsonl_path: "./artifacts/events.jsonl"
   traces_dir: "./artifacts/traces"

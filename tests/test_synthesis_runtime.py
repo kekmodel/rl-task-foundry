@@ -41,9 +41,6 @@ def _config_with_synthesis_output(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
     output = OutputConfig(
         run_db_path=tmp_path / "run.db",
-        accepted_jsonl_path=tmp_path / "accepted.jsonl",
-        rejected_jsonl_path=tmp_path / "rejected.jsonl",
-        events_jsonl_path=tmp_path / "events.jsonl",
         traces_dir=tmp_path / "traces",
     )
     return config.model_copy(update={"output": output}, deep=True)

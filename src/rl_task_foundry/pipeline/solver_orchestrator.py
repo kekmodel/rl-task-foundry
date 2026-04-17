@@ -383,12 +383,22 @@ def _solver_divergence(summary: TaskRolloutSummary) -> tuple[int, float]:
     submitted = 0
     for run in summary.runs:
         text = run.solver_result.raw_output_text
-        if text:
-            answers.add(canonical_json(json.loads(text)) if text.strip().startswith(("{", "[")) else text)
-            submitted += 1
+        if not text:
+            continue
+        answers.add(_solver_divergence_key(text))
+        submitted += 1
     unique = len(answers)
     ratio = unique / submitted if submitted > 0 else 0.0
     return unique, ratio
+
+
+def _solver_divergence_key(text: str) -> str:
+    if not text.strip().startswith(("{", "[")):
+        return text
+    try:
+        return canonical_json(json.loads(text))
+    except json.JSONDecodeError:
+        return text
 
 
 def evaluate_rollout_summary(

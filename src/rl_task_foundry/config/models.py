@@ -159,9 +159,6 @@ class PrivacyConfig(StrictModel):
 
 class OutputConfig(StrictModel):
     run_db_path: Path
-    accepted_jsonl_path: Path
-    rejected_jsonl_path: Path
-    events_jsonl_path: Path
     traces_dir: Path
 
 

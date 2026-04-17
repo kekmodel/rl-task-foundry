@@ -96,7 +96,6 @@ def _config_with_tmp_traces(tmp_path: Path):
         update={
             "traces_dir": tmp_path / "traces",
             "run_db_path": tmp_path / "run.db",
-            "events_jsonl_path": tmp_path / "events.jsonl",
         },
         deep=True,
     )
