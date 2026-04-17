@@ -10,6 +10,12 @@ from typing import Any, ClassVar
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
+    build_reasoning_replay_hook,
+)
+from rl_task_foundry.infra.sdk_helpers import (
+    tool_choice_for_model,
+)
+from rl_task_foundry.infra.sdk_helpers import (
     extract_token_usage as _extract_token_usage,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -64,6 +70,7 @@ def _build_agent(
     sdk: SimpleNamespace,
     *,
     model: Any,
+    model_name: str,
     tools: list[object],
     tool_use_behavior: Any,
     runtime_config: SynthesisRuntimeConfig,
@@ -77,7 +84,7 @@ def _build_agent(
         tool_use_behavior=tool_use_behavior,
         model_settings=sdk.ModelSettings(
             parallel_tool_calls=False,
-            tool_choice="required",
+            tool_choice=tool_choice_for_model(model_name),
         ),
         reset_tool_choice=False,
     )
@@ -149,6 +156,7 @@ class OpenAIAgentsSynthesisBackend:
         self._model = sdk.OpenAIChatCompletionsModel(
             model=self.model_ref.model,
             openai_client=client,
+            should_replay_reasoning_content=build_reasoning_replay_hook(),
         )
         self._shared_models[cache_key] = self._model
         return self._model
@@ -260,6 +268,7 @@ class OpenAIAgentsSynthesisBackend:
         agent = _build_agent(
             sdk,
             model=model,
+            model_name=self.model_ref.model,
             tools=tools,
             tool_use_behavior=self._build_tool_use_behavior(sdk, conversation),
             runtime_config=self.runtime_config,

@@ -36,6 +36,51 @@ def normalize_tool_result(value: Any) -> Any:
     return value
 
 
+_THINKING_MODE_MODEL_MARKERS: tuple[str, ...] = (
+    "qwen",
+    "deepseek-r",
+    "reasoning",
+)
+
+
+def tool_choice_for_model(model: str) -> str:
+    """Return the correct `tool_choice` value for the target model.
+
+    Alibaba's qwen thinking-mode gateway rejects `tool_choice="required"` and
+    tool-object forms. Other reasoning-first providers (DeepSeek R-series) have
+    the same constraint. Relax to `"auto"` for those; keep `"required"` for
+    non-thinking models where we want the SDK to enforce tool-use each turn.
+    """
+
+    lowered = model.lower()
+    for marker in _THINKING_MODE_MODEL_MARKERS:
+        if marker in lowered:
+            return "auto"
+    return "required"
+
+
+def build_reasoning_replay_hook() -> Callable[[Any], bool]:
+    """Return a hook that tells openai-agents when to replay `reasoning_content`.
+
+    Qwen3.5's canonical chat template expects reasoning for in-flight assistant
+    turns (between the last user message and the current one) to be carried
+    forward via `reasoning_content`. The openai-agents default only replays
+    for DeepSeek, so Qwen loses that continuity without this hook.
+    """
+
+    from agents.models.reasoning_content_replay import (
+        default_should_replay_reasoning_content,
+    )
+
+    def _should_replay(context: Any) -> bool:
+        target_model = (getattr(context, "model", "") or "").lower()
+        if "qwen" in target_model:
+            return True
+        return default_should_replay_reasoning_content(context)
+
+    return _should_replay
+
+
 def load_sdk_components(
     *,
     include_sqlite_session: bool = False,

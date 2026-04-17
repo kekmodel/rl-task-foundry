@@ -120,7 +120,7 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             self.kwargs = kwargs
 
     class FakeChatModel:
-        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI, **_kwargs):
             self.model = model
             self.openai_client = openai_client
 
@@ -285,7 +285,7 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
             self.kwargs = kwargs
 
     class FakeChatModel:
-        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI, **_kwargs):
             self.model = model
             self.openai_client = openai_client
 
@@ -381,7 +381,7 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backe
     class FakeChatModel:
         calls: list[tuple[str, object]] = []
 
-        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI, **_kwargs):
             self.model = model
             self.openai_client = openai_client
             self.__class__.calls.append((model, openai_client))
@@ -646,7 +646,7 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
             self.kwargs = kwargs
 
     class FakeChatModel:
-        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI, **_kwargs):
             self.model = model
             self.openai_client = openai_client
 

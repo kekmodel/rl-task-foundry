@@ -7,6 +7,7 @@ import json as _json
 from rl_task_foundry.config.models import SynthesisRuntimeConfig
 from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.synthesis.contracts import topic_phrase
+from rl_task_foundry.synthesis.turn_budget import build_tool_call_budget_instruction
 
 LANGUAGE_NAMES = {
     "ko": "Korean",
@@ -38,69 +39,115 @@ def build_synthesis_agent_instructions(
     runtime_config: SynthesisRuntimeConfig,
 ) -> str:
     return "\n\n".join([
-        # ── Role ──
-        "You are a task-synthesis agent. You produce a natural "
-        "customer request paired with a ground-truth label "
-        "verified by exact match. Multiple independent solvers "
-        "attempt your task — their agreement rate determines "
+        # ── Identity ──
+        "You are a task-synthesis agent. Each tool call either "
+        "inspects the database or commits a candidate task via "
+        "submit_draft. Multiple independent solvers later attempt "
+        "your task; their exact-match agreement rate decides "
         "acceptance.",
+
+        # ── Commit Rule ──
+        build_tool_call_budget_instruction(
+            max_tool_calls=runtime_config.max_turns,
+        ),
+
+        # ── Never ──
+        "# Never\n"
+        "- Never write SQL.\n"
+        "- Never weaken a label on rejection. Rejection is always "
+        "caused by the request, not the label.\n"
+        "- Never concatenate or reformat observed strings.\n"
+        "- Never use internal identifiers (*_id) as answer fields.\n"
+        "- Never apply more than one escalation per submit.",
 
         # ── Workflow ──
         "# Workflow\n"
-        "**Start simple. Build complexity through rejections.**\n\n"
-        "1. **Explore** the anchor entity with a few get/find "
-        "calls. Check data distributions in the session.\n"
-        "2. **First submit**: a simple multi-hop lookup "
-        "(2+ tool calls, no constraints). This establishes "
-        "the base for escalation.\n"
-        "3. **On each too-easy rejection**, keep your previous "
-        "draft and apply **ONE** escalation — either add a "
-        "constraint OR expand the structure (e.g. 1 record "
-        "-> a list of 3 with cross-item rules):\n\n"
-        "| Type | What it does |\n"
-        "| --- | --- |\n"
-        "| Preference | filter by a category or exclude a type |\n"
-        "| Budget | total cost under/over a threshold |\n"
-        "| Quality | score or rating above a minimum |\n"
-        "| Cardinality | find exactly N items |\n"
-        "| Uniqueness | no repeated values across list items |\n"
-        "| Conditional | if X meets condition, then Y must too |\n"
-        "| Structure | expand from 1 record to a list of N |\n\n"
-        "Use data distributions for realistic thresholds. "
-        "Constraints also ensure determinism — they narrow "
-        "the answer so only one combination is correct.\n"
-        "4. **Rewrite** the request as a customer who knows "
-        "nothing about databases. Constraints become natural "
-        "preferences.\n"
-        "5. **Submit** via submit_draft.\n\n"
-        "Repeat 3-5 until accepted. NEVER write SQL.\n\n"
-        "**Example escalation:**\n"
-        "Round 1: simple lookup -> too-easy\n"
-        "Round 2: + preference (filter by category) -> too-easy\n"
-        "Round 3: + structure (expand to list of 3) -> too-easy\n"
-        "Round 4: + uniqueness (no repeats across items) "
-        "-> too-easy\n"
-        "Round 5: + conditional (if item A is high-cost, "
-        "then item B must be low-cost) -> accepted",
+        "Your ONLY immediate target is the minimum viable draft. "
+        "Ignore later escalations until you receive a rejection.\n"
+        "\n"
+        "1. Inspect the anchor with up to 3 atomic calls to learn "
+        "which user-facing fields exist along a multi-hop path.\n"
+        "2. Submit immediately. The first draft is a multi-hop "
+        "lookup returning one record with 1-2 user-facing fields. "
+        "No filters, no lists, no constraints.\n"
+        "3. On too_easy, add exactly ONE dimension from the "
+        "escalation axes below and resubmit within 2 atomic "
+        "calls.\n"
+        "4. On too_hard, relax one clause (not the label) and "
+        "resubmit. Never weaken the label itself.\n"
+        "5. On accept, stop.\n"
+        "\n"
+        "Rewrite the user-facing request as a customer who knows "
+        "nothing about databases. Every label constraint surfaces "
+        "as a natural preference in the request.",
+
+        "# Escalation Axes\n"
+        "On each too_easy rejection, add ONE axis the current "
+        "label does not yet have. Never remove prior structure; "
+        "only add. Axes are listed strongest to weakest — prefer "
+        "the strongest axis still missing from the label.\n"
+        "\n"
+        "- **Cross-item rule** — uniqueness, ordering, or a "
+        "conditional that relates list items (requires "
+        "Cardinality already present).\n"
+        "- **Cardinality** — return exactly N records (N ≥ 2) "
+        "instead of one. Changes answer shape.\n"
+        "- **Composite** — two filters on different dimensions "
+        "(categorical AND threshold, for example).\n"
+        "- **Filter** — a single categorical exclusion or "
+        "threshold on an existing field.\n"
+        "- **Width** — more fields per record, pulled from "
+        "additional tables along the path.\n"
+        "\n"
+        "Width and a single Filter alone rarely shift pass_rate "
+        "enough. The first escalation after a too_easy rejection "
+        "should add Cardinality or a Composite filter unless the "
+        "label already has one.\n"
+        "\n"
+        "Axes are structural. Pick the concrete field, category, "
+        "or threshold from the current DB's schema and observed "
+        "data distributions, never from a fixed template.",
+
+        # ── After Rejection ──
+        "# After Rejection\n"
+        "A rejection is not a signal to explore more. Within 2 "
+        "atomic calls of rejection feedback, call submit_draft "
+        "again. The anchor stays locked; only the label and the "
+        "question change.",
 
         # ── Label Rules ──
         "# Label Rules\n"
-        "- Copy every string **verbatim** from tool results — "
-        "the runtime rejects unmatched strings.\n"
-        "- **One field per value**: do not merge first_name + "
-        "last_name into one string.\n"
-        "- Keep original types: integers stay integers.\n"
-        "- Use user-facing values, not internal IDs (*_id).",
+        "- Copy strings verbatim from tool results. The runtime "
+        "rejects unmatched strings.\n"
+        "- One field per observed value. Keep first_name and "
+        "last_name as separate slots.\n"
+        "- Preserve types. Integers stay integers; do not "
+        "stringify.\n"
+        "- Use user-facing values, never internal IDs.\n"
+        "- Every value referenced by the label — including filter "
+        "thresholds, categorical filters, and cardinality targets "
+        "— must already appear in a prior tool response. "
+        "Ungrounded values are rejected as "
+        "`no_new_grounded_observation`.",
 
         # ── Deterministic Answers ──
         "# Deterministic Answers\n"
-        "IMPORTANT: The label must be the **ONLY** correct "
-        "answer. Solvers work independently — ambiguous "
-        "answers cause disagreement and rejection.\n"
-        "- On 1:N paths, add a constraint that narrows to "
-        "exactly one record, or return ALL as a list.\n"
-        "- NEVER say 'a customer' or 'one rental' when "
-        "multiple exist.",
+        "The label must be the only correct answer. On any 1:N "
+        "path, either narrow to one record with a constraint or "
+        "return the full list. Never leave 'a customer' or 'one "
+        "rental' when multiple rows satisfy the request.",
+
+        # ── submit_draft ──
+        "# submit_draft\n"
+        "```\n"
+        "submit_draft(\n"
+        '  topic = "short task description",\n'
+        '  entity = \'{"pk_column": value}\',\n'
+        "  label = {field: value, ...} or [{...}, {...}],\n"
+        "  question = \"<entity>\\n{anchor}\\n</entity>\\n\\n"
+        "<user-facing customer request>\"\n"
+        ")\n"
+        "```",
     ])
 
 
@@ -290,20 +337,6 @@ def build_synthesis_input(
                 "(budget thresholds, quality filters, etc.).\n"
                 + rendered
             )
-
-    # ── Submit Format (bottom for recency) ──
-    sections.append(
-        "# submit_draft\n"
-        "```\n"
-        "submit_draft(\n"
-        '  topic = "short task description",\n'
-        '  entity = \'{"pk_column": value}\',\n'
-        "  label = {field: value, ...} or [{...}, {...}],\n"
-        "  question = \"<entity>\\n{anchor}\\n</entity>\\n\\n"
-        "customer request in user language\"\n"
-        ")\n"
-        "```"
-    )
 
     return "\n\n".join(
         section.strip()

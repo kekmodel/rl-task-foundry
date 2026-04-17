@@ -602,10 +602,10 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     message = await controller.submit(_too_easy_readable_payload())
 
     assert "Too easy" in message
-    assert "Pick ONE structural change" in message
-    assert "follow one more FK hop" in message
-    assert "filter condition" in message
-    assert "Do not just add or remove a single field" in message
+    assert "ADD exactly one new structural dimension" in message
+    assert "Replacing a field on the same path is not an escalation" in message
+    for axis in ("Width", "Filter", "Cardinality", "Cross-item", "Composite"):
+        assert axis in message
     # no DB-specific field names in feedback
     assert "staff_name" not in message
 

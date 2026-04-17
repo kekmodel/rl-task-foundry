@@ -76,7 +76,7 @@ def test_synthesis_backend_reuses_shared_model_client(monkeypatch) -> None:
     class FakeChatModel:
         calls: list[tuple[str, FakeAsyncOpenAI]] = []
 
-        def __init__(self, model: str, openai_client: FakeAsyncOpenAI):
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI, **_kwargs):
             self.__class__.calls.append((model, openai_client))
             self.model = model
             self.openai_client = openai_client
@@ -136,7 +136,7 @@ async def test_synthesis_backend_writes_artifacts_before_reraising_runner_error(
             pass
 
     class FakeChatModel:
-        def __init__(self, model: str, openai_client):
+        def __init__(self, model: str, openai_client, **_kwargs):
             self.model = model
             self.openai_client = openai_client
 
@@ -235,7 +235,7 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
             pass
 
     class FakeChatModel:
-        def __init__(self, model: str, openai_client):
+        def __init__(self, model: str, openai_client, **_kwargs):
             self.model = model
             self.openai_client = openai_client
 

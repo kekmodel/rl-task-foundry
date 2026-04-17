@@ -70,9 +70,8 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     assert "get_staff: readable fields=[] (id-only)" in prompt
     assert "navigation only" in prompt
 
-    # submit format at bottom
-    assert "# submit_draft" in prompt
-    assert prompt.index("# submit_draft") > prompt.index("# Environment")
+    # submit_draft format lives in the system prompt, not the per-request input
+    assert "# submit_draft" not in prompt
 
 
 def test_synthesis_agent_instructions_describe_single_conversation_loop() -> None:
@@ -80,21 +79,23 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
         load_config("rl_task_foundry.yaml").synthesis.runtime
     )
 
-    # role
+    # identity
     assert "task-synthesis agent" in instructions
+
+    # commit rule with tool-call vocabulary
+    assert "# Commit Rule" in instructions
+    assert "tool calls" in instructions
+    assert "submit_draft" in instructions
 
     # workflow: gradual escalation
     assert "# Workflow" in instructions
-    assert "Start simple" in instructions
-    assert "Explore" in instructions
-    assert "too-easy rejection" in instructions
-    assert "submit_draft" in instructions
-    assert "NEVER write SQL" in instructions
+    assert "too_easy" in instructions
+    assert "too_hard" in instructions
 
-    # constraint types
-    assert "Budget" in instructions
-    assert "Preference" in instructions
-    assert "Conditional" in instructions
+    # escalation axes (structural, no fixed rungs)
+    assert "# Escalation Axes" in instructions
+    for axis in ("Width", "Filter", "Cardinality", "Cross-item", "Composite"):
+        assert axis in instructions
 
     # label rules
     assert "# Label Rules" in instructions
@@ -102,9 +103,16 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
 
     # determinism
     assert "# Deterministic Answers" in instructions
-    assert "IMPORTANT" in instructions
-    assert "**ONLY**" in instructions
-    assert "NEVER say" in instructions
+    assert "only correct answer" in instructions
+
+    # prohibitions
+    assert "# Never" in instructions
+    assert "Never write SQL" in instructions
+    assert "Never weaken" in instructions
+
+    # submit_draft format lives in the system prompt now
+    assert "# submit_draft" in instructions
+    assert "topic = " in instructions
 
     # no legacy
     assert "# Prohibitions" not in instructions
