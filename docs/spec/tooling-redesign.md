@@ -1,6 +1,6 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
-> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice), calculus completed at `201f6f9`, atomic agents-SDK `FunctionTool` factory at `03e9690`. Composer analytic toolset is complete: `schema_map` (`7f92ae2`), `sample` (`398d175`), `query` DSL (`804f7da`), `profile` (`92e54ce`), `neighborhood` (`a9b6d78`), and the composer `tool_factory` (this commit). Remaining work is backend rewiring and prompt rewrites.
+> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice), calculus completed at `201f6f9`, atomic agents-SDK `FunctionTool` factory at `03e9690`. Composer analytic toolset is complete: `schema_map` (`7f92ae2`), `sample` (`398d175`), `query` DSL (`804f7da`), `profile` (`92e54ce`), `neighborhood` (`a9b6d78`), composer `tool_factory` at `852d7c9`. Synthesis-agent rewire to composer tools landed at `0558b45`. Remaining work: solver runtime rewire (`solver/runtime.py`), synthesis prompt rewrite, bundle export migration, and retirement of `synthesis/atomic_tools.py` codegen.
 
 ## Motivation
 
@@ -181,9 +181,8 @@ The canonical answer produced by composer `query(spec)` is stored verbatim in th
 
 ### Next session
 
-- Rewire `synthesis/synthesis_db.py` to bind composer tools for the synthesis agent via `from rl_task_foundry.tooling.composer import build_composer_tools`.
 - Rewire `solver/runtime.py` to bind atomic calculus for solvers via `from rl_task_foundry.tooling.atomic import build_atomic_tools`.
-- Rewrite `synthesis/prompts.py` to describe the 5-tool composer surface + 9-primitive solver calculus.
+- Rewrite `synthesis/prompts.py` to describe the 5-tool composer surface + 9-primitive solver calculus. Expand `summarize_composer_tool_surface` accordingly.
 - Replace per-DB `atomic_tools.py` materialization with a `schema_snapshot.json` export; adjust `bundle_exporter.py` accordingly.
 - Retire `synthesis/atomic_tools.py` codegen once all consumers migrated.
 - iter13+ prompt tuning against the new tool surface.
