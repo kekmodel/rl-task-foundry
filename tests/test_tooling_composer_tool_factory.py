@@ -245,6 +245,25 @@ async def test_sample_tool_against_sakila_returns_rows():
 
 
 @pytest.mark.asyncio
+async def test_neighborhood_tool_accepts_string_row_id_for_integer_pk_against_sakila():
+    # Regression for a smoke-trial failure where the composer LLM passed
+    # ``row_id="5"`` as a JSON string against ``customer.customer_id`` (integer).
+    # asyncpg's binary protocol rejected the bound str, surfacing as UserError.
+    session, conn = await _live_session()
+    try:
+        tool = build_neighborhood_tool(session)
+        response = await _invoke(tool, {"table": "customer", "row_id": "5"})
+        anchor = response["anchor"]
+        assert isinstance(anchor, dict)
+        assert anchor["table"] == "customer"
+        attributes = anchor["attributes"]
+        assert isinstance(attributes, dict)
+        assert attributes["customer_id"] == 5
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_query_tool_coerces_iso_timestamp_against_sakila():
     session, conn = await _live_session()
     try:

@@ -14,13 +14,13 @@ without the SDK present.
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from rl_task_foundry.tooling.common.edges import available_edges
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
+from rl_task_foundry.tooling.common.sql import coerce_scalar
 from rl_task_foundry.tooling.composer._session import ComposerSession
 from rl_task_foundry.tooling.composer._sql import FILTER_OPS
 from rl_task_foundry.tooling.composer.neighborhood import neighborhood
@@ -37,15 +37,6 @@ JsonObject = dict[str, object]
 Handler = Callable[[JsonObject], Awaitable[JsonObject]]
 Invoker = Callable[[object, str], Awaitable[str]]
 
-
-_TIMESTAMP_TYPES = {
-    "timestamp",
-    "timestamp without time zone",
-    "timestamp with time zone",
-    "timestamptz",
-}
-_DATE_TYPES = {"date"}
-_TIME_TYPES = {"time", "time without time zone", "time with time zone"}
 
 _AGGREGATE_FNS = ("avg", "count", "max", "min", "sum")
 
@@ -72,20 +63,6 @@ def _all_edge_labels(snapshot: SchemaSnapshot) -> list[str]:
 
 def _filter_op_enum() -> list[str]:
     return sorted(FILTER_OPS)
-
-
-def _coerce_temporal(value: object, data_type: str) -> object:
-    if isinstance(value, list):
-        return [_coerce_temporal(item, data_type) for item in value]
-    if not isinstance(value, str):
-        return value
-    if data_type in _TIMESTAMP_TYPES:
-        return _dt.datetime.fromisoformat(value)
-    if data_type in _DATE_TYPES:
-        return _dt.date.fromisoformat(value)
-    if data_type in _TIME_TYPES:
-        return _dt.time.fromisoformat(value)
-    return value
 
 
 def _coerce_predicate(
@@ -118,7 +95,7 @@ def _coerce_predicate(
                 f"predicate[{index}].op must be a string"
             )
         column_spec = table_spec.column(column)
-        value = _coerce_temporal(entry.get("value"), column_spec.data_type)
+        value = coerce_scalar(entry.get("value"), column_spec.data_type)
         out.append({"column": column, "op": op, "value": value})
     return out
 
@@ -127,9 +104,11 @@ def _coerce_query_spec(
     snapshot: SchemaSnapshot,
     spec: JsonObject,
 ) -> JsonObject:
-    """Apply temporal coercion to the query spec's filter values based on
-    the from-table's column types. Other fields pass through untouched;
-    query.py re-parses the spec so we only need to fix temporals.
+    """Coerce the query spec's filter values to each column's data type.
+
+    LLM-supplied filter values arrive as JSON scalars, so integer PKs can be
+    strings and temporals arrive as ISO text. query.py re-parses the spec so
+    we only need to normalize ``value`` entries against ``table_spec.column(…)``.
     """
     from_table = spec.get("from")
     if not isinstance(from_table, str):
@@ -155,7 +134,7 @@ def _coerce_query_spec(
             rebuilt.append(entry)
             continue
         rewritten = dict(entry)
-        rewritten["value"] = _coerce_temporal(
+        rewritten["value"] = coerce_scalar(
             entry.get("value"), column_spec.data_type
         )
         rebuilt.append(rewritten)
@@ -450,7 +429,12 @@ def build_neighborhood_tool(session: ComposerSession) -> "FunctionTool":
 
     async def handler(payload: JsonObject) -> JsonObject:
         table = _require_str(payload, "table")
-        row_id = payload.get("row_id")
+        table_spec = session.snapshot.table(table)
+        if len(table_spec.primary_key) == 1:
+            pk_column_spec = table_spec.column(table_spec.primary_key[0])
+            row_id = coerce_scalar(payload.get("row_id"), pk_column_spec.data_type)
+        else:
+            row_id = payload.get("row_id")
         depth = _optional_int(payload, "depth")
         max_per_edge = _optional_int(payload, "max_per_edge")
         result = await neighborhood(

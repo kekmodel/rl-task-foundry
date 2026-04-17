@@ -15,6 +15,7 @@ from rl_task_foundry.tooling.common import (
     SchemaSnapshot,
     available_edges,
     coerce_param,
+    coerce_scalar,
     quote_ident,
     quote_table,
     resolve_edge,
@@ -134,3 +135,44 @@ def test_coerce_param_allows_scalars_and_lists_and_rejects_others():
         coerce_param({"bad": 1})
     with pytest.raises(TypeError):
         coerce_param((1, 2))
+
+
+def test_coerce_scalar_promotes_integer_pk_from_string():
+    # LLM tool payloads deliver PK values as JSON strings; asyncpg's binary
+    # protocol rejects strings on integer columns, so the tool factory must
+    # coerce before binding.
+    assert coerce_scalar("5244", "integer") == 5244
+    assert coerce_scalar("9999", "bigint") == 9999
+    assert coerce_scalar("7", "smallint") == 7
+    assert coerce_scalar(123, "integer") == 123  # int passes through
+    assert coerce_scalar(["1", "2", "3"], "integer") == [1, 2, 3]
+    # schema introspection stores Postgres udt_name (int2/int4/int8,
+    # float4/float8) rather than the information_schema data_type label.
+    assert coerce_scalar("5244", "int4") == 5244
+    assert coerce_scalar("9999", "int8") == 9999
+    assert coerce_scalar("7", "int2") == 7
+    assert coerce_scalar("3.14", "float4") == pytest.approx(3.14)
+    assert coerce_scalar("2.71828", "float8") == pytest.approx(2.71828)
+
+
+def test_coerce_scalar_covers_numeric_and_boolean_columns():
+    import datetime as _dt
+    from decimal import Decimal
+
+    assert coerce_scalar("3.14", "real") == 3.14
+    assert coerce_scalar("2.71828", "double precision") == pytest.approx(2.71828)
+    assert coerce_scalar("10.50", "numeric") == Decimal("10.50")
+    assert coerce_scalar("true", "boolean") is True
+    assert coerce_scalar("no", "boolean") is False
+    assert coerce_scalar("2026-04-18", "date") == _dt.date(2026, 4, 18)
+    assert coerce_scalar("2026-04-18T10:00:00", "timestamp") == _dt.datetime(
+        2026, 4, 18, 10, 0, 0
+    )
+
+
+def test_coerce_scalar_leaves_unknown_types_and_non_strings_alone():
+    assert coerce_scalar("hello", "text") == "hello"
+    assert coerce_scalar(42, "integer") == 42
+    assert coerce_scalar(None, "integer") is None
+    # Unknown / unmapped data_type: passthrough.
+    assert coerce_scalar("some-uuid-value", "uuid") == "some-uuid-value"

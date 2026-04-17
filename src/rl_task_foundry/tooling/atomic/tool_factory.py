@@ -13,7 +13,6 @@ without the SDK present (mirrors `synthesis.submit_draft_tool`).
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
@@ -44,6 +43,7 @@ from rl_task_foundry.tooling.atomic.sql_compile import (
 )
 from rl_task_foundry.tooling.common.edges import available_edges
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
+from rl_task_foundry.tooling.common.sql import coerce_scalar
 
 if TYPE_CHECKING:
     from agents import FunctionTool
@@ -94,34 +94,6 @@ _VALUE_ANY_OF: list[JsonObject] = [
     {"type": "null"},
     {"type": "array", "items": {}},
 ]
-
-
-_TIMESTAMP_TYPES = {
-    "timestamp",
-    "timestamp without time zone",
-    "timestamp with time zone",
-    "timestamptz",
-}
-_DATE_TYPES = {"date"}
-_TIME_TYPES = {"time", "time without time zone", "time with time zone"}
-
-
-def _coerce_temporal(value: object, data_type: str) -> object:
-    """Promote ISO-formatted strings arriving via JSON to the temporal
-    type expected by asyncpg for the column. Leaves non-strings alone so
-    callers that already pass datetime/date/time objects still work.
-    """
-    if isinstance(value, list):
-        return [_coerce_temporal(item, data_type) for item in value]
-    if not isinstance(value, str):
-        return value
-    if data_type in _TIMESTAMP_TYPES:
-        return _dt.datetime.fromisoformat(value)
-    if data_type in _DATE_TYPES:
-        return _dt.date.fromisoformat(value)
-    if data_type in _TIME_TYPES:
-        return _dt.time.fromisoformat(value)
-    return value
 
 
 def _require_str(payload: JsonObject, key: str) -> str:
@@ -246,7 +218,7 @@ def build_rows_where_tool(session: AtomicSession) -> "FunctionTool":
         op_name = _require_str(payload, "op")
         table_spec = session.snapshot.table(table_name)
         column_spec = table_spec.column(column_name)
-        value = _coerce_temporal(payload.get("value"), column_spec.data_type)
+        value = coerce_scalar(payload.get("value"), column_spec.data_type)
         cursor_id = rows_where(
             session,
             table=table_name,
@@ -623,7 +595,12 @@ def build_read_tool(session: AtomicSession) -> "FunctionTool":
 
     async def handler(payload: JsonObject) -> JsonObject:
         table_name = _require_str(payload, "table")
-        row_id = payload.get("row_id")
+        table_spec = session.snapshot.table(table_name)
+        if len(table_spec.primary_key) == 1:
+            pk_column_spec = table_spec.column(table_spec.primary_key[0])
+            row_id = coerce_scalar(payload.get("row_id"), pk_column_spec.data_type)
+        else:
+            row_id = payload.get("row_id")
         column_list = _require_str_list(payload, "columns")
         row = await read(
             session,

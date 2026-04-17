@@ -21,6 +21,7 @@ from rl_task_foundry.tooling.common.schema import (
 )
 from rl_task_foundry.tooling.common.sql import (
     coerce_param,
+    coerce_scalar,
     quote_ident,
     quote_table,
     readonly_select,
@@ -35,6 +36,7 @@ __all__ = [
     "TypedEdge",
     "available_edges",
     "coerce_param",
+    "coerce_scalar",
     "quote_ident",
     "quote_table",
     "readonly_select",

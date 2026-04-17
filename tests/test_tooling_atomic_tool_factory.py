@@ -349,6 +349,20 @@ async def test_end_to_end_tool_chain_against_sakila():
         row = first["row"]
         assert isinstance(row, dict)
         assert row["customer_id"] == 45
+
+        # Regression: LLM payloads sometimes stringify integer PKs. The
+        # read tool must coerce via the PK column's data_type before binding.
+        stringified = await _invoke(
+            read,
+            {
+                "table": "rental",
+                "row_id": str(row_ids[0]),
+                "columns": ["rental_id", "customer_id"],
+            },
+        )
+        string_row = stringified["row"]
+        assert isinstance(string_row, dict)
+        assert string_row["customer_id"] == 45
     finally:
         await conn.close()
 
