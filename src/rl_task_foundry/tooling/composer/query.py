@@ -25,11 +25,18 @@ Semantics:
 - `filter` clauses apply at the `from` table (before joins).
 - `join` projects through FK edges, each leaving the current target
   table at the destination of its edge.
-- `select` / `sort` / `group_by` reference the current target table
-  (the last join's destination, or `from` if no joins).
+- `select` / `sort` / `group_by` and `aggregate.column` resolve column
+  references against **any table in the join chain** (the `from` table
+  plus each join destination). Resolution prefers the earliest chain
+  entry, so a column name on the `from` table wins over the same name
+  on a joined destination. The DSL picks the correct SQL alias for
+  each reference automatically, so the composer can sort by a
+  from-table column while selecting joined-table attributes without
+  qualifying the reference. Filter column resolution is unchanged
+  (always `from`).
 - `select` and `aggregate` are mutually exclusive. `group_by` is only
-  valid when `aggregate` is present. `sort` may reference either
-  target-table columns (no-aggregate mode) or aggregate aliases /
+  valid when `aggregate` is present. `sort` may reference either a
+  chain-resolvable column (no-aggregate mode) or aggregate aliases /
   group-by columns (aggregate mode).
 
 Composer never hides behind raw SQL — the DSL is the escape hatch.
@@ -328,24 +335,66 @@ def _compile_join_chain(
     return " ".join(fragments)
 
 
+ChainTables = list[tuple[str, TableSpec]]
+
+
+def _build_chain_tables(
+    snapshot: SchemaSnapshot,
+    from_spec: TableSpec,
+    steps: list[_JoinStep],
+) -> ChainTables:
+    """Return (alias, TableSpec) for every table visible in the join
+    chain, starting with the FROM table at alias ``t0`` and appending
+    each join destination in order.
+    """
+    chain: ChainTables = [("t0", from_spec)]
+    for step in steps:
+        chain.append(
+            (
+                step.destination_alias,
+                snapshot.table(step.edge.destination_table),
+            )
+        )
+    return chain
+
+
+def _resolve_chain_column(
+    column_name: str, chain: ChainTables
+) -> tuple[str, TableSpec]:
+    """Locate the chain table owning ``column_name`` and return its
+    alias + TableSpec. Earlier chain entries win (FROM first), which
+    mirrors how filter clauses already resolve against the FROM table
+    and matches a composer's natural SQL-like reading where the
+    anchor table is named first.
+    """
+    for alias, spec in chain:
+        if column_name in spec.column_names:
+            return alias, spec
+    table_list = ", ".join(spec.name for _, spec in chain)
+    raise KeyError(
+        f"column {column_name!r} not found on any chain table "
+        f"({table_list})"
+    )
+
+
 def _compile_aggregate_expr(
-    aggregate: _AggregateClause, current_alias: str, target: TableSpec
+    aggregate: _AggregateClause, chain: ChainTables
 ) -> str:
     if aggregate.fn == "count":
         if aggregate.column is None:
             return f"COUNT(*) AS {quote_ident(aggregate.alias)}"
-        target.column(aggregate.column)
+        alias, _ = _resolve_chain_column(aggregate.column, chain)
         return (
-            f"COUNT({current_alias}.{quote_ident(aggregate.column)}) "
+            f"COUNT({alias}.{quote_ident(aggregate.column)}) "
             f"AS {quote_ident(aggregate.alias)}"
         )
     if aggregate.column is None:
         raise ValueError(
             f"aggregate fn={aggregate.fn!r} requires a column"
         )
-    target.column(aggregate.column)
+    alias, _ = _resolve_chain_column(aggregate.column, chain)
     return (
-        f"{aggregate.fn.upper()}({current_alias}.{quote_ident(aggregate.column)}) "
+        f"{aggregate.fn.upper()}({alias}.{quote_ident(aggregate.column)}) "
         f"AS {quote_ident(aggregate.alias)}"
     )
 
@@ -353,15 +402,14 @@ def _compile_aggregate_expr(
 def _compile_sort(
     clause: _SortClause,
     *,
-    current_alias: str,
-    target: TableSpec,
+    chain: ChainTables,
     allowed_aliases: frozenset[str],
 ) -> str:
     direction = clause.direction.upper()
     if clause.reference in allowed_aliases:
         return f"{quote_ident(clause.reference)} {direction}"
-    target.column(clause.reference)
-    return f"{current_alias}.{quote_ident(clause.reference)} {direction}"
+    alias, _ = _resolve_chain_column(clause.reference, chain)
+    return f"{alias}.{quote_ident(clause.reference)} {direction}"
 
 
 async def query(
@@ -374,15 +422,15 @@ async def query(
     snapshot = session.snapshot
     from_spec = snapshot.table(parsed.from_table)
     steps = _resolve_join_chain(snapshot, parsed.from_table, parsed.join_edges)
-    final_alias = steps[-1].destination_alias if steps else "t0"
     target_spec = (
         snapshot.table(steps[-1].edge.destination_table)
         if steps
         else from_spec
     )
-    # Validate group_by columns on the target
+    chain_tables = _build_chain_tables(snapshot, from_spec, steps)
+    # Validate group_by columns resolve somewhere in the chain
     for column_name in parsed.group_by:
-        target_spec.column(column_name)
+        _resolve_chain_column(column_name, chain_tables)
     clause_sql, params, next_index = compile_filter_clauses(
         table_spec=from_spec,
         alias="t0",
@@ -398,39 +446,46 @@ async def query(
     alias_set: set[str] = set()
     if parsed.aggregates:
         for group_column in parsed.group_by:
+            group_alias, _ = _resolve_chain_column(group_column, chain_tables)
             select_fragments.append(
-                f"{final_alias}.{quote_ident(group_column)} AS "
+                f"{group_alias}.{quote_ident(group_column)} AS "
                 f"{quote_ident(group_column)}"
             )
             output_columns.append(group_column)
         for aggregate in parsed.aggregates:
             select_fragments.append(
-                _compile_aggregate_expr(aggregate, final_alias, target_spec)
+                _compile_aggregate_expr(aggregate, chain_tables)
             )
             output_columns.append(aggregate.alias)
             alias_set.add(aggregate.alias)
     elif parsed.select is not None:
         for column_name in parsed.select:
-            target_spec.column(column_name)
+            column_alias, _ = _resolve_chain_column(column_name, chain_tables)
             select_fragments.append(
-                f"{final_alias}.{quote_ident(column_name)} AS "
+                f"{column_alias}.{quote_ident(column_name)} AS "
                 f"{quote_ident(column_name)}"
             )
             output_columns.append(column_name)
     else:
+        # Bare select defaults to the join-chain's terminal table so the
+        # result shape matches what the join was navigating toward.
+        terminal_alias = chain_tables[-1][0]
         for column in target_spec.columns:
             select_fragments.append(
-                f"{final_alias}.{quote_ident(column.name)} AS "
+                f"{terminal_alias}.{quote_ident(column.name)} AS "
                 f"{quote_ident(column.name)}"
             )
             output_columns.append(column.name)
 
     group_by_sql = ""
     if parsed.group_by:
-        group_by_sql = "GROUP BY " + ", ".join(
-            f"{final_alias}.{quote_ident(column)}"
-            for column in parsed.group_by
-        )
+        group_by_fragments: list[str] = []
+        for column in parsed.group_by:
+            group_alias, _ = _resolve_chain_column(column, chain_tables)
+            group_by_fragments.append(
+                f"{group_alias}.{quote_ident(column)}"
+            )
+        group_by_sql = "GROUP BY " + ", ".join(group_by_fragments)
 
     allowed_refs = frozenset(alias_set | set(parsed.group_by))
     sort_fragments: list[str] = []
@@ -438,8 +493,7 @@ async def query(
         sort_fragments.append(
             _compile_sort(
                 sort_clause,
-                current_alias=final_alias,
-                target=target_spec,
+                chain=chain_tables,
                 allowed_aliases=allowed_refs,
             )
         )

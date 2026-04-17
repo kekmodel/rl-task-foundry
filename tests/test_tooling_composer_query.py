@@ -265,6 +265,52 @@ async def test_query_multi_join_walks_rental_to_film():
 
 
 @pytest.mark.asyncio
+async def test_query_sort_resolves_from_table_column_after_join():
+    # Iter13 regression: composer wrote `from=rental, join=->customer,
+    # sort=[rental_date]` and the DSL threw KeyError by resolving sort
+    # only against the join destination (customer). rental_date lives
+    # on rental (t0), so chain resolution must pick t0 here.
+    session, conn = _stub_session()
+    await query(
+        session,
+        spec={
+            "from": "rental",
+            "join": [{"via_edge": "rental.customer_id->customer"}],
+            "select": ["first_name"],
+            "sort": [{"column": "rental_date", "direction": "asc"}],
+            "limit": 3,
+        },
+    )
+    sql, _ = conn.calls[0]
+    assert "ORDER BY t0.\"rental_date\" ASC" in sql
+    assert "t1.\"first_name\" AS \"first_name\"" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_select_spans_from_and_joined_tables():
+    # Iter13 regression variant: composer's multi-hop select asked for
+    # rental_date plus a customer attribute after chaining inventory ->
+    # rental -> customer. Under old target-only resolution, rental_date
+    # failed with KeyError on customer. Chain resolution routes each
+    # column to its owning table.
+    session, conn = _stub_session()
+    await query(
+        session,
+        spec={
+            "from": "inventory",
+            "join": [
+                {"via_edge": "inventory<-rental.inventory_id"},
+                {"via_edge": "rental.customer_id->customer"},
+            ],
+            "select": ["rental_date", "first_name"],
+        },
+    )
+    sql, _ = conn.calls[0]
+    assert "t1.\"rental_date\" AS \"rental_date\"" in sql
+    assert "t2.\"first_name\" AS \"first_name\"" in sql
+
+
+@pytest.mark.asyncio
 async def test_query_reverse_join_follows_edge_backwards():
     session, conn = _stub_session()
     await query(
@@ -328,7 +374,7 @@ async def test_query_aggregate_with_group_by_emits_group_and_sort():
 
 
 @pytest.mark.asyncio
-async def test_query_aggregate_on_joined_table_uses_final_alias():
+async def test_query_aggregate_on_joined_table_resolves_column_in_chain():
     session, conn = _stub_session()
     await query(
         session,
@@ -345,7 +391,11 @@ async def test_query_aggregate_on_joined_table_uses_final_alias():
         },
     )
     sql, _ = conn.calls[0]
-    assert "GROUP BY t2.\"film_id\"" in sql
+    # Chain-order resolution picks the earliest table owning film_id
+    # (inventory at t1). The JOIN equality makes t1.film_id / t2.film_id
+    # produce identical groupings on inner joins, so the rebind is
+    # semantically a no-op; the assertion documents the new rule.
+    assert "GROUP BY t1.\"film_id\"" in sql
     assert "COUNT(*) AS \"rentals\"" in sql
 
 
