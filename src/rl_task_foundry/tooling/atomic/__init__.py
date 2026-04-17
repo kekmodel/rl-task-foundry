@@ -32,6 +32,18 @@ from rl_task_foundry.tooling.atomic.cursor import (
     WhereNode,
     order_by,
 )
+from rl_task_foundry.tooling.atomic.tool_factory import (
+    build_aggregate_tool,
+    build_atomic_tools,
+    build_count_tool,
+    build_group_top_tool,
+    build_intersect_tool,
+    build_order_by_tool,
+    build_read_tool,
+    build_rows_via_tool,
+    build_rows_where_tool,
+    build_take_tool,
+)
 
 __all__ = [
     "AtomicSession",
@@ -43,6 +55,16 @@ __all__ = [
     "ViaNode",
     "WhereNode",
     "aggregate",
+    "build_aggregate_tool",
+    "build_atomic_tools",
+    "build_count_tool",
+    "build_group_top_tool",
+    "build_intersect_tool",
+    "build_order_by_tool",
+    "build_read_tool",
+    "build_rows_via_tool",
+    "build_rows_where_tool",
+    "build_take_tool",
     "count",
     "group_top",
     "intersect",

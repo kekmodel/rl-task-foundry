@@ -1,6 +1,6 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
-> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice: `rows_where → order_by → take → read`). Remaining atomic primitives (`rows_via`, `intersect`, `count`, `aggregate`, `group_top`) landed next. Composer DSL, tool factory, and backend rewiring are still pending.
+> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice). Remaining calculus primitives (`rows_via`, `intersect`, `count`, `aggregate`, `group_top`) landed at `201f6f9`. Agents-SDK `FunctionTool` factory for the atomic calculus landed next. Composer DSL and backend rewiring still pending.
 
 ## Motivation
 
@@ -176,14 +176,14 @@ The canonical answer produced by composer `query(spec)` is stored verbatim in th
 - `tooling/atomic/cursor.py` — `CursorPlan` types + `CursorStore`.
 - `tooling/atomic/sql_compile.py` — plan → SQL (Where/Via/Intersect id-stream + materializers).
 - `tooling/atomic/calculus.py` — all 9 primitives executable end-to-end.
-- Integration tests at `tests/test_tooling_atomic_integration.py` cover the five materialization shapes against sakila.
+- `tooling/atomic/tool_factory.py` — 9 agents-SDK `FunctionTool` builders + `build_atomic_tools(session)` aggregator. Schema-baked enums for table/column/edge/op/fn/direction; ISO string → datetime coercion at the JSON boundary for temporal columns; errors surface as `{error, error_type}` JSON rather than raising.
+- Integration tests at `tests/test_tooling_atomic_integration.py` and `tests/test_tooling_atomic_tool_factory.py` cover both direct calculus and tool-handler paths against sakila.
 
 ### Next session
 
-- `tooling/atomic/tool_factory.py` — agents-SDK FunctionTool construction with schema-baked enum parameters.
 - Full `tooling/composer/` implementation (query DSL, profile, schema_map, neighborhood, sample, tool_factory).
 - Rewire `synthesis/synthesis_db.py` to bind composer tools for the synthesis agent.
-- Rewire `solver/runtime.py` to bind atomic calculus for solvers.
+- Rewire `solver/runtime.py` to bind atomic calculus for solvers via `tooling.atomic.build_atomic_tools(session)`.
 - Rewrite `synthesis/prompts.py` to reflect the calculus surface.
 - Replace per-DB `atomic_tools.py` materialization with a `schema_snapshot.json` export; adjust `bundle_exporter.py` accordingly.
 - Retire `synthesis/atomic_tools.py` codegen once all consumers migrated.
