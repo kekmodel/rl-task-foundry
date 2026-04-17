@@ -1,6 +1,6 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
-> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice). Remaining calculus primitives (`rows_via`, `intersect`, `count`, `aggregate`, `group_top`) landed at `201f6f9`. Agents-SDK `FunctionTool` factory for the atomic calculus landed next. Composer DSL and backend rewiring still pending.
+> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice), calculus completed at `201f6f9`, atomic agents-SDK `FunctionTool` factory at `03e9690`. Composer analytic toolset is complete: `schema_map` (`7f92ae2`), `sample` (`398d175`), `query` DSL (`804f7da`), `profile` (`92e54ce`), `neighborhood` (`a9b6d78`), and the composer `tool_factory` (this commit). Remaining work is backend rewiring and prompt rewrites.
 
 ## Motivation
 
@@ -181,10 +181,9 @@ The canonical answer produced by composer `query(spec)` is stored verbatim in th
 
 ### Next session
 
-- Full `tooling/composer/` implementation (query DSL, profile, schema_map, neighborhood, sample, tool_factory).
-- Rewire `synthesis/synthesis_db.py` to bind composer tools for the synthesis agent.
-- Rewire `solver/runtime.py` to bind atomic calculus for solvers via `tooling.atomic.build_atomic_tools(session)`.
-- Rewrite `synthesis/prompts.py` to reflect the calculus surface.
+- Rewire `synthesis/synthesis_db.py` to bind composer tools for the synthesis agent via `from rl_task_foundry.tooling.composer import build_composer_tools`.
+- Rewire `solver/runtime.py` to bind atomic calculus for solvers via `from rl_task_foundry.tooling.atomic import build_atomic_tools`.
+- Rewrite `synthesis/prompts.py` to describe the 5-tool composer surface + 9-primitive solver calculus.
 - Replace per-DB `atomic_tools.py` materialization with a `schema_snapshot.json` export; adjust `bundle_exporter.py` accordingly.
 - Retire `synthesis/atomic_tools.py` codegen once all consumers migrated.
 - iter13+ prompt tuning against the new tool surface.
