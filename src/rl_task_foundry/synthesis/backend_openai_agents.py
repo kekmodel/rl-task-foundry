@@ -28,12 +28,6 @@ from rl_task_foundry.infra.sdk_helpers import (
     load_sdk_components as _shared_load_sdk_components,
 )
 from rl_task_foundry.infra.sdk_helpers import (
-    make_sdk_tool as _shared_make_sdk_tool,
-)
-from rl_task_foundry.infra.sdk_helpers import (
-    normalize_tool_definition as _normalize_tool_definition,
-)
-from rl_task_foundry.infra.sdk_helpers import (
     resolve_provider_api_key as _resolve_provider_api_key,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -161,37 +155,9 @@ class OpenAIAgentsSynthesisBackend:
         self._shared_models[cache_key] = self._model
         return self._model
 
-    @staticmethod
-    def _normalized_tool_definitions(
-        conversation: SynthesisConversation,
-    ) -> list[dict[str, Any]]:
-        return [
-            _normalize_tool_definition(definition)
-            for definition in conversation.tool_definitions
-        ]
-
     def _build_tools(self, conversation: SynthesisConversation) -> list[object]:
-        controller = conversation.controller
-        sdk_tools: list[object] = []
-        for definition in self._normalized_tool_definitions(conversation):
-            tool_name = str(definition["name"])
-            executor = conversation.tool_executors.get(tool_name)
-            if executor is None:
-                continue
-            sdk_tools.append(
-                _shared_make_sdk_tool(
-                    definition,
-                    executor,
-                    after_invoke=lambda name, payload, result, _ctrl=controller: (
-                        _ctrl.record_atomic_tool_call(
-                            tool_name=name,
-                            params=payload,
-                            result=result,
-                        )
-                    ),
-                )
-            )
-        sdk_tools.append(build_submit_draft_sdk_tool(controller))
+        sdk_tools: list[object] = list(conversation.sdk_tools)
+        sdk_tools.append(build_submit_draft_sdk_tool(conversation.controller))
         return sdk_tools
 
     def _build_tool_use_behavior(

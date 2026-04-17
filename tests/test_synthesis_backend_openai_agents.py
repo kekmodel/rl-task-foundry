@@ -15,8 +15,7 @@ from rl_task_foundry.synthesis.conversation import SynthesisConversation
 def _conversation_with_controller(controller: object) -> SynthesisConversation:
     return SynthesisConversation(
         controller=controller,  # type: ignore[arg-type]
-        tool_definitions=[],
-        tool_executors={},
+        sdk_tools=[],
         shuffle_seed="seed",
     )
 

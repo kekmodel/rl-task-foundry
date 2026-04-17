@@ -20,10 +20,7 @@ from rl_task_foundry.pipeline.provider_resilience import (
 )
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.profiler import DataProfile
-from rl_task_foundry.synthesis.atomic_tools import (
-    AtomicToolBundle,
-    AtomicToolFamily,
-)
+from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     RolloutConstraintsContract,
@@ -35,6 +32,10 @@ from rl_task_foundry.synthesis.contracts import (
     TaskQualityMetrics,
     TopicName,
     normalize_topic,
+)
+from rl_task_foundry.synthesis.composer_tools import (
+    build_instrumented_composer_tools,
+    summarize_composer_tool_surface,
 )
 from rl_task_foundry.synthesis.conversation import SynthesisConversation
 from rl_task_foundry.synthesis.phase_monitor import (
@@ -50,9 +51,10 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftPayload,
 )
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
-from rl_task_foundry.synthesis.tool_runtime import (
-    build_shuffle_seed,
-    with_tool_shuffle_seed,
+from rl_task_foundry.synthesis.tool_runtime import build_shuffle_seed
+from rl_task_foundry.tooling.composer import (
+    ComposerSession,
+    build_composer_tools,
 )
 
 if TYPE_CHECKING:
@@ -370,64 +372,6 @@ def summarize_schema_graph(
     }
 
 
-def summarize_atomic_tool_surface(
-    bundle: AtomicToolBundle,
-    *,
-    max_entity_surfaces: int,
-) -> dict[str, object]:
-    entity_surfaces: list[dict[str, object]] = []
-    family_counts: dict[str, int] = {}
-    for tool in bundle.tools:
-        family_counts[tool.family.value] = family_counts.get(tool.family.value, 0) + 1
-        if tool.family is not AtomicToolFamily.GET:
-            continue
-        properties = _tool_return_properties(tool.returns_schema)
-        if not isinstance(properties, dict):
-            continue
-        field_names = [str(key) for key in properties.keys()]
-        readable_fields = [name for name in field_names if not name.endswith("_id")]
-        entity_surfaces.append(
-            {
-                "tool_name": tool.name,
-                "family": tool.family.value,
-                "field_names": field_names,
-                "readable_fields": readable_fields,
-                "id_only": len(readable_fields) == 0,
-            }
-        )
-    entity_surfaces.sort(
-        key=lambda item: (
-            bool(item.get("id_only")),
-            str(item.get("tool_name", "")),
-        )
-    )
-    return {
-        "tool_count": len(bundle.tools),
-        "family_counts": family_counts,
-        "entity_surfaces": entity_surfaces[:max_entity_surfaces],
-    }
-
-
-def _tool_return_properties(returns_schema: dict[str, object]) -> dict[str, object] | None:
-    properties = returns_schema.get("properties")
-    if isinstance(properties, dict):
-        return properties
-    items = returns_schema.get("items")
-    if isinstance(items, dict):
-        item_properties = items.get("properties")
-        if isinstance(item_properties, dict):
-            return item_properties
-    any_of = returns_schema.get("anyOf")
-    if isinstance(any_of, list):
-        for variant in any_of:
-            if not isinstance(variant, dict):
-                continue
-            variant_properties = variant.get("properties")
-            if isinstance(variant_properties, dict):
-                return variant_properties
-    return None
-
-
 def _snapshot_to_status(snapshot: ProviderCircuitSnapshot) -> SynthesisProviderStatus:
     return SynthesisProviderStatus(
         observed_at=datetime.now(timezone.utc),
@@ -539,13 +483,10 @@ class SynthesisAgentRuntime:
         resolved_graph = await synthesis_db.schema_graph()
         data_profile = await synthesis_db.data_profile()
         atomic_tool_bundle = await synthesis_db.atomic_tool_bundle()
+        schema_snapshot = await synthesis_db.schema_snapshot()
         schema_summary = summarize_schema_graph(
             resolved_graph,
             max_tables=self.config.synthesis.runtime.schema_summary_max_tables,
-        )
-        tool_surface_summary = summarize_atomic_tool_surface(
-            atomic_tool_bundle,
-            max_entity_surfaces=self.config.synthesis.runtime.tool_surface_summary_max_entries,
         )
         anchor_hint = await synthesis_db.random_anchor()
         shuffle_seed = build_shuffle_seed(
@@ -569,21 +510,25 @@ class SynthesisAgentRuntime:
             phase_monitor=self.phase_monitor,
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
         )
-        conversation = await self._build_conversation(
-            db_id=db_id,
-            bundle=atomic_tool_bundle,
-            controller=controller,
-            shuffle_seed=shuffle_seed,
-        )
-        conversation_result = await self._run_synthesis_conversation(
-            conversation=conversation,
-            db_id=db_id,
-            requested_topic=requested_topic,
-            schema_summary=schema_summary,
-            tool_surface_summary=tool_surface_summary,
-            anchor_hint=anchor_hint,
-            data_profile=data_profile,
-        )
+        pools = await synthesis_db.database_pools_for_tools()
+        async with pools.solver_connection() as conn:
+            composer_session = ComposerSession(
+                snapshot=schema_snapshot, connection=conn
+            )
+            conversation, tool_surface_summary = self._build_conversation(
+                session=composer_session,
+                controller=controller,
+                shuffle_seed=shuffle_seed,
+            )
+            conversation_result = await self._run_synthesis_conversation(
+                conversation=conversation,
+                db_id=db_id,
+                requested_topic=requested_topic,
+                schema_summary=schema_summary,
+                tool_surface_summary=tool_surface_summary,
+                anchor_hint=anchor_hint,
+                data_profile=data_profile,
+            )
         if controller.accepted_draft is None:
             attempts = self._generation_attempts_from_submit_records(
                 controller=controller,
@@ -854,26 +799,29 @@ class SynthesisAgentRuntime:
             phase=None,
         )
 
-    async def _build_conversation(
+    def _build_conversation(
         self,
         *,
-        db_id: str,
-        bundle: AtomicToolBundle,
+        session: ComposerSession,
         controller: SubmitDraftController,
         shuffle_seed: str,
-    ) -> SynthesisConversation:
-        synthesis_db = self._ensure_synthesis_db(db_id)
-        base_tool_executors = await synthesis_db.tool_executors()
-        tool_executors = {
-            name: with_tool_shuffle_seed(executor, shuffle_seed=shuffle_seed)
-            for name, executor in base_tool_executors.items()
-        }
-        return SynthesisConversation(
+    ) -> tuple[SynthesisConversation, dict[str, object]]:
+        """Build a conversation + a composer tool-surface summary.
+
+        The ComposerSession is held open by the caller for the lifetime
+        of the conversation; the FunctionTools close over
+        `session.connection`, so tearing the session down (releasing the
+        connection) invalidates the tools.
+        """
+        raw_tools = build_composer_tools(session)
+        instrumented = build_instrumented_composer_tools(raw_tools, controller)
+        conversation = SynthesisConversation(
             controller=controller,
-            tool_definitions=bundle.actor_tool_definitions(),
-            tool_executors=tool_executors,
+            sdk_tools=instrumented,
             shuffle_seed=shuffle_seed,
         )
+        surface_summary = summarize_composer_tool_surface(instrumented)
+        return conversation, surface_summary
 
     def _build_draft_from_submission(
         self,

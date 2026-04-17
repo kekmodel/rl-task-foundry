@@ -28,6 +28,7 @@ from rl_task_foundry.synthesis.tool_runtime import (
     bind_atomic_tool_executor,
     load_atomic_tool_module,
 )
+from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_from_graph
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ class SynthesisDb:
         default=None, init=False, repr=False
     )
     _graph_cache: SchemaGraph | None = field(default=None, init=False, repr=False)
+    _schema_snapshot_cache: SchemaSnapshot | None = field(
+        default=None, init=False, repr=False
+    )
     _data_profile_cache: DataProfile | None = field(default=None, init=False, repr=False)
     _atomic_tool_bundle: AtomicToolBundle | None = field(default=None, init=False, repr=False)
     _tool_executors: dict[str, ToolExecutor] | None = field(default=None, init=False, repr=False)
@@ -72,6 +76,19 @@ class SynthesisDb:
             )
             self._graph_cache = await introspector.introspect()
         return self._graph_cache
+
+    async def schema_snapshot(self) -> SchemaSnapshot:
+        """Immutable snapshot of the schema graph for tooling callers.
+
+        Derived from the cached `SchemaGraph` via `snapshot_from_graph`.
+        Cheap to build; re-cached per SynthesisDb so repeated composer
+        sessions share one instance.
+        """
+        if self._schema_snapshot_cache is not None:
+            return self._schema_snapshot_cache
+        graph = await self.schema_graph()
+        self._schema_snapshot_cache = snapshot_from_graph(graph)
+        return self._schema_snapshot_cache
 
     async def data_profile(self) -> DataProfile:
         if self._data_profile_cache is not None:
@@ -128,6 +145,7 @@ class SynthesisDb:
         """Inject a pre-built schema graph (e.g. from the registry entry)."""
 
         self._graph_cache = graph
+        self._schema_snapshot_cache = None
 
     async def random_anchor(self) -> dict[str, object] | None:
         graph = await self.schema_graph()
