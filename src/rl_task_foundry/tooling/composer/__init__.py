@@ -7,11 +7,13 @@ authoring. Not an RL target.
 """
 
 from rl_task_foundry.tooling.composer._session import ComposerSession
+from rl_task_foundry.tooling.composer.query import query
 from rl_task_foundry.tooling.composer.sample import sample
 from rl_task_foundry.tooling.composer.schema_map import schema_map
 
 __all__ = [
     "ComposerSession",
+    "query",
     "sample",
     "schema_map",
 ]
