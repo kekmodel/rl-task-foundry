@@ -3,47 +3,42 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
-from typing import Any
-
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
 from rl_task_foundry.calibration.runner import calibration_decision
 from rl_task_foundry.config.models import AppConfig, ProviderConfig, SolverModelConfig
 from rl_task_foundry.infra.db import DatabasePools, ensure_attached_database_pools
+from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import AgentRuntime, SolverEpisodeInput
-from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import RewardResult, canonical_json, compute_reward
 from rl_task_foundry.synthesis.contracts import TaskBundleContract
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
-from rl_task_foundry.synthesis.tool_runtime import (
-    ToolExecutor,
-    bind_atomic_tool_executor,
-    build_shuffle_seed,
-    load_atomic_tool_module,
-    with_tool_shuffle_seed,
+from rl_task_foundry.tooling.atomic import (
+    AtomicSession,
+    CursorStore,
+    build_atomic_tools,
 )
+from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_from_graph
+
+
+SdkToolsFactory = Callable[[TaskBundleContract], Awaitable[list[object]]]
+
 
 TaskRuntimeFactory = Callable[
     [
         SolverModelConfig,
         ProviderConfig,
         TaskBundleContract,
-        list[dict[str, Any]],
-        dict[str, ToolExecutor],
+        list[object],
     ],
     AgentRuntime,
-]
-TaskToolExecutorFactory = Callable[
-    [AtomicToolBundle],
-    dict[str, ToolExecutor] | Awaitable[dict[str, ToolExecutor]],
 ]
 TaskSolverRunFactory = Callable[[], Awaitable["TaskSolverRun"]]
 
@@ -117,25 +112,23 @@ class TaskQualityGateSummary:
 class SolverOrchestrator:
     config: AppConfig
     runtime_factory: TaskRuntimeFactory | None = None
-    tool_executor_factory: TaskToolExecutorFactory | None = None
+    sdk_tools_factory: SdkToolsFactory | None = None
     database_pools: DatabasePools | None = None
     _provider_semaphores: dict[str, asyncio.Semaphore] = field(
         default_factory=dict,
         init=False,
         repr=False,
     )
-    _tool_executor_cache: dict[str, dict[str, ToolExecutor]] = field(
+    _schema_snapshot_cache: dict[str, SchemaSnapshot] = field(
         default_factory=dict,
         init=False,
         repr=False,
     )
+    _snapshot_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
     _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
     _owns_database_pools: bool = field(default=True, init=False, repr=False)
-    _atomic_tool_materializer: AtomicToolMaterializer | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
 
     def __post_init__(self) -> None:
         if self.database_pools is not None:
@@ -146,38 +139,17 @@ class SolverOrchestrator:
         return await self.run_bundle(TaskRolloutBundle.from_draft(draft))
 
     async def run_bundle(self, bundle: TaskRolloutBundle) -> TaskRolloutSummary:
-        tool_definitions = bundle.atomic_tool_bundle.actor_tool_definitions()
-        tool_executors = await self._tool_executors(bundle.atomic_tool_bundle)
         runs: list[TaskSolverRun] = []
         calls: list[TaskSolverRunFactory] = []
         for solver_index, solver_config in enumerate(self.config.models.solvers):
             provider_config = self.config.providers[solver_config.provider]
-            shuffle_seed = build_shuffle_seed(
-                "solver",
-                bundle.task_bundle.task_id,
-                solver_config.solver_id,
-                solver_index,
-            )
-            seeded_tool_executors = {
-                name: with_tool_shuffle_seed(executor, shuffle_seed=shuffle_seed)
-                for name, executor in tool_executors.items()
-            }
-            runtime = self._runtime_for_solver(
-                solver_config,
-                provider_config,
-                bundle.task_bundle,
-                tool_definitions,
-                seeded_tool_executors,
-            )
             calls.append(
                 partial(
                     self._run_solver,
-                    runtime=runtime,
                     solver_config=solver_config,
+                    provider_config=provider_config,
                     solver_index=solver_index,
-                    task_bundle=bundle.task_bundle,
-                    rendered_user_prompt=bundle.rendered_user_prompt,
-                    canonical_answer_json=bundle.canonical_answer_json,
+                    bundle=bundle,
                 )
             )
 
@@ -202,27 +174,30 @@ class SolverOrchestrator:
             if self._owns_database_pools:
                 await self._database_pools.close()
             self._database_pools = None
-        self._tool_executor_cache.clear()
+        self._schema_snapshot_cache.clear()
         OpenAIAgentsSolverBackend.clear_model_cache()
 
     async def _run_solver(
         self,
         *,
-        runtime: AgentRuntime,
         solver_config: SolverModelConfig,
+        provider_config: ProviderConfig,
         solver_index: int,
-        task_bundle: TaskBundleContract,
-        rendered_user_prompt: str,
-        canonical_answer_json: str,
+        bundle: TaskRolloutBundle,
     ) -> TaskSolverRun:
         episode = SolverEpisodeInput(
-            task_bundle=task_bundle,
-            rendered_user_prompt=rendered_user_prompt,
+            task_bundle=bundle.task_bundle,
+            rendered_user_prompt=bundle.rendered_user_prompt,
         )
         provider_semaphore = self._provider_semaphore(solver_config.provider)
         async with provider_semaphore:
             try:
-                solver_result = await runtime.run(episode)
+                solver_result = await self._run_with_tools(
+                    solver_config=solver_config,
+                    provider_config=provider_config,
+                    bundle=bundle,
+                    episode=episode,
+                )
             except Exception as exc:
                 solver_result = SolverResult(
                     task_id=episode.task_id,
@@ -243,16 +218,48 @@ class SolverOrchestrator:
                 )
         reward_result = compute_reward(
             submitted_answer_text=solver_result.raw_output_text,
-            canonical_answer=json.loads(canonical_answer_json),
-            output_schema=task_bundle.task.output_schema,
+            canonical_answer=json.loads(bundle.canonical_answer_json),
+            output_schema=bundle.task_bundle.task.output_schema,
         )
         return TaskSolverRun(
-            task_id=task_bundle.task_id,
+            task_id=bundle.task_bundle.task_id,
             solver_id=solver_config.solver_id,
             solver_index=solver_index,
             solver_result=solver_result,
             reward_result=reward_result,
         )
+
+    async def _run_with_tools(
+        self,
+        *,
+        solver_config: SolverModelConfig,
+        provider_config: ProviderConfig,
+        bundle: TaskRolloutBundle,
+        episode: SolverEpisodeInput,
+    ) -> SolverResult:
+        if self.sdk_tools_factory is not None:
+            sdk_tools = await self.sdk_tools_factory(bundle.task_bundle)
+            runtime = self._runtime_for_solver(
+                solver_config=solver_config,
+                provider_config=provider_config,
+                task_bundle=bundle.task_bundle,
+                sdk_tools=sdk_tools,
+            )
+            return await runtime.run(episode)
+        pools = await self._database_pools_for_tools()
+        snapshot = await self._schema_snapshot(bundle.atomic_tool_bundle.db_id)
+        async with pools.solver_connection() as conn:
+            session = AtomicSession(
+                snapshot=snapshot, connection=conn, store=CursorStore()
+            )
+            sdk_tools = build_atomic_tools(session)
+            runtime = self._runtime_for_solver(
+                solver_config=solver_config,
+                provider_config=provider_config,
+                task_bundle=bundle.task_bundle,
+                sdk_tools=sdk_tools,
+            )
+            return await runtime.run(episode)
 
     def _provider_semaphore(self, provider_name: str) -> asyncio.Semaphore:
         semaphore = self._provider_semaphores.get(provider_name)
@@ -264,19 +271,18 @@ class SolverOrchestrator:
 
     def _runtime_for_solver(
         self,
+        *,
         solver_config: SolverModelConfig,
         provider_config: ProviderConfig,
         task_bundle: TaskBundleContract,
-        tool_definitions: list[dict[str, Any]],
-        tool_executors: dict[str, ToolExecutor],
+        sdk_tools: list[object],
     ) -> AgentRuntime:
         if self.runtime_factory is not None:
             return self.runtime_factory(
                 solver_config,
                 provider_config,
                 task_bundle,
-                tool_definitions,
-                tool_executors,
+                sdk_tools,
             )
         if solver_config.backend != "openai_agents":
             raise NotImplementedError(f"Unsupported solver backend: {solver_config.backend}")
@@ -287,44 +293,28 @@ class SolverOrchestrator:
             solver_config=solver_config,
             provider_config=provider_config,
             runtime_config=runtime_config,
-            tool_definitions=tool_definitions,
-            tool_executors=tool_executors,
+            sdk_tools=sdk_tools,
             session_db_path=self.config.output.traces_dir / "sessions.sqlite",
             traces_dir=self.config.output.traces_dir,
         )
 
-    async def _tool_executors(
-        self,
-        bundle: AtomicToolBundle,
-    ) -> dict[str, ToolExecutor]:
-        cached = self._tool_executor_cache.get(bundle.db_id)
+    async def _schema_snapshot(self, db_id: str) -> SchemaSnapshot:
+        cached = self._schema_snapshot_cache.get(db_id)
         if cached is not None:
             return cached
-        if self.tool_executor_factory is not None:
-            executors = self.tool_executor_factory(bundle)
-            if inspect.isawaitable(executors):
-                executors = await executors
-            resolved = dict(executors)
-            self._tool_executor_cache[bundle.db_id] = resolved
-            return resolved
-
-        pools = await self._database_pools_for_tools()
-        materializer = self._tool_materializer()
-        materialization = materializer.materialize_bundle(bundle)
-        module = load_atomic_tool_module(
-            materialization.source_path,
-            module_name=f"rl_task_foundry_atomic_tools_{bundle.db_id}",
-        )
-        resolved = {
-            tool.name: bind_atomic_tool_executor(
-                module=module,
-                tool_name=tool.name,
-                pools=pools,
+        async with self._snapshot_lock:
+            cached = self._schema_snapshot_cache.get(db_id)
+            if cached is not None:
+                return cached
+            introspector = PostgresSchemaIntrospector(
+                database=self.config.database,
+                default_visibility=self.config.privacy.default_visibility,
+                visibility_overrides=self.config.privacy.visibility_overrides,
             )
-            for tool in bundle.tools
-        }
-        self._tool_executor_cache[bundle.db_id] = resolved
-        return resolved
+            graph = await introspector.introspect()
+            snapshot = snapshot_from_graph(graph)
+            self._schema_snapshot_cache[db_id] = snapshot
+            return snapshot
 
     async def _execute_solver_batches(
         self,
@@ -371,11 +361,6 @@ class SolverOrchestrator:
             attr_name="_database_pools",
             config=self.config.database,
         )
-
-    def _tool_materializer(self) -> AtomicToolMaterializer:
-        if self._atomic_tool_materializer is None:
-            self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
-        return self._atomic_tool_materializer
 
 
 def _solver_divergence(summary: TaskRolloutSummary) -> tuple[int, float]:

@@ -26,6 +26,10 @@ from rl_task_foundry.synthesis.task_registry import (
 )
 
 
+async def _empty_sdk_tools_factory(_task_bundle: object) -> list[object]:
+    return []
+
+
 def _config(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
     output = OutputConfig(
@@ -144,7 +148,7 @@ async def test_proof_task_runner_commits_and_exports_bundle(tmp_path: Path) -> N
     orchestrator = SolverOrchestrator(
         config,
         runtime_factory=lambda *_args: _FakeRuntime(),
-        tool_executor_factory=lambda _bundle: {},
+        sdk_tools_factory=_empty_sdk_tools_factory,
     )
     runner = ProofTaskRunner(
         config,
@@ -210,7 +214,7 @@ async def test_proof_task_runner_skips_commit_when_quality_gate_rejects(
     orchestrator = SolverOrchestrator(
         config,
         runtime_factory=lambda *_args: _FakeRuntime(),
-        tool_executor_factory=lambda _bundle: {},
+        sdk_tools_factory=_empty_sdk_tools_factory,
     )
     runner = ProofTaskRunner(
         config,

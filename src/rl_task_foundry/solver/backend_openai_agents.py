@@ -13,9 +13,6 @@ from typing import Any, ClassVar
 
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
-    ToolExecutor,
-)
-from rl_task_foundry.infra.sdk_helpers import (
     build_reasoning_replay_hook,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -32,12 +29,6 @@ from rl_task_foundry.infra.sdk_helpers import (
 )
 from rl_task_foundry.infra.sdk_helpers import (
     load_sdk_components as _shared_load_sdk_components,
-)
-from rl_task_foundry.infra.sdk_helpers import (
-    make_sdk_tool as _shared_make_sdk_tool,
-)
-from rl_task_foundry.infra.sdk_helpers import (
-    normalize_tool_definition as _shared_normalize_tool_definition,
 )
 from rl_task_foundry.infra.sdk_helpers import (
     resolve_provider_api_key as _resolve_provider_api_key,
@@ -73,20 +64,13 @@ def _failure_raw_output_text(error: Exception) -> str:
     return ""
 
 
-def _extract_tool_calls(
-    run_result: Any,
-    *,
-    semantic_keys_by_name: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
+def _extract_tool_calls(run_result: Any) -> list[dict[str, Any]]:
     tool_calls: list[dict[str, Any]] = []
     for item in getattr(run_result, "new_items", []) or []:
         tool_name = _extract_tool_call_name(item)
         if tool_name is None:
             continue
-        payload = {"name": tool_name, "repr": repr(item)}
-        if semantic_keys_by_name is not None and tool_name in semantic_keys_by_name:
-            payload["semantic_key"] = semantic_keys_by_name[tool_name]
-        tool_calls.append(payload)
+        tool_calls.append({"name": tool_name, "repr": repr(item)})
     return tool_calls
 
 
@@ -142,14 +126,6 @@ def _parse_submission_output_string(final_output: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
-
-
-def _normalize_tool_definition(definition: dict[str, Any]) -> dict[str, Any]:
-    return _shared_normalize_tool_definition(definition, include_semantic_key=True)
-
-
-def _make_sdk_tool(definition: dict[str, Any], executor: ToolExecutor) -> object:
-    return _shared_make_sdk_tool(definition, executor)
 
 
 @cache
@@ -209,8 +185,7 @@ class OpenAIAgentsSolverBackend:
     solver_config: SolverModelConfig
     provider_config: ProviderConfig
     runtime_config: SolverRuntimeConfig
-    tool_definitions: list[dict[str, Any]] = field(default_factory=list)
-    tool_executors: dict[str, ToolExecutor] = field(default_factory=dict)
+    sdk_tools: list[object] = field(default_factory=list)
     session_db_path: Path | None = None
     traces_dir: Path | None = None
     artifact_writer: ArtifactWriter | None = None
@@ -263,18 +238,8 @@ class OpenAIAgentsSolverBackend:
         self._shared_models[cache_key] = self._model
         return self._model
 
-    def _normalized_tool_definitions(self) -> list[dict[str, Any]]:
-        return [_normalize_tool_definition(definition) for definition in self.tool_definitions]
-
     def _build_tools(self) -> list[object]:
-        sdk_tools: list[object] = []
-        for definition in self._normalized_tool_definitions():
-            tool_name = str(definition["name"])
-            executor = self.tool_executors.get(tool_name)
-            if executor is None:
-                raise RuntimeError(f"Missing tool executor for tool: {tool_name}")
-            sdk_tools.append(_make_sdk_tool(definition, executor))
-        return sdk_tools
+        return list(self.sdk_tools)
 
     @staticmethod
     def _build_tool_use_behavior(sdk: SimpleNamespace) -> Callable[[Any, list[Any]], Any]:
@@ -442,14 +407,7 @@ class OpenAIAgentsSolverBackend:
                 "task_id": task_id,
                 "solver_id": self.solver_config.solver_id,
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", [])],
-                "tool_calls": _extract_tool_calls(
-                    run_result,
-                    semantic_keys_by_name={
-                        str(definition["name"]): str(definition["semantic_key"])
-                        for definition in self._normalized_tool_definitions()
-                        if definition.get("semantic_key")
-                    },
-                ),
+                "tool_calls": _extract_tool_calls(run_result),
             },
         )
         if submitted_answer_text is None and status == "completed":

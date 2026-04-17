@@ -20,6 +20,10 @@ from rl_task_foundry.synthesis.canonicalize import RewardResult
 from tests.test_synthesis_task_registry import _sample_draft
 
 
+async def _empty_sdk_tools(_task_bundle: object) -> list[object]:
+    return []
+
+
 def _config(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
     output = OutputConfig(
@@ -59,36 +63,6 @@ class _FakeRuntime:
         )
 
 
-class _SeedCapturingRuntime:
-    def __init__(
-        self,
-        *,
-        raw_output_text: str,
-        executor: object,
-        seen_payloads: list[dict[str, object]],
-    ) -> None:
-        self.raw_output_text = raw_output_text
-        self.executor = executor
-        self.seen_payloads = seen_payloads
-
-    async def run(self, episode) -> SolverResult:
-        result = self.executor({"customer_id": 1})
-        if hasattr(result, "__await__"):
-            result = await result
-        if isinstance(result, dict):
-            self.seen_payloads.append(result)
-        return SolverResult(
-            task_id=episode.task_id,
-            solver_id="solver_a",
-            provider="codex_oauth",
-            model="gpt-5.4-mini",
-            transcript_ref="memory://transcript",
-            tool_trace_ref="memory://tools",
-            raw_output_text=self.raw_output_text,
-            status="completed",
-        )
-
-
 @pytest.mark.asyncio
 async def test_solver_orchestrator_scores_against_canonical_answer(tmp_path: Path) -> None:
     draft = _sample_draft()
@@ -99,7 +73,7 @@ async def test_solver_orchestrator_scores_against_canonical_answer(tmp_path: Pat
             '{"customer":"Alice","day":"2026-04-12"}',
             seen_max_turns,
         ),
-        tool_executor_factory=lambda _bundle: {},
+        sdk_tools_factory=_empty_sdk_tools,
     )
 
     try:
@@ -114,7 +88,7 @@ async def test_solver_orchestrator_scores_against_canonical_answer(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_solver_orchestrator_injects_distinct_shuffle_seed_per_solver_run(
+async def test_solver_orchestrator_invokes_sdk_tools_factory_per_solver_run(
     tmp_path: Path,
 ) -> None:
     draft = _sample_draft()
@@ -131,22 +105,18 @@ async def test_solver_orchestrator_injects_distinct_shuffle_seed_per_solver_run(
             model="gpt-5.4-mini",
         ),
     ]
-    recorded_kwargs: list[dict[str, object]] = []
+    factory_calls: list[str] = []
 
-    async def _recording_executor(kwargs: dict[str, object]) -> dict[str, object]:
-        recorded_kwargs.append(dict(kwargs))
-        return dict(kwargs)
+    async def _recording_factory(task_bundle: object) -> list[object]:
+        factory_calls.append(getattr(task_bundle, "task_id", "?"))
+        return []
 
     orchestrator = SolverOrchestrator(
         config,
-        runtime_factory=lambda _solver, _provider, _task, _defs, tool_executors: (
-            _SeedCapturingRuntime(
-                raw_output_text='{"customer":"Alice","day":"2026-04-12"}',
-                executor=next(iter(tool_executors.values())),
-                seen_payloads=[],
-            )
+        runtime_factory=lambda *_args: _FakeRuntime(
+            '{"customer":"Alice","day":"2026-04-12"}', []
         ),
-        tool_executor_factory=lambda _bundle: {"get_customer_by_id": _recording_executor},
+        sdk_tools_factory=_recording_factory,
     )
 
     try:
@@ -155,13 +125,13 @@ async def test_solver_orchestrator_injects_distinct_shuffle_seed_per_solver_run(
         await orchestrator.close()
 
     assert summary.total_solver_runs == 2
-    shuffle_seeds = [str(kwargs["_shuffle_seed"]) for kwargs in recorded_kwargs]
-    assert len(shuffle_seeds) == 2
-    assert len(set(shuffle_seeds)) == 2
+    # One factory invocation per solver run (tools are built fresh each run
+    # so the cursor store / atomic session stays scoped to that run).
+    assert len(factory_calls) == 2
 
 
 @pytest.mark.asyncio
-async def test_solver_orchestrator_close_clears_cached_tool_executors(
+async def test_solver_orchestrator_close_clears_snapshot_cache(
     tmp_path: Path,
 ) -> None:
     draft = _sample_draft()
@@ -171,15 +141,15 @@ async def test_solver_orchestrator_close_clears_cached_tool_executors(
             '{"customer":"Alice","day":"2026-04-12"}',
             [],
         ),
-        tool_executor_factory=lambda _bundle: {"noop": lambda _kwargs: {}},
+        sdk_tools_factory=_empty_sdk_tools,
     )
 
     await orchestrator.run_draft(draft)
-    assert orchestrator._tool_executor_cache
 
+    orchestrator._schema_snapshot_cache["sakila"] = object()  # type: ignore[assignment]
     await orchestrator.close()
 
-    assert orchestrator._tool_executor_cache == {}
+    assert orchestrator._schema_snapshot_cache == {}
 
 
 @pytest.mark.asyncio
@@ -189,7 +159,7 @@ async def test_solver_orchestrator_close_clears_solver_model_cache(
     orchestrator = SolverOrchestrator(
         _config(tmp_path),
         runtime_factory=lambda *_args: _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', []),
-        tool_executor_factory=lambda _bundle: {"noop": lambda _kwargs: {}},
+        sdk_tools_factory=_empty_sdk_tools,
     )
     OpenAIAgentsSolverBackend._shared_models[
         (1, 2, "openai_compatible", None, "dummy", 30.0, "gpt-5.4-mini")

@@ -72,37 +72,6 @@ def _sample_episode() -> SolverEpisodeInput:
     )
 
 
-def _sample_tool_definitions() -> list[dict[str, object]]:
-    return [
-        {
-            "name": "delivery_lookup",
-            "description": "Look up delivery status for an order id.",
-            "params_schema": {
-                "type": "object",
-                "properties": {
-                    "anchor_order_id": {
-                        "type": "integer",
-                        "description": "Order id",
-                    }
-                },
-                "required": ["anchor_order_id"],
-                "additionalProperties": False,
-            },
-            "returns_schema": {
-                "type": "object",
-                "properties": {
-                    "delivery_status": {
-                        "type": "string",
-                    }
-                },
-                "required": ["delivery_status"],
-                "additionalProperties": False,
-            },
-            "semantic_key": "orders.shipments:lookup",
-        }
-    ]
-
-
 @pytest.mark.asyncio
 async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monkeypatch):
     tracing_disabled: list[bool] = []
@@ -205,8 +174,7 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             tracing=True,
             sdk_sessions_enabled=True,
         ),
-        tool_definitions=_sample_tool_definitions(),
-        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
+        sdk_tools=[],
         session_db_path=tmp_path / "sessions.sqlite",
         traces_dir=tmp_path / "traces",
     )
@@ -250,11 +218,7 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
         "'tool-call(submit_result)'",
     ]
     assert tool_trace_payload["tool_calls"] == [
-        {
-            "name": "delivery_lookup",
-            "repr": "'tool-call(delivery_lookup)'",
-            "semantic_key": "orders.shipments:lookup",
-        },
+        {"name": "delivery_lookup", "repr": "'tool-call(delivery_lookup)'"},
         {"name": "submit_result", "repr": "'tool-call(submit_result)'"},
     ]
 
@@ -342,8 +306,7 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
             tracing=True,
             sdk_sessions_enabled=True,
         ),
-        tool_definitions=_sample_tool_definitions(),
-        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
+        sdk_tools=[],
         session_db_path=tmp_path / "sessions.sqlite",
         traces_dir=tmp_path / "traces",
     )
@@ -441,8 +404,7 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backe
             tracing=True,
             sdk_sessions_enabled=False,
         ),
-        tool_definitions=_sample_tool_definitions(),
-        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
+        sdk_tools=[],
         traces_dir=tmp_path / "traces",
     )
     backend_b = OpenAIAgentsSolverBackend(
@@ -465,8 +427,7 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backe
             tracing=True,
             sdk_sessions_enabled=False,
         ),
-        tool_definitions=_sample_tool_definitions(),
-        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
+        sdk_tools=[],
         traces_dir=tmp_path / "traces",
     )
 
@@ -702,8 +663,7 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
             timeout_s=30,
         ),
         runtime_config=SolverRuntimeConfig(max_turns=8),
-        tool_definitions=_sample_tool_definitions(),
-        tool_executors={"delivery_lookup": lambda _kwargs: {"delivery_status": "IN_TRANSIT"}},
+        sdk_tools=[],
         traces_dir=tmp_path / "traces",
     )
 
