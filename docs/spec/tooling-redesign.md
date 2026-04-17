@@ -1,6 +1,6 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
-> **Status:** design spec. All checklist items are complete. Landing chain: atomic scaffold `f63be79`, calculus `201f6f9`, atomic tool_factory `03e9690`, `Any` sweep `b3a5c44`, composer `schema_map` `7f92ae2`, `sample` `398d175`, `query` DSL `804f7da`, `profile` `92e54ce`, `neighborhood` `a9b6d78`, composer tool_factory `852d7c9`, synthesis rewire `0558b45`, solver rewire `52b3fdd`, prompt rewrite `4f0b6d5`, bundle export migration `fdee2f6`, atomic_tools codegen retirement `a51af0d`. Remaining open items are downstream of the redesign: a composer rewrite of the proof environment task (use it as a no-quota smoke test of the new surface), and then iter13+ prompt tuning against the real DB.
+> **Status:** design spec. All checklist items are complete. Landing chain: atomic scaffold `f63be79`, calculus `201f6f9`, atomic tool_factory `03e9690`, `Any` sweep `b3a5c44`, composer `schema_map` `7f92ae2`, `sample` `398d175`, `query` DSL `804f7da`, `profile` `92e54ce`, `neighborhood` `a9b6d78`, composer tool_factory `852d7c9`, synthesis rewire `0558b45`, solver rewire `52b3fdd`, prompt rewrite `4f0b6d5`, bundle export migration `fdee2f6`, atomic_tools codegen retirement `a51af0d`, proof composer rewrite (ephemeral PG schema + scripted backend). Remaining open item is iter13+ prompt tuning against the real DB.
 
 ## Motivation
 
@@ -183,8 +183,8 @@ The canonical answer produced by composer `query(spec)` is stored verbatim in th
 
 Order matters: do (1) before (2).
 
-1. **Rewrite the proof environment task via the composer DSL** so it stops hand-coding a `SynthesisTaskDraft` in `build_proof_task_draft` and instead flows through `SynthesisAgentRuntime`. The proof path is the end-to-end smoke test of the new surface, runs on a sqlite fixture, and costs no API quota — it catches wiring bugs (composer tools not bound, atomic session lifecycle, `tool_signature` hash drift, …) before they contaminate real-DB measurements.
-2. **iter13+ prompt tuning against the new tool surface.** Only meaningful once (1) has proved the runtime wiring works end-to-end; otherwise pass_rate observations mix prompt effects with wiring bugs and the scarce Alibaba quota is spent on debugging plumbing.
+1. **Proof environment rewrite — done.** `ProofTaskRunner` and `build_proof_task_draft` are gone; proof flows through `SynthesisAgentRuntime` + `RealDbTrialRunner` via `run_proof_task(config, output_root=…)`. The fixture is provisioned as an **ephemeral Postgres schema** (`proof_trial_<uuid>`) rather than a sqlite file — the composer/atomic SQL stacks are Postgres-only (`$N` placeholders, `ILIKE`, `= ANY($1::int4[])`), so a sqlite variant would have required a second SQL dialect that the rest of the system does not need. No API quota is consumed: a `ScriptedComposerBackend` replays a fixed composer conversation (5 observations + `submit_draft`) and an `_AlternatingProofSolverRuntime` returns matched/unmatched answers so the pass rate lands inside the `[0.25, 0.75]` band. The schema is dropped on teardown. Integration test at `tests/test_synthesis_proof_environment.py::test_run_proof_task_commits_and_exports_bundle`.
+2. **iter13+ prompt tuning against the new tool surface.** Now unblocked: the proof smoke test exercises composer-tool binding, atomic-session lifecycle, `tool_signature` hashing, registry commit, and bundle export end-to-end against a real Postgres, so any iter13 pass-rate observation isolates prompt effects from wiring bugs.
 
 ### Bundle export change (next session)
 

@@ -26,6 +26,7 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisPhaseExecutionError,
     SynthesisProviderUnavailableError,
     SynthesisRuntimeError,
+    _SynthesisBackendProtocol,
 )
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.task_registry import (
@@ -133,6 +134,7 @@ class RealDbTrialRunner:
     database_pools: DatabasePools | None = None
     solver_orchestrator: SolverOrchestrator | None = None
     synthesis_db: SynthesisDb | None = None
+    synthesis_backends: list[_SynthesisBackendProtocol] | None = None
     _owns_solver_orchestrator: bool = field(default=False, init=False, repr=False)
     _owns_registry: bool = field(default=False, init=False, repr=False)
 
@@ -408,6 +410,7 @@ class RealDbTrialRunner:
             database_pools=self.database_pools,
             solver_orchestrator=self.solver_orchestrator,
             synthesis_db=self.synthesis_db,
+            synthesis_backends=self.synthesis_backends,
         )
         self.synthesis_runtime = runtime
         return runtime

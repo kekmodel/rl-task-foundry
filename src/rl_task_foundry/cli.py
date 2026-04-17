@@ -15,7 +15,7 @@ from rl_task_foundry.infra.storage import summarize_run
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
-from rl_task_foundry.synthesis.proof_environment import ProofTaskRunner
+from rl_task_foundry.synthesis.proof_environment import run_proof_task
 from rl_task_foundry.synthesis.harvest import HarvestOutcome, HarvestRunner
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
@@ -274,7 +274,7 @@ def export_bundle(
 
 
 @app.command("run-proof-task")
-def run_proof_task(
+def run_proof_task_cli(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
@@ -282,17 +282,14 @@ def run_proof_task(
 
     async def _run() -> None:
         config = load_config(config_path)
-        runner = ProofTaskRunner(config)
-        try:
-            summary = await runner.run(output_dir)
-        finally:
-            await runner.close()
+        summary = await run_proof_task(config, output_root=output_dir)
 
         console.print(f"[green]proof task run complete[/green]: {output_dir}")
         console.print(f"db_id={summary.db_id}")
-        console.print(f"task_id={summary.task_id}")
-        console.print(f"fixture_sql_root={summary.fixture_sql_root}")
-        console.print(f"quality_gate_status={summary.quality_gate_status}")
+        if summary.task_id is not None:
+            console.print(f"task_id={summary.task_id}")
+        if summary.quality_gate_status is not None:
+            console.print(f"quality_gate_status={summary.quality_gate_status}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:
@@ -309,7 +306,7 @@ def run_proof_task(
             console.print(f"registry_task_id={summary.registry_task_id}")
         if summary.bundle_root is not None:
             console.print(f"bundle_root={summary.bundle_root}")
-        if summary.quality_gate_status != "accept":
+        if summary.trial_status is not RealDbTrialStatus.ACCEPTED:
             raise typer.Exit(code=1)
 
     asyncio.run(_run())

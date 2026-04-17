@@ -17,7 +17,6 @@ from rl_task_foundry.infra.storage import (
 )
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, TaskBundleStatus
-from rl_task_foundry.synthesis.proof_environment import ProofTaskRunSummary
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialStatus,
     RealDbTrialSummary,
@@ -151,31 +150,32 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
 def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
 
-    @dataclass
-    class _DummyProofRunner:
-        _config: object
+    async def _fake_run_proof_task(
+        _config: object,
+        *,
+        output_root: Path,
+        mirror_monitor_path: Path | None = None,
+    ) -> RealDbTrialSummary:
+        captured["output_root"] = output_root
+        captured["mirror_monitor_path"] = mirror_monitor_path
+        return RealDbTrialSummary(
+            db_id="proof_trip_fixture",
+            requested_topic="itinerary",
+            trial_status=RealDbTrialStatus.ACCEPTED,
+            flow_id="flow_proof_test",
+            phase_monitor_log_path=output_root / "debug" / "phase_monitors.jsonl",
+            debug_root=output_root / "debug",
+            task_id="task_itinerary_fixture",
+            quality_gate_status="accept",
+            solver_pass_rate=0.5,
+            solver_ci_low=0.2,
+            solver_ci_high=0.8,
+            registry_status=TaskRegistryCommitStatus.COMMITTED,
+            registry_task_id="task_itinerary_fixture",
+            bundle_root=output_root / "bundle",
+        )
 
-        async def run(self, output_dir: Path) -> ProofTaskRunSummary:
-            captured["output_dir"] = output_dir
-            return ProofTaskRunSummary(
-                db_id="proof_trip_fixture",
-                task_id="task_proof_trip_fixture_itinerary_v1",
-                fixture_sql_root=output_dir / "fixture_db",
-                quality_gate_status="accept",
-                flow_id="flow_proof_test",
-                phase_monitor_log_path=output_dir / "debug" / "phase_monitors.jsonl",
-                solver_pass_rate=0.5,
-                solver_ci_low=0.2,
-                solver_ci_high=0.8,
-                registry_status=TaskRegistryCommitStatus.COMMITTED,
-                registry_task_id="task_proof_trip_fixture_itinerary_v1",
-                bundle_root=output_dir / "bundle",
-            )
-
-        async def close(self) -> None:
-            captured["closed"] = True
-
-    monkeypatch.setattr("rl_task_foundry.cli.ProofTaskRunner", _DummyProofRunner)
+    monkeypatch.setattr("rl_task_foundry.cli.run_proof_task", _fake_run_proof_task)
 
     output_dir = tmp_path / "proof_output"
     result = CliRunner().invoke(app, ["run-proof-task", str(output_dir)])
@@ -183,13 +183,13 @@ def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     assert "proof task run complete" in result.stdout
     assert "db_id=proof_trip_fixture" in result.stdout
-    assert "task_id=task_proof_trip_fixture_itinerary_v1" in result.stdout
+    assert "task_id=task_itinerary_fixture" in result.stdout
     assert "quality_gate_status=accept" in result.stdout
     assert "flow_id=flow_proof_test" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
     assert "bundle_root=" in result.stdout
-    assert captured["output_dir"] == output_dir
-    assert captured["closed"] is True
+    assert captured["output_root"] == output_dir
+    assert captured["mirror_monitor_path"] is None
 
 
 def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:

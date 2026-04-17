@@ -1,81 +1,112 @@
-"""Synthetic proof-task vertical slice helpers.
+"""Synthetic proof-task vertical slice.
 
-This module keeps the first Milestone 5 proof task deterministic and reviewable:
-it defines a synthetic fixture DB schema, a compositional itinerary environment,
-and a small runner that executes the same rollout -> quality gate -> registry ->
-bundle export path used by accepted synthesized task bundles.
+The proof task drives the full synthesis-through-registry pipeline (composer
+conversation, solver rollout, quality gate, registry commit, bundle export)
+without consuming provider quota.
+
+Shape:
+1. Provision an ephemeral Postgres schema from the packaged fixture DDL/seed.
+2. Build an ``AppConfig`` override that points the schema allowlist and
+   calibration band at the ephemeral schema and keeps rollouts small.
+3. Inject a ``ScriptedComposerBackend`` that replays a fixed sequence of
+   composer-tool observations and submits the canonical itinerary draft.
+4. Inject a solver runtime that alternates matched/unmatched answers so the
+   observed pass rate lands inside the quality-gate band.
+5. Delegate to ``RealDbTrialRunner`` so the registry and bundle paths are
+   identical to real-DB runs.
+6. Drop the ephemeral schema on teardown.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from hashlib import sha256
+import json
+import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.pipeline.solver_orchestrator import (
-    SolverOrchestrator,
-    TaskQualityGateStatus,
-    evaluate_rollout_summary,
-)
-from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
-from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
-from rl_task_foundry.synthesis.canonicalize import canonical_json
-from rl_task_foundry.synthesis.contracts import (
-    ConstraintKind,
-    ConstraintSummaryItem,
-    OutputFieldContract,
-    OutputFieldType,
-    OutputSchemaContract,
-    RolloutConstraintsContract,
-    TaskBundleContract,
-    TaskBundleStatus,
-    TaskContract,
-    TaskQualityMetrics,
-)
-from rl_task_foundry.synthesis.phase_monitor import (
-    PipelinePhaseMonitorLogger,
-)
-from rl_task_foundry.synthesis.pipeline_events import build_flow_id
-from rl_task_foundry.synthesis.quality_gate import accepted_draft_with_quality_metrics
-from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
-from rl_task_foundry.synthesis.runtime import (
-    CURRENT_SYNTHESIS_GENERATOR_VERSION,
-    SynthesisTaskDraft,
-    _snapshot_tool_signature,
-)
-from rl_task_foundry.synthesis.task_registry import (
-    TaskRegistryCommitStatus,
-    TaskRegistryWriter,
-)
+from rl_task_foundry.infra.db import DatabasePools
+from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 from rl_task_foundry.schema.graph import (
     ColumnProfile,
     ForeignKeyEdge,
     SchemaGraph,
     TableProfile,
 )
-from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_from_graph
+from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.solver.runtime import AgentRuntime, SolverEpisodeInput
+from rl_task_foundry.synthesis.backend_scripted import (
+    ScriptedAtomicToolCall,
+    ScriptedComposerBackend,
+    ScriptedComposerScript,
+)
+from rl_task_foundry.synthesis.contracts import TaskBundleContract
+from rl_task_foundry.synthesis.real_db_trial import (
+    RealDbTrialRunner,
+    RealDbTrialSummary,
+)
+from rl_task_foundry.synthesis.submit_draft_tool import SubmitDraftPayload
+from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
+
 
 PROOF_DB_ID = "proof_trip_fixture"
-PROOF_TASK_ID = "task_proof_trip_fixture_itinerary_v1"
+PROOF_TASK_TOPIC = "itinerary"
 
-PROOF_FIXTURE_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS proof_anchors (
+
+PROOF_ANCHOR_ENTITY: dict[str, object] = {"anchor_id": 1}
+
+
+PROOF_CANONICAL_ANSWER: list[dict[str, object]] = [
+    {
+        "day": 1,
+        "city": "Seoul",
+        "lodging": "Seoul Station Stay",
+        "activity": "Han River Night Walk",
+        "total_cost": 180,
+    },
+    {
+        "day": 2,
+        "city": "Suwon",
+        "lodging": "Suwon Fortress Hotel",
+        "activity": "Fortress Loop Tour",
+        "total_cost": 160,
+    },
+    {
+        "day": 3,
+        "city": "Incheon",
+        "lodging": "Incheon Harbor Inn",
+        "activity": "Harbor Sunset Ferry",
+        "total_cost": 170,
+    },
+]
+
+
+PROOF_QUESTION_BODY = (
+    "봄 시즌 3일 출장 일정표를 만들어 주세요. 각 day는 하나의 city를 방문해야 하고 "
+    "전체 itinerary에서 city는 중복되면 안 됩니다. day별 total_cost는 250 이하여야 "
+    "하며, 연속된 day의 city는 인접한 지역이어야 합니다. 가능한 일정이 여러 개면 "
+    "day 1의 city 이름, 그다음 day 2의 city 이름, 그다음 day 3의 city 이름의 "
+    "사전순이 가장 앞서는 답을 고르세요."
+)
+
+
+PROOF_FIXTURE_DDL = """
+CREATE TABLE proof_anchors (
     anchor_id INTEGER PRIMARY KEY,
     season TEXT NOT NULL,
     budget_bucket TEXT NOT NULL,
     start_city_id INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS proof_cities (
+CREATE TABLE proof_cities (
     city_id INTEGER PRIMARY KEY,
     city_name TEXT NOT NULL,
     region_name TEXT NOT NULL,
     season TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS proof_city_links (
+CREATE TABLE proof_city_links (
     city_id INTEGER NOT NULL,
     neighbor_city_id INTEGER NOT NULL,
     PRIMARY KEY (city_id, neighbor_city_id),
@@ -83,7 +114,7 @@ CREATE TABLE IF NOT EXISTS proof_city_links (
     FOREIGN KEY (neighbor_city_id) REFERENCES proof_cities(city_id)
 );
 
-CREATE TABLE IF NOT EXISTS proof_lodgings (
+CREATE TABLE proof_lodgings (
     lodging_id INTEGER PRIMARY KEY,
     city_id INTEGER NOT NULL,
     lodging_name TEXT NOT NULL,
@@ -91,7 +122,7 @@ CREATE TABLE IF NOT EXISTS proof_lodgings (
     FOREIGN KEY (city_id) REFERENCES proof_cities(city_id)
 );
 
-CREATE TABLE IF NOT EXISTS proof_activities (
+CREATE TABLE proof_activities (
     activity_id INTEGER PRIMARY KEY,
     city_id INTEGER NOT NULL,
     activity_name TEXT NOT NULL,
@@ -100,7 +131,8 @@ CREATE TABLE IF NOT EXISTS proof_activities (
 );
 """.strip()
 
-PROOF_FIXTURE_SEED_SQL = """
+
+PROOF_FIXTURE_SEED = """
 INSERT INTO proof_anchors (anchor_id, season, budget_bucket, start_city_id) VALUES
     (1, 'spring', 'mid', 101);
 
@@ -128,203 +160,51 @@ INSERT INTO proof_activities (activity_id, city_id, activity_name, ticket_cost) 
 """.strip()
 
 
-@dataclass(frozen=True, slots=True)
-class ProofFixtureSqlFiles:
-    root_dir: Path
-    schema_path: Path
-    seed_path: Path
+def _split_sql_statements(source: str) -> Iterator[str]:
+    for raw in source.split(";"):
+        cleaned = raw.strip()
+        if cleaned:
+            yield cleaned
 
 
-@dataclass(frozen=True, slots=True)
-class ProofTaskRunSummary:
-    db_id: str
-    task_id: str
-    fixture_sql_root: Path
-    quality_gate_status: str
-    flow_id: str | None = None
-    phase_monitor_log_path: Path | None = None
-    solver_pass_rate: float | None = None
-    solver_ci_low: float | None = None
-    solver_ci_high: float | None = None
-    registry_status: TaskRegistryCommitStatus | None = None
-    registry_task_id: str | None = None
-    bundle_root: Path | None = None
+def _canonical_answer_json() -> str:
+    return json.dumps(PROOF_CANONICAL_ANSWER, ensure_ascii=False)
 
 
-@dataclass(slots=True)
-class ProofTaskRunner:
-    config: AppConfig
-    solver_orchestrator: SolverOrchestrator | None = None
-    registry: TaskRegistryWriter | None = None
-    exporter: TaskBundleExporter | None = None
-
-    def __post_init__(self) -> None:
-        if self.registry is None:
-            self.registry = TaskRegistryWriter.for_config(self.config)
-        assert self.registry.snapshot_materializer is not None
-        if self.exporter is None:
-            self.exporter = TaskBundleExporter(
-                registry=self.registry,
-                snapshot_materializer=self.registry.snapshot_materializer,
-            )
-        if self.solver_orchestrator is None:
-            self.solver_orchestrator = SolverOrchestrator(self.config)
-
-    async def run(self, output_root: Path) -> ProofTaskRunSummary:
-        output_root.mkdir(parents=True, exist_ok=True)
-        assert self.registry is not None
-        assert self.registry.snapshot_materializer is not None
-        self.registry.snapshot_materializer.materialize(
-            db_id=PROOF_DB_ID,
-            snapshot=build_proof_schema_snapshot(),
-        )
-        flow_id = build_flow_id("proof_task")
-        phase_monitor_log_path = output_root / "debug" / "phase_monitors.jsonl"
-        phase_monitor = PipelinePhaseMonitorLogger(
-            phase_monitor_log_path=phase_monitor_log_path,
-            flow_kind="proof_task",
-            flow_id=flow_id,
-        )
-        try:
-            fixture_files = write_proof_fixture_sql(output_root / "fixture_db")
-            draft = build_proof_task_draft(config=self.config)
-            phase_monitor.emit(
-                phase="draft_build",
-                status="completed",
-                expected_contract={
-                    "db_id": PROOF_DB_ID,
-                    "topic": "itinerary",
-                },
-                actual_data={
-                    "task_id": draft.task_bundle.task_id,
-                    "rendered_user_prompt": draft.rendered_user_prompt,
-                    "canonical_answer_json": draft.canonical_answer_json,
-                },
-                checks={"label_signature_present": bool(draft.label_signature)},
-                diagnostics={},
-            )
-            assert self.solver_orchestrator is not None
-            rollout_summary = await self.solver_orchestrator.run_draft(draft)
-            phase_monitor.emit(
-                phase="rollout",
-                status="completed",
-                expected_contract={
-                    "max_solver_runs": self.config.calibration.max_solver_runs,
-                },
-                actual_data={
-                    "planned_solver_runs": rollout_summary.planned_solver_runs,
-                    "total_solver_runs": rollout_summary.total_solver_runs,
-                    "matched_solver_runs": rollout_summary.matched_solver_runs,
-                    "early_stop_decision": rollout_summary.early_stop_decision,
-                },
-                checks={
-                    "executed_runs_within_plan": rollout_summary.total_solver_runs
-                    <= rollout_summary.planned_solver_runs,
-                },
-                diagnostics={"task_id": draft.task_bundle.task_id},
-            )
-            quality_gate_summary = evaluate_rollout_summary(self.config, rollout_summary)
-            phase_monitor.emit(
-                phase="quality_gate",
-                status=quality_gate_summary.status.value,
-                expected_contract={
-                    "band_lower": quality_gate_summary.band_lower,
-                    "band_upper": quality_gate_summary.band_upper,
-                },
-                actual_data={
-                    "pass_rate": quality_gate_summary.pass_rate,
-                    "ci_low": quality_gate_summary.ci_lower,
-                    "ci_high": quality_gate_summary.ci_upper,
-                },
-                checks={
-                    "accepted": quality_gate_summary.status is TaskQualityGateStatus.ACCEPT,
-                },
-                diagnostics={"task_id": draft.task_bundle.task_id},
-            )
-            if quality_gate_summary.status is not TaskQualityGateStatus.ACCEPT:
-                return ProofTaskRunSummary(
-                    db_id=draft.task_bundle.db_id,
-                    task_id=draft.task_bundle.task_id,
-                    fixture_sql_root=fixture_files.root_dir,
-                    quality_gate_status=quality_gate_summary.status.value,
-                    flow_id=flow_id,
-                    phase_monitor_log_path=phase_monitor_log_path,
-                    solver_pass_rate=quality_gate_summary.pass_rate,
-                    solver_ci_low=quality_gate_summary.ci_lower,
-                    solver_ci_high=quality_gate_summary.ci_upper,
-                )
-
-            accepted_draft = accepted_draft_with_quality_metrics(
-                draft,
-                quality_gate_summary=quality_gate_summary,
-            )
-            assert self.registry is not None
-            commit_result = self.registry.commit_draft(accepted_draft)
-            phase_monitor.emit(
-                phase="registry_commit",
-                status=commit_result.status.value,
-                expected_contract={},
-                actual_data={
-                    "registry_task_id": commit_result.task_id,
-                    "status": commit_result.status.value,
-                },
-                checks={},
-                diagnostics={"task_id": accepted_draft.task_bundle.task_id},
-            )
-            assert self.exporter is not None
-            bundle_root = output_root / "bundle"
-            self.exporter.export_bundle(bundle_root, task_id=commit_result.task_id)
-            phase_monitor.emit(
-                phase="bundle_export",
-                status="completed",
-                expected_contract={"bundle_root": bundle_root},
-                actual_data={"bundle_root": bundle_root, "task_id": commit_result.task_id},
-                checks={"bundle_root_exists": bundle_root.exists()},
-                diagnostics={},
-            )
-            return ProofTaskRunSummary(
-                db_id=accepted_draft.task_bundle.db_id,
-                task_id=accepted_draft.task_bundle.task_id,
-                fixture_sql_root=fixture_files.root_dir,
-                quality_gate_status=quality_gate_summary.status.value,
-                flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
-                solver_pass_rate=quality_gate_summary.pass_rate,
-                solver_ci_low=quality_gate_summary.ci_lower,
-                solver_ci_high=quality_gate_summary.ci_upper,
-                registry_status=commit_result.status,
-                registry_task_id=commit_result.task_id,
-                bundle_root=bundle_root,
-            )
-        finally:
-            phase_monitor.close()
-
-    async def close(self) -> None:
-        assert self.solver_orchestrator is not None
-        await self.solver_orchestrator.close()
-        OpenAIAgentsSynthesisBackend.clear_model_cache()
-        close_registry = getattr(self.registry, "close", None)
-        if callable(close_registry):
-            close_registry()
+def _unmatched_answer_json() -> str:
+    return json.dumps(
+        [
+            {
+                "day": 1,
+                "city": "Gangneung",
+                "lodging": "Seoul Station Stay",
+                "activity": "Han River Night Walk",
+                "total_cost": 999,
+            }
+        ],
+        ensure_ascii=False,
+    )
 
 
-def build_proof_schema_snapshot() -> "SchemaSnapshot":
-    """Hand-written snapshot matching `PROOF_FIXTURE_SCHEMA_SQL`.
+def build_proof_question() -> str:
+    entity_block = json.dumps(PROOF_ANCHOR_ENTITY, ensure_ascii=False, sort_keys=True)
+    return (
+        "<entity>\n"
+        f"{entity_block}\n"
+        "</entity>\n\n"
+        f"{PROOF_QUESTION_BODY}"
+    )
 
-    Lives next to the fixture SQL so both paths stay in sync. The proof
-    harness feeds this into `SchemaSnapshotMaterializer` before bundle
-    export so the exported proof bundle carries a valid
-    `schema_snapshot.json` without round-tripping through
-    introspection.
-    """
-    graph = SchemaGraph(
+
+def build_proof_schema_graph(schema_name: str) -> SchemaGraph:
+    return SchemaGraph(
         tables=[
             TableProfile(
-                schema_name="public",
+                schema_name=schema_name,
                 table_name="proof_anchors",
                 columns=[
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_anchors",
                         column_name="anchor_id",
                         data_type="integer",
@@ -334,7 +214,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         is_primary_key=True,
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_anchors",
                         column_name="season",
                         data_type="text",
@@ -343,7 +223,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         visibility="user_visible",
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_anchors",
                         column_name="budget_bucket",
                         data_type="text",
@@ -352,7 +232,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         visibility="user_visible",
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_anchors",
                         column_name="start_city_id",
                         data_type="integer",
@@ -365,11 +245,11 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                 primary_key=("anchor_id",),
             ),
             TableProfile(
-                schema_name="public",
+                schema_name=schema_name,
                 table_name="proof_cities",
                 columns=[
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_cities",
                         column_name="city_id",
                         data_type="integer",
@@ -379,7 +259,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         is_primary_key=True,
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_cities",
                         column_name="city_name",
                         data_type="text",
@@ -388,7 +268,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         visibility="user_visible",
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_cities",
                         column_name="region_name",
                         data_type="text",
@@ -397,7 +277,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         visibility="user_visible",
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_cities",
                         column_name="season",
                         data_type="text",
@@ -409,11 +289,40 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                 primary_key=("city_id",),
             ),
             TableProfile(
-                schema_name="public",
+                schema_name=schema_name,
+                table_name="proof_city_links",
+                columns=[
+                    ColumnProfile(
+                        schema_name=schema_name,
+                        table_name="proof_city_links",
+                        column_name="city_id",
+                        data_type="integer",
+                        ordinal_position=1,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_primary_key=True,
+                        is_foreign_key=True,
+                    ),
+                    ColumnProfile(
+                        schema_name=schema_name,
+                        table_name="proof_city_links",
+                        column_name="neighbor_city_id",
+                        data_type="integer",
+                        ordinal_position=2,
+                        is_nullable=False,
+                        visibility="user_visible",
+                        is_primary_key=True,
+                        is_foreign_key=True,
+                    ),
+                ],
+                primary_key=("city_id", "neighbor_city_id"),
+            ),
+            TableProfile(
+                schema_name=schema_name,
                 table_name="proof_lodgings",
                 columns=[
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_lodgings",
                         column_name="lodging_id",
                         data_type="integer",
@@ -423,7 +332,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         is_primary_key=True,
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_lodgings",
                         column_name="city_id",
                         data_type="integer",
@@ -433,7 +342,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         is_foreign_key=True,
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_lodgings",
                         column_name="lodging_name",
                         data_type="text",
@@ -442,7 +351,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         visibility="user_visible",
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_lodgings",
                         column_name="nightly_cost",
                         data_type="integer",
@@ -454,11 +363,11 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                 primary_key=("lodging_id",),
             ),
             TableProfile(
-                schema_name="public",
+                schema_name=schema_name,
                 table_name="proof_activities",
                 columns=[
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_activities",
                         column_name="activity_id",
                         data_type="integer",
@@ -468,7 +377,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         is_primary_key=True,
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_activities",
                         column_name="city_id",
                         data_type="integer",
@@ -478,7 +387,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         is_foreign_key=True,
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_activities",
                         column_name="activity_name",
                         data_type="text",
@@ -487,7 +396,7 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
                         visibility="user_visible",
                     ),
                     ColumnProfile(
-                        schema_name="public",
+                        schema_name=schema_name,
                         table_name="proof_activities",
                         column_name="ticket_cost",
                         data_type="integer",
@@ -502,182 +411,336 @@ def build_proof_schema_snapshot() -> "SchemaSnapshot":
         edges=[
             ForeignKeyEdge(
                 constraint_name="anchors_start_city",
-                source_schema="public",
+                source_schema=schema_name,
                 source_table="proof_anchors",
                 source_columns=("start_city_id",),
-                target_schema="public",
+                target_schema=schema_name,
+                target_table="proof_cities",
+                target_columns=("city_id",),
+            ),
+            ForeignKeyEdge(
+                constraint_name="city_links_city",
+                source_schema=schema_name,
+                source_table="proof_city_links",
+                source_columns=("city_id",),
+                target_schema=schema_name,
+                target_table="proof_cities",
+                target_columns=("city_id",),
+            ),
+            ForeignKeyEdge(
+                constraint_name="city_links_neighbor",
+                source_schema=schema_name,
+                source_table="proof_city_links",
+                source_columns=("neighbor_city_id",),
+                target_schema=schema_name,
                 target_table="proof_cities",
                 target_columns=("city_id",),
             ),
             ForeignKeyEdge(
                 constraint_name="lodgings_city",
-                source_schema="public",
+                source_schema=schema_name,
                 source_table="proof_lodgings",
                 source_columns=("city_id",),
-                target_schema="public",
+                target_schema=schema_name,
                 target_table="proof_cities",
                 target_columns=("city_id",),
             ),
             ForeignKeyEdge(
                 constraint_name="activities_city",
-                source_schema="public",
+                source_schema=schema_name,
                 source_table="proof_activities",
                 source_columns=("city_id",),
-                target_schema="public",
+                target_schema=schema_name,
                 target_table="proof_cities",
                 target_columns=("city_id",),
             ),
         ],
     )
-    return snapshot_from_graph(graph)
 
 
-def write_proof_fixture_sql(root_dir: Path) -> ProofFixtureSqlFiles:
-    root_dir.mkdir(parents=True, exist_ok=True)
-    schema_path = root_dir / "schema.sql"
-    seed_path = root_dir / "seed.sql"
-    schema_path.write_text(PROOF_FIXTURE_SCHEMA_SQL + "\n", encoding="utf-8")
-    seed_path.write_text(PROOF_FIXTURE_SEED_SQL + "\n", encoding="utf-8")
-    return ProofFixtureSqlFiles(
-        root_dir=root_dir,
-        schema_path=schema_path,
-        seed_path=seed_path,
-    )
-
-
-def build_proof_task_draft(
-    *,
-    config: AppConfig,
-    created_at: datetime | None = None,
-) -> SynthesisTaskDraft:
-    created_at = created_at or datetime.now(timezone.utc)
-    output_schema = OutputSchemaContract(
-        root=OutputFieldContract(
-            name="itinerary",
-            type=OutputFieldType.LIST,
-            ordered=False,
-            sort_key=("day",),
-            unique_elements=True,
-            items=OutputFieldContract(
-                name="day_plan",
-                type=OutputFieldType.OBJECT,
-                fields=[
-                    OutputFieldContract(name="day", type=OutputFieldType.INT),
-                    OutputFieldContract(name="city", type=OutputFieldType.STRING),
-                    OutputFieldContract(name="lodging", type=OutputFieldType.STRING),
-                    OutputFieldContract(name="activity", type=OutputFieldType.STRING),
-                    OutputFieldContract(name="total_cost", type=OutputFieldType.INT),
+def build_proof_composer_script() -> ScriptedComposerScript:
+    atomic_tool_calls: list[ScriptedAtomicToolCall] = [
+        ScriptedAtomicToolCall(
+            tool_name="profile",
+            params={"table": "proof_anchors"},
+            result={
+                "table": "proof_anchors",
+                "row_count": 1,
+                "columns": [
+                    {"name": "anchor_id", "distinct": 1},
+                    {"name": "season", "distinct": 1, "top": ["spring"]},
+                    {"name": "budget_bucket", "distinct": 1, "top": ["mid"]},
                 ],
-            ),
+            },
         ),
-        primary_output_format="json_array",
-    )
-    canonical_answer = [
-        {
-            "day": 1,
-            "city": "Seoul",
-            "lodging": "Seoul Station Stay",
-            "activity": "Han River Night Walk",
-            "total_cost": 180,
-        },
-        {
-            "day": 2,
-            "city": "Suwon",
-            "lodging": "Suwon Fortress Hotel",
-            "activity": "Fortress Loop Tour",
-            "total_cost": 160,
-        },
-        {
-            "day": 3,
-            "city": "Incheon",
-            "lodging": "Incheon Harbor Inn",
-            "activity": "Harbor Sunset Ferry",
-            "total_cost": 170,
-        },
+        ScriptedAtomicToolCall(
+            tool_name="sample",
+            params={
+                "table": "proof_cities",
+                "columns": ["city_id", "city_name", "region_name"],
+                "limit": 10,
+            },
+            result=[
+                {"city_id": 101, "city_name": "Seoul", "region_name": "capital"},
+                {"city_id": 102, "city_name": "Suwon", "region_name": "capital_belt"},
+                {"city_id": 103, "city_name": "Incheon", "region_name": "capital_belt"},
+            ],
+        ),
+        ScriptedAtomicToolCall(
+            tool_name="sample",
+            params={
+                "table": "proof_lodgings",
+                "columns": ["lodging_id", "city_id", "lodging_name", "nightly_cost"],
+                "limit": 10,
+            },
+            result=[
+                {
+                    "lodging_id": 201,
+                    "city_id": 101,
+                    "lodging_name": "Seoul Station Stay",
+                    "nightly_cost": 110,
+                },
+                {
+                    "lodging_id": 202,
+                    "city_id": 102,
+                    "lodging_name": "Suwon Fortress Hotel",
+                    "nightly_cost": 100,
+                },
+                {
+                    "lodging_id": 203,
+                    "city_id": 103,
+                    "lodging_name": "Incheon Harbor Inn",
+                    "nightly_cost": 95,
+                },
+            ],
+        ),
+        ScriptedAtomicToolCall(
+            tool_name="sample",
+            params={
+                "table": "proof_activities",
+                "columns": ["activity_id", "city_id", "activity_name", "ticket_cost"],
+                "limit": 10,
+            },
+            result=[
+                {
+                    "activity_id": 301,
+                    "city_id": 101,
+                    "activity_name": "Han River Night Walk",
+                    "ticket_cost": 70,
+                },
+                {
+                    "activity_id": 302,
+                    "city_id": 102,
+                    "activity_name": "Fortress Loop Tour",
+                    "ticket_cost": 60,
+                },
+                {
+                    "activity_id": 303,
+                    "city_id": 103,
+                    "activity_name": "Harbor Sunset Ferry",
+                    "ticket_cost": 75,
+                },
+            ],
+        ),
+        ScriptedAtomicToolCall(
+            tool_name="neighborhood",
+            params={"table": "proof_cities", "id": 101, "edge": "proof_city_links"},
+            result=[
+                {"neighbor_city_id": 102, "city_name": "Suwon"},
+            ],
+        ),
     ]
-    canonical_answer_json = canonical_json(canonical_answer)
-    label_signature = "sha256:" + sha256(canonical_answer_json.encode("utf-8")).hexdigest()
+    submit_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": PROOF_TASK_TOPIC,
+            "label": PROOF_CANONICAL_ANSWER,
+            "entity": PROOF_ANCHOR_ENTITY,
+            "question": build_proof_question(),
+        }
+    )
+    return ScriptedComposerScript(
+        atomic_tool_calls=tuple(atomic_tool_calls),
+        submit_payload=submit_payload,
+        final_output_text="proof scripted composer",
+        turn_count=len(atomic_tool_calls) + 1,
+    )
 
-    task = TaskContract(
-        question=(
-            "봄 시즌 3일 출장 일정표를 만들어 주세요. 각 day는 하나의 city를 방문해야 하고 "
-            "전체 itinerary에서 city는 중복되면 안 됩니다. day별 total_cost는 250 이하여야 "
-            "하며, 연속된 day의 city는 인접한 지역이어야 합니다. 가능한 일정이 여러 개면 "
-            "day 1의 city 이름, 그다음 day 2의 city 이름, 그다음 day 3의 city 이름의 "
-            "사전순이 가장 앞서는 답을 고르세요."
-        ),
-        topic="itinerary",
-        output_schema=output_schema,
-        constraint_summary=[
-            ConstraintSummaryItem(
-                key="three_days",
-                kind=ConstraintKind.CARDINALITY,
-                summary="day 1, day 2, day 3 세 슬롯을 모두 채워야 한다.",
-            ),
-            ConstraintSummaryItem(
-                key="unique_city",
-                kind=ConstraintKind.UNIQUENESS,
-                summary="전체 일정에서 city는 중복되면 안 된다.",
-            ),
-            ConstraintSummaryItem(
-                key="daily_budget",
-                kind=ConstraintKind.RANGE,
-                summary="각 day의 total_cost는 250 이하여야 한다.",
-            ),
-            ConstraintSummaryItem(
-                key="adjacent_cities",
-                kind=ConstraintKind.TEMPORAL,
-                summary="연속된 day의 city는 proof_city_links 기준으로 인접해야 한다.",
-            ),
-        ],
-        instance_parameters={
-            "anchor_id": 1,
-            "season": "spring",
-            "budget_bucket": "mid",
+
+@dataclass(slots=True)
+class _AlternatingProofSolverRuntime:
+    """Solver runtime that alternates canonical/non-canonical answers.
+
+    Shared across all solver rollouts in one proof run so the matched-count
+    ratio is deterministic (5/10, 4/8, etc.) and lands inside the quality-gate
+    band. The instance is stateful, which is acceptable because the proof
+    pipeline is single-threaded by design.
+    """
+
+    canonical_answer_json: str
+    unmatched_answer_json: str
+    solver_id: str = "proof_scripted"
+    provider_name: str = "scripted"
+    model_name: str = "scripted"
+    _counter: int = field(default=0, init=False, repr=False)
+
+    async def run(self, episode: SolverEpisodeInput) -> SolverResult:
+        matched = self._counter % 2 == 0
+        self._counter += 1
+        raw_output = (
+            self.canonical_answer_json if matched else self.unmatched_answer_json
+        )
+        return SolverResult(
+            task_id=episode.task_id,
+            solver_id=self.solver_id,
+            provider=self.provider_name,
+            model=self.model_name,
+            transcript_ref="memory://proof/transcript",
+            tool_trace_ref="memory://proof/tool-trace",
+            raw_output_text=raw_output,
+            structured_output=None,
+            status="completed",
+            termination_reason="submitted",
+        )
+
+
+def _build_proof_runtime_factory(
+    shared: _AlternatingProofSolverRuntime,
+) -> object:
+    def _factory(*_args: object, **_kwargs: object) -> AgentRuntime:
+        return shared
+
+    return _factory
+
+
+async def _empty_proof_sdk_tools(_task_bundle: TaskBundleContract) -> list[object]:
+    return []
+
+
+def _proof_provider_name(config: AppConfig) -> str:
+    if not config.providers:
+        raise RuntimeError(
+            "proof task requires at least one configured provider in AppConfig.providers"
+        )
+    return next(iter(config.providers))
+
+
+def _build_proof_app_config(base_config: AppConfig, schema_name: str) -> AppConfig:
+    database_override = base_config.database.model_copy(
+        update={"schema_allowlist": [schema_name]}
+    )
+    calibration_override = base_config.calibration.model_copy(
+        update={
+            "max_solver_runs": 6,
+            "solver_batch_size": 3,
+            "safe_early_termination": False,
+        }
+    )
+    return base_config.model_copy(
+        update={
+            "database": database_override,
+            "calibration": calibration_override,
         },
-    )
-    task_bundle = TaskBundleContract(
-        task_id=PROOF_TASK_ID,
-        db_id=PROOF_DB_ID,
-        domain="travel_planning",
-        topic="itinerary",
-        atomic_tool_set_ref=f"db://{PROOF_DB_ID}",
-        created_at=created_at,
-        generator_version=CURRENT_SYNTHESIS_GENERATOR_VERSION,
-        tool_signature=_snapshot_tool_signature(build_proof_schema_snapshot()),
-        task_signature=_sha256_hex(task.model_dump_json()),
-        status=TaskBundleStatus.DRAFT,
-        quality_metrics=TaskQualityMetrics(),
-        rollout_constraints=RolloutConstraintsContract(
-            max_turns=config.solver_runtime.max_turns,
-            max_episode_duration_ms=(
-                config.database.statement_timeout_ms * config.solver_runtime.max_turns
-            ),
-            max_tool_rows=config.atomic_tools.bounded_result_limit,
-        ),
-        task=task,
-    )
-    anchor_entity: dict[str, object] = {"anchor_id": 1}
-    rendered_prompt = build_rendered_user_prompt(
-        task,
-        anchor_entity=anchor_entity,
-        canonical_answer=canonical_answer,
-    )
-    return SynthesisTaskDraft(
-        created_at=created_at,
-        db_id=PROOF_DB_ID,
-        requested_topic="itinerary",
-        schema_summary={"included_table_count": 5, "fixture": "proof_trip_fixture"},
-        selected_topic="itinerary",
-        task_bundle=task_bundle,
-        rendered_user_prompt=rendered_prompt,
-        anchor_entity=anchor_entity,
-        canonical_answer_json=canonical_answer_json,
-        label_signature=label_signature,
-        generation_attempts=[],
-        provider_status={},
+        deep=True,
     )
 
 
-def _sha256_hex(payload: str) -> str:
-    return "sha256:" + sha256(payload.encode("utf-8")).hexdigest()
+async def _ensure_proof_schema(pools: DatabasePools, schema_name: str) -> None:
+    quoted = f'"{schema_name}"'
+    async with pools.control_connection() as conn:
+        async with conn.transaction():
+            await conn.execute(f"CREATE SCHEMA {quoted}")
+            await conn.execute(f"SET LOCAL search_path TO {quoted}")
+            for statement in _split_sql_statements(PROOF_FIXTURE_DDL):
+                await conn.execute(statement)
+            for statement in _split_sql_statements(PROOF_FIXTURE_SEED):
+                await conn.execute(statement)
+
+
+async def _drop_proof_schema(pools: DatabasePools, schema_name: str) -> None:
+    quoted = f'"{schema_name}"'
+    async with pools.control_connection() as conn:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {quoted} CASCADE")
+
+
+async def run_proof_task(
+    config: AppConfig,
+    *,
+    output_root: Path,
+    mirror_monitor_path: Path | None = None,
+    schema_name: str | None = None,
+) -> RealDbTrialSummary:
+    """Provision an ephemeral proof schema and drive a trial through the runtime."""
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    resolved_schema = schema_name or f"proof_trial_{uuid.uuid4().hex[:8]}"
+    proof_config = _build_proof_app_config(config, resolved_schema)
+    pools = await DatabasePools.create(proof_config.database)
+    await _ensure_proof_schema(pools, resolved_schema)
+    synthesis_db: SynthesisDb | None = None
+    solver_orchestrator: SolverOrchestrator | None = None
+    try:
+        synthesis_db = SynthesisDb(
+            db_id=PROOF_DB_ID,
+            config=proof_config,
+            database_pools=pools,
+        )
+        synthesis_db.adopt_schema_graph(build_proof_schema_graph(resolved_schema))
+        proof_runtime = _AlternatingProofSolverRuntime(
+            canonical_answer_json=_canonical_answer_json(),
+            unmatched_answer_json=_unmatched_answer_json(),
+        )
+        solver_orchestrator = SolverOrchestrator(
+            proof_config,
+            database_pools=pools,
+            runtime_factory=_build_proof_runtime_factory(proof_runtime),
+            sdk_tools_factory=_empty_proof_sdk_tools,
+        )
+        provider_name = _proof_provider_name(proof_config)
+        scripted_backend = ScriptedComposerBackend(
+            script=build_proof_composer_script(),
+            provider_name=provider_name,
+            model_name="scripted-proof",
+        )
+        runner = RealDbTrialRunner(
+            proof_config,
+            database_pools=pools,
+            solver_orchestrator=solver_orchestrator,
+            synthesis_db=synthesis_db,
+            synthesis_backends=[scripted_backend],
+        )
+        try:
+            summary = await runner.run(
+                output_root,
+                db_id=PROOF_DB_ID,
+                topic=PROOF_TASK_TOPIC,
+                mirror_monitor_path=mirror_monitor_path,
+            )
+        finally:
+            await runner.close()
+        return summary
+    finally:
+        try:
+            if solver_orchestrator is not None:
+                await solver_orchestrator.close()
+            if synthesis_db is not None:
+                await synthesis_db.close()
+        finally:
+            try:
+                await _drop_proof_schema(pools, resolved_schema)
+            finally:
+                await pools.close()
+
+
+__all__ = [
+    "PROOF_ANCHOR_ENTITY",
+    "PROOF_CANONICAL_ANSWER",
+    "PROOF_DB_ID",
+    "PROOF_FIXTURE_DDL",
+    "PROOF_FIXTURE_SEED",
+    "PROOF_QUESTION_BODY",
+    "PROOF_TASK_TOPIC",
+    "build_proof_composer_script",
+    "build_proof_question",
+    "build_proof_schema_graph",
+    "run_proof_task",
+]

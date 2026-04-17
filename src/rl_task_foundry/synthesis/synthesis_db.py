@@ -4,7 +4,7 @@ A ``SynthesisDb`` owns the long-lived, per-``db_id`` artifacts that
 synthesis needs but that should not be rebuilt for every trial: schema
 introspection, data profile, schema snapshot (materialized to disk for
 bundle export), and the random-anchor sampler. Top-level orchestrators
-(HarvestRunner, RealDbTrialRunner, ProofTaskRunner, SynthesisRegistryRunner)
+(HarvestRunner, RealDbTrialRunner, SynthesisRegistryRunner, and the proof task)
 own one ``SynthesisDb`` per database and inject it into
 ``SynthesisAgentRuntime``; many synthesis conversations for the same
 ``db_id`` share a single ``SynthesisDb``.
