@@ -1,15 +1,14 @@
-"""Integration test for the atomic calculus vertical slice.
+"""Integration tests for the atomic calculus against the live sakila DB.
 
-Runs a four-call chain against the live sakila database:
-  rows_where → order_by → take → read
-
-Proves the primitives compose correctly end-to-end before the remaining
-calculus operators (rows_via, intersect, count, aggregate, group_top)
-land next session.
+Each test builds a fresh AtomicSession, exercises a primitive or chain,
+and tears the connection down in a finally block. Tests are skipped
+implicitly by `PostgresSchemaIntrospector` / `asyncpg.connect` raising
+when the DB is unreachable; no explicit skip logic needed.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import asyncpg
@@ -24,8 +23,13 @@ from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.tooling.atomic import (
     AtomicSession,
     CursorStore,
+    aggregate,
+    count,
+    group_top,
+    intersect,
     order_by,
     read,
+    rows_via,
     rows_where,
     take,
 )
@@ -115,5 +119,138 @@ async def test_rows_where_rejects_unknown_column():
                 op="eq",
                 value=1,
             )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_rows_via_forward_projects_rentals_to_customer():
+    session, conn = await _build_session()
+    try:
+        # Customer 45's rentals → their customer row (all map back to 45).
+        cursor = rows_where(
+            session,
+            table="rental",
+            column="customer_id",
+            op="eq",
+            value=45,
+        )
+        via = rows_via(
+            session,
+            cursor=cursor,
+            edge_label="rental.customer_id->customer",
+        )
+        ids = await take(session, cursor=via, n=2)
+        # Dedup in take → a single customer row.
+        assert set(ids) == {45}
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_rows_via_reverse_projects_customer_to_rentals():
+    session, conn = await _build_session()
+    try:
+        customers = rows_where(
+            session,
+            table="customer",
+            column="customer_id",
+            op="eq",
+            value=45,
+        )
+        rentals = rows_via(
+            session,
+            cursor=customers,
+            edge_label="customer<-rental.customer_id",
+        )
+        cnt = await count(session, cursor=rentals)
+        assert cnt > 0
+        ordered = order_by(
+            session.store, rentals, column="rental_date", direction="desc"
+        )
+        ids = await take(session, cursor=ordered, n=3)
+        assert len(ids) == 3
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_intersect_rejects_mismatched_targets():
+    session, conn = await _build_session()
+    try:
+        customers = rows_where(
+            session, table="customer", column="store_id", op="eq", value=1
+        )
+        rentals = rows_where(
+            session,
+            table="rental",
+            column="customer_id",
+            op="eq",
+            value=45,
+        )
+        with pytest.raises(ValueError):
+            intersect(session, left=customers, right=rentals)
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_intersect_over_customer_filters():
+    session, conn = await _build_session()
+    try:
+        store_1 = rows_where(
+            session, table="customer", column="store_id", op="eq", value=1
+        )
+        active = rows_where(
+            session, table="customer", column="active", op="eq", value=1
+        )
+        combined = intersect(session, left=store_1, right=active)
+        only_store_1 = await count(session, cursor=store_1)
+        overlap = await count(session, cursor=combined)
+        assert 0 < overlap <= only_store_1
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_aggregate_max_rental_date_of_customer_45():
+    session, conn = await _build_session()
+    try:
+        cursor = rows_where(
+            session,
+            table="rental",
+            column="customer_id",
+            op="eq",
+            value=45,
+        )
+        last = await aggregate(
+            session, cursor=cursor, fn="max", column="rental_date"
+        )
+        assert last is not None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_group_top_count_returns_top_customers_by_rentals():
+    session, conn = await _build_session()
+    try:
+        cursor = rows_where(
+            session,
+            table="rental",
+            column="rental_date",
+            op="gt",
+            value=datetime(2005, 1, 1),
+        )
+        tops = await group_top(
+            session,
+            cursor=cursor,
+            group_column="customer_id",
+            fn="count",
+            n=3,
+        )
+        assert len(tops) == 3
+        counts = [t[1] for t in tops]
+        assert counts == sorted(counts, reverse=True)
     finally:
         await conn.close()

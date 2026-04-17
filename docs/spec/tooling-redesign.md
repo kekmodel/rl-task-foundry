@@ -1,6 +1,6 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
-> **Status:** design spec. Scaffold + atomic vertical slice (`rows_where → order_by → take → read`) landed in commit `<TBD>`. Composer DSL and full calculus are next session.
+> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice: `rows_where → order_by → take → read`). Remaining atomic primitives (`rows_via`, `intersect`, `count`, `aggregate`, `group_top`) landed next. Composer DSL, tool factory, and backend rewiring are still pending.
 
 ## Motivation
 
@@ -174,15 +174,14 @@ The canonical answer produced by composer `query(spec)` is stored verbatim in th
 
 - `tooling/common/` — schema snapshot, SQL helpers, edge resolver.
 - `tooling/atomic/cursor.py` — `CursorPlan` types + `CursorStore`.
-- `tooling/atomic/sql_compile.py` — plan → SQL.
-- `tooling/atomic/calculus.py` — at minimum the vertical slice `rows_where → order_by → take → read` executes against sakila.
-- Integration test at `tests/test_tooling_atomic_integration.py`.
+- `tooling/atomic/sql_compile.py` — plan → SQL (Where/Via/Intersect id-stream + materializers).
+- `tooling/atomic/calculus.py` — all 9 primitives executable end-to-end.
+- Integration tests at `tests/test_tooling_atomic_integration.py` cover the five materialization shapes against sakila.
 
 ### Next session
 
-- Remaining atomic primitives: `rows_via`, `intersect`, `count`, `aggregate`, `group_top`.
-- `tooling/atomic/tool_factory.py` — agents-SDK FunctionTool construction.
-- Full `tooling/composer/` implementation.
+- `tooling/atomic/tool_factory.py` — agents-SDK FunctionTool construction with schema-baked enum parameters.
+- Full `tooling/composer/` implementation (query DSL, profile, schema_map, neighborhood, sample, tool_factory).
 - Rewire `synthesis/synthesis_db.py` to bind composer tools for the synthesis agent.
 - Rewire `solver/runtime.py` to bind atomic calculus for solvers.
 - Rewrite `synthesis/prompts.py` to reflect the calculus surface.

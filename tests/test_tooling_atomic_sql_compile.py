@@ -6,15 +6,29 @@ import pytest
 
 from rl_task_foundry.schema.graph import (
     ColumnProfile,
+    ForeignKeyEdge,
     SchemaGraph,
     TableProfile,
 )
-from rl_task_foundry.tooling.atomic.cursor import OrderNode, WhereNode
+from rl_task_foundry.tooling.atomic.cursor import (
+    IntersectNode,
+    OrderNode,
+    ViaNode,
+    WhereNode,
+)
 from rl_task_foundry.tooling.atomic.sql_compile import (
+    compile_aggregate,
+    compile_count,
+    compile_group_top,
     compile_read,
     compile_take,
 )
-from rl_task_foundry.tooling.common import snapshot_from_graph
+from rl_task_foundry.tooling.common import (
+    EdgeDirection,
+    TypedEdge,
+    resolve_edge,
+    snapshot_from_graph,
+)
 
 
 def _column(
@@ -23,6 +37,7 @@ def _column(
     data_type: str = "integer",
     *,
     is_primary_key: bool = False,
+    is_foreign_key: bool = False,
 ) -> ColumnProfile:
     return ColumnProfile(
         schema_name="public",
@@ -33,6 +48,7 @@ def _column(
         is_nullable=False,
         visibility="user_visible",
         is_primary_key=is_primary_key,
+        is_foreign_key=is_foreign_key,
     )
 
 
@@ -48,6 +64,65 @@ def _rental_snapshot():
         primary_key=("rental_id",),
     )
     return snapshot_from_graph(SchemaGraph(tables=[rental], edges=[]))
+
+
+def _customer_rental_snapshot():
+    customer = TableProfile(
+        schema_name="public",
+        table_name="customer",
+        columns=[
+            _column("customer", "customer_id", is_primary_key=True),
+            _column("customer", "store_id"),
+            _column("customer", "first_name", data_type="text"),
+            _column("customer", "active"),
+        ],
+        primary_key=("customer_id",),
+    )
+    rental = TableProfile(
+        schema_name="public",
+        table_name="rental",
+        columns=[
+            _column("rental", "rental_id", is_primary_key=True),
+            _column("rental", "customer_id", is_foreign_key=True),
+            _column("rental", "inventory_id"),
+            _column("rental", "rental_date", data_type="timestamp"),
+        ],
+        primary_key=("rental_id",),
+    )
+    payment = TableProfile(
+        schema_name="public",
+        table_name="payment",
+        columns=[
+            _column("payment", "payment_id", is_primary_key=True),
+            _column("payment", "customer_id", is_foreign_key=True),
+            _column("payment", "amount", data_type="numeric"),
+        ],
+        primary_key=("payment_id",),
+    )
+    rental_fk = ForeignKeyEdge(
+        constraint_name="rental_customer_fk",
+        source_schema="public",
+        source_table="rental",
+        source_columns=("customer_id",),
+        target_schema="public",
+        target_table="customer",
+        target_columns=("customer_id",),
+    )
+    payment_fk = ForeignKeyEdge(
+        constraint_name="payment_customer_fk",
+        source_schema="public",
+        source_table="payment",
+        source_columns=("customer_id",),
+        target_schema="public",
+        target_table="customer",
+        target_columns=("customer_id",),
+    )
+    return snapshot_from_graph(
+        SchemaGraph(
+            tables=[customer, rental, payment],
+            edges=[rental_fk, payment_fk],
+        )
+    )
 
 
 def test_compile_take_emits_parameterized_sql_with_pk_tiebreak():
@@ -89,18 +164,6 @@ def test_compile_take_supports_in_op_with_array_cast():
     assert compiled.params == ([45, 46, 47],)
 
 
-def test_compile_take_rejects_via_nodes_for_now():
-    snapshot = _rental_snapshot()
-    plan = WhereNode(
-        table="rental", column="customer_id", op="eq", value=1
-    )
-    with pytest.raises(NotImplementedError):
-        # intersect/via not in the vertical slice
-        from rl_task_foundry.tooling.atomic.cursor import IntersectNode
-
-        compile_take(snapshot, IntersectNode(left=plan, right=plan), 3)
-
-
 def test_compile_read_selects_named_columns():
     snapshot = _rental_snapshot()
     compiled = compile_read(
@@ -121,3 +184,239 @@ def test_compile_read_rejects_unknown_column():
     snapshot = _rental_snapshot()
     with pytest.raises(KeyError):
         compile_read(snapshot, "rental", 1, ("nonexistent",))
+
+
+# ---------- ViaNode ----------
+
+
+def test_compile_take_forward_via_joins_through_fk():
+    snapshot = _customer_rental_snapshot()
+    edge = resolve_edge(
+        snapshot, "rental", "rental.customer_id->customer"
+    )
+    base = WhereNode(
+        table="rental", column="rental_date", op="gt", value="2005-01-01"
+    )
+    via = ViaNode(source=base, edge=edge)
+    compiled = compile_take(snapshot, via, limit=3)
+    assert "SELECT dst.\"customer_id\" AS id" in compiled.sql
+    assert (
+        "JOIN \"public\".\"rental\" AS origin "
+        "ON origin.\"rental_id\" = inner_stream.id"
+    ) in compiled.sql
+    assert (
+        "JOIN \"public\".\"customer\" AS dst "
+        "ON dst.\"customer_id\" = origin.\"customer_id\""
+    ) in compiled.sql
+    assert "GROUP BY id ORDER BY id ASC LIMIT 3" in compiled.sql
+    assert compiled.params == ("2005-01-01",)
+
+
+def test_compile_take_reverse_via_joins_from_parent_to_child():
+    snapshot = _customer_rental_snapshot()
+    edges = [
+        edge
+        for edge in snapshot.edges_to("customer")
+        if edge.source_table == "rental"
+    ]
+    assert edges, "expected rental→customer FK in snapshot"
+    typed = TypedEdge(spec=edges[0], direction=EdgeDirection.REVERSE)
+    base = WhereNode(
+        table="customer", column="store_id", op="eq", value=1
+    )
+    via = ViaNode(source=base, edge=typed)
+    compiled = compile_take(snapshot, via, limit=3)
+    assert "SELECT dst.\"rental_id\" AS id" in compiled.sql
+    assert (
+        "JOIN \"public\".\"customer\" AS origin "
+        "ON origin.\"customer_id\" = inner_stream.id"
+    ) in compiled.sql
+    assert (
+        "JOIN \"public\".\"rental\" AS dst "
+        "ON dst.\"customer_id\" = origin.\"customer_id\""
+    ) in compiled.sql
+
+
+def test_compile_take_via_with_order_annotation_uses_group_by_dedup():
+    snapshot = _customer_rental_snapshot()
+    edge = resolve_edge(
+        snapshot, "rental", "rental.customer_id->customer"
+    )
+    base = WhereNode(
+        table="rental", column="rental_date", op="gt", value="2005-01-01"
+    )
+    via = ViaNode(source=base, edge=edge)
+    ordered = OrderNode(source=via, column="first_name", direction="asc")
+    compiled = compile_take(snapshot, ordered, limit=3)
+    assert "GROUP BY base.id" in compiled.sql
+    assert "MIN(tgt.\"first_name\") ASC" in compiled.sql
+    assert "base.id ASC" in compiled.sql
+    assert (
+        "JOIN \"public\".\"customer\" AS tgt "
+        "ON tgt.\"customer_id\" = base.id"
+    ) in compiled.sql
+
+
+# ---------- IntersectNode ----------
+
+
+def test_compile_take_intersect_combines_left_and_right_streams():
+    snapshot = _customer_rental_snapshot()
+    left = WhereNode(
+        table="customer", column="store_id", op="eq", value=1
+    )
+    right = WhereNode(
+        table="customer", column="active", op="eq", value=1
+    )
+    plan = IntersectNode(left=left, right=right)
+    compiled = compile_take(snapshot, plan, limit=3)
+    assert "INTERSECT" in compiled.sql
+    assert "WHERE t.\"store_id\" = $1" in compiled.sql
+    assert "WHERE t.\"active\" = $2" in compiled.sql
+    assert compiled.params == (1, 1)
+    assert "GROUP BY id ORDER BY id ASC LIMIT 3" in compiled.sql
+
+
+def test_compile_take_rejects_intersect_with_mismatched_targets():
+    snapshot = _customer_rental_snapshot()
+    left = WhereNode(
+        table="customer", column="store_id", op="eq", value=1
+    )
+    right = WhereNode(
+        table="rental", column="customer_id", op="eq", value=45
+    )
+    plan = IntersectNode(left=left, right=right)
+    with pytest.raises(ValueError, match="same table"):
+        compile_take(snapshot, plan, 3)
+
+
+# ---------- count ----------
+
+
+def test_compile_count_preserves_multiplicity_for_via_chains():
+    snapshot = _customer_rental_snapshot()
+    edge = resolve_edge(
+        snapshot, "rental", "rental.customer_id->customer"
+    )
+    base = WhereNode(
+        table="rental", column="customer_id", op="eq", value=45
+    )
+    via = ViaNode(source=base, edge=edge)
+    compiled = compile_count(snapshot, via)
+    assert compiled.sql.startswith("SELECT COUNT(*) AS cnt FROM (")
+    assert "SELECT dst.\"customer_id\" AS id" in compiled.sql
+    assert compiled.params == (45,)
+
+
+def test_compile_count_on_where_is_trivial():
+    snapshot = _rental_snapshot()
+    plan = WhereNode(
+        table="rental", column="customer_id", op="eq", value=45
+    )
+    compiled = compile_count(snapshot, plan)
+    assert "COUNT(*) AS cnt" in compiled.sql
+    assert "WHERE t.\"customer_id\" = $1" in compiled.sql
+    assert compiled.params == (45,)
+
+
+# ---------- aggregate ----------
+
+
+def test_compile_aggregate_joins_target_table_for_column():
+    snapshot = _customer_rental_snapshot()
+    base = WhereNode(
+        table="payment", column="customer_id", op="eq", value=45
+    )
+    compiled = compile_aggregate(snapshot, base, fn="sum", column="amount")
+    assert "SELECT SUM(tgt.\"amount\") AS agg" in compiled.sql
+    assert (
+        "JOIN \"public\".\"payment\" AS tgt "
+        "ON tgt.\"payment_id\" = base.id"
+    ) in compiled.sql
+    assert compiled.params == (45,)
+
+
+def test_compile_aggregate_rejects_unsupported_fn():
+    snapshot = _rental_snapshot()
+    plan = WhereNode(
+        table="rental", column="customer_id", op="eq", value=45
+    )
+    with pytest.raises(ValueError):
+        compile_aggregate(snapshot, plan, fn="stddev", column="rental_id")  # type: ignore[arg-type]
+
+
+def test_compile_aggregate_rejects_unknown_column():
+    snapshot = _rental_snapshot()
+    plan = WhereNode(
+        table="rental", column="customer_id", op="eq", value=45
+    )
+    with pytest.raises(KeyError):
+        compile_aggregate(
+            snapshot, plan, fn="max", column="nonexistent"
+        )
+
+
+# ---------- group_top ----------
+
+
+def test_compile_group_top_count_orders_desc_with_group_tiebreak():
+    snapshot = _customer_rental_snapshot()
+    base = WhereNode(
+        table="rental", column="rental_date", op="gt", value="2005-01-01"
+    )
+    compiled = compile_group_top(
+        snapshot,
+        base,
+        group_column="customer_id",
+        fn="count",
+        agg_column=None,
+        limit=3,
+    )
+    assert (
+        "SELECT tgt.\"customer_id\" AS group_value, "
+        "COUNT(*) AS agg_value"
+    ) in compiled.sql
+    assert "GROUP BY tgt.\"customer_id\"" in compiled.sql
+    assert "ORDER BY agg_value DESC, group_value ASC" in compiled.sql
+    assert compiled.sql.endswith("LIMIT 3")
+
+
+def test_compile_group_top_sum_requires_agg_column():
+    snapshot = _customer_rental_snapshot()
+    base = WhereNode(
+        table="payment", column="customer_id", op="in", value=[1, 2, 3]
+    )
+    compiled = compile_group_top(
+        snapshot,
+        base,
+        group_column="customer_id",
+        fn="sum",
+        agg_column="amount",
+        limit=5,
+    )
+    assert "SUM(tgt.\"amount\") AS agg_value" in compiled.sql
+    with pytest.raises(ValueError):
+        compile_group_top(
+            snapshot,
+            base,
+            group_column="customer_id",
+            fn="sum",
+            agg_column=None,
+            limit=5,
+        )
+
+
+def test_compile_group_top_count_rejects_agg_column():
+    snapshot = _customer_rental_snapshot()
+    base = WhereNode(
+        table="rental", column="rental_date", op="gt", value="2005-01-01"
+    )
+    with pytest.raises(ValueError):
+        compile_group_top(
+            snapshot,
+            base,
+            group_column="customer_id",
+            fn="count",
+            agg_column="rental_id",
+            limit=3,
+        )
