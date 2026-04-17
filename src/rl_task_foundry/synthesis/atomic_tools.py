@@ -1079,8 +1079,6 @@ def _render_atomic_tool_source(
         "",
         "def _validate_find_value(op: str, value: Any) -> None:",
         "    if op == 'any':",
-        "        if value is not None:",
-        '            raise ValueError("value must be null when op=any")',
         "        return",
         "    if op == 'in':",
         "        if not isinstance(value, list) or not value:",
