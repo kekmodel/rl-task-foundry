@@ -10,10 +10,6 @@ from typing import Any, ClassVar
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
-    ToolExecutor,
-)
-from rl_task_foundry.schema.profiler import DataProfile
-from rl_task_foundry.infra.sdk_helpers import (
     extract_token_usage as _extract_token_usage,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -37,12 +33,13 @@ from rl_task_foundry.infra.sdk_helpers import (
 from rl_task_foundry.infra.sdk_helpers import (
     write_json_artifact as _write_json_artifact,
 )
+from rl_task_foundry.schema.profiler import DataProfile
+from rl_task_foundry.synthesis.conversation import SynthesisConversation
 from rl_task_foundry.synthesis.prompts import (
     build_synthesis_agent_instructions,
     build_synthesis_input,
 )
 from rl_task_foundry.synthesis.submit_draft_tool import (
-    SubmitDraftController,
     build_submit_draft_sdk_tool,
 )
 
@@ -88,13 +85,19 @@ def _build_agent(
 
 @dataclass(slots=True)
 class OpenAIAgentsSynthesisBackend:
+    """Stateless OpenAI Agents synthesis backend.
+
+    All per-conversation state (controller, atomic-tool definitions and
+    executors) is passed in as a ``SynthesisConversation`` argument to
+    ``run_synthesis``. Multiple conversations may share one backend instance
+    concurrently; the only mutable state on the backend is the cached SDK
+    components and the (class-level) shared OpenAI client/model cache.
+    """
+
     model_ref: ModelRef
     provider_config: ProviderConfig
     runtime_config: SynthesisRuntimeConfig
     traces_dir: Path | None = None
-    tool_definitions: list[dict[str, Any]] = field(default_factory=list)
-    tool_executors: dict[str, ToolExecutor] = field(default_factory=dict)
-    submit_draft_controller: SubmitDraftController | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
     _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], Any]] = {}
@@ -150,37 +153,29 @@ class OpenAIAgentsSynthesisBackend:
         self._shared_models[cache_key] = self._model
         return self._model
 
-    def bind_atomic_tools(
-        self,
-        *,
-        tool_definitions: list[dict[str, Any]],
-        tool_executors: dict[str, ToolExecutor],
-    ) -> None:
-        self.tool_definitions = [dict(definition) for definition in tool_definitions]
-        self.tool_executors = dict(tool_executors)
+    @staticmethod
+    def _normalized_tool_definitions(
+        conversation: SynthesisConversation,
+    ) -> list[dict[str, Any]]:
+        return [
+            _normalize_tool_definition(definition)
+            for definition in conversation.tool_definitions
+        ]
 
-    def bind_submit_draft_controller(self, controller: SubmitDraftController) -> None:
-        self.submit_draft_controller = controller
-
-    def _normalized_tool_definitions(self) -> list[dict[str, Any]]:
-        return [_normalize_tool_definition(definition) for definition in self.tool_definitions]
-
-    def _build_tools(self) -> list[object]:
-        if self.submit_draft_controller is None:
-            raise RuntimeError("submit_draft controller must be bound before run_synthesis")
+    def _build_tools(self, conversation: SynthesisConversation) -> list[object]:
+        controller = conversation.controller
         sdk_tools: list[object] = []
-        for definition in self._normalized_tool_definitions():
+        for definition in self._normalized_tool_definitions(conversation):
             tool_name = str(definition["name"])
-            executor = self.tool_executors.get(tool_name)
+            executor = conversation.tool_executors.get(tool_name)
             if executor is None:
                 continue
             sdk_tools.append(
                 _shared_make_sdk_tool(
                     definition,
                     executor,
-                    after_invoke=lambda name, payload, result,
-                    controller=self.submit_draft_controller: (
-                        controller.record_atomic_tool_call(
+                    after_invoke=lambda name, payload, result, _ctrl=controller: (
+                        _ctrl.record_atomic_tool_call(
                             tool_name=name,
                             params=payload,
                             result=result,
@@ -188,11 +183,15 @@ class OpenAIAgentsSynthesisBackend:
                     ),
                 )
             )
-        sdk_tools.append(build_submit_draft_sdk_tool(self.submit_draft_controller))
+        sdk_tools.append(build_submit_draft_sdk_tool(controller))
         return sdk_tools
 
-    def _build_tool_use_behavior(self, sdk: SimpleNamespace) -> Any:
-        controller = self.submit_draft_controller
+    def _build_tool_use_behavior(
+        self,
+        sdk: SimpleNamespace,
+        conversation: SynthesisConversation,
+    ) -> Any:
+        controller = conversation.controller
 
         def _finalize_on_submit(_context_wrapper: Any, tool_results: list[Any]) -> Any:
             for tool_result in tool_results:
@@ -205,7 +204,7 @@ class OpenAIAgentsSynthesisBackend:
                 if (
                     normalized.startswith("Accepted:")
                     or "BudgetExhaustedError: No more attempts." in normalized
-                    or (controller is not None and controller._terminated_too_hard)
+                    or controller._terminated_too_hard
                 ):
                     return sdk.ToolsToFinalOutputResult(
                         is_final_output=True,
@@ -239,6 +238,7 @@ class OpenAIAgentsSynthesisBackend:
     async def run_synthesis(
         self,
         *,
+        conversation: SynthesisConversation,
         db_id: str,
         requested_topic: str | None,
         domain_name: str,
@@ -256,12 +256,12 @@ class OpenAIAgentsSynthesisBackend:
                 disabled=(not self.runtime_config.tracing) or self.provider_config.type != "openai"
             )
         model = self._build_model(sdk)
-        tools = self._build_tools()
+        tools = self._build_tools(conversation)
         agent = _build_agent(
             sdk,
             model=model,
             tools=tools,
-            tool_use_behavior=self._build_tool_use_behavior(sdk),
+            tool_use_behavior=self._build_tool_use_behavior(sdk, conversation),
             runtime_config=self.runtime_config,
         )
         request_input = build_synthesis_input(
@@ -309,13 +309,9 @@ class OpenAIAgentsSynthesisBackend:
                         "detail": str(exc),
                     },
                     "transcript_ref": transcript_ref,
-                    "recent_atomic_tool_calls": (
-                        self.submit_draft_controller._atomic_tool_calls[
-                            -self.runtime_config.recent_tool_call_limit :
-                        ]
-                        if self.submit_draft_controller is not None
-                        else []
-                    ),
+                    "recent_atomic_tool_calls": conversation.controller._atomic_tool_calls[
+                        -self.runtime_config.recent_tool_call_limit :
+                    ],
                 },
             )
             raise
@@ -349,13 +345,9 @@ class OpenAIAgentsSynthesisBackend:
             payload={
                 "tool_calls": list(tool_calls),
                 "run_items": [repr(item) for item in getattr(run_result, "new_items", []) or []],
-                "recent_atomic_tool_calls": (
-                    self.submit_draft_controller._atomic_tool_calls[
-                        -self.runtime_config.recent_tool_call_limit :
-                    ]
-                    if self.submit_draft_controller is not None
-                    else []
-                ),
+                "recent_atomic_tool_calls": conversation.controller._atomic_tool_calls[
+                    -self.runtime_config.recent_tool_call_limit :
+                ],
             },
         )
         return SynthesisConversationResult(

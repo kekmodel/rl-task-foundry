@@ -9,6 +9,16 @@ import pytest
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.synthesis import backend_openai_agents as backend_module
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
+from rl_task_foundry.synthesis.conversation import SynthesisConversation
+
+
+def _conversation_with_controller(controller: object) -> SynthesisConversation:
+    return SynthesisConversation(
+        controller=controller,  # type: ignore[arg-type]
+        tool_definitions=[],
+        tool_executors={},
+        shuffle_seed="seed",
+    )
 
 
 def test_synthesis_backend_write_artifact_creates_dir_once_per_kind(
@@ -173,15 +183,17 @@ async def test_synthesis_backend_writes_artifacts_before_reraising_runner_error(
         runtime_config=SynthesisRuntimeConfig(max_turns=50),
         traces_dir=tmp_path / "traces",
     )
-    backend.bind_submit_draft_controller(
+    conversation = _conversation_with_controller(
         SimpleNamespace(
             _atomic_tool_calls=[],
             record_atomic_tool_call=lambda **_kwargs: None,
+            _terminated_too_hard=False,
         )
     )
 
     with pytest.raises(MaxTurnsExceeded):
         await backend.run_synthesis(
+            conversation=conversation,
             db_id="sakila",
             requested_topic="assignment",
             domain_name="customer support",
@@ -291,14 +303,16 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
         ),
         runtime_config=SynthesisRuntimeConfig(max_turns=50),
     )
-    backend.bind_submit_draft_controller(
+    conversation = _conversation_with_controller(
         SimpleNamespace(
             _atomic_tool_calls=[],
             record_atomic_tool_call=lambda **_kwargs: None,
+            _terminated_too_hard=False,
         )
     )
 
     result = await backend.run_synthesis(
+        conversation=conversation,
         db_id="sakila",
         requested_topic="assignment",
         domain_name="customer support",
@@ -314,8 +328,8 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
 
 
-def _make_tool_use_behavior_backend(controller: object) -> OpenAIAgentsSynthesisBackend:
-    backend = OpenAIAgentsSynthesisBackend(
+def _make_tool_use_behavior_backend() -> OpenAIAgentsSynthesisBackend:
+    return OpenAIAgentsSynthesisBackend(
         model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
         provider_config=ProviderConfig(
             type="openai_compatible",
@@ -326,8 +340,6 @@ def _make_tool_use_behavior_backend(controller: object) -> OpenAIAgentsSynthesis
         ),
         runtime_config=SynthesisRuntimeConfig(max_turns=50),
     )
-    backend.bind_submit_draft_controller(controller)
-    return backend
 
 
 def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
@@ -338,9 +350,10 @@ def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
 
     sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
     controller = SimpleNamespace(_terminated_too_hard=False)
-    backend = _make_tool_use_behavior_backend(controller)
+    backend = _make_tool_use_behavior_backend()
+    conversation = _conversation_with_controller(controller)
 
-    finalize = backend._build_tool_use_behavior(sdk)(
+    finalize = backend._build_tool_use_behavior(sdk, conversation)(
         None,
         [
             SimpleNamespace(
@@ -367,9 +380,10 @@ def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> No
 
     sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
     controller = SimpleNamespace(_terminated_too_hard=False)
-    backend = _make_tool_use_behavior_backend(controller)
+    backend = _make_tool_use_behavior_backend()
+    conversation = _conversation_with_controller(controller)
 
-    finalize = backend._build_tool_use_behavior(sdk)(
+    finalize = backend._build_tool_use_behavior(sdk, conversation)(
         None,
         [
             SimpleNamespace(
@@ -398,9 +412,10 @@ def test_synthesis_tool_use_behavior_finalizes_on_too_hard_termination() -> None
 
     sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
     controller = SimpleNamespace(_terminated_too_hard=True)
-    backend = _make_tool_use_behavior_backend(controller)
+    backend = _make_tool_use_behavior_backend()
+    conversation = _conversation_with_controller(controller)
 
-    finalize = backend._build_tool_use_behavior(sdk)(
+    finalize = backend._build_tool_use_behavior(sdk, conversation)(
         None,
         [
             SimpleNamespace(

@@ -36,6 +36,7 @@ from rl_task_foundry.synthesis.contracts import (
     TopicName,
     normalize_topic,
 )
+from rl_task_foundry.synthesis.conversation import SynthesisConversation
 from rl_task_foundry.synthesis.phase_monitor import (
     PipelinePhaseMonitorLogger,
     default_phase_monitor_log_path,
@@ -50,7 +51,6 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
 )
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.tool_runtime import (
-    ToolExecutor,
     build_shuffle_seed,
     with_tool_shuffle_seed,
 )
@@ -65,16 +65,10 @@ class _SynthesisBackendProtocol(Protocol):
     def provider_name(self) -> str: ...
     @property
     def model_name(self) -> str: ...
-    def bind_atomic_tools(
-        self,
-        *,
-        tool_definitions: list[dict[str, Any]],
-        tool_executors: dict[str, ToolExecutor],
-    ) -> None: ...
-    def bind_submit_draft_controller(self, controller: SubmitDraftController) -> None: ...
     async def run_synthesis(
         self,
         *,
+        conversation: SynthesisConversation,
         db_id: str,
         requested_topic: str | None,
         domain_name: str,
@@ -499,7 +493,6 @@ class SynthesisAgentRuntime:
     )
     _bind_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _category_state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _conversation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _owns_phase_monitor: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -601,23 +594,21 @@ class SynthesisAgentRuntime:
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
             forbidden_question_tokens=forbidden_question_tokens(schema_summary),
         )
-        # The shared backend instances hold mutable bindings for tools and the current
-        # submit controller, so we keep one full synthesis conversation bound at a time.
-        async with self._conversation_lock:
-            await self._prime_synthesis_backends_with_context(
-                db_id=db_id,
-                bundle=atomic_tool_bundle,
-                controller=controller,
-                shuffle_seed=shuffle_seed,
-            )
-            conversation_result = await self._run_synthesis_conversation(
-                db_id=db_id,
-                requested_topic=requested_topic,
-                schema_summary=schema_summary,
-                tool_surface_summary=tool_surface_summary,
-                anchor_hint=anchor_hint,
-                data_profile=data_profile,
-            )
+        conversation = await self._build_conversation(
+            db_id=db_id,
+            bundle=atomic_tool_bundle,
+            controller=controller,
+            shuffle_seed=shuffle_seed,
+        )
+        conversation_result = await self._run_synthesis_conversation(
+            conversation=conversation,
+            db_id=db_id,
+            requested_topic=requested_topic,
+            schema_summary=schema_summary,
+            tool_surface_summary=tool_surface_summary,
+            anchor_hint=anchor_hint,
+            data_profile=data_profile,
+        )
         if controller.accepted_draft is None:
             attempts = self._generation_attempts_from_submit_records(
                 controller=controller,
@@ -829,6 +820,7 @@ class SynthesisAgentRuntime:
     async def _run_synthesis_conversation(
         self,
         *,
+        conversation: SynthesisConversation,
         db_id: str,
         requested_topic: str | None,
         schema_summary: dict[str, object],
@@ -850,6 +842,7 @@ class SynthesisAgentRuntime:
                 continue
             try:
                 result = await backend.run_synthesis(
+                    conversation=conversation,
                     db_id=db_id,
                     requested_topic=requested_topic,
                     domain_name=self.config.domain.name,
@@ -886,31 +879,26 @@ class SynthesisAgentRuntime:
             phase=None,
         )
 
-    async def _prime_synthesis_backends_with_context(
+    async def _build_conversation(
         self,
         *,
         db_id: str,
         bundle: AtomicToolBundle,
         controller: SubmitDraftController,
         shuffle_seed: str,
-    ) -> None:
-        tool_definitions = bundle.actor_tool_definitions()
+    ) -> SynthesisConversation:
         synthesis_db = self._ensure_synthesis_db(db_id)
         base_tool_executors = await synthesis_db.tool_executors()
         tool_executors = {
             name: with_tool_shuffle_seed(executor, shuffle_seed=shuffle_seed)
             for name, executor in base_tool_executors.items()
         }
-        for backend in self.synthesis_backends or []:
-            bind_atomic_tools = getattr(backend, "bind_atomic_tools", None)
-            if callable(bind_atomic_tools):
-                bind_atomic_tools(
-                    tool_definitions=tool_definitions,
-                    tool_executors=tool_executors,
-                )
-            bind_submit_draft_controller = getattr(backend, "bind_submit_draft_controller", None)
-            if callable(bind_submit_draft_controller):
-                bind_submit_draft_controller(controller)
+        return SynthesisConversation(
+            controller=controller,
+            tool_definitions=bundle.actor_tool_definitions(),
+            tool_executors=tool_executors,
+            shuffle_seed=shuffle_seed,
+        )
 
     def _build_draft_from_submission(
         self,

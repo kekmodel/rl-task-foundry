@@ -186,21 +186,13 @@ class _FakeBackend:
     reject_payload: SubmitDraftPayload | None = None
     provider_name: str = "codex_oauth"
     model_name: str = "gpt-5.4-mini"
-    bound_controller: object | None = None
-    bound_tool_definitions: list[dict[str, object]] | None = None
-    bound_tool_executors: dict[str, object] | None = None
+    seen_conversations: list[object] = field(default_factory=list)
     seen_max_turns: list[int] = field(default_factory=list)
-
-    def bind_atomic_tools(self, *, tool_definitions, tool_executors) -> None:
-        self.bound_tool_definitions = tool_definitions
-        self.bound_tool_executors = tool_executors
-
-    def bind_submit_draft_controller(self, controller) -> None:
-        self.bound_controller = controller
 
     async def run_synthesis(
         self,
         *,
+        conversation,
         db_id: str,
         requested_topic: str,
         domain_name: str,
@@ -222,41 +214,42 @@ class _FakeBackend:
             tool_surface_summary,
         )
         self.seen_max_turns.append(max_turns)
-        assert self.bound_controller is not None
-        self.bound_controller.record_atomic_tool_call(
+        self.seen_conversations.append(conversation)
+        controller = conversation.controller
+        controller.record_atomic_tool_call(
             tool_name="find_customer_by_store_id",
             params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 5},
             result=[{"customer_id": 1}, {"customer_id": 2}],
         )
-        self.bound_controller.record_atomic_tool_call(
+        controller.record_atomic_tool_call(
             tool_name="get_customer",
             params={"id": 1},
             result={"store_id": 1},
         )
-        self.bound_controller.record_atomic_tool_call(
+        controller.record_atomic_tool_call(
             tool_name="find_payment_by_customer_id",
             params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
             result=[{"payment_id": 11}, {"payment_id": 12}],
         )
-        self.bound_controller.record_atomic_tool_call(
+        controller.record_atomic_tool_call(
             tool_name="find_rental_by_customer_id",
             params={"op": "eq", "value": 1, "sort_by": None, "direction": "asc", "limit": 3},
             result=[{"rental_id": 201}, {"rental_id": 202}],
         )
-        self.bound_controller.record_atomic_tool_call(
+        controller.record_atomic_tool_call(
             tool_name="calc_customer",
             params={"fn": "count", "metric": None, "by": None, "op": None, "value": None},
             result=5,
         )
-        self.bound_controller.record_atomic_tool_call(
+        controller.record_atomic_tool_call(
             tool_name="get_payment",
             params={"id": 11},
             result={"payment_id": 11},
         )
         if self.reject_payload is not None:
-            await self.bound_controller.submit(self.reject_payload)
+            await controller.submit(self.reject_payload)
         if self.accept_payload is not None:
-            await self.bound_controller.submit(self.accept_payload)
+            await controller.submit(self.accept_payload)
         return type(
             "ConversationResult",
             (),
