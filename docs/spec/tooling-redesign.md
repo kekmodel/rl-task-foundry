@@ -1,6 +1,6 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
-> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice), calculus completed at `201f6f9`, atomic agents-SDK `FunctionTool` factory at `03e9690`. Composer analytic toolset is complete: `schema_map` (`7f92ae2`), `sample` (`398d175`), `query` DSL (`804f7da`), `profile` (`92e54ce`), `neighborhood` (`a9b6d78`), composer `tool_factory` at `852d7c9`. Synthesis-agent rewire to composer tools landed at `0558b45`. Solver rewire to atomic calculus landed at `52b3fdd`. Synthesis prompt rewrite for the new tool surface landed at `4f0b6d5`. Remaining work: bundle export migration (`schema_snapshot.json`) and retirement of `synthesis/atomic_tools.py` codegen.
+> **Status:** design spec. Atomic scaffold landed at `f63be79` (vertical slice), calculus completed at `201f6f9`, atomic agents-SDK `FunctionTool` factory at `03e9690`. Composer analytic toolset is complete: `schema_map` (`7f92ae2`), `sample` (`398d175`), `query` DSL (`804f7da`), `profile` (`92e54ce`), `neighborhood` (`a9b6d78`), composer `tool_factory` at `852d7c9`. Synthesis-agent rewire to composer tools landed at `0558b45`. Solver rewire to atomic calculus landed at `52b3fdd`. Synthesis prompt rewrite for the new tool surface landed at `4f0b6d5`. Bundle export migration to `schema_snapshot.json` + `tooling_version.json` landed at `fdee2f6`. Remaining work: retire `synthesis/atomic_tools.py` codegen + `AtomicToolMaterializer` + `tool_runtime.py` + `SynthesisDb.atomic_tool_bundle()` / `tool_executors()`; `proof_environment._proof_atomic_tool_bundle` can be dropped once the proof path switches to composer authoring.
 
 ## Motivation
 
@@ -181,8 +181,8 @@ The canonical answer produced by composer `query(spec)` is stored verbatim in th
 
 ### Next session
 
-- Replace per-DB `atomic_tools.py` materialization with a `schema_snapshot.json` export; adjust `bundle_exporter.py`, `task_registry`, and `proof_environment` accordingly. `SynthesisDb.atomic_tool_bundle()` / `tool_executors()` and the `AtomicToolMaterializer` can then be deleted.
-- Retire `synthesis/atomic_tools.py` codegen and `synthesis/tool_runtime.py` once all consumers migrated.
+- Retire `synthesis/atomic_tools.py` codegen, `synthesis/atomic_tool_materializer.py`, `synthesis/tool_runtime.py`, `SynthesisDb.atomic_tool_bundle()` / `tool_executors()`, and `proof_environment._proof_atomic_tool_bundle`. After the switch in `fdee2f6` nothing in the hot path reads atomic_tools.py anymore; these are pure dead weight now.
+- `SynthesisTaskDraft.atomic_tool_bundle` can also be dropped (task_registry's `tools.py` trace artifact goes with it).
 - iter13+ prompt tuning against the new tool surface (the prompt itself is already in place at `4f0b6d5`).
 
 ### Bundle export change (next session)
