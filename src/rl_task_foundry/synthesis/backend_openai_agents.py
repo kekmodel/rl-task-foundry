@@ -33,6 +33,12 @@ from rl_task_foundry.infra.sdk_helpers import (
 from rl_task_foundry.infra.sdk_helpers import (
     write_json_artifact as _write_json_artifact,
 )
+from rl_task_foundry.infra.sdk_helpers import (
+    summarize_run_item as _summarize_run_item,
+)
+from rl_task_foundry.infra.sdk_helpers import (
+    extract_run_error_items as _extract_run_error_items,
+)
 from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.synthesis.conversation import SynthesisConversation
 from rl_task_foundry.synthesis.prompts import (
@@ -284,6 +290,7 @@ class OpenAIAgentsSynthesisBackend:
                         "detail": str(exc),
                     },
                     "transcript_ref": transcript_ref,
+                    "run_items": _extract_run_error_items(exc),
                     "recent_atomic_tool_calls": conversation.controller._atomic_tool_calls[
                         -self.runtime_config.recent_tool_call_limit :
                     ],
@@ -319,7 +326,10 @@ class OpenAIAgentsSynthesisBackend:
             requested_topic=requested_topic,
             payload={
                 "tool_calls": list(tool_calls),
-                "run_items": [repr(item) for item in getattr(run_result, "new_items", []) or []],
+                "run_items": [
+                    _summarize_run_item(item)
+                    for item in getattr(run_result, "new_items", []) or []
+                ],
                 "recent_atomic_tool_calls": conversation.controller._atomic_tool_calls[
                     -self.runtime_config.recent_tool_call_limit :
                 ],

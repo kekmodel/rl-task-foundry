@@ -280,3 +280,120 @@ def write_json_artifact(
         encoding="utf-8",
     )
     return str(target_path)
+
+
+_RUN_ITEM_PREVIEW_LIMIT = 800
+
+
+def _preview_text(value: Any, limit: int = _RUN_ITEM_PREVIEW_LIMIT) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            value = str(value)
+    if len(value) > limit:
+        return value[:limit] + f"… [truncated; total {len(value)} chars]"
+    return value
+
+
+def summarize_run_item(item: Any) -> dict[str, Any]:
+    """Extract the meaningful fields from an agents-SDK RunItem into a
+    compact dict. Using this instead of ``repr(item)`` avoids the ~25KB
+    per-item blow-up where RunItem.repr() embeds the full Agent object
+    (including every FunctionTool's params_json_schema) on every item.
+    """
+
+    if isinstance(item, str):
+        return {"type": "str", "text_preview": _preview_text(item)}
+
+    item_type = type(item).__name__
+    summary: dict[str, Any] = {"type": item_type}
+    raw = getattr(item, "raw_item", None)
+
+    if item_type == "ToolCallItem":
+        tool_name = _dual_attr(raw, "name")
+        tool_args = _dual_attr(raw, "arguments")
+        call_id = _dual_attr(raw, "call_id")
+        summary.update(
+            {
+                "tool_name": tool_name,
+                "arguments_preview": _preview_text(tool_args),
+                "call_id": call_id,
+            }
+        )
+        return summary
+
+    if item_type == "ToolCallOutputItem":
+        output = getattr(item, "output", None)
+        call_id = _dual_attr(raw, "call_id")
+        summary.update(
+            {
+                "call_id": call_id,
+                "output_preview": _preview_text(output),
+            }
+        )
+        return summary
+
+    if item_type == "MessageOutputItem":
+        summary["text_preview"] = _preview_text(_collect_text_parts(raw))
+        return summary
+
+    if item_type == "ReasoningItem":
+        reasoning_text = _collect_reasoning_text(raw)
+        summary["reasoning_preview"] = _preview_text(reasoning_text)
+        return summary
+
+    if item_type in {"HandoffCallItem", "HandoffOutputItem"}:
+        summary["handoff_preview"] = _preview_text(str(raw))
+        return summary
+
+    summary["raw_preview"] = _preview_text(str(raw))
+    return summary
+
+
+def _dual_attr(container: Any, key: str) -> Any:
+    if container is None:
+        return None
+    if isinstance(container, dict):
+        return container.get(key)
+    return getattr(container, key, None)
+
+
+def _collect_text_parts(raw: Any) -> str:
+    content = _dual_attr(raw, "content") or []
+    parts: list[str] = []
+    for part in content:
+        text = _dual_attr(part, "text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _collect_reasoning_text(raw: Any) -> str:
+    for key in ("summary", "content"):
+        entries = _dual_attr(raw, key) or []
+        parts: list[str] = []
+        for entry in entries:
+            text = _dual_attr(entry, "text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
+def extract_run_error_items(exc: BaseException) -> list[dict[str, Any]]:
+    """Return compact RunItem summaries from an AgentsException's
+    ``run_data.new_items`` if present, else ``[]``. Agents SDK attaches
+    ``run_data`` to every ``AgentsException`` (MaxTurnsExceeded,
+    ModelBehaviorError, …) so the partial turns can be recovered on the
+    error path — where ``run_result`` is unreachable.
+    """
+
+    run_data = getattr(exc, "run_data", None)
+    if run_data is None:
+        return []
+    new_items = getattr(run_data, "new_items", None) or []
+    return [summarize_run_item(item) for item in new_items]

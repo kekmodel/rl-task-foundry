@@ -190,6 +190,12 @@ class RealDbTrialRunner:
         runtime = self._synthesis_runtime_for_trial(
             debug_traces_dir, phase_monitor
         )
+        # The solver orchestrator was built in __post_init__ with the
+        # original config.output.traces_dir (global). Redirect its
+        # output to this trial's debug_traces_dir so solver transcripts
+        # and tool traces land under artifacts/<trial>/debug/traces/.
+        if self.solver_orchestrator is not None:
+            self.solver_orchestrator.traces_dir_override = debug_traces_dir
         try:
             draft = await runtime.synthesize_environment_draft(
                 db_id=db_id,

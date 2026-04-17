@@ -214,8 +214,8 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
 
     tool_trace_payload = json.loads(tool_trace_path.read_text(encoding="utf-8"))
     assert tool_trace_payload["run_items"] == [
-        "'tool-call(delivery_lookup)'",
-        "'tool-call(submit_result)'",
+        {"type": "str", "text_preview": "tool-call(delivery_lookup)"},
+        {"type": "str", "text_preview": "tool-call(submit_result)"},
     ]
     assert tool_trace_payload["tool_calls"] == [
         {"name": "delivery_lookup", "repr": "'tool-call(delivery_lookup)'"},

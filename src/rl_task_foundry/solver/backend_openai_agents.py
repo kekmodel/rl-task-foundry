@@ -36,6 +36,12 @@ from rl_task_foundry.infra.sdk_helpers import (
 from rl_task_foundry.infra.sdk_helpers import (
     write_json_artifact as _write_json_artifact,
 )
+from rl_task_foundry.infra.sdk_helpers import (
+    summarize_run_item as _summarize_run_item,
+)
+from rl_task_foundry.infra.sdk_helpers import (
+    extract_run_error_items as _extract_run_error_items,
+)
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
 
@@ -349,14 +355,20 @@ class OpenAIAgentsSolverBackend:
                     },
                 },
             )
+            recovered_items = _extract_run_error_items(exc)
+            recovered_tool_calls = [
+                item.get("tool_name")
+                for item in recovered_items
+                if item.get("type") == "ToolCallItem" and item.get("tool_name")
+            ]
             tool_trace_ref = self._write_artifact(
                 "tool_traces",
                 task_id,
                 {
                     "task_id": task_id,
                     "solver_id": self.solver_config.solver_id,
-                    "run_items": [],
-                    "tool_calls": [],
+                    "run_items": recovered_items,
+                    "tool_calls": recovered_tool_calls,
                     "error": {
                         "type": exc.__class__.__name__,
                         "detail": str(exc),
@@ -406,7 +418,10 @@ class OpenAIAgentsSolverBackend:
             {
                 "task_id": task_id,
                 "solver_id": self.solver_config.solver_id,
-                "run_items": [repr(item) for item in getattr(run_result, "new_items", [])],
+                "run_items": [
+                    _summarize_run_item(item)
+                    for item in getattr(run_result, "new_items", [])
+                ],
                 "tool_calls": _extract_tool_calls(run_result),
             },
         )

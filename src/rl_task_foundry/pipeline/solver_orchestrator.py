@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
+from pathlib import Path
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
 from rl_task_foundry.calibration.runner import calibration_decision
 from rl_task_foundry.config.models import AppConfig, ProviderConfig, SolverModelConfig
@@ -111,6 +112,7 @@ class SolverOrchestrator:
     runtime_factory: TaskRuntimeFactory | None = None
     sdk_tools_factory: SdkToolsFactory | None = None
     database_pools: DatabasePools | None = None
+    traces_dir_override: Path | None = None
     _provider_semaphores: dict[str, asyncio.Semaphore] = field(
         default_factory=dict,
         init=False,
@@ -286,13 +288,14 @@ class SolverOrchestrator:
         runtime_config = self.config.solver_runtime.model_copy(
             update={"max_turns": task_bundle.rollout_constraints.max_turns}
         )
+        traces_dir = self.traces_dir_override or self.config.output.traces_dir
         return OpenAIAgentsSolverBackend(
             solver_config=solver_config,
             provider_config=provider_config,
             runtime_config=runtime_config,
             sdk_tools=sdk_tools,
-            session_db_path=self.config.output.traces_dir / "sessions.sqlite",
-            traces_dir=self.config.output.traces_dir,
+            session_db_path=traces_dir / "sessions.sqlite",
+            traces_dir=traces_dir,
         )
 
     async def _schema_snapshot(self, db_id: str) -> SchemaSnapshot:
