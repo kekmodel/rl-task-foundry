@@ -26,8 +26,8 @@ from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftPayload,
-    _ungrounded_answer_strings,
 )
+from rl_task_foundry.synthesis.submit_draft_validators import _ungrounded_answer_strings
 
 def _wrap_user_prompt(anchor_entity: dict[str, object], body: str) -> str:
     return (
@@ -769,9 +769,9 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
     # Disconnected check is diagnostic-only (not blocking) due to
     # integer ID collision false positives. Verify the detection works
     # by checking _rebuild_anchor_connected_strings directly.
-    from rl_task_foundry.synthesis.submit_draft_tool import (
-        _rebuild_anchor_connected_strings,
+    from rl_task_foundry.synthesis.submit_draft_validators import (
         _disconnected_answer_strings,
+        _rebuild_anchor_connected_strings,
     )
 
     anchor_strings = _rebuild_anchor_connected_strings(
