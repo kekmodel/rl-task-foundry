@@ -12,11 +12,14 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.infra.db import DatabasePools, ensure_database_pools
+from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
+from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
@@ -59,6 +62,10 @@ class HarvestRunner:
     registry: TaskRegistryWriter | None = None
     exporter: TaskBundleExporter | None = None
     trial_runner_factory: TrialRunnerFactory | None = None
+    _shared_pools: DatabasePools | None = field(default=None, init=False, repr=False)
+    _shared_solver_orchestrator: SolverOrchestrator | None = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.registry is None:
@@ -77,6 +84,8 @@ class HarvestRunner:
             self.config,
             registry=self.registry,
             exporter=self.exporter,
+            database_pools=self._shared_pools,
+            solver_orchestrator=self._shared_solver_orchestrator,
         )
 
     async def run(
@@ -96,6 +105,18 @@ class HarvestRunner:
             raise ValueError("parallel_workers must be >= 1")
 
         output_root.mkdir(parents=True, exist_ok=True)
+        if self._shared_pools is None and self.trial_runner_factory is None:
+            self._shared_pools = await ensure_database_pools(
+                None, self.config.database
+            )
+        if (
+            self._shared_solver_orchestrator is None
+            and self.trial_runner_factory is None
+        ):
+            self._shared_solver_orchestrator = SolverOrchestrator(
+                self.config,
+                database_pools=self._shared_pools,
+            )
         harvest_monitor_path = output_root / "phase_monitors.jsonl"
         flow_id = build_flow_id("harvest")
         harvest_monitor = PipelinePhaseMonitorLogger(
@@ -237,6 +258,13 @@ class HarvestRunner:
         )
 
     async def close(self) -> None:
+        if self._shared_solver_orchestrator is not None:
+            await self._shared_solver_orchestrator.close()
+            self._shared_solver_orchestrator = None
+        OpenAIAgentsSynthesisBackend.clear_model_cache()
         close_registry = getattr(self.registry, "close", None)
         if callable(close_registry):
             close_registry()
+        if self._shared_pools is not None:
+            await self._shared_pools.close()
+            self._shared_pools = None

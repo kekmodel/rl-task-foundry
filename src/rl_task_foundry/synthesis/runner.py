@@ -18,6 +18,7 @@ from rl_task_foundry.synthesis.contracts import (
     StrictModel,
     TaskBundleStatus,
 )
+from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.orchestrator import (
     SynthesisDbRegistryEntry,
     SynthesisOrchestrator,
@@ -389,6 +390,7 @@ class SynthesisRegistryRunner:
     async def close(self) -> None:
         assert self.orchestrator is not None
         await self.orchestrator.close()
+        OpenAIAgentsSynthesisBackend.clear_model_cache()
         close_registry = getattr(self.task_registry, "close", None)
         if callable(close_registry):
             close_registry()

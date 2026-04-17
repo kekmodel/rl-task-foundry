@@ -7,12 +7,14 @@ this module is in-memory only and is not persisted as a separate JSON file.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.infra.db import DatabasePools
+from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
@@ -127,16 +129,27 @@ class RealDbTrialRunner:
     synthesis_runtime: SynthesisAgentRuntime | None = None
     registry: TaskRegistryWriter | None = None
     exporter: TaskBundleExporter | None = None
+    database_pools: DatabasePools | None = None
+    solver_orchestrator: SolverOrchestrator | None = None
+    _owns_solver_orchestrator: bool = field(default=False, init=False, repr=False)
+    _owns_registry: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.registry is None:
             self.registry = TaskRegistryWriter.for_config(self.config)
+            self._owns_registry = True
         if self.exporter is None:
             assert self.registry.atomic_tool_materializer is not None
             self.exporter = TaskBundleExporter(
                 registry=self.registry,
                 materializer=self.registry.atomic_tool_materializer,
             )
+        if self.solver_orchestrator is None and self.synthesis_runtime is None:
+            self.solver_orchestrator = SolverOrchestrator(
+                self.config,
+                database_pools=self.database_pools,
+            )
+            self._owns_solver_orchestrator = True
 
     async def run(
         self,
@@ -365,9 +378,14 @@ class RealDbTrialRunner:
     async def close(self) -> None:
         if self.synthesis_runtime is not None:
             await self.synthesis_runtime.close()
-        close_registry = getattr(self.registry, "close", None)
-        if callable(close_registry):
-            close_registry()
+        if self._owns_solver_orchestrator and self.solver_orchestrator is not None:
+            await self.solver_orchestrator.close()
+            self.solver_orchestrator = None
+            self._owns_solver_orchestrator = False
+        if self._owns_registry:
+            close_registry = getattr(self.registry, "close", None)
+            if callable(close_registry):
+                close_registry()
 
     def _synthesis_runtime_for_trial(
         self,
@@ -385,6 +403,8 @@ class RealDbTrialRunner:
                 }
             ),
             phase_monitor=phase_monitor,
+            database_pools=self.database_pools,
+            solver_orchestrator=self.solver_orchestrator,
         )
         self.synthesis_runtime = runtime
         return runtime

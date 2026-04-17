@@ -635,10 +635,10 @@ async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> 
     runtime = SynthesisAgentRuntime(
         _config_with_synthesis_output(tmp_path),
         synthesis_backends=[backend],
-    )
-    runtime._solver_orchestrator = _FakeSolverOrchestrator(
-        matched_solver_runs=1,
-        total_solver_runs=2,
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
     )
     runtime._graph_cache = _sample_graph()
     runtime._data_profile_cache = DataProfile()
@@ -672,10 +672,10 @@ async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: 
     runtime = SynthesisAgentRuntime(
         _config_with_synthesis_output(tmp_path),
         synthesis_backends=[backend],
-    )
-    runtime._solver_orchestrator = _FakeSolverOrchestrator(
-        matched_solver_runs=1,
-        total_solver_runs=2,
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
     )
     runtime._graph_cache = _sample_graph()
     runtime._data_profile_cache = DataProfile()

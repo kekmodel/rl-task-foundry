@@ -491,7 +491,9 @@ class SynthesisAgentRuntime:
     _tool_executor_cache: dict[str, dict[str, ToolExecutor]] = field(
         default_factory=dict, init=False, repr=False
     )
+    database_pools: DatabasePools | None = None
     _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
+    _owns_database_pools: bool = field(default=True, init=False, repr=False)
     _bound_db_id: str | None = field(default=None, init=False, repr=False)
     _category_failures: dict[tuple[str, str], _CategoryFailureState] = field(
         default_factory=dict, init=False, repr=False
@@ -502,7 +504,9 @@ class SynthesisAgentRuntime:
     _atomic_tool_materializer: AtomicToolMaterializer | None = field(
         default=None, init=False, repr=False
     )
+    solver_orchestrator: SolverOrchestrator | None = None
     _solver_orchestrator: SolverOrchestrator | None = field(default=None, init=False, repr=False)
+    _owns_solver_orchestrator: bool = field(default=True, init=False, repr=False)
     _category_state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _conversation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     phase_monitor: PipelinePhaseMonitorLogger | None = None
@@ -532,10 +536,20 @@ class SynthesisAgentRuntime:
             for provider_name in self.config.providers
         }
         self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
-        if self._solver_orchestrator is None:
+        if self.database_pools is not None:
+            self._database_pools = self.database_pools
+            self._owns_database_pools = False
+        if self.solver_orchestrator is not None:
+            self._solver_orchestrator = self.solver_orchestrator
+            self._owns_solver_orchestrator = False
+        else:
             from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 
-            self._solver_orchestrator = SolverOrchestrator(self.config)
+            self._solver_orchestrator = SolverOrchestrator(
+                self.config,
+                database_pools=self._database_pools,
+            )
+            self._owns_solver_orchestrator = True
         if self.phase_monitor is None:
             self.phase_monitor = PipelinePhaseMonitorLogger(
                 phase_monitor_log_path=default_phase_monitor_log_path(
@@ -684,14 +698,15 @@ class SynthesisAgentRuntime:
         return accepted_draft
 
     async def close(self) -> None:
+        if self._owns_solver_orchestrator and self._solver_orchestrator is not None:
+            await self._solver_orchestrator.close()
+        self._solver_orchestrator = None
         if self._database_pools is not None:
-            await self._database_pools.close()
+            if self._owns_database_pools:
+                await self._database_pools.close()
             self._database_pools = None
         self._atomic_tool_bundles.clear()
         self._tool_executor_cache.clear()
-        from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
-
-        OpenAIAgentsSynthesisBackend.clear_model_cache()
         if self._owns_phase_monitor and self.phase_monitor is not None:
             self.phase_monitor.close()
             self.phase_monitor = None

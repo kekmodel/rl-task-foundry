@@ -25,6 +25,7 @@ from rl_task_foundry.synthesis.atomic_tools import (
     AtomicToolFamily,
     AtomicToolResultMode,
 )
+from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
@@ -293,6 +294,7 @@ class ProofTaskRunner:
     async def close(self) -> None:
         assert self.solver_orchestrator is not None
         await self.solver_orchestrator.close()
+        OpenAIAgentsSynthesisBackend.clear_model_cache()
         close_registry = getattr(self.registry, "close", None)
         if callable(close_registry):
             close_registry()

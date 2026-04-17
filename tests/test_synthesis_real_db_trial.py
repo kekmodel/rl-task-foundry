@@ -158,7 +158,7 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert not (output_root / "trial_summary.json").exists()
     assert summary.task_id == "task_real_trial"
     assert summary.phase_monitor_log_path == output_root / "debug" / "phase_monitors.jsonl"
-    assert registry.closed is True
+    assert registry.closed is False  # injected registry stays open; caller owns lifecycle
 
 
 @pytest.mark.asyncio
@@ -209,4 +209,4 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
     assert summary.synthesis_error_type == "SynthesisArtifactGenerationError"
     assert summary.attempt_outcomes == ("artifact_invalid",)
     assert summary.error_codes == ("reject_too_easy",)
-    assert runner.registry.closed is True
+    assert runner.registry.closed is False  # injected registry stays open

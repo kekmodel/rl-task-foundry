@@ -118,6 +118,7 @@ class SolverOrchestrator:
     config: AppConfig
     runtime_factory: TaskRuntimeFactory | None = None
     tool_executor_factory: TaskToolExecutorFactory | None = None
+    database_pools: DatabasePools | None = None
     _provider_semaphores: dict[str, asyncio.Semaphore] = field(
         default_factory=dict,
         init=False,
@@ -129,11 +130,17 @@ class SolverOrchestrator:
         repr=False,
     )
     _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
+    _owns_database_pools: bool = field(default=True, init=False, repr=False)
     _atomic_tool_materializer: AtomicToolMaterializer | None = field(
         default=None,
         init=False,
         repr=False,
     )
+
+    def __post_init__(self) -> None:
+        if self.database_pools is not None:
+            self._database_pools = self.database_pools
+            self._owns_database_pools = False
 
     async def run_draft(self, draft: SynthesisTaskDraft) -> TaskRolloutSummary:
         return await self.run_bundle(TaskRolloutBundle.from_draft(draft))
@@ -192,7 +199,8 @@ class SolverOrchestrator:
 
     async def close(self) -> None:
         if self._database_pools is not None:
-            await self._database_pools.close()
+            if self._owns_database_pools:
+                await self._database_pools.close()
             self._database_pools = None
         self._tool_executor_cache.clear()
         OpenAIAgentsSolverBackend.clear_model_cache()
