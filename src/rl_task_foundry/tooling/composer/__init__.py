@@ -7,6 +7,7 @@ authoring. Not an RL target.
 """
 
 from rl_task_foundry.tooling.composer._session import ComposerSession
+from rl_task_foundry.tooling.composer.neighborhood import neighborhood
 from rl_task_foundry.tooling.composer.profile import profile
 from rl_task_foundry.tooling.composer.query import query
 from rl_task_foundry.tooling.composer.sample import sample
@@ -14,6 +15,7 @@ from rl_task_foundry.tooling.composer.schema_map import schema_map
 
 __all__ = [
     "ComposerSession",
+    "neighborhood",
     "profile",
     "query",
     "sample",
