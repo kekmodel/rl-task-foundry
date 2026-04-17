@@ -1,6 +1,6 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
-> **Status:** design spec. All checklist items are complete. Landing chain: atomic scaffold `f63be79`, calculus `201f6f9`, atomic tool_factory `03e9690`, `Any` sweep `b3a5c44`, composer `schema_map` `7f92ae2`, `sample` `398d175`, `query` DSL `804f7da`, `profile` `92e54ce`, `neighborhood` `a9b6d78`, composer tool_factory `852d7c9`, synthesis rewire `0558b45`, solver rewire `52b3fdd`, prompt rewrite `4f0b6d5`, bundle export migration `fdee2f6`, atomic_tools codegen retirement `a51af0d`. Remaining open items are downstream of the redesign: iter13+ prompt tuning on the new surface, and an eventual composer rewrite of the proof environment task so it stops hand-coding a task draft.
+> **Status:** design spec. All checklist items are complete. Landing chain: atomic scaffold `f63be79`, calculus `201f6f9`, atomic tool_factory `03e9690`, `Any` sweep `b3a5c44`, composer `schema_map` `7f92ae2`, `sample` `398d175`, `query` DSL `804f7da`, `profile` `92e54ce`, `neighborhood` `a9b6d78`, composer tool_factory `852d7c9`, synthesis rewire `0558b45`, solver rewire `52b3fdd`, prompt rewrite `4f0b6d5`, bundle export migration `fdee2f6`, atomic_tools codegen retirement `a51af0d`. Remaining open items are downstream of the redesign: a composer rewrite of the proof environment task (use it as a no-quota smoke test of the new surface), and then iter13+ prompt tuning against the real DB.
 
 ## Motivation
 
@@ -181,8 +181,10 @@ The canonical answer produced by composer `query(spec)` is stored verbatim in th
 
 ### Follow-ups (not part of the redesign proper)
 
-- iter13+ prompt tuning against the new tool surface.
-- Rewrite the proof environment task via the composer DSL so it stops hand-coding a `SynthesisTaskDraft` and instead flows through the same `SynthesisAgentRuntime` path as live traffic.
+Order matters: do (1) before (2).
+
+1. **Rewrite the proof environment task via the composer DSL** so it stops hand-coding a `SynthesisTaskDraft` in `build_proof_task_draft` and instead flows through `SynthesisAgentRuntime`. The proof path is the end-to-end smoke test of the new surface, runs on a sqlite fixture, and costs no API quota — it catches wiring bugs (composer tools not bound, atomic session lifecycle, `tool_signature` hash drift, …) before they contaminate real-DB measurements.
+2. **iter13+ prompt tuning against the new tool surface.** Only meaningful once (1) has proved the runtime wiring works end-to-end; otherwise pass_rate observations mix prompt effects with wiring bugs and the scarce Alibaba quota is spent on debugging plumbing.
 
 ### Bundle export change (next session)
 
