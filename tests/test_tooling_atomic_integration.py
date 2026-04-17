@@ -250,7 +250,10 @@ async def test_group_top_count_returns_top_customers_by_rentals():
             n=3,
         )
         assert len(tops) == 3
-        counts = [t[1] for t in tops]
+        counts: list[int] = []
+        for _, value in tops:
+            assert isinstance(value, int)
+            counts.append(value)
         assert counts == sorted(counts, reverse=True)
     finally:
         await conn.close()

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import asyncpg
 import pytest
+
+if TYPE_CHECKING:
+    from agents import FunctionTool
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.infra.db import (
@@ -115,9 +118,13 @@ def _stub_session() -> AtomicSession:
     )
 
 
-async def _invoke(tool: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    result = await tool.on_invoke_tool(None, json.dumps(payload))
-    return json.loads(result)
+async def _invoke(
+    tool: "FunctionTool", payload: dict[str, object]
+) -> dict[str, object]:
+    result = await tool.on_invoke_tool(None, json.dumps(payload))  # pyright: ignore[reportArgumentType]
+    parsed = json.loads(result)
+    assert isinstance(parsed, dict)
+    return {str(key): value for key, value in parsed.items()}
 
 
 # ---------- schema baking ----------
@@ -201,7 +208,9 @@ async def test_rows_where_invoke_returns_cursor_payload():
         {"table": "customer", "column": "store_id", "op": "eq", "value": 1},
     )
     assert response["target_table"] == "customer"
-    assert response["cursor_id"].startswith("c_")
+    cursor_id = response["cursor_id"]
+    assert isinstance(cursor_id, str)
+    assert cursor_id.startswith("c_")
 
 
 @pytest.mark.asyncio
@@ -271,7 +280,7 @@ async def test_intersect_invoke_rejects_mismatched_tables():
 @pytest.mark.asyncio
 async def test_invalid_json_input_is_surfaced_as_error():
     tool = build_rows_where_tool(_stub_session())
-    result = await tool.on_invoke_tool(None, "{not-json")
+    result = await tool.on_invoke_tool(None, "{not-json")  # pyright: ignore[reportArgumentType]
     parsed = json.loads(result)
     assert parsed["error_type"] == "JSONDecodeError"
 
@@ -325,17 +334,21 @@ async def test_end_to_end_tool_chain_against_sakila():
         taken = await _invoke(
             take, {"cursor": ordered["cursor_id"], "n": 3}
         )
-        assert len(taken["row_ids"]) == 3
+        row_ids = taken["row_ids"]
+        assert isinstance(row_ids, list)
+        assert len(row_ids) == 3
 
         first = await _invoke(
             read,
             {
                 "table": "rental",
-                "row_id": taken["row_ids"][0],
+                "row_id": row_ids[0],
                 "columns": ["rental_id", "customer_id"],
             },
         )
-        assert first["row"]["customer_id"] == 45
+        row = first["row"]
+        assert isinstance(row, dict)
+        assert row["customer_id"] == 45
     finally:
         await conn.close()
 
@@ -366,8 +379,13 @@ async def test_group_top_count_tool_returns_descending_counts():
                 "n": 3,
             },
         )
-        counts = [entry["agg_value"] for entry in tops["tops"]]
+        tops_list = tops["tops"]
+        assert isinstance(tops_list, list)
+        counts: list[object] = []
+        for entry in tops_list:
+            assert isinstance(entry, dict)
+            counts.append(entry["agg_value"])
         assert len(counts) == 3
-        assert counts == sorted(counts, reverse=True)
+        assert counts == sorted(counts, reverse=True)  # type: ignore[type-var]
     finally:
         await conn.close()

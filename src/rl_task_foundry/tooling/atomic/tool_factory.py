@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-from typing import Any, Callable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, cast
 
 from rl_task_foundry.tooling.atomic.calculus import (
     AtomicSession,
@@ -28,14 +29,29 @@ from rl_task_foundry.tooling.atomic.calculus import (
     rows_where,
     take,
 )
-from rl_task_foundry.tooling.atomic.cursor import CursorId, order_by
+from rl_task_foundry.tooling.atomic.cursor import (
+    CursorId,
+    Direction,
+    FilterOp,
+    _FILTER_OPS,
+    order_by,
+)
 from rl_task_foundry.tooling.atomic.sql_compile import (
+    AggregateFn,
+    GroupAggregateFn,
     _AGGREGATE_FNS,
     _GROUP_AGGREGATE_FNS,
 )
-from rl_task_foundry.tooling.atomic.cursor import _FILTER_OPS
 from rl_task_foundry.tooling.common.edges import available_edges
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
+
+if TYPE_CHECKING:
+    from agents import FunctionTool
+
+
+JsonObject = dict[str, object]
+Handler = Callable[[JsonObject], Awaitable[JsonObject]]
+Invoker = Callable[[object, str], Awaitable[str]]
 
 
 def _all_table_names(snapshot: SchemaSnapshot) -> list[str]:
@@ -58,36 +74,6 @@ def _all_edge_labels(snapshot: SchemaSnapshot) -> list[str]:
     return sorted(labels)
 
 
-def _json_dumps(payload: Any) -> str:
-    return json.dumps(payload, default=str, ensure_ascii=False)
-
-
-def _cursor_payload(session: AtomicSession, cursor_id: CursorId) -> dict[str, Any]:
-    plan = session.store.resolve(cursor_id)
-    return {"cursor_id": str(cursor_id), "target_table": plan.target_table}
-
-
-def _with_error_handling(
-    handler: Callable[[dict[str, Any]], Any],
-) -> Callable[[Any, str], Any]:
-    async def invoke(_tool_context: Any, input_json: str) -> str:
-        try:
-            parsed = json.loads(input_json) if input_json else {}
-        except json.JSONDecodeError as exc:
-            return _json_dumps(
-                {"error": f"invalid JSON input: {exc}", "error_type": "JSONDecodeError"}
-            )
-        try:
-            result = await handler(parsed)
-        except (KeyError, ValueError, TypeError, LookupError, RuntimeError) as exc:
-            return _json_dumps(
-                {"error": str(exc), "error_type": type(exc).__name__}
-            )
-        return _json_dumps(result)
-
-    return invoke
-
-
 def _filter_op_enum() -> list[str]:
     return sorted(_FILTER_OPS)
 
@@ -100,7 +86,7 @@ def _group_aggregate_fn_enum() -> list[str]:
     return sorted(_GROUP_AGGREGATE_FNS)
 
 
-_VALUE_ANY_OF = [
+_VALUE_ANY_OF: list[JsonObject] = [
     {"type": "string"},
     {"type": "number"},
     {"type": "integer"},
@@ -120,7 +106,7 @@ _DATE_TYPES = {"date"}
 _TIME_TYPES = {"time", "time without time zone", "time with time zone"}
 
 
-def _coerce_temporal(value: Any, data_type: str) -> Any:
+def _coerce_temporal(value: object, data_type: str) -> object:
     """Promote ISO-formatted strings arriving via JSON to the temporal
     type expected by asyncpg for the column. Leaves non-strings alone so
     callers that already pass datetime/date/time objects still work.
@@ -138,15 +124,90 @@ def _coerce_temporal(value: Any, data_type: str) -> Any:
     return value
 
 
+def _require_str(payload: JsonObject, key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{key!r} must be a string; got {type(value).__name__}"
+        )
+    return value
+
+
+def _require_int(payload: JsonObject, key: str) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(
+            f"{key!r} must be an integer; got {type(value).__name__}"
+        )
+    return value
+
+
+def _require_str_list(payload: JsonObject, key: str) -> list[str]:
+    raw = payload.get(key)
+    if not isinstance(raw, list):
+        raise TypeError(
+            f"{key!r} must be a list; got {type(raw).__name__}"
+        )
+    items: list[str] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, str):
+            raise TypeError(
+                f"{key}[{index}] must be a string; got {type(item).__name__}"
+            )
+        items.append(item)
+    return items
+
+
+def _json_dumps(payload: object) -> str:
+    return json.dumps(payload, default=str, ensure_ascii=False)
+
+
+def _cursor_payload(session: AtomicSession, cursor_id: CursorId) -> JsonObject:
+    plan = session.store.resolve(cursor_id)
+    return {"cursor_id": str(cursor_id), "target_table": plan.target_table}
+
+
+def _with_error_handling(handler: Handler) -> Invoker:
+    async def invoke(_tool_context: object, input_json: str) -> str:
+        try:
+            parsed_raw: object = json.loads(input_json) if input_json else {}
+        except json.JSONDecodeError as exc:
+            return _json_dumps(
+                {
+                    "error": f"invalid JSON input: {exc}",
+                    "error_type": "JSONDecodeError",
+                }
+            )
+        if not isinstance(parsed_raw, dict):
+            return _json_dumps(
+                {
+                    "error": "tool input must be a JSON object",
+                    "error_type": "TypeError",
+                }
+            )
+        parsed: JsonObject = {
+            str(key): value for key, value in parsed_raw.items()
+        }
+        try:
+            result = await handler(parsed)
+        except (KeyError, ValueError, TypeError, LookupError, RuntimeError) as exc:
+            return _json_dumps(
+                {"error": str(exc), "error_type": type(exc).__name__}
+            )
+        return _json_dumps(result)
+
+    return invoke
+
+
 # ---------- individual tool builders ----------
 
 
-def build_rows_where_tool(session: AtomicSession) -> Any:
+def build_rows_where_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
     tables = _all_table_names(session.snapshot)
     columns = _all_column_names(session.snapshot)
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["table", "column", "op", "value"],
@@ -179,15 +240,18 @@ def build_rows_where_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
-        table_spec = session.snapshot.table(payload["table"])
-        column_spec = table_spec.column(payload["column"])
+    async def handler(payload: JsonObject) -> JsonObject:
+        table_name = _require_str(payload, "table")
+        column_name = _require_str(payload, "column")
+        op_name = _require_str(payload, "op")
+        table_spec = session.snapshot.table(table_name)
+        column_spec = table_spec.column(column_name)
         value = _coerce_temporal(payload.get("value"), column_spec.data_type)
         cursor_id = rows_where(
             session,
-            table=payload["table"],
-            column=payload["column"],
-            op=payload["op"],
+            table=table_name,
+            column=column_name,
+            op=cast(FilterOp, op_name),
             value=value,
         )
         return _cursor_payload(session, cursor_id)
@@ -206,11 +270,11 @@ def build_rows_where_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_rows_via_tool(session: AtomicSession) -> Any:
+def build_rows_via_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
     edges = _all_edge_labels(session.snapshot)
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["cursor", "edge_label"],
@@ -232,11 +296,13 @@ def build_rows_via_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+    async def handler(payload: JsonObject) -> JsonObject:
+        cursor = _require_str(payload, "cursor")
+        edge_label = _require_str(payload, "edge_label")
         cursor_id = rows_via(
             session,
-            cursor=CursorId(payload["cursor"]),
-            edge_label=payload["edge_label"],
+            cursor=CursorId(cursor),
+            edge_label=edge_label,
         )
         return _cursor_payload(session, cursor_id)
 
@@ -253,10 +319,10 @@ def build_rows_via_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_intersect_tool(session: AtomicSession) -> Any:
+def build_intersect_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["left", "right"],
@@ -266,11 +332,13 @@ def build_intersect_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+    async def handler(payload: JsonObject) -> JsonObject:
+        left = _require_str(payload, "left")
+        right = _require_str(payload, "right")
         cursor_id = intersect(
             session,
-            left=CursorId(payload["left"]),
-            right=CursorId(payload["right"]),
+            left=CursorId(left),
+            right=CursorId(right),
         )
         return _cursor_payload(session, cursor_id)
 
@@ -287,11 +355,11 @@ def build_intersect_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_order_by_tool(session: AtomicSession) -> Any:
+def build_order_by_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
     columns = _all_column_names(session.snapshot)
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["cursor", "column", "direction"],
@@ -309,12 +377,17 @@ def build_order_by_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+    async def handler(payload: JsonObject) -> JsonObject:
+        cursor = _require_str(payload, "cursor")
+        column = _require_str(payload, "column")
+        direction = _require_str(payload, "direction")
+        if direction not in ("asc", "desc"):
+            raise ValueError("'direction' must be 'asc' or 'desc'")
         cursor_id = order_by(
             session.store,
-            CursorId(payload["cursor"]),
-            payload["column"],
-            payload["direction"],
+            CursorId(cursor),
+            column,
+            cast(Direction, direction),
         )
         return _cursor_payload(session, cursor_id)
 
@@ -330,10 +403,10 @@ def build_order_by_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_take_tool(session: AtomicSession) -> Any:
+def build_take_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["cursor", "n"],
@@ -351,13 +424,11 @@ def build_take_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
-        ids = await take(
-            session,
-            cursor=CursorId(payload["cursor"]),
-            n=int(payload["n"]),
-        )
-        return {"row_ids": ids}
+    async def handler(payload: JsonObject) -> JsonObject:
+        cursor = _require_str(payload, "cursor")
+        n = _require_int(payload, "n")
+        ids = await take(session, cursor=CursorId(cursor), n=n)
+        return {"row_ids": list(ids)}
 
     return FunctionTool(
         name="take",
@@ -372,18 +443,19 @@ def build_take_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_count_tool(session: AtomicSession) -> Any:
+def build_count_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["cursor"],
         "properties": {"cursor": {"type": "string"}},
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
-        value = await count(session, cursor=CursorId(payload["cursor"]))
+    async def handler(payload: JsonObject) -> JsonObject:
+        cursor = _require_str(payload, "cursor")
+        value = await count(session, cursor=CursorId(cursor))
         return {"count": value}
 
     return FunctionTool(
@@ -398,11 +470,11 @@ def build_count_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_aggregate_tool(session: AtomicSession) -> Any:
+def build_aggregate_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
     columns = _all_column_names(session.snapshot)
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["cursor", "fn", "column"],
@@ -420,12 +492,15 @@ def build_aggregate_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+    async def handler(payload: JsonObject) -> JsonObject:
+        cursor = _require_str(payload, "cursor")
+        fn_name = _require_str(payload, "fn")
+        column = _require_str(payload, "column")
         value = await aggregate(
             session,
-            cursor=CursorId(payload["cursor"]),
-            fn=payload["fn"],
-            column=payload["column"],
+            cursor=CursorId(cursor),
+            fn=cast(AggregateFn, fn_name),
+            column=column,
         )
         return {"value": value}
 
@@ -441,11 +516,11 @@ def build_aggregate_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_group_top_tool(session: AtomicSession) -> Any:
+def build_group_top_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
     columns = _all_column_names(session.snapshot)
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["cursor", "group_column", "fn", "n"],
@@ -479,14 +554,29 @@ def build_group_top_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+    async def handler(payload: JsonObject) -> JsonObject:
+        cursor = _require_str(payload, "cursor")
+        group_column = _require_str(payload, "group_column")
+        fn_name = _require_str(payload, "fn")
+        n = _require_int(payload, "n")
+        raw_agg_column = payload.get("agg_column")
+        agg_column: str | None
+        if raw_agg_column is None:
+            agg_column = None
+        elif isinstance(raw_agg_column, str):
+            agg_column = raw_agg_column
+        else:
+            raise TypeError(
+                "'agg_column' must be a string or null; got "
+                f"{type(raw_agg_column).__name__}"
+            )
         tops = await group_top(
             session,
-            cursor=CursorId(payload["cursor"]),
-            group_column=payload["group_column"],
-            fn=payload["fn"],
-            n=int(payload["n"]),
-            agg_column=payload.get("agg_column"),
+            cursor=CursorId(cursor),
+            group_column=group_column,
+            fn=cast(GroupAggregateFn, fn_name),
+            n=n,
+            agg_column=agg_column,
         )
         return {
             "tops": [
@@ -508,12 +598,12 @@ def build_group_top_tool(session: AtomicSession) -> Any:
     )
 
 
-def build_read_tool(session: AtomicSession) -> Any:
+def build_read_tool(session: AtomicSession) -> "FunctionTool":
     from agents import FunctionTool
 
     tables = _all_table_names(session.snapshot)
     columns = _all_column_names(session.snapshot)
-    schema = {
+    schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["table", "row_id", "columns"],
@@ -531,12 +621,15 @@ def build_read_tool(session: AtomicSession) -> Any:
         },
     }
 
-    async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+    async def handler(payload: JsonObject) -> JsonObject:
+        table_name = _require_str(payload, "table")
+        row_id = payload.get("row_id")
+        column_list = _require_str_list(payload, "columns")
         row = await read(
             session,
-            table=payload["table"],
-            row_id=payload["row_id"],
-            columns=list(payload["columns"]),
+            table=table_name,
+            row_id=row_id,
+            columns=column_list,
         )
         return {"row": row}
 
@@ -556,7 +649,7 @@ def build_read_tool(session: AtomicSession) -> Any:
 # ---------- aggregate entrypoint ----------
 
 
-def build_atomic_tools(session: AtomicSession) -> list[Any]:
+def build_atomic_tools(session: AtomicSession) -> list["FunctionTool"]:
     """Build all nine atomic calculus FunctionTool instances for a session.
 
     Tool list order matches the prompt-facing calculus grouping:

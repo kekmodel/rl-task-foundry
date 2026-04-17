@@ -9,7 +9,6 @@ the schema snapshot before quoting.
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Any
 
 
 def quote_ident(identifier: str) -> str:
@@ -30,7 +29,7 @@ def readonly_select(sql: str) -> str:
 _ALLOWED_SCALAR_TYPES = (int, float, str, bool, bytes, _dt.datetime, _dt.date, _dt.time)
 
 
-def coerce_param(value: Any) -> Any:
+def coerce_param(value: object) -> object:
     """Minimal coercion of Python values bound for asyncpg parameters.
 
     asyncpg accepts most Python scalars directly; this function rejects

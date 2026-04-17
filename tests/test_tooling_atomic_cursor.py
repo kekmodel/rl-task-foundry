@@ -53,8 +53,10 @@ def test_plan_to_dict_nests_source_plans_in_order():
     payload = plan_to_dict(ordered)
     assert payload["kind"] == "order"
     assert payload["column"] == "rental_date"
-    assert payload["source"]["kind"] == "where"
-    assert payload["source"]["table"] == "rental"
+    source = payload["source"]
+    assert isinstance(source, dict)
+    assert source["kind"] == "where"
+    assert source["table"] == "rental"
 
 
 def test_cursor_store_interns_identical_plans_to_same_id():

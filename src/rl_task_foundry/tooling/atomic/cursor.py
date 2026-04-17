@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Literal, NewType, Union
+from typing import Literal, NewType, Union
 
 from rl_task_foundry.tooling.common.edges import TypedEdge
 
@@ -34,7 +34,7 @@ class WhereNode:
     table: str
     column: str
     op: FilterOp
-    value: Any
+    value: object
 
     @property
     def target_table(self) -> str:
@@ -79,7 +79,7 @@ def plan_target_table(plan: CursorPlan) -> str:
     return plan.target_table
 
 
-def plan_to_dict(plan: CursorPlan) -> dict[str, Any]:
+def plan_to_dict(plan: CursorPlan) -> dict[str, object]:
     """Canonical JSON-compatible representation. Used for hashing and
     trace emission; stable keys let two runtimes reproduce the same ID.
     """

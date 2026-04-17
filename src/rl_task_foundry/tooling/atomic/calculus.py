@@ -15,7 +15,7 @@ settings enforced by the caller (see `infra.db.solver_session_settings`).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol, cast
 
 from rl_task_foundry.tooling.atomic.cursor import (
     CursorId,
@@ -42,9 +42,13 @@ from rl_task_foundry.tooling.common.schema import SchemaSnapshot
 from rl_task_foundry.tooling.common.sql import coerce_param
 
 
+class _Row(Protocol):
+    def __getitem__(self, key: str) -> object: ...
+
+
 class _ConnectionLike(Protocol):
-    async def fetch(self, sql: str, *args: Any) -> list[Any]: ...
-    async def fetchrow(self, sql: str, *args: Any) -> Any: ...
+    async def fetch(self, sql: str, *args: object) -> list[_Row]: ...
+    async def fetchrow(self, sql: str, *args: object) -> _Row | None: ...
 
 
 @dataclass(slots=True)
@@ -74,7 +78,7 @@ def rows_where(
     table: str,
     column: str,
     op: FilterOp,
-    value: Any,
+    value: object,
 ) -> CursorId:
     """Build a cursor over `table` filtered by `column op value`.
 
@@ -142,7 +146,7 @@ async def take(
     *,
     cursor: CursorId,
     n: int,
-) -> list[Any]:
+) -> list[object]:
     """Materialize up to `n` primary-key values from the cursor,
     honouring any `order_by` annotations and adding a primary-key
     tiebreak for determinism. `n` must be in [2, 5] to prevent
@@ -169,7 +173,7 @@ async def count(
     row = await session.connection.fetchrow(compiled.sql, *compiled.params)
     if row is None:
         return 0
-    return int(row["cnt"])
+    return cast(int, row["cnt"])
 
 
 async def aggregate(
@@ -178,7 +182,7 @@ async def aggregate(
     cursor: CursorId,
     fn: AggregateFn,
     column: str,
-) -> Any:
+) -> object:
     """Scalar aggregate over a column of the cursor's target table.
 
     fn ∈ {sum, avg, min, max}. The column is looked up on the target
@@ -204,7 +208,7 @@ async def group_top(
     fn: GroupAggregateFn,
     n: int,
     agg_column: str | None = None,
-) -> list[tuple[Any, Any]]:
+) -> list[tuple[object, object]]:
     """Top-n (group_value, aggregate_value) tuples for the cursor.
 
     `n ∈ [2, 5]` mirrors `take`'s no-shortcut constraint. `fn='count'`
@@ -239,9 +243,9 @@ async def read(
     session: AtomicSession,
     *,
     table: str,
-    row_id: Any,
+    row_id: object,
     columns: list[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Return the named columns of a single row identified by its
     primary key value.
     """
