@@ -26,7 +26,6 @@ from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftPayload,
-    _count_semantics_present,
     _ungrounded_answer_strings,
 )
 
@@ -445,16 +444,6 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
 
     assert "constraint_summary" not in required_fields
 
-def test_count_semantics_present_does_not_match_account_substrings() -> None:
-    assert not _count_semantics_present({"customer_id": 360}, "제 계정 정보를 알려주세요.")
-
-def test_count_semantics_present_does_not_match_country_key() -> None:
-    assert not _count_semantics_present({"country": "USA"}, "이 나라를 알려주세요.")
-    assert not _count_semantics_present({"discount": 0.1}, "할인율을 알려주세요.")
-    assert not _count_semantics_present({"account": "abc"}, "계정을 알려주세요.")
-    assert _count_semantics_present({"rental_count": 5}, "how many rentals?")
-    assert _count_semantics_present({"inventory_count": 8}, "count the inventory")
-
 @pytest.mark.asyncio
 async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path) -> None:
     controller = SubmitDraftController(
@@ -796,53 +785,3 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
     )
     assert "academy dinosaur" in disconnected
 
-def test_temporal_ordering_combines_question_and_sort_type() -> None:
-    """Temporal check requires BOTH a temporal claim in the question
-    AND a non-temporal sort_by in tool calls."""
-    from rl_task_foundry.synthesis.submit_draft_tool import (
-        _has_non_temporal_sort_on_temporal_result,
-        _question_claims_temporal_ordering,
-    )
-
-    calls_bad_sort = [
-        {
-            "tool_name": "find_rental_by_inventory_id",
-            "params": {"sort_by": "rental_id", "direction": "asc"},
-            "result": [
-                {"rental_id": 4863, "rental_date": "2005-07-08T19:03:15"}
-            ],
-        }
-    ]
-    calls_good_sort = [
-        {
-            "tool_name": "find_rental_by_inventory_id",
-            "params": {"sort_by": "rental_date", "direction": "asc"},
-            "result": [
-                {"rental_id": 4863, "rental_date": "2005-07-08T19:03:15"}
-            ],
-        }
-    ]
-    calls_no_sort = [
-        {
-            "tool_name": "get_rental",
-            "params": {"id": 4863},
-            "result": {"rental_id": 4863, "rental_date": "2005-07-08T19:03:15"},
-        }
-    ]
-
-    # Korean temporal claim + bad sort → flag
-    assert _question_claims_temporal_ordering("가장 이른 대여 기록을 알려주세요")
-    assert _has_non_temporal_sort_on_temporal_result(calls_bad_sort)
-
-    # Korean temporal claim + good sort → pass
-    assert not _has_non_temporal_sort_on_temporal_result(calls_good_sort)
-
-    # English temporal claim
-    assert _question_claims_temporal_ordering("Show the earliest rental")
-
-    # No temporal claim → pass regardless of sort
-    assert not _question_claims_temporal_ordering("대여 목록을 알려주세요")
-    assert not _question_claims_temporal_ordering("Show rentals for this customer")
-
-    # No sort_by → pass
-    assert not _has_non_temporal_sort_on_temporal_result(calls_no_sort)

@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, ValidationError, field_validator
@@ -15,24 +14,12 @@ from pydantic import Field, ValidationError, field_validator
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
-from rl_task_foundry.synthesis.contracts import (
-    StrictModel,
-    normalize_words,
-)
+from rl_task_foundry.synthesis.contracts import StrictModel
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 
 if TYPE_CHECKING:
     from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
     from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
-
-
-_FORBIDDEN_PLACEHOLDER_TOKENS = (
-    "__REAL_",
-    "anchor_id",
-    "anchor_table",
-    "example_field",
-    "replace_with_real_",
-)
 
 
 def _strip_message_status_prefix(text: str) -> str:
@@ -90,28 +77,15 @@ class SubmitDraftErrorCode(StrEnum):
     TOPIC_REQUIRED = "topic_required"
     ANCHOR_ENTITY_REQUIRED = "anchor_entity_required"
     ANCHOR_ENTITY_SCALAR_MAP_REQUIRED = "anchor_entity_scalar_map_required"
-    CANONICAL_ANSWER_JSON_REQUIRED = "canonical_answer_json_required"
     CANONICAL_ANSWER_JSON_INVALID = "canonical_answer_json_invalid"
     QUESTION_REQUIRED = "question_required"
     QUESTION_ENTITY_BLOCK_REQUIRED = "question_entity_block_required"
     QUESTION_ENTITY_BLOCK_INVALID_JSON = "question_entity_block_invalid_json"
     QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
     QUESTION_BODY_REQUIRED = "question_body_required"
-    PLACEHOLDER_TOKENS_NOT_ALLOWED = "placeholder_tokens_not_allowed"
-    QUESTION_INTERNAL_SCHEMA_LEAK = "question_internal_schema_leak"
     QUESTION_RAW_IDENTIFIER_LEAK = "question_raw_identifier_leak"
     QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN = "question_entity_placeholder_forbidden"
-    QUESTION_ANCHOR_ENTITY_LEAK = "question_anchor_entity_leak"
-    ANCHOR_ENTITY_CHANGED = "anchor_entity_changed"
-    TEMPORAL_ORDERING_NOT_GROUNDED = "temporal_ordering_not_grounded"
-    GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE = "global_ranking_outside_anchor_scope"
-    COUNT_LABEL_REQUIRES_COUNT_EVIDENCE = "count_label_requires_count_evidence"
-    COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE = "count_label_outside_anchor_scope"
-    INITIAL_LABEL_TOO_BROAD = "initial_label_too_broad"
-    LABEL_SINGLE_TOOL_DERIVABLE = "label_single_tool_derivable"
-    LABEL_REPEATS_ANCHOR_ENTITY = "label_repeats_anchor_entity"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
-    LABEL_IDENTIFIER_CHAIN_FORBIDDEN = "label_identifier_chain_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
     LABEL_NOT_STRENGTHENED = "label_not_strengthened"
     SUBMIT_PAYLOAD_INVALID = "submit_payload_invalid"
@@ -129,20 +103,9 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON,
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH,
         SubmitDraftErrorCode.QUESTION_BODY_REQUIRED,
-        SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK,
         SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK,
         SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN,
-        SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK,
-        SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED,
-        SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED,
-        SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE,
-        SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE,
-        SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE,
-        SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD,
-        SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE,
-        SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY,
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
-        SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
         SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
     }
@@ -268,11 +231,6 @@ class SubmitDraftAttemptRecord:
     pass_rate: float | None = None
     matched_solver_runs: int | None = None
     total_solver_runs: int | None = None
-
-
-def _placeholder_tokens(payload: object) -> list[str]:
-    serialized = json.dumps(payload, ensure_ascii=False, default=str)
-    return sorted({token for token in _FORBIDDEN_PLACEHOLDER_TOKENS if token in serialized})
 
 
 def _preview_runtime_payload(value: object, *, config: AppConfig) -> object:
@@ -420,68 +378,6 @@ def _label_change_summary(
     }
 
 
-def _is_single_tool_derivable(answer: object, result: object) -> bool:
-    if canonical_json(answer, default=str) == canonical_json(result, default=str):
-        return True
-
-    if isinstance(answer, dict):
-        if isinstance(result, dict):
-            return all(key in result and result[key] == value for key, value in answer.items())
-        if isinstance(result, list):
-            return any(_is_single_tool_derivable(answer, item) for item in result)
-        return False
-
-    if isinstance(answer, list):
-        if not isinstance(result, list) or len(result) < len(answer):
-            return False
-        prefix = result[: len(answer)]
-        if canonical_json(answer, default=str) == canonical_json(prefix, default=str):
-            return True
-        if (
-            answer
-            and all(isinstance(item, dict) for item in answer)
-            and all(isinstance(item, dict) for item in prefix)
-        ):
-            if all(
-                all(
-                    key in result_item and result_item[key] == value
-                    for key, value in answer_item.items()
-                )
-                for answer_item, result_item in zip(answer, prefix)
-            ):
-                return True
-        if (
-            answer
-            and all(not isinstance(item, (dict, list)) for item in answer)
-            and all(isinstance(item, dict) for item in prefix)
-        ):
-            shared_keys = set(prefix[0].keys())
-            for item in prefix[1:]:
-                shared_keys &= set(item.keys())
-            for key in shared_keys:
-                if [item.get(key) for item in prefix] == answer:
-                    return True
-        return False
-
-    if isinstance(result, dict):
-        return answer in result.values()
-    if isinstance(result, list):
-        if answer in result:
-            return True
-        return any(_is_single_tool_derivable(answer, item) for item in result)
-    return False
-
-
-def _single_tool_derivation_record(
-    answer: object,
-    tool_calls: list[dict[str, object]],
-) -> dict[str, object] | None:
-    for record in tool_calls:
-        if _is_single_tool_derivable(answer, record.get("result")):
-            return record
-    return None
-
-
 def _value_tree_contains_scalar(value: object, target: object) -> bool:
     if value == target:
         return True
@@ -503,49 +399,6 @@ def _tool_call_depends_on_anchor_entity(
     return any(_value_tree_contains_scalar(params, value) for value in anchor_entity.values())
 
 
-def _answer_uses_only_identifier_fields(answer: object) -> bool:
-    def _keys_are_identifier_only(mapping: dict[str, object]) -> bool:
-        if not mapping:
-            return False
-        return all(isinstance(key, str) and _is_identifier_field_name(key) for key in mapping)
-
-    def _is_identifier_only_tree(value: object) -> bool:
-        if isinstance(value, dict):
-            if _keys_are_identifier_only(value):
-                return True
-            child_values = list(value.values())
-            return bool(child_values) and all(
-                _is_identifier_only_tree(item) for item in child_values
-            )
-        if isinstance(value, list):
-            return bool(value) and all(_is_identifier_only_tree(item) for item in value)
-        return False
-
-    if isinstance(answer, dict):
-        return _is_identifier_only_tree(answer)
-    if isinstance(answer, list) and answer and all(isinstance(item, dict) for item in answer):
-        return _is_identifier_only_tree(answer)
-    return False
-
-
-def _answer_repeats_anchor_entity(
-    answer: object,
-    *,
-    anchor_entity: dict[str, object],
-) -> bool:
-    if not anchor_entity:
-        return False
-
-    def _contains_anchor(mapping: dict[str, object]) -> bool:
-        return all(mapping.get(key) == value for key, value in anchor_entity.items())
-
-    if isinstance(answer, dict):
-        return _contains_anchor(answer)
-    if isinstance(answer, list) and answer and all(isinstance(item, dict) for item in answer):
-        return all(_contains_anchor(item) for item in answer)
-    return False
-
-
 def _collect_observed_strings(value: object, *, strings: set[str]) -> None:
     if isinstance(value, str):
         normalized = value.strip().lower()
@@ -564,21 +417,6 @@ def _collect_observed_strings(value: object, *, strings: set[str]) -> None:
     if isinstance(value, list):
         for item in value:
             _collect_observed_strings(item, strings=strings)
-
-
-def _collect_observed_numerics(value: object, *, numerics: set[int | float]) -> None:
-    if isinstance(value, bool):
-        return
-    if isinstance(value, (int, float)):
-        numerics.add(value)
-        return
-    if isinstance(value, dict):
-        for item in value.values():
-            _collect_observed_numerics(item, numerics=numerics)
-        return
-    if isinstance(value, list):
-        for item in value:
-            _collect_observed_numerics(item, numerics=numerics)
 
 
 def _collect_scalar_values(value: object, *, sink: set[object]) -> None:
@@ -740,21 +578,6 @@ def _ungrounded_answer_strings(
     return sorted(dict.fromkeys(ungrounded))
 
 
-def _ungrounded_answer_numerics(
-    answer: object,
-    *,
-    observed_numerics: set[int | float],
-) -> list[str]:
-    answer_numerics: list[int | float] = []
-    _collect_answer_numerics(answer, sink=answer_numerics)
-    ungrounded: list[str] = []
-    for value in answer_numerics:
-        if value in observed_numerics:
-            continue
-        ungrounded.append(str(value))
-    return sorted(dict.fromkeys(ungrounded))
-
-
 _DATETIME_LITERAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ t]\d{2}:\d{2}:\d{2}$")
 
 
@@ -788,52 +611,6 @@ _IDENTIFIER_FIELD_TOKEN_RE = re.compile(
     r"(?<![a-z0-9_])[a-z][a-z0-9_]*_ids?(?![a-z0-9_])",
     re.IGNORECASE,
 )
-_ISO_DATETIME_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}",
-)
-_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TEMPORAL_ORDERING_TOKENS: dict[str, tuple[str, ...]] = {
-    "en": (
-        "earliest",
-        "latest",
-        "most recent",
-        "oldest",
-        "newest",
-        "first",
-        "last",
-    ),
-    "ko": (
-        "가장 이른",
-        "가장 먼저",
-        "가장 최근",
-        "가장 늦은",
-        "첫 번째",
-        "첫번째",
-        "처음",
-        "마지막",
-        "최신",
-        "최초",
-    ),
-}
-_GLOBAL_SCOPE_TOKENS = (
-    "global",
-    "overall",
-    "across all",
-    "among all",
-    "entire database",
-    "전역",
-    "전체 데이터베이스",
-    "전체 고객",
-    "전체 사용자",
-    "모든 고객",
-    "모든 사용자",
-)
-_COUNT_SEMANTIC_TOKENS = frozenset({"count", "counting", "cardinality"})
-
-
-def _is_identifier_field_name(value: str) -> bool:
-    normalized = value.strip().lower()
-    return normalized.endswith("_id") or normalized.endswith("_ids")
 
 
 def _contains_raw_identifier_token(text: str) -> bool:
@@ -843,197 +620,6 @@ def _contains_raw_identifier_token(text: str) -> bool:
 def _contains_entity_placeholder_token(text: str) -> bool:
     lowered = text.lower()
     return "<entity>" in lowered or "&lt;entity&gt;" in lowered
-
-
-def _is_temporal_value(value: object) -> bool:
-    """Check if a value is a date or datetime by its actual type."""
-    if isinstance(value, (datetime, date)):
-        return True
-    if isinstance(value, str):
-        return bool(
-            _ISO_DATETIME_RE.match(value)
-            or _ISO_DATE_RE.match(value)
-        )
-    return False
-
-
-def _label_has_temporal_value(answer: object) -> bool:
-    """Check if the canonical answer contains any date/datetime value."""
-    if _is_temporal_value(answer):
-        return True
-    if isinstance(answer, dict):
-        return any(
-            _label_has_temporal_value(v)
-            for v in answer.values()
-        )
-    if isinstance(answer, list):
-        return any(
-            _label_has_temporal_value(v) for v in answer
-        )
-    return False
-
-
-_TEMPORAL_ORDERING_WORD_BOUNDARY_RE = re.compile(
-    r"(?<![a-z_])"
-    r"(?:" + "|".join(re.escape(t) for t in _TEMPORAL_ORDERING_TOKENS["en"]) + r")"
-    r"(?![a-z_])",
-    re.IGNORECASE,
-)
-
-
-def _question_claims_temporal_ordering(
-    question_body: str | None,
-    *,
-    languages: tuple[str, ...] = ("en", "ko"),
-) -> bool:
-    if not question_body:
-        return False
-    lowered = question_body.lower()
-    if "en" in languages and _TEMPORAL_ORDERING_WORD_BOUNDARY_RE.search(lowered):
-        return True
-    for lang in languages:
-        if lang == "en":
-            continue
-        tokens = _TEMPORAL_ORDERING_TOKENS.get(lang, ())
-        if any(token in lowered for token in tokens):
-            return True
-    return False
-
-
-def _has_non_temporal_sort_on_temporal_result(
-    tool_calls: list[dict[str, object]],
-) -> bool:
-    """Return True if any sorted tool call sorts by a non-temporal
-    column while the result contains temporal values.
-
-    Only meaningful when the question claims temporal ordering —
-    caller should check _question_claims_temporal_ordering first."""
-    found_any_sort = False
-    for record in tool_calls:
-        params = record.get("params")
-        if not isinstance(params, dict):
-            continue
-        sort_by = params.get("sort_by")
-        if not isinstance(sort_by, str):
-            continue
-        result = record.get("result")
-        sample: dict[str, object] | None = None
-        if isinstance(result, list) and result:
-            first = result[0]
-            if isinstance(first, dict):
-                sample = first
-        elif isinstance(result, dict):
-            sample = result
-        if sample is None:
-            continue
-        has_temporal_in_result = any(
-            _is_temporal_value(v) for v in sample.values()
-        )
-        if not has_temporal_in_result:
-            continue
-        found_any_sort = True
-        sort_value = sample.get(sort_by)
-        if sort_value is not None and _is_temporal_value(
-            sort_value
-        ):
-            return False  # at least one sort is temporal — OK
-    return found_any_sort
-
-
-def _uses_unanchored_global_ranking(
-    tool_calls: list[dict[str, object]],
-    *,
-    anchor_entity: dict[str, object],
-) -> bool:
-    for record in tool_calls:
-        tool_name = str(record.get("tool_name", ""))
-        if not tool_name.startswith(("rank_", "top_")):
-            continue
-        if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
-            continue
-        return True
-    return False
-
-
-def _mentions_global_scope(question_body: str | None) -> bool:
-    combined = normalize_words(question_body or "", lowercase=True)
-    return any(token in combined for token in _GLOBAL_SCOPE_TOKENS)
-
-
-def _count_semantics_present(
-    answer: object,
-    question_body: str | None,
-) -> bool:
-    if isinstance(answer, dict):
-        count_keys = [
-            key for key in answer
-            if isinstance(key, str)
-            and re.search(r"(?<![a-z])count(?![a-z])", key.lower())
-        ]
-        if count_keys:
-            return True
-        return any(_count_semantics_present(item, question_body) for item in answer.values())
-    if isinstance(answer, list):
-        return any(_count_semantics_present(item, question_body) for item in answer)
-    if not isinstance(answer, (int, float)):
-        return False
-    combined_tokens: set[str] = set()
-    combined_tokens.update(normalize_words(question_body or "", lowercase=True).split())
-    return not combined_tokens.isdisjoint(_COUNT_SEMANTIC_TOKENS)
-
-
-def _observed_count_evidence(tool_calls: list[dict[str, object]]) -> bool:
-    for record in tool_calls:
-        if _tool_call_is_count_evidence(record):
-            return True
-    return False
-
-
-def _observed_anchor_scoped_count_evidence(
-    tool_calls: list[dict[str, object]],
-    *,
-    anchor_entity: dict[str, object],
-) -> bool:
-    for record in tool_calls:
-        if not _tool_call_is_count_evidence(record):
-            continue
-        if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity):
-            return True
-    return False
-
-
-def _tool_call_is_count_evidence(record: dict[str, object]) -> bool:
-    tool_name = str(record.get("tool_name", "")).strip()
-    if tool_name.startswith("count_"):
-        return True
-    if not tool_name.startswith("calc_"):
-        return False
-    params = record.get("params")
-    if not isinstance(params, dict):
-        return False
-    return str(params.get("fn", "")).strip().lower() == "count"
-
-
-def _distinct_tool_name_count(tool_calls: list[dict[str, object]]) -> int:
-    return len(
-        {
-            str(record.get("tool_name", "")).strip()
-            for record in tool_calls
-            if str(record.get("tool_name", "")).strip()
-        }
-    )
-
-
-def _anchor_scoped_tool_call_count(
-    tool_calls: list[dict[str, object]],
-    *,
-    anchor_entity: dict[str, object],
-) -> int:
-    return sum(
-        1
-        for record in tool_calls
-        if _tool_call_depends_on_anchor_entity(record, anchor_entity=anchor_entity)
-    )
 
 
 def _observed_anchor_readable_string_surface(
@@ -1047,16 +633,6 @@ def _observed_anchor_readable_string_surface(
             continue
         _collect_observed_strings(record.get("result"), strings=observed_strings)
     return bool(observed_strings)
-
-
-def _answer_has_multi_item_collection(value: object) -> bool:
-    if isinstance(value, list):
-        if len(value) > 1:
-            return True
-        return any(_answer_has_multi_item_collection(item) for item in value)
-    if isinstance(value, dict):
-        return any(_answer_has_multi_item_collection(item) for item in value.values())
-    return False
 
 
 def _too_easy_retry_guidance() -> str:
@@ -1104,48 +680,6 @@ def _split_entity_wrapped_prompt(
     return anchor_entity, body, None
 
 
-def _question_repeats_anchor_entity(
-    question: str,
-    *,
-    anchor_entity: dict[str, object],
-) -> bool:
-    lowered = question.lower()
-    anchor_items = tuple(sorted((str(key), str(value)) for key, value in anchor_entity.items()))
-    return any(pattern.search(lowered) for pattern in _anchor_entity_patterns(anchor_items))
-
-
-@lru_cache(maxsize=256)
-def _anchor_entity_patterns(
-    anchor_items: tuple[tuple[str, str], ...],
-) -> tuple[re.Pattern[str], ...]:
-    compiled_patterns: list[re.Pattern[str]] = []
-    for raw_key, raw_value in anchor_items:
-        key = raw_key.strip().lower()
-        if not key:
-            continue
-        base_key = key
-        if base_key.endswith("_ids"):
-            base_key = base_key[:-4]
-        elif base_key.endswith("_id"):
-            base_key = base_key[:-3]
-        if not base_key:
-            continue
-        key_pattern = re.escape(normalize_words(base_key, lowercase=True))
-        value = raw_value.strip().lower()
-        if not value:
-            continue
-        value_pattern = re.escape(value)
-        compiled_patterns.extend(
-            (
-                re.compile(rf"(?<![a-z0-9_]){key_pattern}\s*[:#-]?\s*{value_pattern}(?![a-z0-9_])"),
-                re.compile(
-                    rf"(?<![a-z0-9_]){value_pattern}(?:번)?\s*[:#-]?\s*{key_pattern}(?![a-z0-9_])"
-                ),
-            )
-        )
-    return tuple(compiled_patterns)
-
-
 @dataclass(slots=True)
 class SubmitDraftController:
     config: AppConfig
@@ -1154,7 +688,6 @@ class SubmitDraftController:
     build_draft: Any
     max_submissions: int
     phase_monitor: PipelinePhaseMonitorLogger | None = None
-    forbidden_question_tokens: frozenset[str] = field(default_factory=frozenset)
     accepted_draft: SynthesisTaskDraft | None = None
     attempts: list[SubmitDraftAttemptRecord] = field(default_factory=list)
     _needs_label_change: bool = field(default=False, init=False)
@@ -1235,15 +768,6 @@ class SubmitDraftController:
                 error_codes.append(prompt_error)
             elif question_body is not None and _contains_raw_identifier_token(question_body):
                 error_codes.append(SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK)
-        raw_canonical = parsed.get("label")
-        raw_answer = None
-        if isinstance(raw_canonical, (dict, list)):
-            raw_answer = raw_canonical
-        elif isinstance(raw_canonical, str):
-            try:
-                raw_answer = json.loads(raw_canonical)
-            except json.JSONDecodeError:
-                pass
         deduped_error_codes = list(dict.fromkeys(error_codes)) or [
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID
         ]
@@ -1541,7 +1065,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED: (
                 'Rejected. entity must be a flat JSON object mapping one or more primary-key field names to scalar values, for example {"customer_id": 123} or {"order_id": 7, "line_no": 2}. Do not nest it under entity_type, primary_key, or primary_keys.'  # noqa: E501
             ),
-            SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_REQUIRED: "Rejected. label is required.",  # noqa: E501
             SubmitDraftErrorCode.QUESTION_REQUIRED: "Rejected. question is required.",
             SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED: (
                 "Rejected. question must already be the full user prompt in this exact shape: <entity> newline JSON newline </entity> blank line user request."  # noqa: E501
@@ -1558,50 +1081,14 @@ class SubmitDraftController:
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. label must be a valid JSON string."
             ),
-            SubmitDraftErrorCode.PLACEHOLDER_TOKENS_NOT_ALLOWED: (
-                "Rejected. Replace every placeholder token with grounded names and values from the current database."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.QUESTION_INTERNAL_SCHEMA_LEAK: (
-                "Rejected. Rewrite the user-facing question for a non-technical user who knows nothing about the database schema. Remove raw table names, bridge-table names, SQL keywords, and other internal data-model language."  # noqa: E501
-            ),
             SubmitDraftErrorCode.QUESTION_RAW_IDENTIFIER_LEAK: (
                 "Rejected. Rewrite the user-facing question for a user who does not know internal field names. Remove raw identifier names such as <entity>_id and keep identifiers only inside entity."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_ENTITY_PLACEHOLDER_FORBIDDEN: (
                 "Rejected. Do not repeat the literal <entity> token inside the user-request body. Use it only once as the required XML entity block at the top."  # noqa: E501
             ),
-            SubmitDraftErrorCode.QUESTION_ANCHOR_ENTITY_LEAK: (
-                "Rejected. Rewrite the user-request body without repeating the raw anchor entity id. The user only sees the entity block, so refer to that anchor naturally instead of surfacing its internal identifier again."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.ANCHOR_ENTITY_CHANGED: (
-                "Rejected. Keep the same anchored user entity across retries. The requesting user has not changed, so do not switch entity to a different person or role while repairing this draft."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.TEMPORAL_ORDERING_NOT_GROUNDED: (
-                "Rejected. The question uses ordering words (earliest, latest, first, most recent) but the evidence path has no observed date/time or sequence field to ground that order. Fix: either (a) remove the ordering word and ask for any matching record, or (b) make a tool call that returns a date/time field, include that field in the label, and sort by it. Do not resubmit the same ordering word without adding a grounding field."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.GLOBAL_RANKING_OUTSIDE_ANCHOR_SCOPE: (
-                "Rejected. The draft jumps from the anchored user's own records to a global ranking without saying so. Keep rankings local to the anchored scope, or explicitly ask for a global benchmark in the user-facing request and constraints."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.COUNT_LABEL_REQUIRES_COUNT_EVIDENCE: (
-                "Rejected. A count-like label needs explicit count evidence. Do not infer a total from the first sampled rows you happened to inspect; use a grounded count or aggregate observation for that anchored scope."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.COUNT_LABEL_OUTSIDE_ANCHOR_SCOPE: (
-                "Rejected. The count evidence is not scoped to the anchored user. For a self-scoped request, only keep a count field if you observed a count or aggregate tool call whose parameters depend on entity. Otherwise drop the count field or gather anchored count evidence on the same user path instead of using a global total."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.INITIAL_LABEL_TOO_BROAD: (
-                "Rejected. Start the first judged draft with a smaller anchored label. Use one grounded record, one small object, or one anchored summary that still needs multiple observations. Do not start with a multi-item set, top-few list, or paired bundle before the loop proves a smaller label is too easy."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE: (
-                "Rejected. The canonical answer can be recovered from a single atomic tool call. Redesign the task so the label requires combining multiple observations. A one-hop foreign-key lookup that only returns identifiers is still too weak."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.LABEL_REPEATS_ANCHOR_ENTITY: (
-                "Rejected. Do not repeat entity fields inside the canonical answer. The entity block already provides that grounding, so use the answer slots for new grounded information."  # noqa: E501
-            ),
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
                 "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, keep the same anchored user and switch to grounded counts, dates, amounts, statuses, ordering, or make new anchored tool calls until you observe readable fields."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN: (
-                "Rejected. The canonical answer is only a chain of internal identifier fields. A relation made only of ids is still an internal identifier chain. Return user-relevant business values such as names, titles, dates, amounts, counts, or statuses instead. If the current hinted topic keeps forcing id-only answers, choose a better grounded topic for the same anchored user need before resubmitting."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
                 "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings, dates, and other readable values that you actually observed in real tool outputs, and copy them exactly as they appeared there. Do not shorten names, paraphrase labels, normalize timestamp formatting, or manufacture readable labels by wrapping an id in generic words such as 'staff member 2' or 'order 17'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."  # noqa: E501
@@ -1615,12 +1102,6 @@ class SubmitDraftController:
             SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED: "Rejected. The submitted draft could not be validated.",  # noqa: E501
         }
         primary = message_map.get(error_codes[0], "Rejected. Fix the draft and resubmit.")
-        if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_SINGLE_TOOL_DERIVABLE:
-            if diagnostics is not None and diagnostics.get("single_tool_scope") == "global":
-                primary = (
-                    "Rejected. The canonical answer can be recovered from a single global tool call that does not depend on the anchor entity. "  # noqa: E501
-                    "Keep the label anchored to the selected entity and combine multiple anchored observations."  # noqa: E501
-                )
         if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED:
             if (
                 diagnostics is not None
@@ -1632,15 +1113,6 @@ class SubmitDraftController:
                 )
             else:
                 primary += _format_ungrounded_value_guidance(diagnostics)
-        if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_IDENTIFIER_CHAIN_FORBIDDEN:
-            if (
-                diagnostics is not None
-                and diagnostics.get("anchor_path_has_readable_strings") is False
-            ):
-                primary = (
-                    "Rejected. The current anchored evidence path is still id-only. Do not submit another answer made only of *_id fields on this same path. "  # noqa: E501
-                    "Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or pivot to a better grounded topic for that same user need."  # noqa: E501
-                )
         if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED:
             primary += _too_easy_retry_guidance()
         preserve_guidance = ""
@@ -1818,26 +1290,6 @@ class SubmitDraftController:
             },
         )
         self._last_monitored_label_data = label_data
-
-
-def _strict_submit_draft_schema() -> dict[str, Any]:
-    """Build a strict-mode-compatible JSON schema for submit_draft."""
-    from agents.strict_schema import ensure_strict_json_schema
-
-    schema = SubmitDraftPayload.model_json_schema()
-    # anchor_entity needs additionalProperties for arbitrary PK names,
-    # but strict mode forbids it — remove and rely on runtime validation.
-    anchor = schema["properties"]["entity"]
-    anchor.pop("additionalProperties", None)
-    anchor.pop("minProperties", None)
-    # strict mode forbids minLength / default / minimum
-    for prop in schema["properties"].values():
-        prop.pop("minLength", None)
-    for def_schema in schema.get("$defs", {}).values():
-        for prop in def_schema.get("properties", {}).values():
-            prop.pop("default", None)
-            prop.pop("minimum", None)
-    return ensure_strict_json_schema(schema)
 
 
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:

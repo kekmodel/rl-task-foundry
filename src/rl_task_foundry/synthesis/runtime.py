@@ -428,30 +428,6 @@ def _tool_return_properties(returns_schema: dict[str, object]) -> dict[str, obje
     return None
 
 
-def forbidden_question_tokens(schema_summary: dict[str, object]) -> frozenset[str]:
-    tokens = {
-        "select ",
-        " from ",
-        " join ",
-        " order by",
-        " group by",
-        " limit ",
-        " where ",
-    }
-    tables = schema_summary.get("tables")
-    if isinstance(tables, list):
-        for table in tables:
-            if not isinstance(table, dict):
-                continue
-            qualified_name = str(table.get("qualified_name") or "")
-            table_name = qualified_name.split(".")[-1]
-            if "_" in table_name:
-                tokens.add(table_name.lower())
-            if "_" in qualified_name:
-                tokens.add(qualified_name.lower())
-    return frozenset(token for token in tokens if token)
-
-
 def _snapshot_to_status(snapshot: ProviderCircuitSnapshot) -> SynthesisProviderStatus:
     return SynthesisProviderStatus(
         observed_at=datetime.now(timezone.utc),
@@ -592,7 +568,6 @@ class SynthesisAgentRuntime:
             ),
             phase_monitor=self.phase_monitor,
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
-            forbidden_question_tokens=forbidden_question_tokens(schema_summary),
         )
         conversation = await self._build_conversation(
             db_id=db_id,
