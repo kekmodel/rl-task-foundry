@@ -314,7 +314,43 @@ Per-attempt 요약:
 
 ---
 
-## Cross-Iteration Summary (iter 1-7)
+### Iteration 13 — 2026-04-18 (tool surface baseline)
+
+**Hypothesis.** iter01~12가 관측한 same-model (qwen3.5-plus composer + qwen3.5-plus solver) `pass_rate=1.0` ceiling은 동일 tool 서피스를 양쪽이 공유한 구조적 산물이라는 해석이었다. tooling redesign(atomic 9-primitive 계산자 + composer 5-tool DSL)이 완료된 지금, 이 asymmetry만으로 ceiling이 깨지는지(즉 pass_rate 분포가 1.0에서 실제로 이탈하는지)를 베이스라인으로 측정한다. 프롬프트는 5-tool composer + 9-primitive solver 기준으로 commit `4f0b6d5`에서 재작성된 상태 그대로. solver 3명, `max_solver_runs=3`, 밴드는 n=3 discretization에 맞춰 `[0.33, 0.67]`로 조정.
+
+**Change.**
+- 전 tooling redesign(`atomic.calculus` 9 primitives + `composer` query/profile/schema_map/neighborhood/sample DSL) 전면 적용. 이전 iter와 프롬프트 의도는 같지만 바닥 서피스가 완전히 달라짐.
+- `artifacts/tmp_configs/iter13_3solvers.yaml`로 solver roster 3명(`qwen3.5-plus_00/01/02`, 자동 도출 ID)·`max_solver_runs=3`·calibration `[0.33, 0.67]`. 그 외 모든 synthesis 파라미터는 메인 config 그대로(`max_turns=20`, `max_generation_attempts=5`).
+
+**Trial.** `artifacts/smoke_iter13` — flow_id `real_db_trial:20260417T174920Z:32825672`, anchor `inventory_id=3025`, selected_topic `Film actors for inventory item`. question(ko): "이 재고 항목이 속한 영화에 출연한 배우들을 성(last name) 알파벳 순서대로 정렬했을 때, 처음 3명의 이름과 성을 알려주세요." canonical answer = `[KIM ALLEN, RENEE BALL, CARMEN HUNT]` (film_id=664, last_name asc, top 3). attempts=1/5, submissions=1/1, terminal status `synthesis_failed / SynthesisArtifactGenerationError / budget_exhausted`, `attempt_outcomes=["difficulty_weakened"]`, `error_codes=["reject_too_hard"]`. 약 9분 경과.
+
+Attempt 1 composer trace (`query` DSL 사용):
+
+| # | query spec 요약 | result |
+|---|------------------|--------|
+| 1 | from=rental, filter=inventory_id=3025, join→customer, select=first/last/email, sort=rental_date asc, limit=3 | KeyError `public.customer.rental_date` |
+| 2 | 동일 spec에서 sort 제거 | 4 customer rows |
+| 3 | from=inventory, join=rental→customer, select=rental_date+names | KeyError `public.customer.rental_date` 재발 |
+| 4 | from=film filter=film_id=664, join=film_actor→actor, select=first/last | 4 actor rows |
+| 5 | 동일 spec + sort=last_name asc, limit=3 | 정답 후보 3행 확보 |
+
+atomic_tool_calls_seen=14 → 단일 attempt로 `max_turns=20` 거의 소진 → attempt 2 진입 전 budget_exhausted. solver 3명은 이 task에 0/3 matched, `pass_rate=0.0`.
+
+**Findings.**
+- **가설 검증됨(positive).** 동일 모델 페어링이지만 첫 제출부터 `pass_rate=0.0 (reject_too_hard)`이 관측됨. iter07/10의 `pass_rate=1.0` ceiling은 **반전되었다**. tool asymmetry만으로 composer가 solver를 떨구는 task를 authoring 가능. 즉 이전에 "prompt로 해결 불가"로 정리된 구조적 한계는 tool 서피스 교체로 해소된다.
+- **밴드 진입은 못함.** pass_rate가 `{0, 1/3, 2/3, 1}` 중 0으로 떨어짐. composer가 저작 가능한 난이도가 solver의 composition 능력을 크게 상회. 2-hop(`inventory→film→actor` via `film_actor`) + sort+limit 태스크를 9-primitive 체인으로 재구성하는 비용이 solver에게 과도한 것으로 보임.
+- **budget 압박으로 단일 attempt.** 첫 attempt에서 composer가 `query` DSL의 join-sort 컬럼 해상 실패(KeyError `public.customer.rental_date`)로 재시도 루프에 들어가 14 tool calls를 소비. `max_turns=20`이 bottleneck이 되어 difficulty weakening 재시도 기회가 원천 봉쇄. 프롬프트 가설의 반증은 아니고 **런타임 예산 부족**.
+- **DSL 이슈 관측.** `query(spec={from: rental, join: [rental.customer_id->customer], sort: [rental_date asc]})`에서 `sort.column=rental_date`가 `rental` 소속인데 DSL이 join 끝점인 `customer`의 컬럼으로 해석함. join+sort 조합에서 column-to-table 해상이 모호. iter13 분석과 별개로 `tooling/composer/query_dsl` 쪽 버그로 별도 티켓.
+
+**Next direction.**
+1. **최우선: `synthesis.runtime.max_turns` 완화.** 20 → 40(or 60)으로 올려 composer가 DSL 시행착오 후에도 attempt 2~3으로 진입 가능하게. 이전 iter07 retry의 turn 예산 부족과 같은 계열 신호지만 원인이 다름(그땐 탐색 폭주, 지금은 DSL 해상 실패 비용). 프롬프트 건드리지 말고 예산만.
+2. **병행: composer query DSL의 join+sort 컬럼 해상 버그 수정.** iter13에서 14턴 중 3턴을 여기에 낭비. 수정되면 attempt 1 비용이 대폭 줄어 attempt 2 진입이 자연스러워짐. 이건 prompt tuning과 독립. — **수정 완료 `2b4911f`** (select/sort/group_by/aggregate.column 모두 조인 체인 전체에서 FROM-first 해상으로 통일). iter14 합산 개선 효과 측정 대상.
+3. **밴드 진입 여지 측정.** 예산 완화 + DSL 수정 후에도 `pass_rate=0`이 반복되면 composer의 initial label을 "의도적으로 단순하게 시작"하도록 프롬프트 조정(예: step 1에 "first attempt uses slot_count=1 and a single filter" 명시). 즉 difficulty를 **위에서 내리는** 기존 설계가 아니라 **아래에서 올리는** 방향으로 workflow 전환 실험.
+4. **밴드 진입 실패가 pass_rate=0으로 고착되면 solver-side 프롬프트에 2-hop 계산 가이던스 추가 고려.** 단 이건 asymmetric model 실험과 경계가 겹치므로 `feedback_experiment_scope.md`의 "모델 페어링은 고정 조건" 원칙과 충돌하지 않도록 `솔버 프롬프트`만 조정하고 model/tool pairing은 그대로.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 13)
 
 ### 행동 변화 요약
 
@@ -334,6 +370,7 @@ Per-attempt 요약:
 | 12 | — | quota 재소진 | step 2를 "homogeneous list + 예시" 로 재작성, 세션 누적 6 trial로 Alibaba quota 429, 프롬프트 검증 불가 |
 | 12_retry | 0 | MaxTurnsExceeded | qwen이 city→address 1:N 경로는 정확히 식별, 그러나 동일 쿼리 반복 + `op="any" value=""` 스키마 버그 4턴 + calc/샘플링으로 예산 고갈. 프롬프트 반증 아님, 런타임 노이즈 |
 | 12_retry2 | 0 | MaxTurnsExceeded | tool 버그 수정 후 재실행. qwen이 turn 5에 올바른 find_*(limit=3) 실행했으나 submit하지 않고 대안 1:N 경로 5종 탐색. commit 회피 행동 관측 |
+| 13 | 1 | — | **신 tool 서피스 첫 베이스라인.** composer는 query DSL로 2-hop + sort+limit task 저작 성공, solver 0/3 matched → `reject_too_hard`. same-model `pass_rate=1.0` ceiling **반전**. 14 tool calls/attempt로 `max_turns=20` 소진해 attempt 2 진입 실패. DSL의 join+sort 컬럼 해상 버그로 3턴 낭비 관측 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
@@ -346,15 +383,20 @@ Per-attempt 요약:
 7. **Workflow step 본문을 3줄 이상으로 늘리면 첫 submit이 지연된다** (iter09 MaxTurnsExceeded). escalation 규칙의 상세도 자체가 첫 submit 속도에 영향. step 본문은 한 문장 수준으로 유지하고, 상세는 Axes 본문에 분산.
 8. **"list along 1:N path" 같은 추상 어휘는 qwen이 attribute enumeration으로 오해한다** (iter11). homogeneous list 요구 시 "every item shares the same keys" + 시각적 예시 패턴(`[{k1,k2},{k1,k2},…]`) 같은 구체화 필수.
 
-### 구조적 한계 (prompt로 해결 불가)
+### 구조적 한계 (prompt로 해결 불가) — iter 13에서 반전됨
 
-같은 reasoning 모델(qwen3.5-plus thinking)이 composer + solver 양쪽에 쓰이면 composer가 solver 3명을 동시에 떨구는 task를 설계하기 매우 어렵다. Band [0.25, 0.75] 진입은 composer와 solver의 상대적 능력 차가 있어야 자연스럽다. 후속 조치 후보:
+**iter01~12 시점 결론 (old atomic-tool 서피스 기준).** 같은 reasoning 모델(qwen3.5-plus thinking)이 composer + solver 양쪽에 쓰이면 composer가 solver 3명을 동시에 떨구는 task를 설계하기 매우 어렵다. Band [0.25, 0.75] 진입은 composer와 solver의 상대적 능력 차가 있어야 자연스럽다. 후속 조치 후보로 다음이 나왔다:
 - composer = qwen3.5-plus, solver = 약한 모델(gpt-5.4-nano 등) 혼합
 - solver 수를 3 → 5~10으로 늘려 band 해상도 증가
 - calibration band 완화(현재 [0.25, 0.75] → [0.1, 0.9])
 
+**iter 13 관측 (new composer DSL + atomic calculus 서피스 기준).** same-model 페어링 그대로지만 첫 제출에서 `pass_rate=0.0 (reject_too_hard)`. 즉 위 "구조적 한계"는 **모델 페어링**이 아니라 **tool 서피스 공유**의 산물이었다. composer가 query DSL로 one-shot 저작하는 2-hop 태스크를 solver가 9-primitive 체인으로 재구성하는 비용이 오히려 과도. 이제 ceiling은 `1.0`이 아니라 `0.0` 쪽으로 반전됐고, 개입은 "composer 난이도를 끌어내리기" 방향으로 바뀐다. 위 후속 조치 후보들(약한 solver, solver 수 증가, band 완화)은 여전히 유효하지만 **동인이 반전**되었음에 유의.
+
 ### 다음 세션 작업 우선순위
 
+> iter 13에서 tool 서피스 교체로 ceiling이 반전되어, 이하 iter07-era 우선순위는 역사적 맥락으로만 유효. **현재 활성 Next direction은 iter 13 엔트리의 "Next direction" 블록**(max_turns 완화 → query DSL 버그 수정 → bottom-up 난이도 workflow 실험 순)을 참조.
+
+(이하 iter07 기준 역사적 우선순위, 반전된 문제공간에서는 직접 적용 안 됨)
 1. **iter08**: 선언형 Label-Rules 제약("After too_easy, the next label MUST change slot count or add a Cross-item rule") + `# Escalation Axes`에서 Width/Filter bullet 제거 혹은 "last resort" 라벨 부여. 조건문 금지 원칙과 양립하는 문장 형태로.
 2. **budget 완화 대조군**: 동일 프롬프트로 `max_generation_attempts=4` 1회 trial. iter07_retry는 attempt 4가 있었다면 band 진입 가능성.
 3. **asymmetric composer/solver**: composer=qwen3.5-plus, solver=약한 모델(gpt-5.4-nano 후보) — 구조적 상한과 프롬프트 상한 분리 측정.
