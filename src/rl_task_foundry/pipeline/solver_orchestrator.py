@@ -16,7 +16,6 @@ from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import AgentRuntime, SolverEpisodeInput
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import RewardResult, canonical_json, compute_reward
 from rl_task_foundry.synthesis.contracts import TaskBundleContract
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
@@ -46,7 +45,6 @@ TaskSolverRunFactory = Callable[[], Awaitable["TaskSolverRun"]]
 @dataclass(frozen=True, slots=True)
 class TaskRolloutBundle:
     task_bundle: TaskBundleContract
-    atomic_tool_bundle: AtomicToolBundle
     rendered_user_prompt: str
     canonical_answer_json: str
     label_signature: str
@@ -55,7 +53,6 @@ class TaskRolloutBundle:
     def from_draft(cls, draft: SynthesisTaskDraft) -> "TaskRolloutBundle":
         return cls(
             task_bundle=draft.task_bundle,
-            atomic_tool_bundle=draft.atomic_tool_bundle,
             rendered_user_prompt=draft.rendered_user_prompt,
             canonical_answer_json=draft.canonical_answer_json,
             label_signature=draft.label_signature,
@@ -247,7 +244,7 @@ class SolverOrchestrator:
             )
             return await runtime.run(episode)
         pools = await self._database_pools_for_tools()
-        snapshot = await self._schema_snapshot(bundle.atomic_tool_bundle.db_id)
+        snapshot = await self._schema_snapshot(bundle.task_bundle.db_id)
         async with pools.solver_connection() as conn:
             session = AtomicSession(
                 snapshot=snapshot, connection=conn, store=CursorStore()

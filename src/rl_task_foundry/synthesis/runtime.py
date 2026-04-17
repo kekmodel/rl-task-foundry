@@ -20,7 +20,6 @@ from rl_task_foundry.pipeline.provider_resilience import (
 )
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.profiler import DataProfile
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     RolloutConstraintsContract,
@@ -50,12 +49,29 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftErrorCode,
     SubmitDraftPayload,
 )
+from rl_task_foundry.synthesis.snapshot_materializer import TOOLING_VERSION
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
-from rl_task_foundry.synthesis.tool_runtime import build_shuffle_seed
+from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_to_dict
 from rl_task_foundry.tooling.composer import (
     ComposerSession,
     build_composer_tools,
 )
+
+
+def _shuffle_seed(*parts: object) -> str:
+    payload = "|".join(str(part) for part in parts)
+    return sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _snapshot_tool_signature(snapshot: SchemaSnapshot) -> str:
+    """Deterministic sha256 of the tooling-version-qualified schema snapshot.
+
+    Replaces the legacy per-db atomic_tools.py hash. Captures both the
+    tool surface version (TOOLING_VERSION) and the schema shape the
+    snapshot-parameterized tools will bind against.
+    """
+    payload = f"{TOOLING_VERSION}|{canonical_json(snapshot_to_dict(snapshot))}"
+    return f"sha256:{sha256(payload.encode('utf-8')).hexdigest()}"
 
 if TYPE_CHECKING:
     from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
@@ -154,7 +170,6 @@ class SynthesisTaskDraft(StrictModel):
     schema_summary: dict[str, object] = Field(default_factory=dict)
     selected_topic: str
     task_bundle: TaskBundleContract
-    atomic_tool_bundle: AtomicToolBundle
     rendered_user_prompt: str
     anchor_entity: dict[str, object] = Field(default_factory=dict)
     canonical_answer_json: str
@@ -482,14 +497,13 @@ class SynthesisAgentRuntime:
             )
         resolved_graph = await synthesis_db.schema_graph()
         data_profile = await synthesis_db.data_profile()
-        atomic_tool_bundle = await synthesis_db.atomic_tool_bundle()
         schema_snapshot = await synthesis_db.schema_snapshot()
         schema_summary = summarize_schema_graph(
             resolved_graph,
             max_tables=self.config.synthesis.runtime.schema_summary_max_tables,
         )
         anchor_hint = await synthesis_db.random_anchor()
-        shuffle_seed = build_shuffle_seed(
+        shuffle_seed = _shuffle_seed(
             "synthesis",
             db_id,
             requested_topic or "",
@@ -503,14 +517,14 @@ class SynthesisAgentRuntime:
             build_draft=lambda payload: self._build_draft_from_submission(
                 db_id=db_id,
                 requested_topic=requested_topic,
-                atomic_tool_bundle=atomic_tool_bundle,
+                schema_snapshot=schema_snapshot,
                 submission=payload,
                 schema_summary=schema_summary,
             ),
             phase_monitor=self.phase_monitor,
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
         )
-        pools = await synthesis_db.database_pools_for_tools()
+        pools = await synthesis_db.ensure_database_pools()
         async with pools.solver_connection() as conn:
             composer_session = ComposerSession(
                 snapshot=schema_snapshot, connection=conn
@@ -828,7 +842,7 @@ class SynthesisAgentRuntime:
         *,
         db_id: str,
         requested_topic: str | None,
-        atomic_tool_bundle: AtomicToolBundle,
+        schema_snapshot: SchemaSnapshot,
         submission: SubmitDraftPayload,
         schema_summary: dict[str, object],
     ) -> SynthesisTaskDraft:
@@ -851,7 +865,7 @@ class SynthesisAgentRuntime:
         )
         materialized_at = datetime.now(timezone.utc)
         task_bundle = self._materialize_task_bundle(
-            atomic_tool_bundle=atomic_tool_bundle,
+            schema_snapshot=schema_snapshot,
             db_id=db_id,
             selected_topic=selected_topic,
             created_at=materialized_at,
@@ -864,7 +878,6 @@ class SynthesisAgentRuntime:
             schema_summary=schema_summary,
             selected_topic=selected_topic,
             task_bundle=task_bundle,
-            atomic_tool_bundle=atomic_tool_bundle,
             rendered_user_prompt=rendered_user_prompt,
             anchor_entity=dict(submission.parsed_entity),
             canonical_answer_json=canonical_answer_json,
@@ -926,7 +939,7 @@ class SynthesisAgentRuntime:
     def _materialize_task_bundle(
         self,
         *,
-        atomic_tool_bundle: AtomicToolBundle,
+        schema_snapshot: SchemaSnapshot,
         db_id: str,
         selected_topic: str,
         created_at: datetime,
@@ -934,7 +947,7 @@ class SynthesisAgentRuntime:
     ) -> TaskBundleContract:
         task_payload = task.model_dump(mode="python")
         task_signature = self._signature_for_payload(task_payload)
-        tool_signature = self._signature_for_text(atomic_tool_bundle.source)
+        tool_signature = _snapshot_tool_signature(schema_snapshot)
         task_id = self._build_task_id(
             db_id=db_id,
             topic=selected_topic,

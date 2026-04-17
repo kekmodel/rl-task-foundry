@@ -1,12 +1,13 @@
 """Per-database cache and resource holder for synthesis.
 
-A ``SynthesisDb`` owns the long-lived, per-``db_id`` artifacts that synthesis
-needs but that should not be rebuilt for every trial: schema introspection,
-data profile, atomic-tool bundle, materialized tool executors, and the
-random-anchor sampler. Top-level orchestrators (HarvestRunner, RealDbTrialRunner,
-ProofTaskRunner, SynthesisRegistryRunner) own one ``SynthesisDb`` per database
-and inject it into ``SynthesisAgentRuntime``; many synthesis conversations for
-the same ``db_id`` share a single ``SynthesisDb``.
+A ``SynthesisDb`` owns the long-lived, per-``db_id`` artifacts that
+synthesis needs but that should not be rebuilt for every trial: schema
+introspection, data profile, schema snapshot (materialized to disk for
+bundle export), and the random-anchor sampler. Top-level orchestrators
+(HarvestRunner, RealDbTrialRunner, ProofTaskRunner, SynthesisRegistryRunner)
+own one ``SynthesisDb`` per database and inject it into
+``SynthesisAgentRuntime``; many synthesis conversations for the same
+``db_id`` share a single ``SynthesisDb``.
 """
 
 from __future__ import annotations
@@ -21,15 +22,8 @@ from rl_task_foundry.infra.db import DatabasePools, ensure_attached_database_poo
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.schema.profiler import DataProfile, profile_database
-from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle, AtomicToolGenerator
 from rl_task_foundry.synthesis.snapshot_materializer import (
     SchemaSnapshotMaterializer,
-)
-from rl_task_foundry.synthesis.tool_runtime import (
-    ToolExecutor,
-    bind_atomic_tool_executor,
-    load_atomic_tool_module,
 )
 from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_from_graph
 
@@ -41,13 +35,9 @@ class SynthesisDb:
     db_id: str
     config: AppConfig
     database_pools: DatabasePools | None = None
-    atomic_tool_materializer: AtomicToolMaterializer | None = None
     snapshot_materializer: SchemaSnapshotMaterializer | None = None
     _database_pools: DatabasePools | None = field(default=None, init=False, repr=False)
     _owns_database_pools: bool = field(default=True, init=False, repr=False)
-    _atomic_tool_materializer: AtomicToolMaterializer | None = field(
-        default=None, init=False, repr=False
-    )
     _snapshot_materializer: SchemaSnapshotMaterializer | None = field(
         default=None, init=False, repr=False
     )
@@ -56,19 +46,12 @@ class SynthesisDb:
         default=None, init=False, repr=False
     )
     _data_profile_cache: DataProfile | None = field(default=None, init=False, repr=False)
-    _atomic_tool_bundle: AtomicToolBundle | None = field(default=None, init=False, repr=False)
-    _tool_executors: dict[str, ToolExecutor] | None = field(default=None, init=False, repr=False)
     _graph_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
-    _atomic_tool_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.database_pools is not None:
             self._database_pools = self.database_pools
             self._owns_database_pools = False
-        if self.atomic_tool_materializer is not None:
-            self._atomic_tool_materializer = self.atomic_tool_materializer
-        else:
-            self._atomic_tool_materializer = AtomicToolMaterializer.for_config(self.config)
         if self.snapshot_materializer is not None:
             self._snapshot_materializer = self.snapshot_materializer
         else:
@@ -114,44 +97,12 @@ class SynthesisDb:
         self._data_profile_cache = await profile_database(self.config.database, graph)
         return self._data_profile_cache
 
-    async def atomic_tool_bundle(self) -> AtomicToolBundle:
-        if self._atomic_tool_bundle is not None:
-            return self._atomic_tool_bundle
-        async with self._atomic_tool_lock:
-            if self._atomic_tool_bundle is not None:
-                return self._atomic_tool_bundle
-            graph = await self.schema_graph()
-            bundle = AtomicToolGenerator(self.config.atomic_tools).generate_bundle(
-                graph, db_id=self.db_id
-            )
-            assert self._atomic_tool_materializer is not None
-            self._atomic_tool_materializer.materialize_bundle(bundle)
-            self._atomic_tool_bundle = bundle
-        return bundle
+    async def ensure_database_pools(self) -> DatabasePools:
+        """Lazily attach a DatabasePools handle and return it.
 
-    async def tool_executors(self) -> dict[str, ToolExecutor]:
-        if self._tool_executors is not None:
-            return self._tool_executors
-        bundle = await self.atomic_tool_bundle()
-        pools = await self.database_pools_for_tools()
-        assert self._atomic_tool_materializer is not None
-        materialization = self._atomic_tool_materializer.materialize_bundle(bundle)
-        module = load_atomic_tool_module(
-            materialization.source_path,
-            module_name=f"rl_task_foundry_synthesis_atomic_tools_{self.db_id}",
-        )
-        resolved = {
-            tool.name: bind_atomic_tool_executor(
-                module=module,
-                tool_name=tool.name,
-                pools=pools,
-            )
-            for tool in bundle.tools
-        }
-        self._tool_executors = resolved
-        return resolved
-
-    async def database_pools_for_tools(self) -> DatabasePools:
+        Used by the runtime for composer-tool connections and by
+        `random_anchor` for control-plane queries.
+        """
         return await ensure_attached_database_pools(
             self,
             attr_name="_database_pools",
@@ -176,7 +127,7 @@ class SynthesisDb:
         table = random.choice(hub_tables)
         pk_col = table.primary_key[0]
         try:
-            pools = await self.database_pools_for_tools()
+            pools = await self.ensure_database_pools()
             async with pools.control_connection() as conn:
                 row = await conn.fetchrow(
                     f"SELECT {pk_col} FROM {table.qualified_name} "
@@ -197,5 +148,3 @@ class SynthesisDb:
             if self._owns_database_pools:
                 await self._database_pools.close()
             self._database_pools = None
-        self._tool_executors = None
-        self._atomic_tool_bundle = None

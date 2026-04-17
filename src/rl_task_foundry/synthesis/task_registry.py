@@ -19,7 +19,6 @@ import yaml
 from datasketch import MinHash, MinHashLSH
 
 from rl_task_foundry.config.models import AppConfig, TaskRegistryConfig
-from rl_task_foundry.synthesis.atomic_tool_materializer import AtomicToolMaterializer
 from rl_task_foundry.synthesis.snapshot_materializer import (
     SchemaSnapshotMaterializer,
 )
@@ -235,10 +234,6 @@ class TaskRegistryWriter:
         default_factory=dict,
         repr=False,
     )
-    atomic_tool_materializer: AtomicToolMaterializer | None = field(
-        default=None,
-        repr=False,
-    )
     snapshot_materializer: SchemaSnapshotMaterializer | None = field(
         default=None,
         repr=False,
@@ -247,10 +242,6 @@ class TaskRegistryWriter:
 
     def __post_init__(self) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
-        if self.atomic_tool_materializer is None:
-            self.atomic_tool_materializer = AtomicToolMaterializer(
-                root_dir=self.root_dir.parent / "databases"
-            )
         if self.snapshot_materializer is None:
             self.snapshot_materializer = SchemaSnapshotMaterializer(
                 root_dir=self.root_dir.parent / "databases"
@@ -297,8 +288,6 @@ class TaskRegistryWriter:
             exact_signature,
             semantic_text,
         )
-        assert self.atomic_tool_materializer is not None
-        self.atomic_tool_materializer.materialize_bundle(draft.atomic_tool_bundle)
 
         try:
             with self._connect() as conn:
@@ -685,10 +674,6 @@ class TaskRegistryWriter:
                 indent=2,
                 sort_keys=True,
             ),
-            encoding="utf-8",
-        )
-        (directory / "tools.py").write_text(
-            draft.atomic_tool_bundle.source,
             encoding="utf-8",
         )
         (directory / "registry_metadata.json").write_text(

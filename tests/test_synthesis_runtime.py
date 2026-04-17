@@ -12,12 +12,6 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
 from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
 from rl_task_foundry.schema.profiler import DataProfile
-from rl_task_foundry.synthesis.atomic_tools import (
-    AtomicToolBundle,
-    AtomicToolDefinition,
-    AtomicToolFamily,
-    AtomicToolResultMode,
-)
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
@@ -118,41 +112,6 @@ def _sample_graph() -> SchemaGraph:
             )
         ],
         edges=[],
-    )
-
-def _sample_atomic_tool_bundle(db_id: str = "sakila") -> AtomicToolBundle:
-    return AtomicToolBundle(
-        db_id=db_id,
-        tools=[
-            AtomicToolDefinition(
-                name="get_customer",
-                family=AtomicToolFamily.GET,
-                description="Retrieve one customer by ID. Returns all fields or nothing.",
-                params_schema={
-                    "type": "object",
-                    "properties": {"id": {"type": "integer"}},
-                    "required": ["id"],
-                    "additionalProperties": False,
-                },
-                returns_schema={
-                    "anyOf": [
-                        {
-                            "type": "object",
-                            "properties": {
-                                "customer_name": {"type": "string"},
-                            },
-                            "required": ["customer_name"],
-                            "additionalProperties": False,
-                        },
-                        {"type": "null"},
-                    ],
-                },
-                sql="SELECT 1",
-                result_mode=AtomicToolResultMode.OBJECT_OR_NULL,
-                semantic_key="customer:get",
-            )
-        ],
-        source="async def get_customer(conn, id):\n    return {'store_id': 1}\n",
     )
 
 @dataclass(slots=True)
@@ -616,12 +575,6 @@ async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> 
     synthesis_db = SynthesisDb(db_id="sakila", config=config)
     synthesis_db._graph_cache = _sample_graph()
     synthesis_db._data_profile_cache = DataProfile()
-    synthesis_db._atomic_tool_bundle = _sample_atomic_tool_bundle()
-
-    async def _get_customer(_kwargs):
-        return {"customer_name": "Alice"}
-
-    synthesis_db._tool_executors = {"get_customer": _get_customer}
     runtime = SynthesisAgentRuntime(
         config,
         synthesis_backends=[backend],
@@ -654,12 +607,6 @@ async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: 
     synthesis_db = SynthesisDb(db_id="sakila", config=config)
     synthesis_db._graph_cache = _sample_graph()
     synthesis_db._data_profile_cache = DataProfile()
-    synthesis_db._atomic_tool_bundle = _sample_atomic_tool_bundle()
-
-    async def _get_customer(_kwargs):
-        return {"customer_name": "Alice"}
-
-    synthesis_db._tool_executors = {"get_customer": _get_customer}
     runtime = SynthesisAgentRuntime(
         config,
         synthesis_backends=[backend],
@@ -684,7 +631,7 @@ async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: 
 async def test_synthesis_runtime_close_clears_owned_synthesis_db(tmp_path: Path) -> None:
     config = _config_with_synthesis_output(tmp_path)
     synthesis_db = SynthesisDb(db_id="sakila", config=config)
-    synthesis_db._tool_executors = {"noop": lambda _kwargs: {}}
+    synthesis_db._graph_cache = _sample_graph()
     runtime = SynthesisAgentRuntime(
         config,
         synthesis_backends=[_FakeBackend()],
@@ -694,7 +641,7 @@ async def test_synthesis_runtime_close_clears_owned_synthesis_db(tmp_path: Path)
     await runtime.close()
 
     # injected synthesis_db is preserved (caller owns lifecycle)
-    assert synthesis_db._tool_executors == {"noop": synthesis_db._tool_executors["noop"]}
+    assert synthesis_db._graph_cache is not None
     assert runtime._synthesis_db is None
 
 
@@ -706,12 +653,11 @@ async def test_synthesis_runtime_close_disposes_owned_synthesis_db(tmp_path: Pat
         synthesis_backends=[_FakeBackend()],
     )
     synthesis_db = runtime._ensure_synthesis_db("sakila")
-    synthesis_db._tool_executors = {"noop": lambda _kwargs: {}}
 
     await runtime.close()
 
     assert runtime._synthesis_db is None
-    assert synthesis_db._tool_executors is None
+    assert synthesis_db._database_pools is None
 
 def test_submit_draft_payload_rejects_blank_text() -> None:
     payload = _accepted_payload().model_dump(mode="json")

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from rl_task_foundry.synthesis.atomic_tools import AtomicToolBundle
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
@@ -97,11 +96,6 @@ def _sample_draft(
         schema_summary={"included_table_count": 2},
         selected_topic=topic,
         task_bundle=task_bundle,
-        atomic_tool_bundle=AtomicToolBundle(
-            db_id=db_id,
-            tools=[],
-            source="async def get_assignments(conn, customer_id, limit=10):\n    return []\n",
-        ),
         rendered_user_prompt=build_rendered_user_prompt(
             task,
             anchor_entity=anchor_entity,
@@ -130,7 +124,6 @@ def test_task_registry_writer_commits_single_task_layout(tmp_path: Path) -> None
     assert (task_dir / "task.json").exists()
     assert (task_dir / "instance.json").exists()
     assert (task_dir / "canonical_answer.json").exists()
-    assert (task_dir / "tools.py").read_text(encoding="utf-8") == draft.atomic_tool_bundle.source
 
     metadata = json.loads((task_dir / "registry_metadata.json").read_text(encoding="utf-8"))
     assert metadata["generation_attempts"] == []

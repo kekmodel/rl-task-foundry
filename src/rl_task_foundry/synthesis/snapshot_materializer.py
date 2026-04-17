@@ -1,7 +1,6 @@
 """Persist per-database schema snapshots + tooling version for bundle export.
 
-Replaces the old per-database `atomic_tools.py` materialization from the
-bundle-export perspective. The exported bundle now ships:
+The exported bundle ships:
 
 - ``schema_snapshot.json`` — the immutable schema snapshot an env server
   can load to rebuild the atomic calculus (and, when desired, the
@@ -10,10 +9,6 @@ bundle-export perspective. The exported bundle now ships:
   version identifier plus the known composer tools and atomic
   primitives. Lets the env server reject mismatched artifacts without
   trying to import them.
-
-`AtomicToolMaterializer` still exists for now as an internal debug
-persistence layer (it keeps `atomic_tools.py` locally for task_registry
-diagnostics), but bundle export no longer consumes it.
 """
 
 from __future__ import annotations
