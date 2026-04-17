@@ -113,6 +113,171 @@
 
 ---
 
+### Iteration 8 — 2026-04-17
+
+**Hypothesis.** iter07 retry에서 qwen이 Width만 반복한 건 Escalation Axes 안의 "강도순+Width 회피" 문단이 정렬 정보로만 읽혔기 때문. 규칙을 `# Label Rules`에 선언형 imperative로 올리면 agent가 turn마다 재평가하며 지킨다.
+
+**Change.**
+- `# Escalation Axes`에서 "listed strongest to weakest" 문장과 "Width and a single Filter alone rarely shift..." 두 문장을 제거. 5개 축 bullet만 neutral 참조로 유지.
+- `# Label Rules`에 bullet 2개 추가:
+  - "After a too_easy rejection, the next label MUST change the answer shape. Raise record count (Cardinality or Cross-item) or add a row-excluding constraint (Filter or Composite). Adding a column to a single-record answer (Width alone) does not change shape."
+  - "After any rejection, make at least one fresh atomic tool call before the next submit_draft."
+
+**Trial.** `artifacts/smoke_iter08` (flow_id `real_db_trial:20260417T084645Z:1649ee42`). anchor = inventory_id=4547 (film_id=993). **submit 0회, `MaxTurnsExceeded` (20 turns)**. 19 atomic calls, 0 submit_draft.
+
+Call pattern: `get_inventory(4547) → get_film(993) → get_store(1) → get_address(1) → get_city(300) → get_country(20) → find_inventory_by_store_id × 3 → get_inventory(4548…4560, 4555, 4554)`. 4-hop 주소 체인을 먼저 내려간 뒤 cardinality 후보를 만들려 inventory 리스트를 하나씩 확인.
+
+**Findings.**
+- Label Rules bullet은 turn-1부터 적용됐고, "next label MUST change shape"를 첫 submit 대비로 qwen이 재해석해 **cardinality 후보를 초기 탐색 단계에서 쌓으려 했다**.
+- iter01/04/05와 동일한 "복잡한 규칙 → qwen 과계획" 실패 모드. "After a too_easy rejection"이라는 scope 어구를 포함했음에도 Label Rules 위치에서는 조건부로 읽히지 않고 상시 제약으로 적용됨.
+- Label Rules는 `<scope, always-on>` 규칙 저장소로만 안전하게 쓸 수 있음이 재확인됨 (iter06에서 grounding이 성공한 이유이기도 함 — grounding은 진짜로 every turn에 요구되는 제약).
+- 교훈: "after too_easy"처럼 rejection-conditional인 지시는 이미 conditional scope가 박힌 Workflow step 3이나 dedicated `# After Rejection` 섹션에만 둬야 한다.
+
+**Next direction.** iter09에서 동일 shape-change 규칙을 Workflow step 3으로 옮긴다.
+
+---
+
+### Iteration 9 — 2026-04-17
+
+**Hypothesis.** iter08의 shape-change imperative는 옳지만 Label Rules 위치가 잘못됐다. Workflow step 3("On too_easy, …")는 이미 rejection-conditional scope라 같은 문장을 여기 넣으면 첫 submit에는 영향 없이 too_easy 이후에만 발동한다.
+
+**Change.**
+- iter08의 Label Rules bullet 2개 제거.
+- Workflow step 3을 재작성: "On too_easy, make at least one fresh atomic call, then resubmit with a label that changes the answer shape — raise the record count (Cardinality or Cross-item rule) or add a constraint that excludes rows (Filter or Composite). Adding another field to a single-record answer (Width alone) does not count."
+
+**Trial.** `artifacts/smoke_iter09` (flow_id `real_db_trial:20260417T085223Z:1516b096`). anchor = customer_id=86. **submit 0회, `MaxTurnsExceeded`**. 18 atomic calls, 0 submit.
+
+Call pattern: `get_customer(86) → 4-hop 주소 체인(address/city/country) → find_rental_by_customer_id × 2 (limit=100) → get_rental(1) → find_payment_by_customer_id(limit=100) → find_customer_by_store_id(limit=100) → find_address_by_city_id(limit=100) → find_customer_by_activebool(limit=10) → find_customer_by_last_update → 두 번째 주소 체인 → find_customer_by_store_id(op=any)`.
+
+**Findings.**
+- Workflow step 3으로 옮겼음에도 동일 실패 — qwen은 step 3을 "첫 submit 전에 필요한 사전조건"으로 재해석. 첫 draft를 내기 전에 "resubmit-시 선택 가능한 후보들"을 한꺼번에 확보하려는 듯 대량의 `find_*` (limit 100) + multi-axis 탐색 수행.
+- iter01 전후로 반복된 "qwen이 Workflow의 조건부 step까지 선제 계획에 포함한다"는 증상이 재현. 현 프롬프트는 "step 1~5 다 훑어본 뒤 행동"이라는 qwen의 thinking-mode 습성과 부딪힘.
+- 구조적 단서: Workflow가 "1. Inspect → 2. Submit immediately" 같은 순차 명령형이어도, step 3~5 본문이 상세하면 step 2 실행 자체가 지연된다. 즉 escalation 규칙의 **상세도 자체**가 첫 submit 속도를 느리게 만드는 독립 변수.
+- iter06까지는 step 3이 한 문장 "add exactly ONE dimension..."이라 깔끔했고 submit이 2회 발생. iter09에서 세 줄로 늘리자 submit 0.
+
+**Next direction.** iter10에서는 step 3을 **짧은 한 문장**으로 되돌리고, shape-change 강제는 Escalation Axes bullet 본문에 명령형으로 분산시킨다 — 각 bullet이 "언제 적용" 대신 "쓰면 effect"를 선언하는 형태. Axes 정보가 길어지는 건 괜찮은데(iter03에서 확인) step 본문이 길어지는 건 위험.
+
+---
+
+### Iteration 10 — 2026-04-17
+
+**Hypothesis.** iter09 실패 원인이 step-3 본문 과다였으니, step 3을 iter06 수준 한 문장으로 되돌리고 shape-change 강제를 `# Escalation Axes` 각 bullet의 **effect 설명**에 분산시킨다(정렬이 아닌 축별 effect 선언). 특히 Width bullet에 "Does NOT change shape or row set; insufficient by itself" 명시.
+
+**Change.**
+- Workflow step 3 → iter06 한 줄 복원: "On too_easy, add exactly ONE dimension from the escalation axes below and resubmit within 2 atomic calls."
+- Axes 섹션 intro에 "shape-changing axes drop pass_rate faster" 추가.
+- 각 bullet 끝에 effect 한 줄: Cardinality "Changes shape. Strongly drops pass_rate.", Cross-item "Changes shape. Requires Cardinality already present.", Composite "Changes which rows qualify.", Filter "mildly.", Width "Does NOT change shape … insufficient by itself when already too_easy."
+
+**Trial.** `artifacts/smoke_iter10` (flow_id `real_db_trial:20260417T090319Z:c60da1db`). anchor = rental_id (customer ALEX GRESHAM / film MURDER ANTITRUST). 3 submit, 전부 `reject_too_easy` → `difficulty_crank_invalid` × 3 → synthesis_failed.
+
+Per-attempt 요약:
+
+| # | added fields | slot | pass_rate |
+|---|--------------|------|-----------|
+| 1 | first_name, last_name, title | 3 | 1.0 (3/3) |
+| 2 | +city (Width) | 4 | 1.0 (3/3) |
+| 3 | +rating, +rental_duration (Width) | 6 | 1.0 (3/3) |
+
+**Findings.**
+- submit 빈도는 iter06~07 수준으로 정상화(step 3 짧게 유지 규칙 재확인).
+- 3 attempt 전부 **Width**. Width bullet에 "insufficient by itself" 명시한 iter10에서도 편향 안 깨짐 → 프롬프트 문구로 qwen의 Width 편향을 깨는 것은 실효성 낮다는 증거 강화(iter07 retry와 합해 2 trial 연속).
+- 주목할 점: 이번 trial은 attempt 사이 `find_rental_by_customer_id`, `rank_rental_by_customer_id`, `calc_rental`까지 호출해 **cardinality/통계 축의 후보 데이터 자체는 관측**했다. 그럼에도 label은 single-record width에 고정. composer의 "anchor=1건 lookup" 프레임이 tool 관측으로도 흔들리지 않음.
+- pass_rate가 세 번 모두 1.0으로 고정된 점 — solver가 같은 모델이라 Width 3→4→6 증가에도 전혀 못 맞춘 경우가 없음. 같은-모델 ceiling 가설의 직접 증거.
+
+**Next direction.** 프롬프트 분포 가정을 바꿔서 Width 편향을 구조적으로 제거하는 방향 시도. iter11 후보: Workflow step 2의 "first draft = multi-hop lookup returning one record"를 "first draft returns a 3-item list along the anchor's 1:N path"로 교체. Cardinality를 baseline으로 깔면 이후 escalation은 Cross-item/Composite 밖에 남지 않아 Width 유혹이 구조적으로 사라진다. 단 이건 synthesis 태스크 카테고리 분포를 바꾸는 변경이라 lookup-style task 생성 빈도가 줄 수 있음.
+
+---
+
+### Iteration 11 — 2026-04-17
+
+**Hypothesis.** Width 편향이 프롬프트 문구로 깨지지 않으므로 구조적 해법 시도. Workflow step 2의 "1-record lookup first draft"를 "3-item list along anchor's 1:N path, sorted by observed key"로 바꾸고, Axes에서 Width를 **disallowed**로 명시. Cardinality가 baseline이면 Width 경로가 구조적으로 제거된다.
+
+**Change.**
+- Workflow step 2 → "homogeneous 3-item list along 1:N path with 1-2 user-facing fields, sort by observed field" (의도상).
+- Deterministic Answers 섹션 → "narrow to one OR return full list" 제거, "fix count + sort clause" 로 재작성.
+- Axes Width bullet → "disallowed as an escalation. Adding more fields per record does not change the row set".
+- 다른 axes bullet도 "change N/bump N" 같은 N-변경 어휘로 재배치.
+
+**Trial.** `artifacts/smoke_iter11` (flow_id `real_db_trial:20260417T091347Z:438411b3`). anchor = address_id. 3 submit, 3 모두 실패 → synthesis_failed.
+
+| # | preview | error_code |
+|---|---------|------------|
+| 1 | `[{address,district:""},{city,country},{phone:"",postal_code}]` (heterogeneous!) | `label_blank_string_forbidden` |
+| 2 | `[{field,value},{field,value},{field,value}]` (key-value rows) | `label_values_not_grounded` |
+| 3 | `[{address},{city},{country}]` (singleton heterogeneous) | `reject_too_hard` (pass_rate 0.0) |
+
+**Findings.**
+- Step 2가 말한 "list along 1:N path"를 qwen은 **anchor의 속성들을 list로 나열**하는 것으로 오해. homogeneous 구조(같은 keys 반복) 개념이 빠져 있어 attribute enumeration으로 falsify.
+- attempt 1에서 `district=""`, `phone=""` 같은 blank string이 들어가 `label_blank_string_forbidden` 발동. schema inference 관점에서 list-heterogeneity가 아니라 단순 문자열 검증에 걸림.
+- solver pass_rate 0.0 — 3 solver 전부 `[{address},{city},{country}]` 같은 기이한 답을 재현하지 못함. 즉 "list-first" 아이디어 자체는 태스크를 어렵게 만들긴 했지만, 구조가 무너져서 매칭 불가 상태로 어려워진 것(실패 종류 다름).
+- 교훈: list-first를 제대로 유도하려면 "homogeneous list where every item shares the same keys"를 1문장으로 못박고, 예시 패턴도 `[{rental_date, film_title}, …]` 식으로 같은 keys 반복을 시각적으로 제시해야 한다.
+
+**Next direction.** iter12에서 step 2를 "homogeneous list of N child records through a single foreign key" 로 rewrite + 시각적 예시. Deterministic Answers도 "fix count + sort clause"로 갱신.
+
+---
+
+### Iteration 12 — 2026-04-17 (quota-blocked)
+
+**Hypothesis.** iter11의 heterogeneous list 오해를 "homogeneous list of 3 child records through a single foreign key, every item sharing the same 1-2 keys" + 시각적 예시(`[{rental_date, film_title}, …]`)로 해소. Deterministic Answers도 "fix count + sort clause"로 재작성.
+
+**Change.**
+- Workflow step 2 재작성: "homogeneous list of 3 child records reached through a single foreign key from the anchor. Every item shares the same 1-2 keys (e.g. `[{rental_date, film_title}, …]`). Sort by one observed field in a fixed direction. No filters."
+- Deterministic Answers 재작성: "State the exact record count and sort clause in the question (e.g. 'the first 3 rentals ordered by rental_date ascending'). Never leave count or order implicit."
+
+**Trial.** `artifacts/smoke_iter12` (flow_id `real_db_trial:20260417T091851Z:54a31ab1`). anchor = address_id. 8 atomic call 후 `insufficient_quota` 429 발생 → synthesis_failed. submit 전 API cutoff.
+
+**Findings.** 프롬프트 효과 미측정. 이 세션에서 누적 6 trial이 Alibaba qwen3.5-plus quota를 다시 소진. 첫 8 atomic call 관찰 결과 qwen이 다시 주소 체인(get_address → get_city → get_country → find_customer_by_address_id × 2 → find_staff_by_address_id → find_store_by_address_id → find_address_by_city_id)으로 진입 — address anchor에서는 list-first가 어색한 게 이 iter11~12 공통. customer/rental anchor라면 다를 수 있으나 측정 불가.
+
+### Iteration 12 retry — 2026-04-17 (quota refreshed)
+
+**Trial.** `artifacts/smoke_iter12_retry` (flow_id `real_db_trial:20260417T102744Z:5c05ea10`). anchor = city_id=245. 20 atomic call, 0 submit, `MaxTurnsExceeded`.
+
+Call 분해:
+1. `get_city(245)` → anchor description 확보.
+2. `find_address_by_city_id(value=245, limit=10)` × 3 동일 쿼리 반복 + op=in 변형 1회 — 같은 10건 child 주소를 4번 재확인.
+3. `get_country(103)`.
+4. `find_address_by_last_update op="any" value=""` × 4 — atomic tool 스키마 버그(`value must be null when op=any`)로 4턴 헛발질. 메모리에 이미 기록된 기존 버그.
+5. `get_address(1)` → `find_address_by_district value=""` × 2 → `calc_address count by city_id(=245)` × 3 → `get_address(100/200/300/400)` 샘플링으로 마무리.
+
+**Findings.**
+- qwen은 **city → address 1:N 경로를 정확히 식별**했고 `find_address_by_city_id`로 child rows 10건을 가져왔다. homogeneous-list 프롬프트의 구조적 목표(1:N 단일 FK 자식 3건)는 이해했다는 첫 긍정 신호.
+- 그러나 turn budget(20)이 (a) 동일 쿼리 재호출 루프와 (b) `op="any"` 스키마 버그로 4턴, 총 8+턴이 소진되어 submit_draft 직전에 예산 고갈.
+- 즉 이번 실패는 **프롬프트 반증이 아니라 런타임 노이즈** — 프롬프트 가설(homogeneous list baseline이 Width 편향을 구조적으로 대체)은 여전히 미검증 상태로 남음.
+- 교훈: homogeneous-list 방향은 살려둘 가치 있지만, `find_*_by_last_update op="any"` 버그 존재 하에선 20턴 예산이 타이트. 이 버그가 샤피로 "첫 submit 전 qwen 헛발질 유발기"로 작동하고 있음.
+
+**Next direction.** (a) atomic tool 스키마 버그 수정(`op="any"`일 때 value 무시) 후 iter12 프롬프트 그대로 재시도, 혹은 (b) `max_turns` 20→25 상향이라는 프롬프트-독립 컨트롤로 iter12 재시도. 둘 다 프롬프트 스코프 내 조정. 프롬프트 자체는 변경하지 않는다 — homogeneous-list 가설이 실제로 작동하는지 보려면 노이즈를 걷어낸 조건에서 동일 프롬프트를 한 번 더 돌려야 함.
+
+### Iteration 12 retry2 — 2026-04-17 (tool bug fixed)
+
+**Change.** `src/rl_task_foundry/synthesis/atomic_tools.py::_render_atomic_tool_source` 내 `_validate_find_value` 를 수정해 `op == 'any'` 분기에서 value 검사 제거. 기존 `find_*` 런타임은 `op='any'`일 때 `where_sql='TRUE'`로 value 무시하므로 downstream 영향 없음. pytest 182/182 통과.
+
+**Trial.** `artifacts/smoke_iter12_retry2` (flow_id `real_db_trial:20260417T103610Z:db0bd0db`). anchor = rental_id=6966 (customer 45, inventory 1577, film 346). 20 atomic call, 0 submit, `MaxTurnsExceeded`.
+
+Call 분해 (key turns):
+1. turn 1~4: `get_rental(6966) → get_customer(45) → get_inventory(1577) → get_film(346)` 정상 inspection.
+2. turn 5: `find_rental_by_customer_id(customer_id=45, limit=3, sort_by=rental_date, direction=asc)` — **step 2 목표 정확히 실행**, child rows 3건 확보. 여기서 submit 가능한 상태.
+3. turn 6~8: 같은 쿼리 limit=3 재호출 + limit=5 변형 + payment 탐색.
+4. turn 9~11: staff→rental 경로, op=in 변형.
+5. turn 12~15: address→customer 확장, rental_by_rental_date, film_by_release_year.
+6. turn 16~20: film_by_length, actor_by_first_name/last_name/any, rental_by_return_date.
+
+단 한 건의 `find_*_by_last_update op="any"` 에러 스팸도 없음 → tool 버그 수정 효과 확인.
+
+**Findings.**
+- 툴 노이즈 제거에도 불구하고 **submit 0**. 실패 원인이 툴 버그가 아니라 qwen thinking-mode의 commit 회피.
+- 프롬프트는 올바르게 수용됨: step 2의 "homogeneous list of 3 child records through single FK, sort by observed field" 를 turn 5에 정확히 실행. 그럼에도 submit 대신 대안 1:N 경로(payment/staff/address/date/actor 5종)를 탐색.
+- Commit Rule의 "Within your first 6 tool calls, submit_draft must have been called at least once" + "Spend at most 3 atomic calls before your first submit" 두 제약을 qwen이 구조적으로 무시. iter12 retry2는 20턴 내 submit 0.
+- 일반 패턴: step 2에 조금이라도 structural freedom(어느 1:N 경로? 어느 sort key?)이 있으면 qwen은 "더 나은 옵션" 탐색에 빠짐. iter06(rigid 1-record lookup)처럼 목표가 경직돼야 빠른 commit이 일어남.
+
+**Structural diagnosis.** qwen3.5-plus thinking-mode × rigid composer/solver pairing 조건에서는:
+- Rigid step 2 target (iter06) → 빠른 commit, Width escalation만 반복, pass_rate>0.75.
+- Flexible step 2 target (iter11/12) → commit 자체가 느림, MaxTurnsExceeded.
+어느 쪽도 [0.25, 0.75] 밴드 진입 불가. 같은-모델 ceiling은 프롬프트로 피해갈 수 없음을 재확인.
+
+**Next direction.** iter13에서 step 2에 명시적 commit pressure 추가("Submit after the first successful find_* call; do not explore alternative paths before the first submit. The first draft is always too_easy — that is expected"). 동시에 too_easy를 실패가 아닌 expected outcome으로 재프레이밍하여 qwen의 premature optimization 유혹 차단.
+
+---
+
 ### Iteration 7 — 2026-04-17
 
 **Hypothesis.** 같은 reasoning 모델이 composer/solver 양쪽이라 Width나 단일 Filter 수준 escalation으론 pass_rate를 band로 끌어내리지 못한다. Escalation Axes를 **강도 순서대로 재배열**하고 "Width와 단일 Filter는 첫 escalation부터 피해라"를 명시하면 agent가 Cardinality/Composite 부터 시도할 것이다.
@@ -123,11 +288,29 @@
 - Axes 섹션 하단에 추가 문장: "Width and a single Filter alone rarely shift pass_rate enough. The first escalation after a too_easy rejection should add Cardinality or a Composite filter unless the label already has one."
 - Cross-item rule의 prerequisite "requires Cardinality already present"를 bullet 설명에 포함.
 
-**Trial.** `artifacts/smoke_iter07` (task id `b9govvnwn`). **Blocked by quota**: Alibaba Qwen API가 429 `insufficient_quota`를 반환 — 계정 쿼터 소진. 7회 연속 reasoning-heavy trial이 누적돼 quota cap 도달.
+**Trial (blocked).** `artifacts/smoke_iter07` (task id `b9govvnwn`). Alibaba Qwen API가 429 `insufficient_quota`를 반환 — 7회 연속 reasoning-heavy trial 누적으로 quota cap 도달.
 
-**Findings.** 프롬프트 변경 효과 측정 불가. qwen3.5-plus billing 리셋 전까지 후속 iteration은 blocked.
+**Trial (retry, 2026-04-17 post-quota-refresh).** `artifacts/smoke_iter07_retry` (flow_id `real_db_trial:20260417T083124Z:f3c9b934`). anchor = `rental_id=9970` (customer 578 WILLARD LUMPKIN / inventory 2846 / film 624 NIGHTMARE CHILL / staff 2). 3 submit_draft, terminal `reject_too_hard` → budget_exhausted → `synthesis_failed`. token_usage 610k input / 1.4k output over 8 turns, 230 s latency.
 
-**Next direction.** (a) 다른 모델(gpt-5.4-mini, claude-haiku-4-5 등 non-thinking)로 전환해서 프롬프트 검증 계속, (b) billing 리셋 대기, (c) 지금까지 얻은 학습을 바탕으로 설계 결정 정리 후 재개. 판단은 다음 세션에서.
+Per-attempt 요약:
+
+| # | added fields | slot | pass_rate | error_code |
+|---|--------------|------|-----------|------------|
+| 1 | first_name, last_name | 2 | 1.0 (3/3) | reject_too_easy |
+| 2 | +title (Width) | 3 | — | no_new_grounded_observation |
+| 3 | +staff_first_name, staff_last_name (Width) | 5 | 0.333 (1/3) | reject_too_hard |
+
+**Findings.**
+- 강도순 Escalation Axes + "Width와 단일 Filter는 첫 escalation부터 피해라" 명시에도 composer는 첫/둘째 escalation 모두 **Width**를 선택. 가설 **미검증(negative)**.
+- attempt 2는 직전 관측 집합 내에서 `title`만 꺼내 label에 추가 — 새 atomic call 없이 submit한 전형적 `no_new_grounded_observation`. iter06에서 확보했다고 본 grounding 규율이 "축 선택"이 복잡해진 순간 다시 깨짐.
+- slot 2 → 5로 점프했을 때 pass_rate 1.0 → 0.333. band [0.25, 0.75] 진입은 가능했지만 attempt 2 낭비로 4번째 submit 여력 없음. budget cap 3이 이 프롬프트 구조의 실질적 병목.
+- Width 두 번만으로 pass_rate 3단 하강이 관측된 점은 의미 있음 — qwen 솔버 3명이 동일 모델이라도 output surface 크기에 민감. 반대로 Cardinality/Cross-item은 시도조차 안 됨.
+
+**Next direction.**
+1. Iter08 후보: "첫 escalation 실패(Width로 진행) 시 immediate Cardinality 전환" 규칙을 `# After Rejection`이 아닌 `# Label Rules`의 명령형 한 줄로 넣는다(조건문 금지 원칙과 양립하도록 "After a too_easy rejection, the next label MUST change the slot count or add a Cross-item rule" 형태).
+2. 병행으로 `max_generation_attempts`를 3 → 4로 완화하는 실험(프롬프트 독립). iter07_retry는 4였다면 성공 가능성 존재.
+3. asymmetric composer/solver (solver=gpt-5.4-nano 등) 실험을 iter08 뒤로 미뤄두지 말고 같은 세션에 묶어 구조적 상한 대 프롬프트 상한을 구분.
+4. `no_new_grounded_observation` 재현성(iter07에서 처음 이 attempt-2 패턴 관측)을 확인하려면 동일 프롬프트로 1~2회 추가 trial 필요.
 
 ---
 
@@ -143,7 +326,14 @@
 | 04 | 1 | 19-call loop | "1-3 calls" 허용 → 탐색 폭주 |
 | 05 | 1 | 19-call 넓은 탐색 | 조건문 문장도 qwen에겐 tree 탐색 유발 |
 | 06 | 2 | 18-call 탐색 | grounding을 Label Rules로 이전 → ungrounded 차단 성공 |
-| 07 | N/A | — | quota 소진, 측정 불가 |
+| 07 | 3 | Width 반복 + grounding 위반 | quota 이후 retry — 강도순 Axes 가설 미검증, qwen은 여전히 Width만 선택 |
+| 08 | 0 | — | Label Rules에 "next label MUST change shape" 추가 → 상시 제약으로 오인해 cardinality 후보 사전탐색, MaxTurnsExceeded |
+| 09 | 0 | — | 같은 imperative를 Workflow step 3로 이전 → step 본문이 길어지자 첫 submit 자체 지연, MaxTurnsExceeded |
+| 10 | 3 | +Width, +Width, +Width | step 3 복원 + Axes effect 본문 재설계 → submit 3회 정상, 그러나 qwen이 Width 편향 깨지 않음. pass_rate 1.0 고정, same-model ceiling 직접 증거 |
+| 11 | 3 | heterogeneous list attempts | Workflow step 2를 "3-item list along 1:N path"로 교체 → qwen은 "list"를 attribute enumeration으로 오해, blank string + ungrounded 로 실패 |
+| 12 | — | quota 재소진 | step 2를 "homogeneous list + 예시" 로 재작성, 세션 누적 6 trial로 Alibaba quota 429, 프롬프트 검증 불가 |
+| 12_retry | 0 | MaxTurnsExceeded | qwen이 city→address 1:N 경로는 정확히 식별, 그러나 동일 쿼리 반복 + `op="any" value=""` 스키마 버그 4턴 + calc/샘플링으로 예산 고갈. 프롬프트 반증 아님, 런타임 노이즈 |
+| 12_retry2 | 0 | MaxTurnsExceeded | tool 버그 수정 후 재실행. qwen이 turn 5에 올바른 find_*(limit=3) 실행했으나 submit하지 않고 대안 1:N 경로 5종 탐색. commit 회피 행동 관측 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
@@ -151,7 +341,10 @@
 2. **시스템 프롬프트와 rejection feedback 본문은 어휘+의미 완전 정렬 필수**. 두 신호가 다르면 agent는 일관된 규율을 잃는다 (iter03 핵심 발견).
 3. **grounding 책임은 `# Label Rules`에 bullet 하나로 둬야 한다**. `# After Rejection`에 넣으면 조건문이 돼 과탐색 유발.
 4. **`# After Rejection`은 최소 형태 고정**: "rejection ≠ 탐색 신호, 2 atomic calls 내 재submit" 외에는 건드리지 않는다 (iter04/iter05가 증명).
-5. **Escalation Axes는 강도 우선순위로 나열해야 Cardinality/Cross-item 등 강한 축이 선택된다** (iter07 가설, 미검증).
+5. **Escalation Axes 강도순 재배열 + "Width 회피" 명시만으로는 qwen의 Width 편향을 깨지 못한다** (iter07 retry, iter10 두 번 재확인). 축 순서나 bullet 본문 effect 문구는 decision tree 분기 우선순위로 읽히지 않고, 가장 "추가 실행 비용이 낮은" 축이 여전히 선택됨. pass_rate=1.0이 세 번 연속 관측되는 건 same-model composer/solver ceiling의 직접 증거.
+6. **Rejection-conditional 지시는 Label Rules에 두면 상시 제약으로 오인된다** (iter08). scope가 박힌 Workflow step 3 혹은 dedicated After Rejection 섹션에만 두어야 한다.
+7. **Workflow step 본문을 3줄 이상으로 늘리면 첫 submit이 지연된다** (iter09 MaxTurnsExceeded). escalation 규칙의 상세도 자체가 첫 submit 속도에 영향. step 본문은 한 문장 수준으로 유지하고, 상세는 Axes 본문에 분산.
+8. **"list along 1:N path" 같은 추상 어휘는 qwen이 attribute enumeration으로 오해한다** (iter11). homogeneous list 요구 시 "every item shares the same keys" + 시각적 예시 패턴(`[{k1,k2},{k1,k2},…]`) 같은 구체화 필수.
 
 ### 구조적 한계 (prompt로 해결 불가)
 
@@ -162,10 +355,10 @@
 
 ### 다음 세션 작업 우선순위
 
-1. **billing 확인 후 qwen3.5-plus 재개** 또는 **non-thinking 모델로 전환**.
-2. **iter07 프롬프트(강도 순 escalation)** 효과 검증.
-3. 검증 후 **iter 03/06/07 변경사항 커밋**(지금까지 프롬프트 변화는 unstaged).
-4. 이후 composer-vs-solver 비대칭 설정 실험.
+1. **iter08**: 선언형 Label-Rules 제약("After too_easy, the next label MUST change slot count or add a Cross-item rule") + `# Escalation Axes`에서 Width/Filter bullet 제거 혹은 "last resort" 라벨 부여. 조건문 금지 원칙과 양립하는 문장 형태로.
+2. **budget 완화 대조군**: 동일 프롬프트로 `max_generation_attempts=4` 1회 trial. iter07_retry는 attempt 4가 있었다면 band 진입 가능성.
+3. **asymmetric composer/solver**: composer=qwen3.5-plus, solver=약한 모델(gpt-5.4-nano 후보) — 구조적 상한과 프롬프트 상한 분리 측정.
+4. `no_new_grounded_observation` 재현성 확인을 위한 same-prompt 2회 추가 trial.
 
 ---
 
