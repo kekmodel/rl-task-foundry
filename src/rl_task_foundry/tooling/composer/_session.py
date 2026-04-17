@@ -10,6 +10,7 @@ and must not import from each other).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -21,7 +22,7 @@ class _Row(Protocol):
 
 
 class _ConnectionLike(Protocol):
-    async def fetch(self, sql: str, *args: object) -> list[_Row]: ...
+    async def fetch(self, sql: str, *args: object) -> Sequence[_Row]: ...
     async def fetchrow(self, sql: str, *args: object) -> _Row | None: ...
     async def fetchval(self, sql: str, *args: object) -> object: ...
 
