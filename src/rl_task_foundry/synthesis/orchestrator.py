@@ -10,6 +10,7 @@ from typing import Protocol
 from rl_task_foundry.config.models import DatabaseConfig, DomainConfig
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.synthesis.runtime import (
+    SynthesisCategoryStatus,
     SynthesisTaskDraft,
 )
 from rl_task_foundry.synthesis.scheduler import (
@@ -25,7 +26,7 @@ class SynthesisRuntimeHandle(Protocol):
         self,
         *,
         db_id: str | None = None,
-    ) -> dict[str, object]: ...
+    ) -> dict[str, SynthesisCategoryStatus]: ...
 
     async def synthesize_environment_draft(
         self,

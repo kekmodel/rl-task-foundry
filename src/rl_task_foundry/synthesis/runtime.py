@@ -88,7 +88,7 @@ class _SynthesisBackendProtocol(Protocol):
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
-        data_profile: object | None = None,
+        data_profile: DataProfile | None = None,
         max_turns: int,
     ) -> SynthesisConversationResult: ...
 
@@ -640,12 +640,13 @@ class SynthesisAgentRuntime:
                 if last_attempt is not None and last_attempt.artifact_diagnostics is not None
                 else [],
             )
-            await self._record_category_discard(
-                db_id,
-                requested_topic,
-                outcome=last_attempt.outcome if last_attempt is not None else None,
-                error_codes=list(diagnostics.error_codes),
-            )
+            if requested_topic is not None:
+                await self._record_category_discard(
+                    db_id,
+                    requested_topic,
+                    outcome=last_attempt.outcome if last_attempt is not None else None,
+                    error_codes=list(diagnostics.error_codes),
+                )
             raise SynthesisArtifactGenerationError(
                 "single-agent synthesis did not produce an accepted"
                 " draft before budget or turn exhaustion",
@@ -846,7 +847,7 @@ class SynthesisAgentRuntime:
         schema_summary: dict[str, object],
         tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
-        data_profile: object | None = None,
+        data_profile: DataProfile | None = None,
     ) -> SynthesisConversationResult:
         candidate_backends = self.synthesis_backends or []
         if not candidate_backends:
@@ -953,7 +954,7 @@ class SynthesisAgentRuntime:
         task_bundle = self._materialize_task_bundle(
             atomic_tool_bundle=atomic_tool_bundle,
             db_id=db_id,
-            requested_topic=selected_topic,
+            selected_topic=selected_topic,
             created_at=materialized_at,
             task=task,
         )
@@ -1121,7 +1122,7 @@ class SynthesisAgentRuntime:
         *,
         atomic_tool_bundle: AtomicToolBundle,
         db_id: str,
-        requested_topic: str | None,
+        selected_topic: str,
         created_at: datetime,
         task: TaskContract,
     ) -> TaskBundleContract:
@@ -1130,7 +1131,7 @@ class SynthesisAgentRuntime:
         tool_signature = self._signature_for_text(atomic_tool_bundle.source)
         task_id = self._build_task_id(
             db_id=db_id,
-            topic=requested_topic,
+            topic=selected_topic,
             task_signature=task_signature,
             tool_signature=tool_signature,
         )
@@ -1140,7 +1141,7 @@ class SynthesisAgentRuntime:
                 "task_id": task_id,
                 "db_id": db_id,
                 "domain": self.config.domain.name,
-                "topic": requested_topic,
+                "topic": selected_topic,
                 "atomic_tool_set_ref": f"db://{db_id}",
                 "created_at": created_at,
                 "generator_version": CURRENT_SYNTHESIS_GENERATOR_VERSION,

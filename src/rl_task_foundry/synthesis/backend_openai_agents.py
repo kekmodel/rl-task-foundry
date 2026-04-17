@@ -12,6 +12,7 @@ from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRun
 from rl_task_foundry.infra.sdk_helpers import (
     ToolExecutor,
 )
+from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.infra.sdk_helpers import (
     extract_token_usage as _extract_token_usage,
 )
@@ -247,7 +248,7 @@ class OpenAIAgentsSynthesisBackend:
         tool_surface_summary: dict[str, object],
         max_turns: int,
         anchor_hint: dict[str, object] | None = None,
-        data_profile: object | None = None,
+        data_profile: DataProfile | None = None,
     ) -> SynthesisConversationResult:
         sdk = self._sdk_components()
         if hasattr(sdk, "set_tracing_disabled"):

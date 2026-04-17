@@ -217,7 +217,7 @@ class SynthesisRegistryRunner:
             results_lock = asyncio.Lock()
             step_counter = 0
             steps_remaining = max_steps
-            entry_queue: asyncio.Queue[SynthesisDbRegistryEntry | None] = asyncio.Queue()
+            entry_queue: asyncio.Queue[SynthesisDbRegistryEntry] = asyncio.Queue()
             for entry in pending_registry:
                 entry_queue.put_nowait(entry)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json as _json
 
 from rl_task_foundry.config.models import SynthesisRuntimeConfig
+from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.synthesis.contracts import topic_phrase
 
 LANGUAGE_NAMES = {
@@ -113,7 +114,7 @@ def build_synthesis_input(
     tool_surface_summary: dict[str, object],
     runtime_config: SynthesisRuntimeConfig,
     anchor_hint: dict[str, object] | None = None,
-    data_profile: object | None = None,
+    data_profile: DataProfile | None = None,
 ) -> str:
     sections: list[str] = []
 
@@ -280,7 +281,7 @@ def build_synthesis_input(
         )
 
     # ── Data Distributions ──
-    if data_profile is not None and hasattr(data_profile, "render"):
+    if data_profile is not None:
         rendered = data_profile.render()
         if rendered.strip():
             sections.append(
