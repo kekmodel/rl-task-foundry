@@ -91,21 +91,39 @@ def build_instrumented_composer_tools(
     return [instrument_composer_tool(tool, controller) for tool in raw_tools]
 
 
+_SOLVER_ATOMIC_PRIMITIVES: dict[str, tuple[str, ...]] = {
+    "set_producing": ("rows_where", "rows_via", "intersect"),
+    "set_annotating": ("order_by",),
+    "set_materializing": ("take", "count", "aggregate", "group_top"),
+    "row_reading": ("read",),
+}
+
+
 def summarize_composer_tool_surface(
     tools: list["FunctionTool"],
 ) -> dict[str, object]:
-    """Small JSON summary of the composer toolset for prompt inputs.
+    """JSON summary of the composer toolset plus the solver primitive
+    inventory, both rendered by `synthesis/prompts.build_synthesis_input`.
 
-    Kept minimal on purpose — the prompt rewrite (checklist step 6)
-    will expand this to describe the DSL. For now the synthesis input
-    carries enough for the agent to see the tools exist.
+    The composer entries (name + description) come straight from the
+    FunctionTool instances built for this conversation. The solver
+    primitive groups are fixed — the prompt surfaces them so the
+    composer can anticipate how a solver will re-derive the canonical
+    answer via an atomic calculus chain.
     """
     entries: list[dict[str, object]] = []
     for tool in tools:
         entries.append(
             {"name": tool.name, "description": tool.description}
         )
-    return {"tool_count": len(tools), "tools": entries}
+    return {
+        "tool_count": len(tools),
+        "tools": entries,
+        "solver_primitives": {
+            group: list(names)
+            for group, names in _SOLVER_ATOMIC_PRIMITIVES.items()
+        },
+    }
 
 
 __all__ = [

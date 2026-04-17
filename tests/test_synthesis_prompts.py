@@ -7,7 +7,41 @@ from rl_task_foundry.synthesis.prompts import (
 )
 
 
-def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
+def _composer_surface() -> dict[str, object]:
+    return {
+        "tool_count": 5,
+        "tools": [
+            {
+                "name": "schema_map",
+                "description": "Schema graph slice with hub/bridge tags.",
+            },
+            {
+                "name": "profile",
+                "description": "Row/distinct/null counts + top-k frequency.",
+            },
+            {
+                "name": "sample",
+                "description": "Up to n representative rows with optional seed.",
+            },
+            {
+                "name": "neighborhood",
+                "description": "Anchor row + per-edge sample IDs.",
+            },
+            {
+                "name": "query",
+                "description": "JSON DSL compiler for canonical answers.",
+            },
+        ],
+        "solver_primitives": {
+            "set_producing": ["rows_where", "rows_via", "intersect"],
+            "set_annotating": ["order_by"],
+            "set_materializing": ["take", "count", "aggregate", "group_top"],
+            "row_reading": ["read"],
+        },
+    }
+
+
+def test_synthesis_input_renders_composer_and_solver_tool_surface() -> None:
     config = load_config("rl_task_foundry.yaml")
     prompt = build_synthesis_input(
         domain_name="service_operations",
@@ -29,29 +63,13 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
                 },
             ],
         },
-        tool_surface_summary={
-            "tool_count": 4,
-            "family_counts": {"get": 2, "find": 1, "calc": 1},
-            "entity_surfaces": [
-                {
-                    "tool_name": "get_customer",
-                    "readable_fields": ["first_name", "last_name"],
-                },
-                {
-                    "tool_name": "get_staff",
-                    "readable_fields": [],
-                },
-                {
-                    "tool_name": "find_order_by_customer_id",
-                    "readable_fields": ["status", "total_amount"],
-                },
-            ],
-        },
+        tool_surface_summary=_composer_surface(),
     )
 
     # structural sections
     assert "# Session Context" in prompt
     assert "# Environment" in prompt
+    assert "# Tools Available" in prompt
 
     # session context
     assert "Domain: service_operations" in prompt
@@ -62,33 +80,68 @@ def test_synthesis_input_is_minimal_and_schema_oriented() -> None:
     # schema
     assert "public.customer" in prompt
     assert "public.rental" in prompt
-    assert "Total atomic tools: 4" in prompt
-    assert "get: 2 tools" in prompt
 
-    # entity surfaces
-    assert "get_customer: readable fields=" in prompt
-    assert "get_staff: readable fields=[] (id-only)" in prompt
+    # composer tools surface
+    assert "Composer tools: 5" in prompt
+    assert "schema_map — Schema graph slice" in prompt
+    assert "query — JSON DSL compiler" in prompt
+
+    # solver primitive inventory
+    assert "set-producing: rows_where, rows_via, intersect" in prompt
+    assert "set-materializing: take, count, aggregate, group_top" in prompt
+    assert "row-reading: read" in prompt
+
+    # no legacy atomic-bundle vocabulary
+    assert "Total atomic tools" not in prompt
+    assert "family_counts" not in prompt
+    assert "entity_surfaces" not in prompt
+
+    # navigation hint still present
     assert "navigation only" in prompt
 
     # submit_draft format lives in the system prompt, not the per-request input
     assert "# submit_draft" not in prompt
 
 
-def test_synthesis_agent_instructions_describe_single_conversation_loop() -> None:
+def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     instructions = build_synthesis_agent_instructions(
         load_config("rl_task_foundry.yaml").synthesis.runtime
     )
 
     # identity
     assert "task-synthesis agent" in instructions
+    assert "9-primitive atomic calculus" in instructions
 
     # commit rule with tool-call vocabulary
     assert "# Commit Rule" in instructions
     assert "tool calls" in instructions
     assert "submit_draft" in instructions
 
-    # workflow: gradual escalation
+    # composer toolset section with each primitive
+    assert "# Composer Tools" in instructions
+    for tool in ("schema_map", "neighborhood", "profile", "sample", "query"):
+        assert tool in instructions
+
+    # solver context section enumerating atomic calculus primitives
+    assert "# Solver Context" in instructions
+    for primitive in (
+        "rows_where",
+        "rows_via",
+        "intersect",
+        "order_by",
+        "take",
+        "count",
+        "aggregate",
+        "group_top",
+        "read",
+    ):
+        assert primitive in instructions
+    assert "2 ≤ n ≤ 5" in instructions
+
+    # workflow now names composer tools instead of "atomic calls"
     assert "# Workflow" in instructions
+    assert "schema_map" in instructions
+    assert "query(spec)" in instructions
     assert "too_easy" in instructions
     assert "too_hard" in instructions
 
@@ -114,10 +167,9 @@ def test_synthesis_agent_instructions_describe_single_conversation_loop() -> Non
     assert "# submit_draft" in instructions
     assert "topic = " in instructions
 
-    # no legacy
+    # no legacy atomic-tool language
+    assert "atomic calls" not in instructions
     assert "# Prohibitions" not in instructions
-    assert "Too-hard" not in instructions
-    assert "Budget exhausted" not in instructions
 
 
 def test_synthesis_input_includes_anchor_hint() -> None:
@@ -129,7 +181,7 @@ def test_synthesis_input_includes_anchor_hint() -> None:
         task_language="ko",
         runtime_config=config.synthesis.runtime,
         schema_summary={"table_count": 1, "tables": []},
-        tool_surface_summary={"tool_count": 0, "family_counts": {}, "entity_surfaces": []},
+        tool_surface_summary=_composer_surface(),
         anchor_hint={"film_id": 42},
     )
 

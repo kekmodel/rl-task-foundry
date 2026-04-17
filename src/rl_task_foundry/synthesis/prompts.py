@@ -41,10 +41,11 @@ def build_synthesis_agent_instructions(
     return "\n\n".join([
         # ── Identity ──
         "You are a task-synthesis agent. Each tool call either "
-        "inspects the database or commits a candidate task via "
-        "submit_draft. Multiple independent solvers later attempt "
-        "your task; their exact-match agreement rate decides "
-        "acceptance.",
+        "inspects the database via one of the composer tools or "
+        "commits a candidate task via submit_draft. Multiple "
+        "independent solvers later attempt your task using a "
+        "separate 9-primitive atomic calculus; their exact-match "
+        "agreement rate decides acceptance.",
 
         # ── Commit Rule ──
         build_tool_call_budget_instruction(
@@ -53,28 +54,73 @@ def build_synthesis_agent_instructions(
 
         # ── Never ──
         "# Never\n"
-        "- Never write SQL.\n"
+        "- Never write SQL. Use the composer DSL (`query`) instead.\n"
         "- Never weaken a label on rejection. Rejection is always "
         "caused by the request, not the label.\n"
         "- Never concatenate or reformat observed strings.\n"
         "- Never use internal identifiers (*_id) as answer fields.\n"
         "- Never apply more than one escalation per submit.",
 
+        # ── Composer Tools ──
+        "# Composer Tools\n"
+        "You have five high-bandwidth tools. Each returns JSON you "
+        "can keep reading directly.\n"
+        "\n"
+        "- `schema_map(root_table?, depth?)` — tables, columns, "
+        "FK edges, plus hub/bridge tags. One call to orient.\n"
+        "- `neighborhood(table, row_id, max_per_edge?)` — the "
+        "anchor row's attributes plus per-edge sample IDs and "
+        "counts. Use right after sampling an anchor.\n"
+        "- `profile(table, column?, predicate?)` — row_count plus "
+        "distinct/null counts; with `column` set, adds min/max and "
+        "a top-k frequency list. Drives filter calibration.\n"
+        "- `sample(table, n, seed?, predicate?)` — up to `n` "
+        "representative rows. Seed makes the draw reproducible.\n"
+        "- `query(spec)` — JSON DSL over filter + FK join chain + "
+        "select or group_by+aggregate, plus sort/limit. One call "
+        "computes any canonical answer an atomic chain could "
+        "derive. Use it to produce the label.",
+
+        # ── Solver Context ──
+        "# Solver Context\n"
+        "Solvers re-derive your canonical answer through nine "
+        "atomic primitives on a schema-parameterized calculus:\n"
+        "\n"
+        "- Set-producing: `rows_where(table, column, op, value)` "
+        "(ops: eq/in/lt/gt/lte/gte/like; no `any`), "
+        "`rows_via(cursor, edge_label)`, "
+        "`intersect(left, right)`.\n"
+        "- Set-annotating: `order_by(cursor, column, direction)`.\n"
+        "- Set-materializing: `take(cursor, n)` with `2 ≤ n ≤ 5`, "
+        "`count(cursor)`, `aggregate(cursor, fn, column)` "
+        "(sum/avg/min/max), `group_top(cursor, group_column, fn, "
+        "n)` with `2 ≤ n ≤ 5`.\n"
+        "- Row-reading: `read(table, row_id, columns)`.\n"
+        "\n"
+        "Design labels that force chaining. A grounded answer "
+        "reachable by one primitive (e.g. a single `read` or a "
+        "bare `take` on a base table) is solver-trivial and will "
+        "lock pass_rate at 1.0. Aim for at least three primitives "
+        "of required composition.",
+
         # ── Workflow ──
         "# Workflow\n"
         "Your ONLY immediate target is the minimum viable draft. "
         "Ignore later escalations until you receive a rejection.\n"
         "\n"
-        "1. Inspect the anchor with up to 3 atomic calls to learn "
-        "which user-facing fields exist along a multi-hop path.\n"
-        "2. Submit immediately. The first draft is a "
-        "homogeneous list of 3 child records reached through a "
-        "single foreign key from the anchor. Every item shares "
-        "the same 1-2 keys (e.g. "
-        "`[{rental_date, film_title}, …]`). Sort by one observed "
-        "field in a fixed direction. No filters.\n"
+        "1. Call `schema_map` once if you are not already oriented; "
+        "then `neighborhood(table, anchor_row_id)` to see the "
+        "anchor's FK fan-out.\n"
+        "2. Author the canonical answer with a single "
+        "`query(spec)` call: a homogeneous list of 3 child records "
+        "reached through a single foreign key from the anchor, "
+        "every item sharing the same 1-2 keys "
+        "(e.g. `[{rental_date, film_title}, …]`), sorted by one "
+        "observed field in a fixed direction. Submit the result as "
+        "the label and resurface the same constraint in the user-"
+        "facing question.\n"
         "3. On too_easy, add exactly ONE dimension from the "
-        "escalation axes below and resubmit within 2 atomic "
+        "escalation axes below and resubmit within 2 composer "
         "calls.\n"
         "4. On too_hard, relax one clause (not the label) and "
         "resubmit. Never weaken the label itself.\n"
@@ -114,7 +160,7 @@ def build_synthesis_agent_instructions(
         # ── After Rejection ──
         "# After Rejection\n"
         "A rejection is not a signal to explore more. Within 2 "
-        "atomic calls of rejection feedback, call submit_draft "
+        "composer calls of rejection feedback, call submit_draft "
         "again. The anchor stays locked; only the label and the "
         "question change.",
 
@@ -139,7 +185,11 @@ def build_synthesis_agent_instructions(
         "exact record count and the sort clause in the question "
         "so the list is unique (e.g. \"the first 3 rentals "
         "ordered by rental_date ascending\"). Never leave the "
-        "count or order implicit.",
+        "count or order implicit. Solvers cannot `take` fewer "
+        "than 2 or more than 5 rows in a single primitive call, "
+        "so fixed-N targets within `[2, 5]` are directly "
+        "reachable; anything outside forces a `count` + "
+        "`aggregate` chain.",
 
         # ── submit_draft ──
         "# submit_draft\n"
@@ -153,6 +203,54 @@ def build_synthesis_agent_instructions(
         ")\n"
         "```",
     ])
+
+
+def _render_composer_tool_lines(
+    tool_surface_summary: dict[str, object],
+    hint_limit: int,
+) -> list[str]:
+    lines: list[str] = []
+    tool_count = tool_surface_summary.get("tool_count")
+    if isinstance(tool_count, int):
+        lines.append(f"- Composer tools: {tool_count}")
+    tools = tool_surface_summary.get("tools")
+    if isinstance(tools, list):
+        for tool in tools[:hint_limit]:
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            description = tool.get("description")
+            if not isinstance(name, str):
+                continue
+            if isinstance(description, str) and description.strip():
+                lines.append(f"- {name} — {description}")
+            else:
+                lines.append(f"- {name}")
+    return lines
+
+
+def _render_solver_primitive_lines(
+    tool_surface_summary: dict[str, object],
+) -> list[str]:
+    primitives = tool_surface_summary.get("solver_primitives")
+    if not isinstance(primitives, dict):
+        return []
+    labels = {
+        "set_producing": "set-producing",
+        "set_annotating": "set-annotating",
+        "set_materializing": "set-materializing",
+        "row_reading": "row-reading",
+    }
+    lines: list[str] = []
+    for key, label in labels.items():
+        names = primitives.get(key)
+        if not isinstance(names, list):
+            continue
+        filtered = [str(name) for name in names if isinstance(name, str)]
+        if not filtered:
+            continue
+        lines.append(f"- {label}: {', '.join(filtered)}")
+    return lines
 
 
 def build_synthesis_input(
@@ -225,41 +323,6 @@ def build_synthesis_input(
             environment_lines.append(
                 f"- {qualified_name}: columns={list(columns)[:max_cols]}"
             )
-    family_counts = tool_surface_summary.get("family_counts")
-    tool_count = tool_surface_summary.get("tool_count")
-    if isinstance(tool_count, int):
-        environment_lines.append(f"- Total atomic tools: {tool_count}")
-    if isinstance(family_counts, dict):
-        for family_name, meaning in [
-            ("get", "retrieve one entry by ID"),
-            ("find", "find entries matching a condition"),
-            ("calc", "compute one statistic"),
-            ("rank", "rank groups by a statistic"),
-        ]:
-            count = family_counts.get(family_name)
-            if isinstance(count, int) and count > 0:
-                environment_lines.append(
-                    f"- {family_name}: {count} tools — {meaning}."
-                )
-    surfaces = tool_surface_summary.get("entity_surfaces")
-    if isinstance(surfaces, list):
-        hint_limit = runtime_config.prompt_tool_surface_hint_limit
-        for item in surfaces[:hint_limit]:
-            if not isinstance(item, dict):
-                continue
-            tool_name = str(item.get("tool_name") or "")
-            readable_fields = item.get("readable_fields")
-            if not isinstance(readable_fields, list):
-                continue
-            readable = [str(f) for f in readable_fields]
-            if readable:
-                environment_lines.append(
-                    f"- {tool_name}: readable fields={readable}"
-                )
-            else:
-                environment_lines.append(
-                    f"- {tool_name}: readable fields=[] (id-only)"
-                )
     environment_lines.append(
         "- Schema orientation is for navigation only. "
         "Verify readability in actual tool results before "
@@ -268,6 +331,26 @@ def build_synthesis_input(
     sections.append(
         "# Environment\n" + "\n".join(environment_lines)
     )
+
+    # ── Tools Available ──
+    hint_limit = runtime_config.prompt_tool_surface_hint_limit
+    composer_lines = _render_composer_tool_lines(
+        tool_surface_summary, hint_limit
+    )
+    solver_lines = _render_solver_primitive_lines(tool_surface_summary)
+    tool_section_lines: list[str] = []
+    if composer_lines:
+        tool_section_lines.append("## Composer toolset (for authoring)")
+        tool_section_lines.extend(composer_lines)
+    if solver_lines:
+        tool_section_lines.append(
+            "\n## Solver atomic calculus (what re-derives your answer)"
+        )
+        tool_section_lines.extend(solver_lines)
+    if tool_section_lines:
+        sections.append(
+            "# Tools Available\n" + "\n".join(tool_section_lines)
+        )
 
     # ── Topology ──
     topology_lines: list[str] = []
