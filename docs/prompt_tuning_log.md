@@ -604,7 +604,48 @@ Solver traces (3명):
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 20)
+### Iteration 21 — 2026-04-18 (accept 스트릭 끊김 → tooling 버그 노출)
+
+**Hypothesis.** iter20의 voice fix가 일반 anchor에서도 일관되게 작동하는지 단일 trial로 1차 재현성 확인(batch는 iter22부터). 프롬프트/config 변화 없음, composer의 anchor sampling 다양성에 맡김.
+
+**Change.** `artifacts/tmp_configs/iter21_repro.yaml` = iter20 config 복제. 제어 변수 0.
+
+**Trial.** `artifacts/smoke_iter21` — anchor `actor_id=87` (SPENCER PECK), topic "Actor filmography lookup". attempt 1 single submit → **`reject_too_hard + budget_exhausted`**. 3 solver 모두 matched=False, turn_count=0으로 기록됐으나 run_items 48~49개 → 실제로는 16 turns 가득 돌다 MaxTurnsExceeded(turn_count는 에러 경로 하드코딩 버그). 3연속 accept 스트릭 끊김.
+
+**Composer 저작 (attempt 1):** 2-hop `actor → film_actor → film` with `filter=actor_id=87, select=[title, rental_rate, rating], sort=title asc, limit=3`. Question은 "배우 SPENCER PECK이 출연한 영화 중 제목 순으로 정렬했을 때 처음 3개의 영화 제목, 대여 요금, 그리고 등급을 알려주세요." — 2인칭 조직-대상 ask 패턴으로 **voice는 완전 준수**(iter20 fix 지속).
+
+**Findings.**
+
+1. **Voice는 회귀 아님.** 실패 원인은 composer 저작이 아니라 solver의 실행 실패. 금지 구절 0건.
+2. **결정적 원인은 `film_actor` composite PK.** Solver의 run_items 분석:
+   - `rows_where(film_actor, actor_id=87)` → cursor ✓
+   - `rows_via(film_actor.film_id→film)` → cursor ✓ (target=film은 단일 PK)
+   - `order_by(title, asc)` → cursor ✓
+   - `take(n=3)` on sorted film cursor → **ERROR: "table 'public.film_actor' has a composite primary key; atomic calculus supports single-column PKs only for now"**
+   - 이유: `compile_take`의 Via/Intersect 경로가 `_compile_id_stream`을 호출하고 그 안의 `_compile_via_id_stream`이 origin table(film_actor)의 PK를 scalar로 취급. 가드 `_single_column_pk`가 composite PK 전부 거부.
+   - Solver가 15턴 동안 우회 경로(다른 방향 rows_via, `group_top(count)`, `take` on 다른 cursor) 시도했으나 동일 계통 에러 반복. MaxTurnsExceeded.
+3. **Structural mismatch 확정.** Composer의 `query` DSL은 junction table(M:N bridge)을 자유롭게 pass-through로 쓰는데, solver의 atomic calculus는 composite PK 테이블을 touch하는 순간 모든 primitive가 거부. Composer 저작 가능 집합 ⊃ Solver 재현 가능 집합. "composer 저작 ⟺ solver 재현 가능"이라는 설계 원칙 위반.
+4. **`turn_count=0` 관측 버그.** solver error path(solver/backend_openai_agents.py)가 `turn_count=0`을 하드코딩. 실제로는 16턴 MaxTurnsExceeded인데 기록상 0. 별건으로 fix 필요.
+5. **원 경로인 `_pk_expression`은 이미 composite 지원.** `(t.c1, t.c2)` ROW 표현으로 내놓을 수 있었는데, 4개 compile 함수(`_compile_via_id_stream`, `compile_take`, `compile_aggregate`, `compile_group_top`)가 모두 `_single_column_pk` 가드로 진입 차단 후 scalar `= base.id` JOIN. ROW 버전의 `_pk_expression(target, alias) = base.id`로 통일하면 PostgreSQL row equality가 단일/composite 둘 다 처리.
+
+**Fix (commit `0ff46a5`).**
+
+- `_single_column_pk` 완전 제거.
+- `_compile_via_id_stream` / `compile_take` Via·Intersect 경로 / `compile_aggregate` / `compile_group_top`의 JOIN 매칭을 `_pk_expression(...)  = base.id`로 통일.
+- `compile_read`에 composite 분기 추가 — `len(pk_cols) > 1`이면 row_id는 tuple/list, WHERE은 `c1 = $1 AND c2 = $2 ...` 다중 파라미터.
+- `build_read_tool` JSON 스키마의 row_id를 `scalar OR array` anyOf로 확장.
+- `build_take_tool` 핸들러가 asyncpg Record(composite ROW 반환)를 plain list로 정규화 — downstream JSON 직렬화에서 Record 객체 누출 방지.
+- 실측 회귀 테스트 `test_composite_pk_chain_against_sakila_film_actor` 추가: iter21 실패 경로 그대로 `rows_where(film_actor) → take → rows_via(→film) → order_by → take → read(film_actor, [composite_row_id])` 전부 통과.
+
+**Next direction.**
+
+1. **iter22: composite PK fix 실측 검증.** 동일 config로 재실행 → composer가 다시 junction table 경로를 고르면 (actor anchor나 category/film_category 등) solver가 이번엔 통과해야 함. 안 고르면 iter23+에서 의도적 seeding 필요.
+2. **turn_count=0 에러 경로 버그 별건 수정.** `solver/backend_openai_agents.py`의 exception handler가 `turn_count=_extract_turn_count(exc.run_data)` 같은 복구를 해야 정확. 에러 path 경로 개선 코스.
+3. **iter18/19/20 축 분포 보완 관측은 iter22 이후 batch로.** 이제 composite PK 안전하니 film/category/film_actor 기반 task도 배출 대상으로 유효.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 21)
 
 ### 행동 변화 요약
 
@@ -631,7 +672,8 @@ Solver traces (3명):
 | 17 | 1 | — | retry=5로 transient noise 제거 후 재실행. address 앵커 3 solvers 모두 submit, 1/3 matched → pass_rate=0.333 band 포함이지만 `_solver_divergence`가 2차 gate로 작동해 reject_too_hard 재분류. iter16 accept는 timeout 1명이 submission 풀에서 빠지며 divergence=1/2로 경계 통과한 infrastructure artifact 였음이 확정. n=3 + max_divergence=0.5는 구조적으로 band landing 불가 |
 | 18 | 2 | — | **첫 clean accept.** divergence gate off 후 rental 앵커에서 attempt 1 simple single-filter (3/3 too_easy) → Composite escalate (+staff_id 3 filters) → attempt 2 2/3 in band + committed + bundle exported. asymmetric tool surface에서 same-model qwen 페어링이 원설계 bottom-up 궤적으로 clean landing 가능함 첫 실증. trial_events.jsonl 실시간 스트리밍 실제 관측 검증 |
 | 19 | 1 | — | **2연속 accept** + Phase 2 unified logger 실사용 검증. customer 앵커에서 attempt 1 simple 1-filter로 바로 1/3 in band. iter18과 달리 escalation 없이 direct landing 궤적. trial_events.jsonl 한 파일에 composer/solver/phase 이벤트 전부 interleaved, legacy per-file trace 폴더 비어 있음 확인. iter17과 사실상 같은 signal(1/3 + 2 unique wrong)이 gate off라 자연 accept, fix 효과 직접 실증 |
-| 20 | 1 | — | **3연속 accept + voice fix 검증.** Qualitative 평가에서 발견한 iter18/19의 staff-voice / mixed-voice 문제를 prompt의 rewrite instruction 강화로 해결(1인칭 ask 명시 + 금지 구절 리스트). 결과: city(Toulouse) 앵커에서 "저는 툴루즈에 거주하는 고객입니다. 제 대여 기록..." 1인칭 customer-ask voice 완벽 준수. 부수 효과로 **첫 clean 2-hop join task**(city→address→customer→rental) 성공 — iter15 multi-hop overshoot 실패가 누적 수정들로 해소. 단 Toulouse customer 수가 2+면 semantic ambiguity 가능성 별도 검증 필요 |
+| 20 | 1 | — | **3연속 accept + voice fix 검증.** Qualitative 평가에서 발견한 iter18/19의 staff-voice / mixed-voice 문제를 prompt의 rewrite instruction 강화로 해결(1인칭 ask 명시 + 금지 구절 리스트). 결과: city(Toulouse) 앵커에서 "저는 툴루즈에 거주하는 고객입니다. 제 대여 기록..." 1인칭 customer-ask voice 완벽 준수. 부수 효과로 **첫 clean 2-hop join task**(city→address→customer→rental) 성공 — iter15 multi-hop overshoot 실패가 누적 수정들로 해소. 단 Toulouse customer 수가 2+면 semantic ambiguity 가능성 별도 검증 필요 (사후 확인: 1명, 무해) |
+| 21 | 1 | — | **Structural mismatch 노출** — actor anchor에서 composer가 `actor → film_actor → film` 2-hop task 저작. voice는 완전 준수(2인칭 org-ask)인데 solver의 atomic calculus가 `film_actor` composite PK에서 `take/count/aggregate/group_top` 전부 거부(`_single_column_pk` 가드). 16턴 우회 시도 후 MaxTurnsExceeded. Composer DSL ⊃ Solver calculus 표현력 격차 드러남. Fix는 `0ff46a5` — `_pk_expression` ROW 표현을 JOIN 매칭 통일해 composite PK 전면 지원. 실측 회귀 테스트 통과, iter22에서 실제 trial 재현 검증 예정 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
