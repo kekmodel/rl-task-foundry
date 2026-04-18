@@ -732,7 +732,44 @@ Voice: 2인칭 조직-대상 ask, 금지 구절 0, schema-ese 0 ✓. Sirjan cust
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 24)
+### Iteration 25 — 2026-04-19 (3-trial batch, shape 분포 측정)
+
+**Hypothesis.** iter24의 1-trial shape 변화가 단발 우연이 아니라 프롬프트 편집(`c07924d`)의 실제 효과인지 3-trial batch로 측정. 부가로 (a) accept rate 관측, (b) composer가 rental/payment 외 다른 shape(actor name, film title 등)에 도달하는지, (c) junction 경로 등장 시 composite PK fix(`0ff46a5`) 실측 기회.
+
+**Change.** `artifacts/tmp_configs/iter25_batch.yaml` = iter24 config 복제. 순차 3회 실행(smoke_iter25_a/b/c).
+
+**Trial 결과:**
+
+| suffix | anchor | topic | shape | axis | pass_rate | voice |
+|---|---|---|---|---|---|---|
+| a | payment_id=1453 | "Customer payment history with amount filter" | `{amount, payment_date}` | **Composite** (customer+amount>2) | 1/3 = 0.333 | 1인칭 ✓ |
+| b | film_id=108 | "Film actors retrieval" | **`{first_name, last_name}`** | Filter | 2/3 = 0.667 | 2인칭 org-ask ✓ |
+| c | inventory_id=3678 | "Inventory rental history" | `{rental_date, return_date}` | Filter | 1/3 = 0.333 | △ schema-ese |
+
+**3/3 accept rate = 100%.** 3 unique shapes across 3 trials.
+
+**iter25_b question:** "영화 'BUTCH PANTHER'에 출연한 배우들의 이름을 첫 이름 오름차순으로 정렬하여 처음 3명 알려주세요." → canonical `[{CARMEN HUNT}, {CUBA OLIVIER}, {GROUCHO DUNST}]`.
+
+**iter25_c question:** "인벤토리 ID 3678번 영화의 대여 기록을 대여 날짜가 빠른 순서대로 정렬하여 처음 3건의 대여 날짜와 반납 날짜를 알려주세요." — "인벤토리 ID 3678번" 표현은 customer가 자연스럽게 쓸 법하지 않은 schema-ese 경계. 금지 구절은 아니지만 voice 축에서 경미한 회귀.
+
+**Findings.**
+
+1. **Shape 다양화 실질 확인.** 프롬프트 편집 후 4 trials(iter24 + 25_a/b/c)의 shape 분포: rental 25% (1/4), payment 50% (2/4), actor names 25% (1/4). 이전 iter18/19/20/23 4회 연속 rental 100% 락인과 **극명히 대조**. `c07924d`의 예시 다변화가 composer의 template matching 성향 그대로 활용해 다양한 shape 유도.
+2. **Composite PK fix 실측 검증 ✓ (iter25_b).** iter21에서 실패한 `actor → film_actor → film` 경로와 구조적 대칭인 `film → film_actor → actor` 2-hop junction을 composer가 저작, solver 3명 중 2명이 정합 chain으로 matched. `0ff46a5` 수정이 실제 prompt-tuning loop에서 작동 확인. iter21이 21턴 소비 후 MaxTurnsExceeded였던 걸 iter25_b는 정상 턴 범위 내 완료.
+3. **Axis 축 여전히 Filter-dominant.** 8 accept 누적(iter18~25_c) 기준 axis 분포: Filter 5~6건, Composite 2건(iter18 escalation + iter25_a first-attempt), Cardinality/Cross-item rule/Aggregate **0건**. Shape는 변했지만 task type(list of records + filter + sort + limit)은 고착. 이는 iter01~12 Width 편향과 **동일 메커니즘** — composer가 가장 "추가 비용 낮은 axis"로 수렴, prompt의 escalation axes 나열만으론 안 깨짐.
+4. **iter25_c voice 회귀 관측.** inventory anchor에서 "인벤토리 ID 3678번 영화"는 schema-ese 경향. anchor가 customer-naturally reference 어려운 타입(inventory, payment_id 숫자)일 때 composer가 schema identifier를 그대로 노출. iter20의 city(Toulouse)/iter23의 city(Sirjan)처럼 named entity가 있으면 voice 자연, 숫자 ID만 있으면 voice 약화.
+5. **Composer의 initial task type 고착.** 4 trials 모두 attempt 1에서 "list of 3 records + single/double filter + sort + limit" 패턴. Aggregate task("이 customer가 몇 번 결제했나?" scalar answer)나 Cardinality 변형("결제 10만원 초과 customer 전원 이름") 등 task type 레벨 다양성 0. 프롬프트의 Escalation Axes가 Aggregate를 포함하지 않고 Cardinality는 "N 변경" 수준으로만 표현돼 있어 composer가 task type 전환 신호를 받지 못함.
+
+**Next direction.**
+
+1. **iter26: Task type 다양화 프롬프트 편집.** Workflow step 2의 answer shape을 "list of records" 전제에서 벗어나 scalar aggregate / count / filter-count-pair 등 **task type 레벨 옵션**을 first-class로 추가. 예: "anchor=customer → payment count: `{count: 42}`" 또는 "avg rental duration" 같은 scalar answer 예시를 shape 예시 옆에 배치. iter24식 예시 기반 편집이라 past Width ceiling(iter10)의 "순서/효과 문구 조정" 실패와 다른 각도.
+2. **iter25_c voice 회귀 체크포인트 추가 여부.** "anchor가 숫자 ID-only이면 customer-natural reference로 번역" 가이드 한 줄. 단 iter26에서 task type 편집 효과 보고 여유 있을 때 병합.
+3. **Composite PK fix 검증 완료 — composite 경로 일상화.** iter21/25_b로 충분. 별도 재검증 iter 없음.
+4. **축적 task pool 8건에 대한 외부 평가 가능 시점.** Voice, shape, semantic 모두 합격권 태스크 7건(iter25_c 경미 제외). 실제 RL 훈련 데이터셋 후보로 활용 시 이 분포가 충분한지(8건은 소량, 수백건 단위 필요) 별도 판단 필요.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 25)
 
 ### 행동 변화 요약
 
