@@ -40,6 +40,7 @@ class ProviderConfig(StrictModel):
     api_key_env: str
     max_concurrency: int = 8
     timeout_s: int = 120
+    max_retries: int = Field(default=2, ge=0)
 
 
 class ModelRef(StrictModel):

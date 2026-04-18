@@ -235,6 +235,7 @@ class OpenAIAgentsSolverBackend:
             api_key=api_key,
             base_url=self.provider_config.base_url,
             timeout=float(self.provider_config.timeout_s),
+            max_retries=self.provider_config.max_retries,
         )
         self._model = sdk.OpenAIChatCompletionsModel(
             model=self.solver_config.model,
