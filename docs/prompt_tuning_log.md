@@ -645,7 +645,35 @@ Solver traces (3명):
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 21)
+### Iteration 22 — 2026-04-19 (composite PK fix 검증 시도 → 새 asyncpg escape 버그)
+
+**Hypothesis.** iter21의 composite PK 수정(`0ff46a5`) 실측. anchor가 junction 경로로 가면 solver가 통과해야.
+
+**Change.** iter21 config 복제(`iter22_composite_verify.yaml`). composite PK fix 이외 변경 없음.
+
+**Trial.** anchor `inventory_id=3094` (film 680 "PINOCCHIO SIMON"). Attempt 1: simple 1-filter rental query → **3/3 matched, reject_too_easy**. Attempt 2 저작 중 Composite escalation으로 `staff_id=1` 추가 후 profile(staff) 실행. 그 다음 composer의 query 시도가 asyncpg `operator does not exist: integer = text`로 **SDK-level UserError 발생, synthesis_failed**.
+
+**Findings.**
+
+1. **Composite PK fix 실측 불가.** Anchor가 inventory라 film_actor/category 같은 junction 경로가 안 타짐. iter21의 actor anchor와 달라 fix 효과 직접 확인 못함. 재샘플링 또는 의도적 seeding 필요.
+2. **새 버그 노출: `_with_error_handling`의 asyncpg.PostgresError 누락.** atomic/composer 양쪽 `_with_error_handling`이 `(KeyError, ValueError, TypeError, LookupError, RuntimeError, NotImplementedError)`만 catch. asyncpg의 DataError/UndefinedFunctionError/SyntaxError 계열은 `PostgresError` 하위인데 catch 목록에 없어 tool 밖으로 propagate, agents SDK가 UserError로 감싸 synthesis 중단. composer가 error 피드백 받고 자가 복구할 기회 자체가 봉쇄.
+3. **실패 query 본문 trial_events에 없음.** run_items summarizer가 800자 preview × N개 item 범위만 보존. 27번째 item 이후 실제 실패 query는 SDK가 tool 호출하기 전/중 raise해 `record_atomic_tool_call`에 등록 안 됨. trial_events의 `composer/atomic_tool_call` 이벤트는 handler 성공 경로만 찍힘. 관측성 결함 — 에러 경로도 logger에 남기는 Phase 3 개선 필요.
+4. **Attempt 1은 정상.** composer가 Composite 축 시도(`Filter` dimension으로 `staff_id=1` 추가) 자체는 iter18/19/20의 bottom-up 궤적과 동일. 저작 궤적은 회귀 없음. 실행 런타임만 asyncpg 에러에 취약했던 것.
+
+**Fix (commit `67fa1d6`).**
+
+- `tooling/atomic/tool_factory.py` + `tooling/composer/tool_factory.py`의 `_with_error_handling` except 튜플에 `asyncpg.exceptions.PostgresError` 추가. DB-layer 에러가 `{error, error_type}` JSON으로 composer에게 돌아가 자가 복구 가능.
+- asyncpg import 추가, 53 tool-factory 테스트 통과 유지.
+
+**Next direction.**
+
+1. **iter23: asyncpg catch fix 실측 + composite PK 경로 유도.** `--no-sync`로 editable 유지하면서 재실행. anchor bias 있으니 여러 번 시도 or actor/category 경로 seeding 방법 검토. composer가 중간 에러 받으면 자가 복구하는지 관측.
+2. **Query DSL coerce 갭 재현 및 수정.** composer가 "integer = text" 실패한 filter의 근본 원인 — coerce_scalar가 어느 column/data_type에서 누락했는지. iter23에서 에러가 JSON 응답으로 돌아오면 composer의 다음 turn에서 정확한 args 관측 가능.
+3. **Error-path logger 보강 (Phase 3 후보).** tool handler가 raise한 경우도 `composer/atomic_tool_call_failed` 이벤트로 찍히도록 `_with_error_handling` 자체에서 event_logger 호출. 단일 pane 완결성 강화.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 22)
 
 ### 행동 변화 요약
 
@@ -674,6 +702,7 @@ Solver traces (3명):
 | 19 | 1 | — | **2연속 accept** + Phase 2 unified logger 실사용 검증. customer 앵커에서 attempt 1 simple 1-filter로 바로 1/3 in band. iter18과 달리 escalation 없이 direct landing 궤적. trial_events.jsonl 한 파일에 composer/solver/phase 이벤트 전부 interleaved, legacy per-file trace 폴더 비어 있음 확인. iter17과 사실상 같은 signal(1/3 + 2 unique wrong)이 gate off라 자연 accept, fix 효과 직접 실증 |
 | 20 | 1 | — | **3연속 accept + voice fix 검증.** Qualitative 평가에서 발견한 iter18/19의 staff-voice / mixed-voice 문제를 prompt의 rewrite instruction 강화로 해결(1인칭 ask 명시 + 금지 구절 리스트). 결과: city(Toulouse) 앵커에서 "저는 툴루즈에 거주하는 고객입니다. 제 대여 기록..." 1인칭 customer-ask voice 완벽 준수. 부수 효과로 **첫 clean 2-hop join task**(city→address→customer→rental) 성공 — iter15 multi-hop overshoot 실패가 누적 수정들로 해소. 단 Toulouse customer 수가 2+면 semantic ambiguity 가능성 별도 검증 필요 (사후 확인: 1명, 무해) |
 | 21 | 1 | — | **Structural mismatch 노출** — actor anchor에서 composer가 `actor → film_actor → film` 2-hop task 저작. voice는 완전 준수(2인칭 org-ask)인데 solver의 atomic calculus가 `film_actor` composite PK에서 `take/count/aggregate/group_top` 전부 거부(`_single_column_pk` 가드). 16턴 우회 시도 후 MaxTurnsExceeded. Composer DSL ⊃ Solver calculus 표현력 격차 드러남. Fix는 `0ff46a5` — `_pk_expression` ROW 표현을 JOIN 매칭 통일해 composite PK 전면 지원. 실측 회귀 테스트 통과, iter22에서 실제 trial 재현 검증 예정 |
+| 22 | 1 | — | composite PK fix 실측 시도 but anchor=inventory라 junction 경로 미유도. Attempt 1 정상 too_easy, Attempt 2 Composite escalation 저작 중 asyncpg `integer = text` 에러가 `_with_error_handling`의 PostgresError 누락 catch list 통과해 SDK UserError로 propagate. composer 자가 복구 기회 봉쇄. Fix `67fa1d6` — atomic/composer 양쪽 tool wrapper가 asyncpg.PostgresError catch, JSON error 응답으로 변환. iter23에서 실효 검증 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
