@@ -452,6 +452,7 @@ def evaluate_rollout_summary(
     unique_answers, divergence_ratio = _solver_divergence(summary)
     if (
         status is TaskQualityGateStatus.ACCEPT
+        and config.calibration.max_divergence_ratio is not None
         and divergence_ratio > config.calibration.max_divergence_ratio
     ):
         status = TaskQualityGateStatus.REJECT_TOO_HARD

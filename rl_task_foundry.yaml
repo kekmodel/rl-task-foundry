@@ -128,7 +128,6 @@ calibration:
   solver_batch_size: 3
   max_solver_runs: 30
   safe_early_termination: true
-  max_divergence_ratio: 0.5
 
 dedup:
   exact_enabled: true
