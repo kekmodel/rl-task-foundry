@@ -113,6 +113,7 @@ class SolverOrchestrator:
     sdk_tools_factory: SdkToolsFactory | None = None
     database_pools: DatabasePools | None = None
     traces_dir_override: Path | None = None
+    event_logger: object | None = None
     _provider_semaphores: dict[str, asyncio.Semaphore] = field(
         default_factory=dict,
         init=False,
@@ -220,6 +221,24 @@ class SolverOrchestrator:
             canonical_answer=json.loads(bundle.canonical_answer_json),
             output_schema=bundle.task_bundle.task.output_schema,
         )
+        if self.event_logger is not None:
+            self.event_logger.log_sync(
+                actor="solver",
+                actor_id=solver_config.solver_id,
+                event_type="solver_run_completed",
+                payload={
+                    "task_id": bundle.task_bundle.task_id,
+                    "solver_index": solver_index,
+                    "status": solver_result.status,
+                    "termination_reason": solver_result.termination_reason,
+                    "turn_count": solver_result.turn_count,
+                    "latency_ms": solver_result.latency_ms,
+                    "matched": reward_result.status == "matched",
+                    "raw_output_preview": solver_result.raw_output_text[:200]
+                    if solver_result.raw_output_text
+                    else "",
+                },
+            )
         return TaskSolverRun(
             task_id=bundle.task_bundle.task_id,
             solver_id=solver_config.solver_id,

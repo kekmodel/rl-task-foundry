@@ -415,6 +415,7 @@ class SynthesisAgentRuntime:
     solver_orchestrator: SolverOrchestrator | None = None
     synthesis_db: SynthesisDb | None = None
     phase_monitor: PipelinePhaseMonitorLogger | None = None
+    event_logger: object | None = None
     _breakers: dict[str, ProviderCircuitBreaker] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -523,6 +524,7 @@ class SynthesisAgentRuntime:
             ),
             phase_monitor=self.phase_monitor,
             max_submissions=self.config.synthesis.runtime.max_generation_attempts,
+            event_logger=self.event_logger,
         )
         pools = await synthesis_db.ensure_database_pools()
         async with pools.solver_connection() as conn:

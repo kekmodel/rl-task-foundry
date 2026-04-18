@@ -381,6 +381,7 @@ class SubmitDraftController:
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
     _observed_response_strings: set[str] = field(default_factory=set, init=False)
     _terminated_too_hard: bool = field(default=False, init=False)
+    event_logger: Any = None
 
     def submissions_left(self) -> int:
         if self._terminated_too_hard:
@@ -401,14 +402,24 @@ class SubmitDraftController:
                 "result": result,
             }
         )
-        self._atomic_tool_calls.append(
-            {
-                "tool_name": tool_name,
-                "params": _preview_runtime_payload(params, config=self.config),
-                "result": _preview_runtime_payload(result, config=self.config),
-            }
-        )
+        preview_entry = {
+            "tool_name": tool_name,
+            "params": _preview_runtime_payload(params, config=self.config),
+            "result": _preview_runtime_payload(result, config=self.config),
+        }
+        self._atomic_tool_calls.append(preview_entry)
         _collect_observed_strings(result, strings=self._observed_response_strings)
+        if self.event_logger is not None:
+            self.event_logger.log_sync(
+                actor="composer",
+                event_type="atomic_tool_call",
+                payload={
+                    "tool_name": tool_name,
+                    "params_preview": preview_entry["params"],
+                    "result_preview": preview_entry["result"],
+                    "call_index": len(self._atomic_tool_calls),
+                },
+            )
 
     def reject_invalid_payload(self, *, parsed: dict[str, object], error: ValidationError) -> str:
         if self.accepted_draft is not None:

@@ -7,7 +7,7 @@ this module is in-memory only and is not persisted as a separate JSON file.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
@@ -18,6 +18,10 @@ from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
+from rl_task_foundry.synthesis.snapshot_materializer import (
+    SchemaSnapshotMaterializer,
+)
+from rl_task_foundry.infra.event_log import TrialEventLogger
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
@@ -172,7 +176,18 @@ class RealDbTrialRunner:
         synthesis_traces_dir = debug_traces_dir / "synthesis"
         solver_traces_dir = debug_traces_dir
         synthesis_traces_dir.mkdir(parents=True, exist_ok=True)
+        event_logger = TrialEventLogger(debug_root / "trial_events.jsonl")
         flow_id = build_flow_id("real_db_trial")
+        event_logger.log_sync(
+            actor="runner",
+            event_type="trial_started",
+            payload={
+                "flow_id": flow_id,
+                "db_id": db_id,
+                "requested_topic": topic,
+                "output_root": str(output_root),
+            },
+        )
         phase_monitor = PipelinePhaseMonitorLogger(
             phase_monitor_log_path=phase_monitor_log_path,
             flow_kind="real_db_trial",
@@ -188,7 +203,7 @@ class RealDbTrialRunner:
             diagnostics={},
         )
         runtime = self._synthesis_runtime_for_trial(
-            debug_traces_dir, phase_monitor
+            debug_traces_dir, phase_monitor, event_logger=event_logger
         )
         # The solver orchestrator was built in __post_init__ with the
         # original config.output.traces_dir (global). Redirect its
@@ -196,6 +211,19 @@ class RealDbTrialRunner:
         # and tool traces land under artifacts/<trial>/debug/traces/.
         if self.solver_orchestrator is not None:
             self.solver_orchestrator.traces_dir_override = debug_traces_dir
+            self.solver_orchestrator.event_logger = event_logger
+        # Synchronize the bundle exporter's snapshot source with where
+        # SynthesisDb actually materializes the schema during this
+        # trial. Without this the exporter reads the global
+        # ``artifacts/databases/<db_id>/`` path and raises
+        # FileNotFoundError even though the snapshot was written into
+        # ``<output_root>/debug/databases/<db_id>/``.
+        trial_materializer = SchemaSnapshotMaterializer(
+            root_dir=debug_root / "databases"
+        )
+        self.exporter = replace(
+            self.exporter, snapshot_materializer=trial_materializer
+        )
         try:
             draft = await runtime.synthesize_environment_draft(
                 db_id=db_id,
@@ -239,6 +267,7 @@ class RealDbTrialRunner:
                 ),
             )
             phase_monitor.close()
+            event_logger.close()
             return summary
         except SynthesisPhaseExecutionError as exc:
             phase_monitor.emit(
@@ -270,6 +299,7 @@ class RealDbTrialRunner:
                 backend_failures=_encode_backend_failures(exc.backend_failures),
             )
             phase_monitor.close()
+            event_logger.close()
             return summary
         except SynthesisProviderUnavailableError as exc:
             phase_monitor.emit(
@@ -299,6 +329,7 @@ class RealDbTrialRunner:
                 synthesis_phase=exc.phase,
             )
             phase_monitor.close()
+            event_logger.close()
             return summary
         except SynthesisRuntimeError as exc:
             phase_monitor.emit(
@@ -326,6 +357,7 @@ class RealDbTrialRunner:
                 synthesis_error_message=str(exc),
             )
             phase_monitor.close()
+            event_logger.close()
             return summary
 
         assert self.registry is not None
@@ -383,6 +415,7 @@ class RealDbTrialRunner:
             bundle_root=bundle_root,
         )
         phase_monitor.close()
+        event_logger.close()
         return summary
 
     async def close(self) -> None:
@@ -401,6 +434,7 @@ class RealDbTrialRunner:
         self,
         debug_traces_dir: Path,
         phase_monitor: PipelinePhaseMonitorLogger,
+        event_logger: TrialEventLogger | None = None,
     ) -> SynthesisAgentRuntime:
         if self.synthesis_runtime is not None:
             return self.synthesis_runtime
@@ -417,6 +451,7 @@ class RealDbTrialRunner:
             solver_orchestrator=self.solver_orchestrator,
             synthesis_db=self.synthesis_db,
             synthesis_backends=self.synthesis_backends,
+            event_logger=event_logger,
         )
         self.synthesis_runtime = runtime
         return runtime
