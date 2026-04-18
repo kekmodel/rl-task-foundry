@@ -802,7 +802,38 @@ iter26_a attempt 1 question: "네덜란드에 거주하는 고객은 총 몇 명
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 26)
+### Iteration 27 — 2026-04-19 (Task type lock, 1-sample 스모크)
+
+**Hypothesis.** iter26 `difficulty_crank_invalid` 2회 연속은 prompt의 "Never weaken / only add" 규칙이 task type 교체까지는 커버하지 못한 탓. step 3에 task-type-lock 한 줄을 추가하면 composer가 attempt 1에 선택한 type 내에서만 escalation하도록 유도 가능.
+
+**Change.** prompts.py Workflow step 3/4 수정. step 3에 "The task type picked on your first submit is locked for the whole anchor" 명시, Type B escalation 예시(`count` + city subset filter) 제공, 교체 시 crank_invalid 경고. step 4(too_hard relax)에도 동일 lock 적용. commit `aaae65a`.
+
+**Trial.** `artifacts/tmp_configs/iter27_type_lock.yaml` 1-sample 스모크(smoke_iter27_a). **accepted.** pass_rate=2/3=0.667, CI [0.135, 0.983], registry committed. task_id `task_Customer rentals at address with staff filter_8ad54a5d3755cc8b`.
+
+| attempt | task type | label | axis | pass_rate | reject |
+|---|---|---|---|---|---|
+| 1 | Type A | `[{rental_date, return_date}, …]` (address 509 → rental, top-3 oldest) | Filter | 3/3 = 1.0 | too_easy |
+| 2 | **Type A** (유지) | 동일 shape + staff_id=1 필터 추가 | **Composite** (address + staff) | **2/3 = 0.667** ✓ | **accepted** |
+
+iter27_a attempt 2 question: "제 주소 (786 Matsue Way) 에 등록된 대여 기록 중 직원 1 번이 처리한 가장 오래된 3 건을 대여일 순으로 알려주세요." — 1인칭 고객 ask, 실제 주소명("786 Matsue Way") 사용, 직원 ID도 "직원 1 번"으로 자연 표현, schema-ese 없음.
+
+**Findings.**
+
+1. **Task-type-lock 규칙 실측 작동 ✓.** attempt 1 Type A too_easy 후 composer가 **같은 Type A를 유지하면서 staff 필터를 추가**해 Composite으로 escalate. iter26의 "Type B → Type A 교체" 실패 패턴이 반복되지 않음. 단 1 trial 관측이지만 규칙의 직접적 효과 확인.
+2. **Type B는 이번 trial에 선택되지 않음.** iter27_a는 address 앵커로 Type A 리스트를 초기 선택. iter26에서 country 앵커로 Type B를 선택했던 것과 다른 데이터 포인트. task type 선택은 앵커/prompt 예시의 조합에 따라 달라지며 아직 편향 판정 불가(샘플 N=2). 여러 앵커에 걸친 batch(3-4 trial) 필요.
+3. **Shape 분포.** attempt 2 accept label이 `{rental_date, return_date}` — iter18/19/20/23의 lock-in shape과 동일. iter24/25 4 trial에서 깨졌던 분포가 1 trial만에 회귀. 1 trial 샘플 한계이며 통계적 결론 내기는 이름. 단발 관측으로 기록만 남김.
+4. **Composite 축 재출현.** 누적 9 accept 기준 Composite 분포: iter18(교차 + 임계치), iter25_a(customer 필터 + amount 임계치), iter27_a(address + staff) — 3건. Filter 5~6, Cardinality/Cross-item rule/Aggregate 여전히 0. **Type B 통한 Aggregate 첫 accept는 iter27 시점에도 미확인** — iter26 attempt 1 Type B 성공은 accept까지 이어지지 못했고, iter27에서는 Type B 선택 자체가 없었음.
+5. **Composer의 step 2 선택 bias.** 현재 프롬프트는 Type A/B를 동등 옵션으로 제시하지만 Type A가 자주 선택되는 경향(iter26 attempt 1: country 앵커로 Type B, iter27 attempt 1: address 앵커로 Type A). Type A가 예시 5개 vs Type B 예시 5개로 동률이지만 Type A가 먼저 나오고, anchor별 "자연스러움"에서 list 쪽이 LLM에게 친숙할 가능성. Type B 선택 빈도를 N=5~10 trial로 측정해야 기본 분포 확인 가능.
+
+**Next direction.**
+
+1. **iter27 배치 확장 (3 trial)**. task type 분포 + shape 분포 본격 측정. config는 그대로, 순차 3회. 목표: (a) task-type-lock이 Type B 선택 시에도 정상 작동하는지 확인, (b) shape lock-in 재발 여부 판정, (c) axis 축적 확장.
+2. **iter28 후보: Type B 선택 유도 강화.** 만약 iter27 batch 3 trial에서 Type B 선택이 0건이라면 prompt에 "If the last accepted task in this conversation was Type A, prefer Type B this attempt (and vice versa)" 추가해 rotation 강제. 단 conversation context 없이 단발 trial 실행 중이므로 conversation-level rotation은 효과 제한적 — 배치 결과 보고 결정.
+3. **voice 회귀 가드는 여전히 대기.** iter25_c의 "인벤토리 ID 3678번" schema-ese는 이번 trial에 재발하지 않음("제 주소 786 Matsue Way"는 자연스러움). 배치 결과 모니터 후 계속 관찰.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 27)
 
 ### 행동 변화 요약
 
