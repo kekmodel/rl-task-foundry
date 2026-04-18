@@ -36,6 +36,7 @@ class PipelinePhaseMonitorLogger:
     flow_kind: str
     flow_id: str
     mirror_phase_monitor_log_path: Path | None = None
+    event_logger: Any = None
     _seq: int = field(default=0, init=False, repr=False)
     _primary_sink: JsonlFileSink = field(init=False, repr=False)
     _mirror_sink: JsonlFileSink | None = field(default=None, init=False, repr=False)
@@ -86,6 +87,18 @@ class PipelinePhaseMonitorLogger:
         self._primary_sink.write_record(payload)
         if self._mirror_sink is not None:
             self._mirror_sink.write_record(payload)
+        if self.event_logger is not None:
+            self.event_logger.log_sync(
+                actor="phase",
+                event_type=f"{record.phase}.{record.status}",
+                payload={
+                    "seq": record.seq,
+                    "expected_contract": record.expected_contract,
+                    "actual_data": record.actual_data,
+                    "checks": record.checks,
+                    "diagnostics": record.diagnostics,
+                },
+            )
         return record
 
     def close(self) -> None:

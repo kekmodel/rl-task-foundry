@@ -193,6 +193,7 @@ class RealDbTrialRunner:
             flow_kind="real_db_trial",
             flow_id=flow_id,
             mirror_phase_monitor_log_path=mirror_monitor_path,
+            event_logger=event_logger,
         )
         phase_monitor.emit(
             phase="trial",
