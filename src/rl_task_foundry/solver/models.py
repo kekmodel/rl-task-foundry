@@ -12,8 +12,6 @@ class SolverResult(StrictModel):
     solver_id: str
     provider: str
     model: str
-    transcript_ref: str
-    tool_trace_ref: str
     raw_output_text: str
     structured_output: dict[str, object] | None = None
     explicit_memory_events: list[dict[str, object]] = Field(default_factory=list)

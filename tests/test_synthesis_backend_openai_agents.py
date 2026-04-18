@@ -34,7 +34,6 @@ def test_synthesis_backend_write_artifact_creates_dir_once_per_kind(
             timeout_s=30,
         ),
         runtime_config=SynthesisRuntimeConfig(),
-        traces_dir=tmp_path / "traces",
     )
 
     mkdir_calls: list[Path] = []
@@ -180,7 +179,6 @@ async def test_synthesis_backend_writes_artifacts_before_reraising_runner_error(
             timeout_s=30,
         ),
         runtime_config=SynthesisRuntimeConfig(max_turns=50),
-        traces_dir=tmp_path / "traces",
     )
     conversation = _conversation_with_controller(
         SimpleNamespace(

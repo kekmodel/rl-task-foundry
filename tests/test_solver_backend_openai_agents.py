@@ -176,7 +176,6 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
         ),
         sdk_tools=[],
         session_db_path=tmp_path / "sessions.sqlite",
-        traces_dir=tmp_path / "traces",
     )
 
     result = await backend.run(episode)
@@ -194,7 +193,9 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
     assert result.turn_count == 3
     assert result.status == "completed"
     assert result.termination_reason == "submitted"
-    assert result.termination_metadata == {}
+    # termination_metadata now carries run_items for unified logging;
+    # assert the shape rather than emptiness.
+    assert "run_items" in result.termination_metadata
     assert tracing_disabled == [True]
 
     assert FakeAsyncOpenAI.calls[0]["base_url"] == "http://127.0.0.1:10531/v1"
@@ -203,23 +204,12 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
     assert FakeRunner.calls[0]["max_turns"] == 8
     assert FakeSQLiteSession.last_instance.session_id == "task_assignment_solver:solver_a"
 
-    transcript_path = tmp_path / "traces" / "transcripts" / "task_assignment_solver__solver_a.json"
-    tool_trace_path = tmp_path / "traces" / "tool_traces" / "task_assignment_solver__solver_a.json"
-    assert result.transcript_ref == str(transcript_path)
-    assert result.tool_trace_ref == str(tool_trace_path)
-
-    transcript_payload = json.loads(transcript_path.read_text(encoding="utf-8"))
-    assert transcript_payload["final_output"] == '{"delivery_status":"IN_TRANSIT"}'
-    assert transcript_payload["input_items"][0]["content"] == episode.rendered_user_prompt
-
-    tool_trace_payload = json.loads(tool_trace_path.read_text(encoding="utf-8"))
-    assert tool_trace_payload["run_items"] == [
+    # Per-file trace writes were removed in the unified-logger
+    # cleanup; run_items now travel back via termination_metadata so
+    # the orchestrator can emit them through TrialEventLogger.
+    assert result.termination_metadata["run_items"] == [
         {"type": "str", "text_preview": "tool-call(delivery_lookup)"},
         {"type": "str", "text_preview": "tool-call(submit_result)"},
-    ]
-    assert tool_trace_payload["tool_calls"] == [
-        {"name": "delivery_lookup", "repr": "'tool-call(delivery_lookup)'"},
-        {"name": "submit_result", "repr": "'tool-call(submit_result)'"},
     ]
 
     assert FakeAgent.last_instance.kwargs["instructions"] is None
@@ -308,7 +298,6 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
         ),
         sdk_tools=[],
         session_db_path=tmp_path / "sessions.sqlite",
-        traces_dir=tmp_path / "traces",
     )
 
     result = await backend.run(episode)
@@ -317,11 +306,9 @@ async def test_openai_agents_solver_backend_returns_failed_result_on_runner_exce
     assert result.termination_reason == "MaxTurnsExceeded"
     assert result.raw_output_text == ""
     assert result.structured_output is None
-    assert result.termination_metadata == {"detail": "Max turns (8) exceeded"}
-
-    transcript_payload = json.loads(Path(result.transcript_ref).read_text(encoding="utf-8"))
-    assert transcript_payload["error"]["type"] == "MaxTurnsExceeded"
-    assert transcript_payload["error"]["detail"] == "Max turns (8) exceeded"
+    # Error-path termination_metadata carries detail + recovered run_items.
+    assert result.termination_metadata["detail"] == "Max turns (8) exceeded"
+    assert "run_items" in result.termination_metadata
 
 
 @pytest.mark.asyncio
@@ -405,7 +392,6 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backe
             sdk_sessions_enabled=False,
         ),
         sdk_tools=[],
-        traces_dir=tmp_path / "traces",
     )
     backend_b = OpenAIAgentsSolverBackend(
         solver_config=SolverModelConfig(
@@ -428,7 +414,6 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backe
             sdk_sessions_enabled=False,
         ),
         sdk_tools=[],
-        traces_dir=tmp_path / "traces",
     )
 
     await backend_a.run(episode)
@@ -572,7 +557,6 @@ def test_solver_backend_write_artifact_creates_dir_once_per_kind(
             timeout_s=30,
         ),
         runtime_config=SolverRuntimeConfig(max_turns=8),
-        traces_dir=tmp_path / "traces",
     )
 
     mkdir_calls: list[Path] = []
@@ -664,7 +648,6 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
         ),
         runtime_config=SolverRuntimeConfig(max_turns=8),
         sdk_tools=[],
-        traces_dir=tmp_path / "traces",
     )
 
     with pytest.raises(RuntimeError, match="did not submit an answer"):

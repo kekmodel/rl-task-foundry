@@ -31,9 +31,6 @@ from rl_task_foundry.infra.sdk_helpers import (
     resolve_provider_api_key as _resolve_provider_api_key,
 )
 from rl_task_foundry.infra.sdk_helpers import (
-    write_json_artifact as _write_json_artifact,
-)
-from rl_task_foundry.infra.sdk_helpers import (
     summarize_run_item as _summarize_run_item,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -57,13 +54,7 @@ class SynthesisConversationResult:
     final_output_text: str
     turn_count: int
     token_usage: dict[str, int]
-    transcript_ref: str
-    tool_trace_ref: str
     tool_calls: tuple[str, ...] = ()
-
-
-def _trace_stub(kind: str, db_id: str, provider: str, model: str) -> str:
-    return f"memory://{kind}/{db_id}/synthesis/{provider}/{model}"
 
 
 def _build_agent(
@@ -104,11 +95,9 @@ class OpenAIAgentsSynthesisBackend:
     model_ref: ModelRef
     provider_config: ProviderConfig
     runtime_config: SynthesisRuntimeConfig
-    traces_dir: Path | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
     _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], Any]] = {}
-    _created_artifact_dirs: set[Path] = field(default_factory=set, init=False, repr=False)
 
     @property
     def provider_name(self) -> str:
@@ -195,27 +184,6 @@ class OpenAIAgentsSynthesisBackend:
 
         return _finalize_on_submit
 
-    def _write_artifact(
-        self,
-        *,
-        kind: str,
-        db_id: str,
-        requested_topic: str | None,
-        payload: dict[str, Any],
-    ) -> str:
-        if self.traces_dir is None:
-            return _trace_stub(kind, db_id, self.provider_name, self.model_name)
-        return _write_json_artifact(
-            traces_dir=self.traces_dir,
-            created_dirs=self._created_artifact_dirs,
-            kind=kind,
-            filename=(
-                f"{db_id}__{requested_topic}__synthesis__"
-                f"{self.provider_name}__{self.model_name.replace('/', '_')}.json"
-            ),
-            payload=payload,
-        )
-
     async def run_synthesis(
         self,
         *,
@@ -267,36 +235,19 @@ class OpenAIAgentsSynthesisBackend:
             )
         except Exception as exc:
             latency_ms = int((perf_counter() - started_at) * 1000)
-            transcript_ref = self._write_artifact(
-                kind="transcripts",
-                db_id=db_id,
-                requested_topic=requested_topic,
-                payload={
-                    "input": request_input,
-                    "error": {
-                        "type": exc.__class__.__name__,
-                        "detail": str(exc),
+            event_logger = getattr(conversation.controller, "event_logger", None)
+            if event_logger is not None:
+                event_logger.log_sync(
+                    actor="composer",
+                    event_type="synthesis_failed",
+                    payload={
+                        "error_type": exc.__class__.__name__,
+                        "error_detail": str(exc),
+                        "latency_ms": latency_ms,
+                        "max_turns": max_turns,
+                        "run_items": _extract_run_error_items(exc),
                     },
-                    "latency_ms": latency_ms,
-                    "max_turns": max_turns,
-                },
-            )
-            self._write_artifact(
-                kind="tool_traces",
-                db_id=db_id,
-                requested_topic=requested_topic,
-                payload={
-                    "error": {
-                        "type": exc.__class__.__name__,
-                        "detail": str(exc),
-                    },
-                    "transcript_ref": transcript_ref,
-                    "run_items": _extract_run_error_items(exc),
-                    "recent_atomic_tool_calls": conversation.controller._atomic_tool_calls[
-                        -self.runtime_config.recent_tool_call_limit :
-                    ],
-                },
-            )
+                )
             raise
         latency_ms = int((perf_counter() - started_at) * 1000)
         tool_calls = tuple(
@@ -308,41 +259,28 @@ class OpenAIAgentsSynthesisBackend:
         final_output_text = (
             final_output if isinstance(final_output, str) else str(final_output or "")
         )
-        transcript_ref = self._write_artifact(
-            kind="transcripts",
-            db_id=db_id,
-            requested_topic=requested_topic,
-            payload={
-                "input": request_input,
-                "final_output_text": final_output_text,
-                "latency_ms": latency_ms,
-                "turn_count": _extract_turn_count(run_result),
-                "token_usage": _extract_token_usage(run_result),
-                "tool_calls": list(tool_calls),
-            },
-        )
-        tool_trace_ref = self._write_artifact(
-            kind="tool_traces",
-            db_id=db_id,
-            requested_topic=requested_topic,
-            payload={
-                "tool_calls": list(tool_calls),
-                "run_items": [
-                    _summarize_run_item(item)
-                    for item in getattr(run_result, "new_items", []) or []
-                ],
-                "recent_atomic_tool_calls": conversation.controller._atomic_tool_calls[
-                    -self.runtime_config.recent_tool_call_limit :
-                ],
-            },
-        )
+        event_logger = getattr(conversation.controller, "event_logger", None)
+        if event_logger is not None:
+            event_logger.log_sync(
+                actor="composer",
+                event_type="synthesis_completed",
+                payload={
+                    "final_output_text": final_output_text,
+                    "latency_ms": latency_ms,
+                    "turn_count": _extract_turn_count(run_result),
+                    "token_usage": _extract_token_usage(run_result),
+                    "tool_calls": list(tool_calls),
+                    "run_items": [
+                        _summarize_run_item(item)
+                        for item in getattr(run_result, "new_items", []) or []
+                    ],
+                },
+            )
         return SynthesisConversationResult(
             provider=self.provider_name,
             model=self.model_name,
             final_output_text=final_output_text,
             turn_count=_extract_turn_count(run_result),
             token_usage=_extract_token_usage(run_result),
-            transcript_ref=transcript_ref,
-            tool_trace_ref=tool_trace_ref,
             tool_calls=tool_calls,
         )

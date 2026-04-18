@@ -92,8 +92,6 @@ class ScriptedComposerBackend:
             final_output_text=self.script.final_output_text,
             turn_count=self.script.turn_count,
             token_usage={"requests": 0},
-            transcript_ref=f"memory://scripted/{db_id}/transcript",
-            tool_trace_ref=f"memory://scripted/{db_id}/tool-trace",
             tool_calls=tuple(tool_names),
         )
 

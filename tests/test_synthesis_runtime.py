@@ -214,8 +214,6 @@ class _FakeBackend:
                 "final_output_text": "done",
                 "turn_count": 6,
                 "token_usage": {"requests": 1},
-                "transcript_ref": "memory://transcript",
-                "tool_trace_ref": "memory://tool-trace",
                 "tool_calls": ("get_customer", "submit_draft"),
             },
         )()

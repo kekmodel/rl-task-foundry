@@ -27,7 +27,6 @@ def _proof_config(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
     output = OutputConfig(
         run_db_path=tmp_path / "run.db",
-        traces_dir=tmp_path / "traces",
     )
     return config.model_copy(update={"output": output}, deep=True)
 

@@ -441,7 +441,6 @@ class SynthesisAgentRuntime:
                 model_ref=self.config.models.composer,
                 provider_config=self.config.providers[self.config.models.composer.provider],
                 runtime_config=self.config.synthesis.runtime,
-                traces_dir=self.config.output.traces_dir / "synthesis",
             )
             self.synthesis_backends = [backend]
         self._breakers = {
@@ -605,8 +604,6 @@ class SynthesisAgentRuntime:
                 "model": conversation_result.model,
                 "shuffle_seed": shuffle_seed,
                 "token_usage": conversation_result.token_usage,
-                "transcript_ref": conversation_result.transcript_ref,
-                "tool_trace_ref": conversation_result.tool_trace_ref,
             },
         )
         if requested_topic:

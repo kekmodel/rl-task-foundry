@@ -204,8 +204,6 @@ class SolverOrchestrator:
                     solver_id=solver_config.solver_id,
                     provider=solver_config.provider,
                     model=solver_config.model,
-                    transcript_ref="memory://solver-error/transcript",
-                    tool_trace_ref="memory://solver-error/tools",
                     raw_output_text="",
                     structured_output=None,
                     explicit_memory_events=[],
@@ -222,6 +220,8 @@ class SolverOrchestrator:
             output_schema=bundle.task_bundle.task.output_schema,
         )
         if self.event_logger is not None:
+            termination_metadata = solver_result.termination_metadata or {}
+            run_items = termination_metadata.get("run_items", [])
             self.event_logger.log_sync(
                 actor="solver",
                 actor_id=solver_config.solver_id,
@@ -237,6 +237,7 @@ class SolverOrchestrator:
                     "raw_output_preview": solver_result.raw_output_text[:200]
                     if solver_result.raw_output_text
                     else "",
+                    "run_items": run_items,
                 },
             )
         return TaskSolverRun(
@@ -314,7 +315,6 @@ class SolverOrchestrator:
             runtime_config=runtime_config,
             sdk_tools=sdk_tools,
             session_db_path=traces_dir / "sessions.sqlite",
-            traces_dir=traces_dir,
         )
 
     async def _schema_snapshot(self, db_id: str) -> SchemaSnapshot:

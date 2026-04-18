@@ -56,8 +56,6 @@ class _FakeRuntime:
             solver_id="solver_a",
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            transcript_ref="memory://transcript",
-            tool_trace_ref="memory://tools",
             raw_output_text=self.raw_output_text,
             status="completed",
         )
@@ -196,8 +194,6 @@ def _make_run(*, solver_id: str, raw: str, matched: bool) -> TaskSolverRun:
             solver_id=solver_id,
             provider="codex_oauth",
             model="gpt-5.4-mini",
-            transcript_ref="memory://transcript",
-            tool_trace_ref="memory://tools",
             raw_output_text=raw,
             status="completed",
         ),

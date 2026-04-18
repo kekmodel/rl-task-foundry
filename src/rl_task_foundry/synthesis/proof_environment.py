@@ -594,8 +594,6 @@ class _AlternatingProofSolverRuntime:
             solver_id=self.solver_id,
             provider=self.provider_name,
             model=self.model_name,
-            transcript_ref="memory://proof/transcript",
-            tool_trace_ref="memory://proof/tool-trace",
             raw_output_text=raw_output,
             structured_output=None,
             status="completed",

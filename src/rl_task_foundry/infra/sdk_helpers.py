@@ -262,26 +262,6 @@ def make_sdk_tool(
     )
 
 
-def write_json_artifact(
-    *,
-    traces_dir: Path,
-    created_dirs: set[Path],
-    kind: str,
-    filename: str,
-    payload: dict[str, Any],
-) -> str:
-    target_dir = traces_dir / kind
-    if target_dir not in created_dirs:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        created_dirs.add(target_dir)
-    target_path = target_dir / filename
-    target_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-    return str(target_path)
-
-
 _RUN_ITEM_PREVIEW_LIMIT = 800
 
 

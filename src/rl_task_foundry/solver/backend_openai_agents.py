@@ -34,9 +34,6 @@ from rl_task_foundry.infra.sdk_helpers import (
     resolve_provider_api_key as _resolve_provider_api_key,
 )
 from rl_task_foundry.infra.sdk_helpers import (
-    write_json_artifact as _write_json_artifact,
-)
-from rl_task_foundry.infra.sdk_helpers import (
     summarize_run_item as _summarize_run_item,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -44,8 +41,6 @@ from rl_task_foundry.infra.sdk_helpers import (
 )
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
-
-ArtifactWriter = Callable[[str, dict[str, Any]], str]
 
 
 def _load_sdk_components() -> SimpleNamespace:
@@ -78,10 +73,6 @@ def _extract_tool_calls(run_result: Any) -> list[dict[str, Any]]:
             continue
         tool_calls.append({"name": tool_name, "repr": repr(item)})
     return tool_calls
-
-
-def _trace_stub(kind: str, task_id: str, solver_id: str) -> str:
-    return f"memory://{kind}/{task_id}/{solver_id}"
 
 
 def _is_successful_submission(output: Any) -> bool:
@@ -193,12 +184,9 @@ class OpenAIAgentsSolverBackend:
     runtime_config: SolverRuntimeConfig
     sdk_tools: list[object] = field(default_factory=list)
     session_db_path: Path | None = None
-    traces_dir: Path | None = None
-    artifact_writer: ArtifactWriter | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
     _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], Any]] = {}
-    _created_artifact_dirs: set[Path] = field(default_factory=set, init=False, repr=False)
 
     @classmethod
     def clear_model_cache(cls) -> None:
@@ -282,24 +270,6 @@ class OpenAIAgentsSolverBackend:
             db_path = self.session_db_path
         return sdk.SQLiteSession(session_id=session_id, db_path=db_path)
 
-    def _write_artifact(
-        self,
-        kind: str,
-        task_id: str,
-        payload: dict[str, Any],
-    ) -> str:
-        if self.artifact_writer is not None:
-            return self.artifact_writer(kind, payload)
-        if self.traces_dir is None:
-            return _trace_stub(kind, task_id, self.solver_config.solver_id)
-        return _write_json_artifact(
-            traces_dir=self.traces_dir,
-            created_dirs=self._created_artifact_dirs,
-            kind=kind,
-            filename=f"{task_id}__{self.solver_config.solver_id}.json",
-            payload=payload,
-        )
-
     @staticmethod
     def _coerce_run_input(input_item: object) -> tuple[str, str]:
         if not isinstance(input_item, SolverEpisodeInput):
@@ -342,47 +312,12 @@ class OpenAIAgentsSolverBackend:
         except Exception as exc:
             latency_ms = int((perf_counter() - started_at) * 1000)
             raw_output_text = _failure_raw_output_text(exc)
-            transcript_ref = self._write_artifact(
-                "transcripts",
-                task_id,
-                {
-                    "task_id": task_id,
-                    "solver_id": self.solver_config.solver_id,
-                    "input_items": [{"role": "user", "content": rendered_user_prompt}],
-                    "final_output": raw_output_text,
-                    "error": {
-                        "type": exc.__class__.__name__,
-                        "detail": str(exc),
-                    },
-                },
-            )
             recovered_items = _extract_run_error_items(exc)
-            recovered_tool_calls = [
-                item.get("tool_name")
-                for item in recovered_items
-                if item.get("type") == "ToolCallItem" and item.get("tool_name")
-            ]
-            tool_trace_ref = self._write_artifact(
-                "tool_traces",
-                task_id,
-                {
-                    "task_id": task_id,
-                    "solver_id": self.solver_config.solver_id,
-                    "run_items": recovered_items,
-                    "tool_calls": recovered_tool_calls,
-                    "error": {
-                        "type": exc.__class__.__name__,
-                        "detail": str(exc),
-                    },
-                },
-            )
             return SolverResult(
                 task_id=task_id,
                 solver_id=self.solver_config.solver_id,
                 provider=self.solver_config.provider,
                 model=self.solver_config.model,
-                transcript_ref=transcript_ref,
-                tool_trace_ref=tool_trace_ref,
                 raw_output_text=raw_output_text,
                 structured_output=None,
                 explicit_memory_events=[],
@@ -391,7 +326,10 @@ class OpenAIAgentsSolverBackend:
                 turn_count=0,
                 status="failed",
                 termination_reason=exc.__class__.__name__,
-                termination_metadata={"detail": str(exc)},
+                termination_metadata={
+                    "detail": str(exc),
+                    "run_items": recovered_items,
+                },
             )
         latency_ms = int((perf_counter() - started_at) * 1000)
 
@@ -403,39 +341,21 @@ class OpenAIAgentsSolverBackend:
             termination_metadata,
         ) = _extract_submission_output(run_result.final_output)
         raw_output_text = _raw_output_text(run_result.final_output, submitted_answer_text)
-        transcript_ref = self._write_artifact(
-            "transcripts",
-            task_id,
-            {
-                "task_id": task_id,
-                "solver_id": self.solver_config.solver_id,
-                "input_items": run_result.to_input_list(mode="preserve_all"),
-                "final_output": raw_output_text,
-            },
-        )
-        tool_trace_ref = self._write_artifact(
-            "tool_traces",
-            task_id,
-            {
-                "task_id": task_id,
-                "solver_id": self.solver_config.solver_id,
-                "run_items": [
-                    _summarize_run_item(item)
-                    for item in getattr(run_result, "new_items", [])
-                ],
-                "tool_calls": _extract_tool_calls(run_result),
-            },
-        )
         if submitted_answer_text is None and status == "completed":
             raise RuntimeError("Solver run did not submit an answer via submit_result()")
+
+        # run_items summary travels back on termination_metadata so the
+        # orchestrator can include it in the solver_run_completed event.
+        metadata = dict(termination_metadata)
+        metadata["run_items"] = [
+            _summarize_run_item(item) for item in getattr(run_result, "new_items", [])
+        ]
 
         return SolverResult(
             task_id=task_id,
             solver_id=self.solver_config.solver_id,
             provider=self.solver_config.provider,
             model=self.solver_config.model,
-            transcript_ref=transcript_ref,
-            tool_trace_ref=tool_trace_ref,
             raw_output_text=raw_output_text,
             structured_output=structured_output,
             explicit_memory_events=[],
@@ -444,5 +364,5 @@ class OpenAIAgentsSolverBackend:
             turn_count=_extract_turn_count(run_result),
             status=status,
             termination_reason=termination_reason,
-            termination_metadata=termination_metadata,
+            termination_metadata=metadata,
         )
