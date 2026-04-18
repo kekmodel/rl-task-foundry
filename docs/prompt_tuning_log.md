@@ -702,7 +702,37 @@ Voice: 2인칭 조직-대상 ask, 금지 구절 0, schema-ese 0 ✓. Sirjan cust
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 23)
+### Iteration 24 — 2026-04-19 (shape 다변화 프롬프트 검증, 1-trial)
+
+**Hypothesis.** iter18/19/20/23 4회 연속 `[{rental_date, return_date}]` 고착 원인이 Workflow step 2의 단일 concrete example(`[{rental_date, return_date}, …]`) + 강한 negative example(`[{rental_date, film_title}, …] NOT valid`)이라는 진단 하에, commit `c07924d`에서 예시를 5개 destination-appropriate pair(rental date, actor name, customer name, film title, payment amount)로 확장 + "do NOT default to rental_date" 명시 + rotation rule 추가. 이 변경이 실제로 composer의 shape 선택을 움직이는지 단일 trial로 1차 확인(batch는 iter25부터, quota 규칙).
+
+**Change.** `artifacts/tmp_configs/iter24_shape_diversity.yaml` = iter23 config 복제. 변수는 `prompts.py` 한 건.
+
+**Trial.** anchor `payment_id=6137`, topic "Customer payment history by date". **attempt 1 바로 accepted**, `pass_rate=2/3=0.667` in band, registry committed + bundle exported.
+
+**Question:**
+> "2005 년 6 월 19일에 결제를 진행한 고객입니다. 제 결제 내역에서 가장 오래된 3 건의 기록을 결제일 오름차순으로 금액과 결제일을 알려주세요."
+
+**Canonical (최초 non-rental shape):**
+> `[{amount: "4.99", payment_date: "2005-05-28..."}, {amount: "0.99", payment_date: "2005-05-31..."}, {amount: "3.99", payment_date: "2005-06-18..."}]`
+
+**Findings.**
+
+1. **Shape 다변화 첫 관측.** 프롬프트 예시 리스트 중 "anchor=staff → payment destination: `[{amount, payment_date}, …]`"를 composer가 채택. **4회 연속 rental-only 락인이 1회 iter로 깨짐**. 프롬프트 편집 효과 초기 증거 ✓.
+2. **Voice 축 지속 준수.** "2005년 6월 19일에 결제를 진행한 고객입니다" — payment_id anchor를 날짜로 1인칭 self-reference하는 자연스러운 방식. "제 결제 내역", "알려주세요" 1인칭 ask. 금지 구절 0건. iter20 이후 voice 규칙 5iter째 유지.
+3. **Semantic 정합성.** anchor payment(_id=6137)는 customer X의 payment row. "2005년 6월 19일에 결제한 고객의 다른 결제 기록"이 destination. "가장 오래된 3 건 결제일 오름차순"이 label constraint surface. canonical의 첫 entry는 2005-05-28로 anchor payment(2005-06-19) 이전의 기록, 자연스럽게 "history" 개념 성립.
+4. **Composition depth.** payment anchor → 같은 customer의 다른 payment rows. single-table scope(payment 내부 filter + sort + limit). ~5 primitives. 구조적으로는 iter19 rental 패턴과 동형. **다른 anchor·target은 구조적 단순성은 동일하되 shape 의미가 다양화**.
+5. **"1회 관측 = 분포 아님" 경계.** 이번 trial이 payment_id anchor라 프롬프트의 payment 예시가 자연 매칭. anchor가 다른 타입이면 여전히 iter20/23 패턴(rental/customer 타겟)으로 회귀할 가능성. 실제 다양성 측정은 iter25 batch 필요.
+
+**Next direction.**
+
+1. **iter25: 3-trial batch — shape 분포 측정.** 같은 config로 3회 순차 실행. anchor sampling이 다른 타입으로 뽑혔을 때 composer가 새 예시 기반으로 shape 선택하는지(e.g., film anchor → actor names, category anchor → film titles), 아니면 또 rental 고착되는지. accept rate도 함께 측정.
+2. **Composite PK fix 실측 기회.** iter25 batch에 actor/category/film anchor 하나만 등장해도 junction path 재시도 가능. 안 나오면 iter26+ seeding.
+3. **현재까지 축적된 task pool 정성 재평가.** iter18/19/20/23/24 5건. iter24만 다른 shape. RL training 분포는 여전히 rental 편중(4/5 = 80%) — 분포 건강한 상태 아님. iter25 batch 결과와 합쳐 분포 재검토.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 24)
 
 ### 행동 변화 요약
 
@@ -733,6 +763,7 @@ Voice: 2인칭 조직-대상 ask, 금지 구절 0, schema-ese 0 ✓. Sirjan cust
 | 21 | 1 | — | **Structural mismatch 노출** — actor anchor에서 composer가 `actor → film_actor → film` 2-hop task 저작. voice는 완전 준수(2인칭 org-ask)인데 solver의 atomic calculus가 `film_actor` composite PK에서 `take/count/aggregate/group_top` 전부 거부(`_single_column_pk` 가드). 16턴 우회 시도 후 MaxTurnsExceeded. Composer DSL ⊃ Solver calculus 표현력 격차 드러남. Fix는 `0ff46a5` — `_pk_expression` ROW 표현을 JOIN 매칭 통일해 composite PK 전면 지원. 실측 회귀 테스트 통과, iter22에서 실제 trial 재현 검증 예정 |
 | 22 | 1 | — | composite PK fix 실측 시도 but anchor=inventory라 junction 경로 미유도. Attempt 1 정상 too_easy, Attempt 2 Composite escalation 저작 중 asyncpg `integer = text` 에러가 `_with_error_handling`의 PostgresError 누락 catch list 통과해 SDK UserError로 propagate. composer 자가 복구 기회 봉쇄. Fix `67fa1d6` — atomic/composer 양쪽 tool wrapper가 asyncpg.PostgresError catch, JSON error 응답으로 변환. iter23에서 실효 검증 |
 | 23 | 1 | — | **Accept 스트릭 재개**(18/19/20/23 success, 21/22 fail). city 앵커(Sirjan) attempt 1 direct 2-hop landing. voice+semantic 모두 유효(Sirjan 1명 unambiguous). asyncpg catch/composite PK fix 둘 다 직접 검증은 안 됨 — 이번에도 junction 경로 미유도. 답 shape 편중(rental date-only) 4iter 누적 확정. iter24 axis 다양성 batch로 진입 |
+| 24 | 1 | — | **Shape 편중 해소 첫 관측.** 프롬프트 예시를 5개 destination-appropriate pair로 확장한 뒤 payment anchor에서 `[{amount, payment_date}, …]` 출력. 4iter 연속 rental date-only 락인 깨짐. voice 1인칭 self-ID, semantic 자연, 5번째 clean accept(2/3). 단 1회 관측 = 분포 아님 — 진짜 다양성은 iter25 3-trial batch 필요 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
