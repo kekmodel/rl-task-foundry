@@ -350,7 +350,91 @@ atomic_tool_calls_seen=14 → 단일 attempt로 `max_turns=20` 거의 소진 →
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 13)
+### Iteration 14 — 2026-04-18 (max_turns=40 실측 + terminal 규칙 관측)
+
+**Hypothesis.** iter13의 1-attempt 한계는 `max_turns=20`이 composer의 DSL 시행착오 비용으로 소진돼 attempt 2 진입 자체가 봉쇄됐기 때문. 예산만 두 배로 완화하면(iter13 Next direction #1) weakening/escalation이 작동할 여지가 생긴다.
+
+**Change.**
+- `artifacts/tmp_configs/iter14_turns40.yaml` — iter13 config 복제에 `synthesis.runtime.max_turns: 20 → 40` 단일 변경. 프롬프트/솔버/밴드/DSL 모두 iter13과 동일.
+
+**Trial.** `artifacts/smoke_iter14` — flow_id `real_db_trial:20260417T182209Z:275b3e00`, anchor `payment_id=8917`, topic "Film actors from payment's rental". attempt 1 single submit, terminal `synthesis_failed / reject_too_hard / budget_exhausted`. atomic_tool_calls_seen=6 (iter13의 14 대비 DSL fix 덕에 절반 이하). canonical = 2-hop actors-via-rental chain, slot_count=2.
+
+**Findings.**
+- **가설 반증됨(negative).** max_turns를 40으로 올려도 여전히 1 attempt 만에 종료. composer는 DSL fix 덕에 단 6 turns만 썼고 18 turns가 여유 상태였는데도 attempt 2가 뜨지 않음. 즉 **max_turns가 병목이 아니었음**.
+- **진짜 원인 `submit_draft_tool.py:700-728`**. `reject_too_hard` 발생 시 `_terminated_too_hard = True` + `ToolsToFinalOutputResult(is_final_output=True)` 조합이 Runner를 즉시 break. composer에게 전달되는 메시지도 "conversation is terminated. Do not call submit_draft again" 으로 명시적 종료 지시. `attempt_outcomes=['difficulty_weakened']`는 outcome enum의 자동 매핑(`too_hard → DIFFICULTY_WEAKENED`)일 뿐 실제 weakening attempt는 구조적으로 발생 불가.
+- **설계 의도 재확인.** iter01~12 symmetric-tool regime 하에선 composer가 보통 pass_rate=1.0(too_easy)에서 시작해 escalate로 band를 향하는 궤적이었고, 가끔 overshoot해서 too_hard가 터지면 같은 anchor에서 weakening 시도가 진동하며 수렴 실패했다. "too_hard는 terminal, 새 anchor로 fresh start"가 그 시대의 최적 설계였음. 즉 terminal 규칙은 버그가 아니라 **이전 regime에 대한 정답**이었다.
+- **Asymmetric regime에선 too_hard가 default mode**로 전환되면서 이 규칙이 "모든 trial을 1-attempt로 축소"하는 부작용을 일으킨다. 프롬프트 `line 125-126` "On too_hard, relax one clause (not the label)"과 `line 161-165` "Within 2 composer calls of rejection feedback, call submit_draft again"이 코드의 terminal 플래그와 **정면 충돌**하는 상태로 공존.
+
+**Next direction.**
+1. **too_hard 종료 규칙 vs weakening 허용의 선택.** 원설계 복원(simple 시작 → too_easy → escalate) 방향으로 가려면 composer의 initial label 난이도를 낮추는 프롬프트 조정이 필요. weakening 시도를 허용하려면 terminal 플래그를 "N회 연속 too_hard" 조건으로 완화 + 프롬프트의 "Never weaken label" 조항을 뒤집어야 함. 둘 다 기존 설계 철학과 트레이드오프.
+2. 어느 쪽 가든 **단일 관측 전에 iter15로 "initial 난이도 문제" 가설 검증.** composer가 왜 첫 submit부터 multi-hop overshoot을 authoring하는지 prompt 레벨에서 분석.
+
+---
+
+### Iteration 15 — 2026-04-18 (Workflow step 2 예시 일관성 복원)
+
+**Hypothesis.** iter14 Next direction #2의 원인 진단. composer가 multi-hop overshoot을 authoring한 건 prompt `# Workflow` step 2의 **내부 모순** 때문. 룰은 "a homogeneous list of 3 child records reached through a **single foreign key** from the anchor"이지만 예시 `[{rental_date, film_title}, …]`은 rental 앵커 기준 2-hop을 요구한다(rental_date는 rental 0-hop, film_title은 rental→inventory→film 2-hop). composer는 예시를 "룰보다 더 넓게 허용되는 실제 목표"로 읽고 multi-hop으로 확장. 이 예시를 진짜 single-hop + destination table에 모든 필드가 거주하는 형태로 바꾸면 composer의 overshoot이 사라질 것.
+
+**Change.**
+- `prompts.py:114-126` Workflow step 2 재작성(commit `aaebc61`): "exactly ONE foreign-key hop from the anchor, every item's 1-2 keys all living on that one destination table (never mixed across the join chain)". 예시를 `[{rental_date, return_date}, …]` for customer anchor via `customer<-rental.customer_id`로 교체. 이전 `[{rental_date, film_title}, …]`은 명시적 negative example로 박음.
+- `artifacts/tmp_configs/iter15_singlehop.yaml` — iter14 config 그대로. 변수는 프롬프트 하나.
+
+**Trial.** `artifacts/smoke_iter15` — flow_id `real_db_trial:20260417T183622Z:a6a391ab`, anchor `film_id=38`, topic "Film cast lookup". attempt 1 single submit, terminal `reject_too_hard` 재발. atomic_tool_calls_seen=6 (1 neighborhood + 6 query; DSL chain resolution 덕에 KeyError retries 없음). canonical = `[AUDREY BAILEY, NICK DEGENERES, PARKER GOLDBERG]`. composer는 film 앵커에서 film_actor → actor (2-hop) 경로로 저작.
+
+**Findings.**
+- **가설 부분 반증: 프롬프트 내부 정합성은 복원됐지만 composer는 여전히 2-hop 저작.** 이유는 **sakila schema의 구조적 제약** 때문이었다. film 앵커의 1-hop 자식들(`film_actor`, `film_category`, `inventory`)이 전부 ID-only 브리지 테이블이라, Label Rules line 61 "Never use internal identifiers as answer fields" 와 single-hop 룰 + all-fields-on-destination 룰 **세 개를 동시에 만족할 수 없음**. composer는 세 룰 중 하나를 위반해야 하고, 가장 합리적 선택(no-ID 보존, single-hop 포기)을 내림. trace의 query #1/2/3 시퀀스가 그 탐색 과정을 그대로 보여줌: 1-hop 자식 셋 전부 ID-only 확인 후 2-hop으로 전환.
+- **이건 프롬프트 룰 세트가 over-determined.** 특정 앵커(bridge-heavy schema)에서 룰 세 개의 교집합이 공집합. 해결은 세 룰 중 하나를 상대화해야 함 — 예: "prefer single-hop when readable destination exists; otherwise nearest readable via bridge" 같은 계층적 규칙, 또는 anchor sampler에서 1-hop readable 자식이 없는 앵커는 거르는 방식.
+- **Solver 트레이스 관측 불가 (로깅 버그 발견).** stdout이 `solver_traces_dir` 경로를 광고하지만 글로벌 `./artifacts/traces/` 쪽에 쓰이고 trial debug 폴더에는 없음. 추가로 error path(`solver/backend_openai_agents.py:358`)가 `"run_items": []` 하드코딩이라 MaxTurnsExceeded에서 16턴 전부 손실. AgentsSDK의 `exc.run_data.new_items` 공식 복구 경로를 안 쓰고 있음. 이 버그 자체가 iter15 해석을 가로막는 결정적 장애물.
+- **iter15 가설 자체는 잘못된 프레이밍이었다.** "프롬프트 예시 불일치"가 composer overshoot의 유일 원인이라 가정했지만 실제로는 (a) schema 제약 + (b) 로깅 결함 둘 다 섞여 있었음. holistic read의 부재(iter15 설계 시 prompt/submit_draft_tool/backend 동시 읽지 않음)가 이 진단을 단일축으로 좁힌 원인.
+
+**Next direction.**
+1. **로깅 시스템 고치기 최우선**(iter16은 기능 수정 결과 관측용). `exc.run_data.new_items` 복구 + `repr(item)` → 구조화된 dict summarizer + `solver_orchestrator.traces_dir_override` — iter16에 반영하고 실측. 완료: commit `ffa587c`.
+2. **iter16: 로깅 fix 이후 solver 행동을 처음으로 관측**하면서 동일 프롬프트/config로 재실행. 같은 too_hard 재발하면 그때 프롬프트 룰 세트의 over-determination 해소 작업.
+3. anchor sampler에 "1-hop에 readable 자식이 있어야 함" 필터 추가 여부는 iter17 이후.
+
+---
+
+### Iteration 16 — 2026-04-18 (로깅 fix 후 첫 관측, accepted)
+
+**Hypothesis.** iter15 Next direction #2의 실행. 로깅 fix(commit `ffa587c`)가 solver 행동을 처음 관측 가능하게 만든 상태에서 iter15와 **완전 동일한** 프롬프트/config로 재실행. 기대값 분기: (a) 같은 too_hard 재발하면 prompt 룰 over-determination이 진짜 원인, (b) 다른 anchor에서 다른 결과가 나오면 anchor sampling randomness가 지배적.
+
+**Change.** 코드/프롬프트/config 변화 **없음**. 로깅 인프라만 수정된 상태에서 iter15와 같은 `iter15_singlehop.yaml`(rename 없이 재사용)로 재실행.
+
+**Trial.** `artifacts/smoke_iter16` — anchor `inventory_id=2794`. **처음으로 accepted** — session 내 첫 synthesis 성공.
+
+| # | topic | slot | pass_rate | calls_seen | outcome |
+|---|---|---|---|---|---|
+| 1 | inventory rental history | 2 | 1.0 (3/3) | 2 | reject_too_easy |
+| 2 | inventory rental history **by staff** | 2 | 0.667 (2/3) | 7 | **accepted** (in band [0.33, 0.67]) |
+
+- attempt 1: `neighborhood(inventory 2794) → query(rental|inv=2794, select=rental_date/return_date/rental_id, sort)`. **2 atomic calls**. iter13/14/15 대비 **6~7배 저비용**.
+- escalation: `profile(rental) + profile(staff) + query(staff list)` → staff 축 분석 → attempt 2 `query(rental|inv=2794 AND staff=2, select=rental_date/return_date)` — **Composite axis** 채택(두 filter on 다른 dims). iter07 Next direction의 "shape-changing axis" 원칙 준수. single-hop 룰 0-hop으로 완전 준수(rental은 inventory의 1-hop 자식이고 select 모두 rental 컬럼).
+- 그 뒤 registry commit 성공, bundle export 단계에서 별건 infra 버그 발생(아래).
+
+**Solver traces (첫 관측):**
+
+| Solver | tool calls | run_items | status | 요약 |
+|---|---|---|---|---|
+| qwen3.5-plus_00 | 12 | 36 | matched | `rows_where(inv=2794) → rows_via(rental) → rows_where(staff.first=Jon) → take → read(staff) → rows_where(rental.staff=2) → intersect → order_by(rental_date) → take(2) → read×2 → submit`. 정합 chain, 4턴 여유. |
+| qwen3.5-plus_01 | 13 | 39 | matched | 동일 shape + Jon/Stephens를 `intersect(first=Jon, last=Stephens)`로 더 엄밀. 정답. |
+| qwen3.5-plus_02 | 0 | 0 | **APITimeoutError** | 추론 실패 아닌 업스트림 타임아웃. |
+
+**Findings.**
+- **원설계 bottom-up 궤적 작동 확인.** `simple attempt 1 (too_easy) → Composite escalate → band` 정상 수렴. iter01~12 동안 관찰되던 패턴이 새 tool 서피스에서 되살아남. iter15 프롬프트 fix + iter13~16의 DSL chain resolution + coerce_scalar + retry-aware config 조합이 누적 효과를 냄.
+- **Solver의 chain-planning 능력 확인.** 2명이 12~13 atomic calls, 16턴 내 여유로 정합 chain 구성 + 정답 재현. iter13~15의 `pass_rate=0`은 solver 무능이 아니라 composer의 multi-hop overshoot 탓이었음이 역증됨.
+- **pass_rate=2/3의 이중 해석.** 매칭이 2/3인 주요 원인은 qwen3.5-plus_02의 **APITimeoutError**. 즉 band 진입은 **"composer 난이도가 solver ceiling에 정확히 걸림"이 아니라 "3명 중 1명이 인프라 사유로 제외된 통계 잡음"**. 3명 전부 API 성공했다면 3/3 too_easy로 떨어졌을 가능성이 실제 signal. 즉 iter16의 accept는 자연 관찰이 아닌 **fortunate noise-gifted landing**.
+- **인프라 발견.** `SolverOrchestrator._run_solver`가 transient error를 retry 없이 실패 처리 → APITimeoutError 한 번에 pass_rate가 1/3 단위로 noise. 해결은 OpenAI SDK의 `AsyncOpenAI(max_retries=N)` 노출(commit `61ed382`). Bundle export 단계의 schema_snapshot 경로 불일치 infra 버그도 별도 관측(미수정).
+- **Draft 4요소 정합성(attempt 2)** ✓: topic "inventory rental history by staff" ↔ label 2 rows(rental_date, return_date) ↔ anchor inventory_id=2794 ↔ question이 Jon Stephens staff 조건 자연스럽게 언급. solver 둘 다 question에서 staff 필터를 정확히 추출.
+
+**Next direction.**
+1. **iter17 — 재현성 검증.** iter16과 동일 프롬프트/config + `provider_config.max_retries=3~5` + bundle exporter infra fix. 여러 anchor에 걸쳐 accept 비율 측정. 한 iter만으로는 "우연한 landing"과 "설계가 작동 중"을 구분 불가. 3~5 trial batch로 accept rate 확인하되 쿼터 예산 내에서.
+2. **`max_solver_runs` 확대 실험.** 현재 3이면 1/3 단위 해상도라 transient noise에 취약. 5~10으로 올리면 pass_rate 분해능이 높아져 "진짜 band 안"과 "운 좋게 걸린 값" 구분이 생김. 단 쿼터 2~3배 부담.
+3. **Composite axis의 재현성 관측.** iter16은 staff 축을 escalation으로 뽑았는데 다른 anchor에서도 Composite가 자연 선택되는지 vs Cardinality/Cross-item rule 중 어느 축이 지배적인지. iter01~12의 Width 편향이 새 서피스에서 실제로 사라졌는지 확인.
+4. **프롬프트 over-determination 문제는 iter15 앵커(film)에서만 발현된 특수 케이스인지, bridge-heavy 앵커 전반의 문제인지 판단.** iter17에서 film/category/store 같은 bridge 중심 앵커가 뽑히면 iter15 실패가 재현될 것.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 16)
 
 ### 행동 변화 요약
 
@@ -371,6 +455,9 @@ atomic_tool_calls_seen=14 → 단일 attempt로 `max_turns=20` 거의 소진 →
 | 12_retry | 0 | MaxTurnsExceeded | qwen이 city→address 1:N 경로는 정확히 식별, 그러나 동일 쿼리 반복 + `op="any" value=""` 스키마 버그 4턴 + calc/샘플링으로 예산 고갈. 프롬프트 반증 아님, 런타임 노이즈 |
 | 12_retry2 | 0 | MaxTurnsExceeded | tool 버그 수정 후 재실행. qwen이 turn 5에 올바른 find_*(limit=3) 실행했으나 submit하지 않고 대안 1:N 경로 5종 탐색. commit 회피 행동 관측 |
 | 13 | 1 | — | **신 tool 서피스 첫 베이스라인.** composer는 query DSL로 2-hop + sort+limit task 저작 성공, solver 0/3 matched → `reject_too_hard`. same-model `pass_rate=1.0` ceiling **반전**. 14 tool calls/attempt로 `max_turns=20` 소진해 attempt 2 진입 실패. DSL의 join+sort 컬럼 해상 버그로 3턴 낭비 관측 |
+| 14 | 1 | — | `max_turns=40` 완화 단독 실험. DSL fix 덕에 composer 6턴으로 종료했지만 attempt 2는 여전히 미발동. 원인: `submit_draft_tool._terminated_too_hard` + `ToolsToFinalOutputResult` 조합이 Runner 즉시 break. max_turns는 병목 아니었음 |
+| 15 | 1 | — | Workflow step 2 예시를 single-hop + all-fields-on-destination으로 재작성. film 앵커에서 여전히 2-hop 저작됨. 이유: sakila film의 1-hop 자식이 전부 ID-only 브리지라 3개 룰(single-hop / no-ID / destination-only) 교집합이 공집합. prompt 룰 세트가 over-determined. solver trace 누락으로 관측 불가(로깅 버그 발견) |
+| 16 | 2 | — | **첫 accepted.** inventory 앵커에서 attempt 1 pass_rate=1.0(too_easy) → Composite axis(staff 필터 추가) escalate → attempt 2 pass_rate=0.667 **in band**. bottom-up 원설계 궤적 부활 관측. 단 2/3는 solver 3명 중 1명 APITimeoutError 덕의 noise-gifted landing이므로 재현성 검증 필요 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
