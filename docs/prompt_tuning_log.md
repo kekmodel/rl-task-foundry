@@ -769,7 +769,40 @@ Voice: 2인칭 조직-대상 ask, 금지 구절 0, schema-ese 0 ✓. Sirjan cust
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 25)
+### Iteration 26 — 2026-04-19 (Type B 도입, 1-sample 스모크)
+
+**Hypothesis.** iter18~25 전체 8 accept가 Filter-dominant에 고착된 이유가 Workflow step 2의 "homogeneous list of 3 child records" 하드코딩 때문이라는 가설. step 2를 Type A(list)와 Type B(scalar aggregate) 두 개의 first-class 옵션으로 분리하면 composer가 `count`/`min`/`max` 같은 scalar 답변 task를 시도할지 관측.
+
+**Change.** `src/rl_task_foundry/synthesis/prompts.py` Workflow step 2 재작성. Type A 예시는 유지, Type B 신규 블록 추가(5개 anchor×aggregate 예시: rental_count, actor_count, film_count, first_payment_date, max_payment). Deterministic Answers 섹션도 Type B 스칼라 케이스 포함하도록 보강. Escalation Axes는 그대로 — task type 자체는 step-2 선택이지 escalation이 아니라고 명시. commit `e83d111`.
+
+**Trial.** `artifacts/tmp_configs/iter26_task_type.yaml` 1-sample 스모크(smoke_iter26_a). 결과 `trial_status=synthesis_failed`, attempt_outcomes `[difficulty_crank_invalid, difficulty_crank_invalid, difficulty_weakened]`, 3 submit 모두 미채택.
+
+| attempt | task type | label | axis signal | pass_rate | reject |
+|---|---|---|---|---|---|
+| 1 | **Type B 스칼라** | `{customer_count: 5}` (country 67→city→address→customer, `count(*)`) | search_cost=8 slot=1 constraints=0 | **3/3 = 1.0** | too_easy |
+| 2 | Type A 리스트 | `[{first_name, last_name}, …]` (country 67→…→customer, top-3 last_name asc) | search_cost=3 slot=2 constraints=0 | 3/3 = 1.0 | too_easy |
+| 3 | Type A 리스트 | `[{first_name, last_name}, …]` + city IN (Amersfoort, Apeldoorn, Ede) | search_cost=10 slot=2 constraints=0 | (too_hard) | budget_exhausted |
+
+iter26_a attempt 1 question: "네덜란드에 거주하는 고객은 총 몇 명인가요?" — 1인칭 ask, schema identifier 없음, voice 자연. 3 solvers 모두 `{"customer_count": 5}`로 정합 (turn 6 / 10 / 11).
+
+**Findings.**
+
+1. **Type B first-class 도입 성공 ✓ — 튜닝 로그 사상 최초 scalar aggregate 관측.** attempt 1에서 composer가 Type B를 채택해 `aggregate: [{fn: count, column: customer_id, alias: customer_count}]`, no `group_by`로 query DSL 호출. 스키마 추론이 `{customer_count: int}` 형식을 solver-facing prompt로 전파, solver 3명 모두 정확한 matching output 생성. iter18~25 8 accept 누적에서 Aggregate=0이던 축적을 iter26 attempt 1 하나가 깨트림. **프롬프트 편집의 구조적 효과 확인.**
+2. **Type B의 too_easy 고착은 구조적 signal.** `{customer_count: 5}` 같은 정수 스칼라는 solver 3명이 전부 같은 값을 produce할 확률이 매우 높음(답의 공간이 1차원 정수). Filter-dominant Type A에서는 3/5 slot exact match가 필요해 pass_rate가 자연스럽게 흩어지는데, Type B는 scalar match 하나로 수렴해 3/3으로 쉽게 수렴. 즉 **Type B는 기본이 too_easy** → escalation(filter 추가 또는 IN-window)으로 답의 공간을 축소해야 band 진입.
+3. **Composer가 Type B too_easy 대응을 Type A 전환으로 처리했음 (치명 결함).** attempt 2에서 composer는 `customer_count`를 지우고 `first_name/last_name` 리스트로 교체. 이는 escalation이 아니라 task type 교체. 백엔드의 difficulty 분석기는 search_cost 8→3 감소를 포착해 `difficulty_crank_invalid` 반환(올바른 판정). 프롬프트는 "Never weaken / only add"를 명시했으나 composer는 "다른 task type으로 전환하는 것"도 허용된 옵션으로 해석. 즉 **step-2에서 Type A/B 중 하나를 선택하되, 첫 submit 이후 attempt에서는 같은 type 내에서만 escalation** 제약이 누락.
+4. **Attempt 3 too_hard.** 같은 Type A에 city IN-filter(3개 도시)를 추가해 answer space를 지나치게 좁힘 → 3/3 solver 불일치 → too_hard. 이건 정상적인 탐색 실패이며, budget=3 submit이 너무 타이트한 것과 결합돼 trial 자체가 synthesis_failed로 종료. 만약 attempt 2가 Type B escalation(예: 도시 이름 IN 필터로 count)으로 정상 진행됐다면 attempt 3까지 더 완만한 band 수렴이 가능했을 것.
+5. **iter26 프롬프트의 미흡 1줄 요약.** "Type B too_easy → Type A 전환" 경로가 열려 있음. 프롬프트에 "Once step 2 picks a task type, all subsequent attempts for the same anchor stay within that type — escalations are within-type additions, never cross-type replacements" 같은 잠금 규칙 필요.
+
+**Next direction.**
+
+1. **iter27 (프롬프트 edit, blocker fix): Task type lock across attempts.** prompts.py에 한 줄 추가: attempt 2+에서 task type 교체 금지, 같은 type 내에서 Escalation Axes의 Filter/Composite/Cardinality/Cross-item만 적용. iter26의 attempt 1 Type B 성공을 보전하면서 too_easy 대응을 제대로 열어주기. 1-sample 스모크로 검증.
+2. **iter26_a attempt 1의 Type B 성공 그 자체가 강한 양성 신호** — iter27 수정 후 accept가 따라붙을 가능성 높음. Type B는 structure상 solver 3명이 같은 scalar로 수렴하기 쉬우므로 within-Type-B escalation (filter 추가)이 band 0.33~0.67 진입 키.
+3. **iter25_c voice 회귀는 여전히 미해결** — iter27 task-type-lock 편집과 묶어 1줄 voice 가이드 병합 여부는 iter27 결과 보고 판단.
+4. **축적 관찰.** iter26으로 Aggregate 축 1건 추가(attempt 1 기준). accept까지는 iter27 제약 수정 후에.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 26)
 
 ### 행동 변화 요약
 
