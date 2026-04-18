@@ -117,14 +117,18 @@ class SynthesisDb:
 
     async def random_anchor(self) -> dict[str, object] | None:
         graph = await self.schema_graph()
-        hub_tables = [
+        candidates = [
             t
             for t in graph.tables
             if t.primary_key and len(t.primary_key) == 1 and (t.row_estimate or 0) >= 100
         ]
-        if not hub_tables:
+        if not candidates:
             return None
-        table = random.choice(hub_tables)
+        weights = [
+            max(1, len(graph.edges_to(t.table_name, schema_name=t.schema_name)))
+            for t in candidates
+        ]
+        table = random.choices(candidates, weights=weights, k=1)[0]
         pk_col = table.primary_key[0]
         try:
             pools = await self.ensure_database_pools()
