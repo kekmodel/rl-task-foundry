@@ -434,7 +434,72 @@ atomic_tool_calls_seen=14 → 단일 attempt로 `max_turns=20` 거의 소진 →
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 16)
+### Iteration 17 — 2026-04-18 (retry=5 재현성 검증 + divergence gate 관측)
+
+**Hypothesis.** iter16의 band landing(pass_rate=0.667 in [0.33, 0.67])이 **진짜로 composer escalation의 결과**인지 검증. 같은 프롬프트/config + `provider_config.max_retries=5` 추가로 transient APITimeoutError를 제거해 pass_rate 측정을 안정화하면, 재현 시 동일한 2/3 landing이 일관되게 나타나야 한다.
+
+**Change.**
+- `artifacts/tmp_configs/iter17_retry5.yaml` — iter15/16 config 복제에 `providers.opencode_zen.max_retries: 5` 단일 필드 추가(commit `61ed382`에서 ProviderConfig 노출).
+- 프롬프트/모델/solver 수/max_turns/band 모두 iter16과 동일.
+
+**Trial.** `artifacts/smoke_iter17` — flow_id `real_db_trial:20260418T124749Z:594131ba`, anchor `address_id=227`, topic "Customer rental history lookup". attempt 1 single submit, pass_rate=**1/3=0.3333333333333333**, terminal `synthesis_failed / reject_too_hard / budget_exhausted`. Composer 4 atomic calls (neighborhood×2 + query×2, 그중 #3과 #4는 **완전히 동일한 spec의 duplicate**). canonical = 3 rental rows from customer 223 via address 227.
+
+**Solvers (3/3 submitted, retry가 transient error 차단):**
+
+| Solver | turns | status | matched |
+|---|---|---|---|
+| qwen3.5-plus_01 | 9 | submitted | ✓ |
+| qwen3.5-plus_00 | 8 | submitted | ✗ |
+| qwen3.5-plus_02 | 9 | submitted | ✗ |
+
+raw_output_preview 3개 모두 같은 두 rental_date로 시작하지만 세 번째 row에서 분기(혹은 format 차이). 1/3만 정확히 canonical과 매치.
+
+**Findings.**
+
+**결정적 발견 (iter16 accept 해석 완전 재구성):** `solver_orchestrator.py:452-457`에 **2차 gate가 존재**한다.
+
+```python
+unique_answers, divergence_ratio = _solver_divergence(summary)
+if (
+    status is TaskQualityGateStatus.ACCEPT
+    and divergence_ratio > config.calibration.max_divergence_ratio
+):
+    status = TaskQualityGateStatus.REJECT_TOO_HARD
+```
+
+`divergence_ratio = unique_answers_among_submissions / num_submissions`. default `max_divergence_ratio=0.5`. 1차 band check가 accept였더라도 solver들의 답이 너무 발산하면 too_hard로 **재분류**. iter17은 3 submitted × 2+ unique → ratio ≥ 2/3 > 0.5 → accept 판정이 강제 번복됨.
+
+**n=3 + max_divergence=0.5는 band landing을 사실상 불가능하게 한다:**
+
+| matched/submitted | unique | divergence | band pass | final status |
+|---|---|---|---|---|
+| 1/3 | 2~3 | 2/3 ~ 1.0 | in band | **reject_too_hard (divergence 번복)** |
+| 2/3 (모두 submit) | 2 | 2/3 | in band | **reject_too_hard (divergence 번복)** |
+| 2/3 (1명 timeout, 2명 matched) | 1 | 1/2 | in band | **accept** (iter16 시나리오) |
+| 3/3 | 1 | 1/3 | above band | reject_too_easy |
+
+즉 **iter16의 accept는 divergence gate를 우회한 infrastructure noise**였다. qwen3.5-plus_02의 APITimeoutError가 "submission 풀에서 빠지는" 통계적 행운을 만들어 divergence가 0.5 경계로 내려왔을 뿐, **composer/solver 수준의 "band 정확히 타격"이 아니었다**. retry=5로 이 noise source를 제거하자 구조적 장벽이 드러남.
+
+**추가 관측:**
+
+- **composer duplicate query call**: trial_events에서 `query(rental|customer_id=223, ..., limit=3)`이 call_index 3과 4로 **완전히 동일한 spec 2회 호출**. 첫 호출의 결과를 무시하고 같은 호출을 반복. qwen3.5-plus thinking 모델의 단발 검증 성향이거나 attempt 2 진입을 위한 탐색 행동으로 보이지만 정보 이득 없는 reuse.
+- **composer는 0-hop single filter + limit+sort 사용** → Workflow step 2 single-hop 룰을 충실히 지킴. address → customer 1-hop → rental 0-hop(customer_id = 223 filter). 이번엔 prompt 룰 대로 작동했으나 어쨌든 too_hard.
+- **solver 3명 전부 submit + 3명 전부 9 turns 전후 정상 종료**. retry=5 효과 확인됨 — iter16식 timeout 기반 artifact 제거.
+- **Draft 4요소 정합성**: topic ↔ label ↔ anchor ↔ question 모두 적절. 문제는 저작 수준이 아니라 divergence gate 정책.
+
+**Next direction.**
+
+1. **`max_divergence_ratio` 재교정이 최우선.** n=3 환경에서 현 0.5는 구조적 reject generator. 후보:
+   - (a) 0.67로 완화 — 2/3 landing(2 matched + 1 unique wrong, divergence=2/3=0.667)이 경계 걸리도록. 0.67 "미만"으로 `>` 비교를 `>=`로 바꿀지도 동시 검토.
+   - (b) 정의 자체를 재정의 — `unique_among_non_matched / non_matched_count` 같은 normalize된 지표로 전환.
+   - (c) `n` 증가에 따라 자동 scale — 예: `max(0.5, 1 - 1/n)`.
+2. **`max_solver_runs` 확대**와의 상호작용 측정. n=5~10으로 늘리면 divergence_ratio=unique/n이 자연스럽게 완화됨. 쿼터 부담 증가는 있으나 구조적 해상도 향상.
+3. **iter17의 composer duplicate query 관측**은 별도 조사. neighborhood 뒤에 같은 query를 두 번 호출한 이유가 attempt 경계(첫 submit 전 탐색) 때문인지, 아니면 Runner 내부 동작인지 trace의 run_items를 열어 확인 필요.
+4. **iter16 accept는 "natural reproducibility" 증거가 아님을 로그 상 명확히 표기.** Cross-Iteration Summary 표에도 "noise-gifted landing, retry=5로 재현 실패"를 iter17 행으로 추가해야 함.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 17)
 
 ### 행동 변화 요약
 
@@ -458,6 +523,7 @@ atomic_tool_calls_seen=14 → 단일 attempt로 `max_turns=20` 거의 소진 →
 | 14 | 1 | — | `max_turns=40` 완화 단독 실험. DSL fix 덕에 composer 6턴으로 종료했지만 attempt 2는 여전히 미발동. 원인: `submit_draft_tool._terminated_too_hard` + `ToolsToFinalOutputResult` 조합이 Runner 즉시 break. max_turns는 병목 아니었음 |
 | 15 | 1 | — | Workflow step 2 예시를 single-hop + all-fields-on-destination으로 재작성. film 앵커에서 여전히 2-hop 저작됨. 이유: sakila film의 1-hop 자식이 전부 ID-only 브리지라 3개 룰(single-hop / no-ID / destination-only) 교집합이 공집합. prompt 룰 세트가 over-determined. solver trace 누락으로 관측 불가(로깅 버그 발견) |
 | 16 | 2 | — | **첫 accepted.** inventory 앵커에서 attempt 1 pass_rate=1.0(too_easy) → Composite axis(staff 필터 추가) escalate → attempt 2 pass_rate=0.667 **in band**. bottom-up 원설계 궤적 부활 관측. 단 2/3는 solver 3명 중 1명 APITimeoutError 덕의 noise-gifted landing이므로 재현성 검증 필요 |
+| 17 | 1 | — | retry=5로 transient noise 제거 후 재실행. address 앵커 3 solvers 모두 submit, 1/3 matched → pass_rate=0.333 band 포함이지만 `_solver_divergence`가 2차 gate로 작동해 reject_too_hard 재분류. iter16 accept는 timeout 1명이 submission 풀에서 빠지며 divergence=1/2로 경계 통과한 infrastructure artifact 였음이 확정. n=3 + max_divergence=0.5는 구조적으로 band landing 불가 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
