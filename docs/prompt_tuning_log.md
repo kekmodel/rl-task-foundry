@@ -574,7 +574,37 @@ Solver traces (3명):
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 19)
+### Iteration 20 — 2026-04-19 (voice-constraint prompt, 3연속 accept)
+
+**Hypothesis.** iter18/19 task bundle의 qualitative 평가에서 composer가 user-facing question을 **staff/service voice로 쓰는** 문제 발견 — iter19는 "고객님, 귀하의... 확인해 드리겠습니다... 알려주세요"로 한 문장 안에 응답자/질의자 voice 혼재, iter18은 "이 대여 기록" schema-internal reference. 원인은 prompt `# Workflow` 마지막 문장 "Rewrite ... as a customer who knows nothing about databases"가 너무 포괄적이라 composer가 CS 대화 조각을 끼워넣음. voice 제약을 명시적 positive/negative 예시로 강화하면 해소될 것.
+
+**Change.**
+- `prompts.py:135-137` rewrite instruction을 (a) 1인칭 ask 또는 조직-대상 2인칭 요청 명시, (b) 금지 구절 리스트("고객님"/"귀하의"/"확인해 드리겠습니다"/"도와드리겠습니다"), (c) schema-internal anchor reference("이 대여 기록") 금지, (d) 조직 관점 no — "customer is seeking information, solver is the organization answering" 프레이밍으로 확장 (commit `a98f58c`).
+- `artifacts/tmp_configs/iter20_voice.yaml` — iter19와 동일 config (변수 프롬프트 하나만).
+
+**Trial.** `artifacts/smoke_iter20` — anchor `city_id=544` (Toulouse), topic "Rental records for customer in Toulouse". **attempt 1 바로 accepted**, `pass_rate=1/3=0.333` in band, registry committed + bundle exported.
+
+**Question (실측):**
+> "저는 툴루즈에 거주하는 고객입니다. 제 대여 기록에서 대여일 순으로 가장 빠른 3건의 대여일과 반납일을 알려주세요."
+
+**Findings.**
+
+1. **Voice fix 완벽 작동 ✓ (가설 positive 검증).** 금지 구절 0건. "저는... 고객입니다" 1인칭 self-identification, "제 대여 기록" 고객 본인 reference, "알려주세요" ask voice, schema-internal "이 대여 기록" 없음, city anchor를 "툴루즈"로 자연어화. iter18/19 대비 voice 품질 **dramatically 개선**.
+2. **3연속 accept 재현성 유지.** voice 제약 추가가 composer 성능 회귀 유발 안 함. 오히려 simple direct landing(iter19)과 다른 궤적(iter20 2-hop)으로도 accept 가능.
+3. **첫 clean 2-hop join task.** city → address → customer → rental 경로로 실질 multi-table join. iter15의 multi-hop overshoot 실패(`reject_too_hard`)가 **prompt/divergence/retry 수정 누적 + anchor 다양성**의 조합으로 이제 clean 통과. solver primitive chain: `rows_where(address, city_id=544) → rows_via(address_id→customer) → rows_via(customer_id←rental) → order_by(rental_date asc) → take(3) → read×3` (~7 primitives).
+4. **새 anchor 타입 관측.** iter13(inventory)/16(inventory)/17(address)/18(rental)/19(customer)/20(city) — sakila 7 anchor 타입 중 6종 관측. film/payment/staff anchor는 아직 iter 내 미등장.
+5. **Semantic ambiguity — Toulouse 거주 고객이 2명 이상이면 문제.** "저는 툴루즈에 거주하는 고객입니다. 제 대여 기록..."은 1인 지칭을 가정한 표현인데 anchor가 city(복수 customer 포함 가능)임. canonical이 Toulouse 전체 customers의 rental 통합 top-3이면 질문의 "제"와 답의 의미가 불일치. sakila Toulouse의 customer 수에 따라 무해~문제. **별도 검증 필요**.
+
+**Next direction.**
+
+1. **iter20 semantic ambiguity 검증.** sakila city_id=544의 customer 수 쿼리 → 1명이면 iter20 task 유효, 2+명이면 task 자체 ambiguity로 bundle 품질 결함. 필요시 prompt에 "anchor 엔티티가 여러 customer를 포함하는 집계 레벨(city, country)일 때는 '저'/'제' 1인칭이 아닌 '해당 도시 고객들의' 등 복수형 표현" 추가.
+2. **iter21 axis 다양성 batch.** voice 문제는 해결됐으니 이제 원래 iter20 계획이었던 axis 축 관측으로 이동. 3~5 trial batch 돌려 Cardinality/Cross-item rule/Aggregate 축이 등장하는지. film/payment/staff anchor에서는 어떤 task가 나오는지.
+3. **iter18/19 재해석 보완.** voice 축에서는 iter20이 baseline. iter18/19 task는 voice 결함으로 RL training data로 그대로 쓰기엔 grade 낮음. 축적된 task pool에서 voice 기준 post-hoc 필터링 검토.
+4. **uv sync editable 이슈 별건.** `uv sync`가 `.venv` 재생성 후 local 프로젝트를 editable install 안 하고 누락하는 현상 관측. iter20 실행 전 `uv pip install -e .` 수동 필요. 재발 방지 위해 pyproject.toml `[tool.uv]` 설정 조사 필요.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 20)
 
 ### 행동 변화 요약
 
@@ -601,6 +631,7 @@ Solver traces (3명):
 | 17 | 1 | — | retry=5로 transient noise 제거 후 재실행. address 앵커 3 solvers 모두 submit, 1/3 matched → pass_rate=0.333 band 포함이지만 `_solver_divergence`가 2차 gate로 작동해 reject_too_hard 재분류. iter16 accept는 timeout 1명이 submission 풀에서 빠지며 divergence=1/2로 경계 통과한 infrastructure artifact 였음이 확정. n=3 + max_divergence=0.5는 구조적으로 band landing 불가 |
 | 18 | 2 | — | **첫 clean accept.** divergence gate off 후 rental 앵커에서 attempt 1 simple single-filter (3/3 too_easy) → Composite escalate (+staff_id 3 filters) → attempt 2 2/3 in band + committed + bundle exported. asymmetric tool surface에서 same-model qwen 페어링이 원설계 bottom-up 궤적으로 clean landing 가능함 첫 실증. trial_events.jsonl 실시간 스트리밍 실제 관측 검증 |
 | 19 | 1 | — | **2연속 accept** + Phase 2 unified logger 실사용 검증. customer 앵커에서 attempt 1 simple 1-filter로 바로 1/3 in band. iter18과 달리 escalation 없이 direct landing 궤적. trial_events.jsonl 한 파일에 composer/solver/phase 이벤트 전부 interleaved, legacy per-file trace 폴더 비어 있음 확인. iter17과 사실상 같은 signal(1/3 + 2 unique wrong)이 gate off라 자연 accept, fix 효과 직접 실증 |
+| 20 | 1 | — | **3연속 accept + voice fix 검증.** Qualitative 평가에서 발견한 iter18/19의 staff-voice / mixed-voice 문제를 prompt의 rewrite instruction 강화로 해결(1인칭 ask 명시 + 금지 구절 리스트). 결과: city(Toulouse) 앵커에서 "저는 툴루즈에 거주하는 고객입니다. 제 대여 기록..." 1인칭 customer-ask voice 완벽 준수. 부수 효과로 **첫 clean 2-hop join task**(city→address→customer→rental) 성공 — iter15 multi-hop overshoot 실패가 누적 수정들로 해소. 단 Toulouse customer 수가 2+면 semantic ambiguity 가능성 별도 검증 필요 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
