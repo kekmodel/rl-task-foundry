@@ -673,7 +673,36 @@ Solver traces (3명):
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 22)
+### Iteration 23 — 2026-04-19 (asyncpg catch + composite PK fix 통합 상태 accept 재개)
+
+**Hypothesis.** iter21 composite PK fix(`0ff46a5`)와 iter22 asyncpg catch fix(`67fa1d6`) 양쪽 수정이 들어간 상태에서 동일 config로 돌렸을 때 accept 재개 + 회귀 없음 확인.
+
+**Change.** iter22 config 복제(`iter23_pg_catch.yaml`). 변수 0.
+
+**Trial.** anchor `city_id=481` (Sirjan). Attempt 1 바로 accepted, `pass_rate=1/3=0.333` in band, registry committed + bundle exported. solver 2개 fail/1개 match.
+
+**Question:**
+> "Sirjan 도시에 거주하는 고객의 대여 기록을 대여일 오름차순으로 처음 3 건 알려주세요."
+
+Voice: 2인칭 조직-대상 ask, 금지 구절 0, schema-ese 0 ✓. Sirjan customer 수 사후 검증 = 1명 (OSCAR AQUINO) → "Sirjan 고객 = customer 449" 자연스러운 지칭, unambiguous ✓.
+
+**Findings.**
+
+1. **Accept 스트릭 재개.** iter21/22 tooling 버그로 끊겼던 스트릭이 수정 반영 후 재개. 전체 4 clean accept / 6 iter (18/19/20/23 vs 21/22).
+2. **voice fix 지속 검증.** iter20~23 전부 금지 구절 부재, schema-ese 부재, customer-ask voice 유지. prompt 변경(iter20 `a98f58c`) 이후 회귀 관측 없음.
+3. **asyncpg catch fix 직접 검증 불가.** iter23에서 composer query가 type error 자체를 일으키지 않음. 회귀 검증에는 유효(53 tool-factory 테스트 통과) but 실제 복구 경로 미관측.
+4. **Composite PK fix도 미검증 (2회 연속).** iter22/23 모두 anchor가 inventory/city라 junction(`film_actor`) 경로 안 탐. **Composer의 anchor 경로 선택 편중 관측**: iter13~23 11회 중 junction direct path는 iter21의 actor anchor 1회뿐. composer는 M:N bridge를 intermediate pass-through로만 쓰고 최종 target은 readable non-junction table로 수렴. 실측 검증은 의도적 seeding 필요.
+5. **Task 품질 패턴 고착화 관측.** iter18/19/20/23 accept된 task 4건 모두 `[{rental_date, return_date}]` 답 shape. customer/address/city anchor에서 rental 테이블로 수렴. film_title/actor_name/category_name 같은 다른 답 shape 0건. iter20 qualitative 평가에서 지적한 답 shape 편중이 iter23까지 지속. RL training data 분포 여전히 좁음.
+
+**Next direction.**
+
+1. **iter24: 3-trial batch로 axis/anchor 다양성 관측.** accept rate 측정 + composer axis 선택 분포(Composite / Cardinality / Cross-item rule / Aggregate). 쿼터 부담 있지만 단일 trial만으론 분포 측정 불가능.
+2. **composite PK fix 직접 검증 축 계속 열어둠.** iter25+에서 필요 시 `category` / `film_category` / `film_actor` anchor 강제 주입 수단 검토.
+3. **답 shape 다양화 프롬프트 가이드 후보.** iter20 Next direction #1에서 제안했던 "answer fields should sometimes include readable attributes (names/titles/categories)" 재검토 — iter23에서도 여전히 rental date-only 패턴이라 이제 실제 프롬프트 편집 후보.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 23)
 
 ### 행동 변화 요약
 
@@ -703,6 +732,7 @@ Solver traces (3명):
 | 20 | 1 | — | **3연속 accept + voice fix 검증.** Qualitative 평가에서 발견한 iter18/19의 staff-voice / mixed-voice 문제를 prompt의 rewrite instruction 강화로 해결(1인칭 ask 명시 + 금지 구절 리스트). 결과: city(Toulouse) 앵커에서 "저는 툴루즈에 거주하는 고객입니다. 제 대여 기록..." 1인칭 customer-ask voice 완벽 준수. 부수 효과로 **첫 clean 2-hop join task**(city→address→customer→rental) 성공 — iter15 multi-hop overshoot 실패가 누적 수정들로 해소. 단 Toulouse customer 수가 2+면 semantic ambiguity 가능성 별도 검증 필요 (사후 확인: 1명, 무해) |
 | 21 | 1 | — | **Structural mismatch 노출** — actor anchor에서 composer가 `actor → film_actor → film` 2-hop task 저작. voice는 완전 준수(2인칭 org-ask)인데 solver의 atomic calculus가 `film_actor` composite PK에서 `take/count/aggregate/group_top` 전부 거부(`_single_column_pk` 가드). 16턴 우회 시도 후 MaxTurnsExceeded. Composer DSL ⊃ Solver calculus 표현력 격차 드러남. Fix는 `0ff46a5` — `_pk_expression` ROW 표현을 JOIN 매칭 통일해 composite PK 전면 지원. 실측 회귀 테스트 통과, iter22에서 실제 trial 재현 검증 예정 |
 | 22 | 1 | — | composite PK fix 실측 시도 but anchor=inventory라 junction 경로 미유도. Attempt 1 정상 too_easy, Attempt 2 Composite escalation 저작 중 asyncpg `integer = text` 에러가 `_with_error_handling`의 PostgresError 누락 catch list 통과해 SDK UserError로 propagate. composer 자가 복구 기회 봉쇄. Fix `67fa1d6` — atomic/composer 양쪽 tool wrapper가 asyncpg.PostgresError catch, JSON error 응답으로 변환. iter23에서 실효 검증 |
+| 23 | 1 | — | **Accept 스트릭 재개**(18/19/20/23 success, 21/22 fail). city 앵커(Sirjan) attempt 1 direct 2-hop landing. voice+semantic 모두 유효(Sirjan 1명 unambiguous). asyncpg catch/composite PK fix 둘 다 직접 검증은 안 됨 — 이번에도 junction 경로 미유도. 답 shape 편중(rental date-only) 4iter 누적 확정. iter24 axis 다양성 batch로 진입 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
