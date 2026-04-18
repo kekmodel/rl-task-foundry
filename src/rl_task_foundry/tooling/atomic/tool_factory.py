@@ -400,7 +400,18 @@ def build_take_tool(session: AtomicSession) -> "FunctionTool":
         cursor = _require_str(payload, "cursor")
         n = _require_int(payload, "n")
         ids = await take(session, cursor=CursorId(cursor), n=n)
-        return {"row_ids": list(ids)}
+        # Composite-PK ids come back as asyncpg Records (tuple-like but
+        # not list). Normalise to plain list so downstream JSON
+        # serialization doesn't leak Record objects.
+        normalised: list[object] = []
+        for item in ids:
+            if isinstance(item, (tuple, list)):
+                normalised.append(list(item))
+            elif hasattr(item, "__iter__") and not isinstance(item, (str, bytes, bytearray)):
+                normalised.append(list(item))
+            else:
+                normalised.append(item)
+        return {"row_ids": normalised}
 
     return FunctionTool(
         name="take",
@@ -575,6 +586,19 @@ def build_read_tool(session: AtomicSession) -> "FunctionTool":
 
     tables = _all_table_names(session.snapshot)
     columns = _all_column_names(session.snapshot)
+    row_id_any_of: list[JsonObject] = list(_VALUE_ANY_OF)
+    row_id_any_of.append(
+        {
+            "type": "array",
+            "description": (
+                "For composite primary keys — one entry per PK column, "
+                "in the order declared by the table. take() also emits "
+                "composite PKs as arrays."
+            ),
+            "items": {"anyOf": _VALUE_ANY_OF},
+            "minItems": 1,
+        }
+    )
     schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
@@ -582,8 +606,12 @@ def build_read_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "table": {"type": "string", "enum": tables},
             "row_id": {
-                "description": "Primary-key value of the row.",
-                "anyOf": _VALUE_ANY_OF,
+                "description": (
+                    "Primary-key value of the row. Scalar for single-"
+                    "column PKs; array [v1, v2, ...] in PK-column order "
+                    "for composite PKs."
+                ),
+                "anyOf": row_id_any_of,
             },
             "columns": {
                 "type": "array",
@@ -596,11 +624,23 @@ def build_read_tool(session: AtomicSession) -> "FunctionTool":
     async def handler(payload: JsonObject) -> JsonObject:
         table_name = _require_str(payload, "table")
         table_spec = session.snapshot.table(table_name)
-        if len(table_spec.primary_key) == 1:
-            pk_column_spec = table_spec.column(table_spec.primary_key[0])
-            row_id = coerce_scalar(payload.get("row_id"), pk_column_spec.data_type)
+        raw_row_id = payload.get("row_id")
+        pk_cols = table_spec.primary_key
+        if len(pk_cols) == 1:
+            pk_column_spec = table_spec.column(pk_cols[0])
+            row_id = coerce_scalar(raw_row_id, pk_column_spec.data_type)
         else:
-            row_id = payload.get("row_id")
+            if not isinstance(raw_row_id, list):
+                raise ValueError(
+                    f"table {table_name!r} has a composite primary key "
+                    f"{list(pk_cols)}; row_id must be an array of length "
+                    f"{len(pk_cols)}"
+                )
+            coerced: list[object] = []
+            for component, pk_col in zip(raw_row_id, pk_cols, strict=True):
+                col_spec = table_spec.column(pk_col)
+                coerced.append(coerce_scalar(component, col_spec.data_type))
+            row_id = coerced
         column_list = _require_str_list(payload, "columns")
         row = await read(
             session,

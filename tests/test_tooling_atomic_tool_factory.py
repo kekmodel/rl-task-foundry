@@ -368,6 +368,83 @@ async def test_end_to_end_tool_chain_against_sakila():
 
 
 @pytest.mark.asyncio
+async def test_composite_pk_chain_against_sakila_film_actor():
+    # Regression for iter21's observed failure: actor → film_actor → film
+    # chain ran into 'table film_actor has a composite primary key'
+    # because atomic calculus single-column guards short-circuited every
+    # rows_via / take / count that touched film_actor. Sakila's
+    # film_actor has PK (actor_id, film_id); this test exercises the
+    # full chain (take on a film_actor cursor, via to film, sorted take,
+    # composite-row read) to confirm the guards are gone and the
+    # pk_expression emits composite ROW ids correctly.
+    session, conn = await _live_session()
+    try:
+        rows_where = build_rows_where_tool(session)
+        rows_via = build_rows_via_tool(session)
+        order_by = build_order_by_tool(session)
+        take = build_take_tool(session)
+        read = build_read_tool(session)
+
+        actor_cursor = await _invoke(
+            rows_where,
+            {"table": "film_actor", "column": "actor_id", "op": "eq", "value": 87},
+        )
+        composite_ids = await _invoke(
+            take, {"cursor": actor_cursor["cursor_id"], "n": 3}
+        )
+        row_ids = composite_ids["row_ids"]
+        assert isinstance(row_ids, list)
+        assert len(row_ids) == 3
+        # Each row_id is a 2-element [actor_id, film_id] sequence.
+        for row_id in row_ids:
+            assert isinstance(row_id, list)
+            assert len(row_id) == 2
+            assert row_id[0] == 87
+
+        # rows_via across the film_actor → film edge should now work even
+        # though the origin table (film_actor) has a composite PK. The
+        # target (film) has a single PK so the emitted id is scalar.
+        film_cursor = await _invoke(
+            rows_via,
+            {
+                "cursor": actor_cursor["cursor_id"],
+                "edge_label": "film_actor.film_id->film",
+            },
+        )
+        sorted_cursor = await _invoke(
+            order_by,
+            {
+                "cursor": film_cursor["cursor_id"],
+                "column": "title",
+                "direction": "asc",
+            },
+        )
+        film_ids = await _invoke(take, {"cursor": sorted_cursor["cursor_id"], "n": 3})
+        film_row_ids = film_ids["row_ids"]
+        assert isinstance(film_row_ids, list)
+        assert len(film_row_ids) == 3
+        for film_id in film_row_ids:
+            assert isinstance(film_id, int)
+
+        # read on a composite-PK table should accept a list row_id in
+        # PK-column order and return the non-PK columns of that single row.
+        composite_row_id = row_ids[0]
+        details = await _invoke(
+            read,
+            {
+                "table": "film_actor",
+                "row_id": composite_row_id,
+                "columns": ["last_update"],
+            },
+        )
+        row = details["row"]
+        assert isinstance(row, dict)
+        assert "last_update" in row
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_group_top_count_tool_returns_descending_counts():
     from datetime import datetime
 

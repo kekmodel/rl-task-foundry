@@ -56,21 +56,21 @@ class CompiledQuery:
 
 
 def _pk_expression(table: TableSpec, alias: str) -> str:
+    """Emit a PostgreSQL ROW expression for the table's primary key.
+
+    Single-column PKs render as ``alias.col`` (scalar). Composite PKs
+    render as ``(alias.c1, alias.c2, ...)`` which PostgreSQL treats as
+    an anonymous composite row — row equality, set ops, GROUP BY, and
+    ORDER BY all work on these, so the rest of the calculus can treat
+    ``id`` as a single column regardless of PK arity.
+    """
+
     if len(table.primary_key) == 1:
         return f"{alias}.{quote_ident(table.primary_key[0])}"
     parts = ", ".join(
         f"{alias}.{quote_ident(column)}" for column in table.primary_key
     )
     return f"({parts})"
-
-
-def _single_column_pk(table: TableSpec) -> str:
-    if len(table.primary_key) != 1:
-        raise NotImplementedError(
-            f"table {table.qualified_name!r} has a composite primary key; "
-            "atomic calculus supports single-column PKs only for now"
-        )
-    return table.primary_key[0]
 
 
 def _deterministic_tiebreak(table: TableSpec, alias: str) -> str:
@@ -144,7 +144,6 @@ def _compile_where_id_stream(
     param_start: int,
 ) -> tuple[str, tuple[object, ...], int]:
     table = snapshot.table(plan.table)
-    _ = _single_column_pk(table)
     alias = "t"
     predicate, params, next_idx = _compile_where_predicate(
         snapshot=snapshot, plan=plan, alias=alias, param_start=param_start
@@ -169,8 +168,8 @@ def _compile_via_id_stream(
     edge = plan.edge
     origin_spec = snapshot.table(edge.origin_table)
     dest_spec = snapshot.table(edge.destination_table)
-    origin_pk = _single_column_pk(origin_spec)
-    dest_pk = _single_column_pk(dest_spec)
+    origin_pk_expr = _pk_expression(origin_spec, "origin")
+    dest_pk_expr = _pk_expression(dest_spec, "dst")
     if edge.direction is EdgeDirection.FORWARD:
         # Join origin.<source_column> = dest.<target_column>; inner emits
         # origin PKs so we self-join origin to get source_column values.
@@ -180,10 +179,10 @@ def _compile_via_id_stream(
         origin_match_col = edge.spec.target_column
         dest_match_col = edge.spec.source_column
     sql = (
-        f"SELECT dst.{quote_ident(dest_pk)} AS id "
+        f"SELECT {dest_pk_expr} AS id "
         f"FROM ({inner_sql}) AS inner_stream "
         f"JOIN {quote_table(origin_spec.schema, origin_spec.name)} AS origin "
-        f"ON origin.{quote_ident(origin_pk)} = inner_stream.id "
+        f"ON {origin_pk_expr} = inner_stream.id "
         f"JOIN {quote_table(dest_spec.schema, dest_spec.name)} AS dst "
         f"ON dst.{quote_ident(dest_match_col)} "
         f"= origin.{quote_ident(origin_match_col)}"
@@ -255,7 +254,7 @@ def compile_take(
             f"{type(inner).__name__}"
         )
     target = snapshot.table(inner.target_table)
-    target_pk = _single_column_pk(target)
+    target_pk_expr = _pk_expression(target, "tgt")
     base_sql, params, _ = _compile_id_stream(snapshot, inner, 1)
     if not orderings:
         sql = readonly_select(
@@ -276,7 +275,7 @@ def compile_take(
         f"SELECT base.id "
         f"FROM ({base_sql}) AS base "
         f"JOIN {quote_table(target.schema, target.name)} AS tgt "
-        f"ON tgt.{quote_ident(target_pk)} = base.id "
+        f"ON {target_pk_expr} = base.id "
         f"GROUP BY base.id "
         f"ORDER BY {', '.join(order_clauses)} "
         f"LIMIT {int(limit)}"
@@ -356,14 +355,14 @@ def compile_aggregate(
             f"{type(inner).__name__}"
         )
     target = snapshot.table(inner.target_table)
-    target_pk = _single_column_pk(target)
+    target_pk_expr = _pk_expression(target, "tgt")
     target.column(column)
     base_sql, params, _ = _compile_id_stream(snapshot, inner, 1)
     sql = readonly_select(
         f"SELECT {fn.upper()}(tgt.{quote_ident(column)}) AS agg "
         f"FROM ({base_sql}) AS base "
         f"JOIN {quote_table(target.schema, target.name)} AS tgt "
-        f"ON tgt.{quote_ident(target_pk)} = base.id"
+        f"ON {target_pk_expr} = base.id"
     )
     return CompiledQuery(sql=sql, params=params)
 
@@ -397,7 +396,7 @@ def compile_group_top(
             f"{type(inner).__name__}"
         )
     target = snapshot.table(inner.target_table)
-    target_pk = _single_column_pk(target)
+    target_pk_expr = _pk_expression(target, "tgt")
     target.column(group_column)
     if agg_column is not None:
         target.column(agg_column)
@@ -411,7 +410,7 @@ def compile_group_top(
         f"{agg_expr} AS agg_value "
         f"FROM ({base_sql}) AS base "
         f"JOIN {quote_table(target.schema, target.name)} AS tgt "
-        f"ON tgt.{quote_ident(target_pk)} = base.id "
+        f"ON {target_pk_expr} = base.id "
         f"GROUP BY tgt.{quote_ident(group_column)} "
         f"ORDER BY agg_value DESC, group_value ASC "
         f"LIMIT {int(limit)}"
@@ -425,27 +424,52 @@ def compile_read(
     row_id: object,
     columns: tuple[str, ...],
 ) -> CompiledQuery:
-    """Compile a single-row read of the named columns."""
+    """Compile a single-row read of the named columns.
+
+    ``row_id`` is a scalar for single-column PKs and a sequence
+    (list/tuple) of the same length as ``table.primary_key`` for
+    composite PKs. The generated WHERE clause binds one parameter
+    per PK column so asyncpg can type-check each component.
+    """
+
     table = snapshot.table(table_name)
-    if len(table.primary_key) != 1:
-        raise NotImplementedError(
-            "compile_read supports single-column primary keys only for now"
-        )
-    pk = table.primary_key[0]
-    table.column(pk)
     if not columns:
         raise ValueError("columns must be non-empty")
     selected = []
     for column_name in columns:
         table.column(column_name)
         selected.append(f"t.{quote_ident(column_name)}")
+    pk_cols = table.primary_key
+    if len(pk_cols) == 1:
+        pk = pk_cols[0]
+        table.column(pk)
+        where_clause = f"t.{quote_ident(pk)} = $1"
+        params: tuple[object, ...] = (row_id,)
+    else:
+        if not isinstance(row_id, (list, tuple)):
+            raise TypeError(
+                f"table {table.qualified_name!r} has a composite primary "
+                f"key {list(pk_cols)}; row_id must be a list/tuple of "
+                f"length {len(pk_cols)}, got {type(row_id).__name__}"
+            )
+        if len(row_id) != len(pk_cols):
+            raise ValueError(
+                f"composite primary key for {table.qualified_name!r} has "
+                f"{len(pk_cols)} columns; row_id has {len(row_id)}"
+            )
+        equalities = []
+        for index, pk_col in enumerate(pk_cols):
+            table.column(pk_col)
+            equalities.append(f"t.{quote_ident(pk_col)} = ${index + 1}")
+        where_clause = " AND ".join(equalities)
+        params = tuple(row_id)
     sql = readonly_select(
         f"SELECT {', '.join(selected)} "
         f"FROM {quote_table(table.schema, table.name)} AS t "
-        f"WHERE t.{quote_ident(pk)} = $1 "
+        f"WHERE {where_clause} "
         f"LIMIT 1"
     )
-    return CompiledQuery(sql=sql, params=(row_id,))
+    return CompiledQuery(sql=sql, params=params)
 
 
 __all__ = [
