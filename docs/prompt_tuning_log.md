@@ -534,7 +534,47 @@ if (
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 18)
+### Iteration 19 — 2026-04-18 (Phase 2 unified logger 실사용 + 2연속 accept)
+
+**Hypothesis.** iter18에서 clean accept 첫 관측. iter19는 (a) 같은 config로 재현성 초기 증거 확보, (b) commit `5cc180c` Phase 2 unified logger가 `trial_events.jsonl` 단일 파일로 composer/solver/phase 전 흐름을 담는지 실사용 검증, (c) legacy per-file trace 쓰기 경로가 완전히 제거됐는지 디스크 확인.
+
+**Change.**
+- `artifacts/tmp_configs/iter19_phase2logger.yaml` — iter18 config 완전 복제. 변수 0.
+- Phase 2 logger는 iter19가 첫 실사용 (commit 랜딩 후 처음 돌아감).
+
+**Trial.** `artifacts/smoke_iter19` — flow_id `real_db_trial:20260418T143809Z:77edd890`, anchor `customer_id=54`, topic "Customer rental history". **attempt 1 바로 accepted**, task_id `task_Customer rental history_8bc7b30eee9f8c1f`, registry committed + bundle exported. `pass_rate=1/3=0.333` in band, quality_gate_status=accept.
+
+Composer trace (2 calls):
+1. `neighborhood(customer, row_id=54)` — 앵커 orient.
+2. `query(from=rental, filter=customer_id=54, select=rental_id/rental_date/return_date, sort=rental_date asc, limit=5)` → submit.
+
+Solver traces (3명):
+
+| Solver | turns | matched | run_items |
+|---|---|---|---|
+| qwen3.5-plus_00 | 6 | ✗ | 19 |
+| qwen3.5-plus_01 | 7 | ✗ | 22 |
+| qwen3.5-plus_02 | 7 | ✓ | 22 |
+
+**Findings.**
+
+1. **Phase 2 unified logger 완벽 작동 ✓.** `trial_events.jsonl` 12 이벤트가 순서대로: `runner/trial_started` → `phase/trial.started` → `composer/atomic_tool_call`×2 → `solver/solver_run_completed`×3 (각 run_items 포함) → `phase/submit_draft.accepted` → `composer/synthesis_completed` → `phase/synthesis_conversation.accepted` → `phase/registry_commit.committed` → `phase/bundle_export.completed`. **phase_monitors.jsonl 안 열고 완결 분석 가능.** `tail -f` 실시간 관측도 정상.
+2. **Legacy 쓰기 경로 사라짐 ✓.** `artifacts/smoke_iter19/debug/traces/synthesis/`는 빈 디렉토리만 남음(파일 0개). `tool_traces/`, `transcripts/` 서브디렉토리 아예 생성 안 됨. commit `5cc180c`의 `_write_artifact` 삭제가 실측으로 검증.
+3. **iter18과 다른 저작 궤적, 같은 결과.** iter18은 "simple too_easy → Composite escalate" 2-attempt 저작, iter19는 "simple 1-filter 직접 band landing" 1-attempt 저작. 두 궤적 모두 유효하고, composer가 anchor/seed에 따라 궤적 선택 중인 것으로 해석. customer_id=54의 rental 목록 크기가 3+ 정도면 limit=5 + sort만으로도 solver 일부가 헷갈릴 만한 미세 난이도가 이미 있음.
+4. **iter17 대비 직접 증거.** iter17의 `pass_rate=1/3 + 3 solver submit + 2 unique wrong` 상황은 divergence gate에 의해 reject_too_hard였음. iter19는 사실상 같은 통계(1/3 + 2 unique wrong 이상)인데 gate off로 **자연 accept**. commit `1573c25`의 gate 제거가 올바른 결정이었음을 실증.
+5. **재현성 초기 증거 (n=2).** iter18/19 둘 다 accept, 단일 trial 수준에선 2회 연속 성공. 궤적은 다르지만 composer 행동이 상황에 맞게 정합. 본격 재현성 통계(accept rate)는 iter20 batch로 검증.
+6. **Solver chain 정합성.** run_items 19~22개로 iter18(10~12 turns)보다 길지만 iter18의 turn_count는 backend에서 집계하는 값이고 run_items는 SDK의 모든 item(reasoning + tool call + output 각각)이라 직접 비교 안 됨. turn_count만 보면 6~7 turns, iter18 10~12보다 짧음 — task가 더 간단했기 때문.
+
+**Next direction.**
+
+1. **iter20: 3~5 trial batch로 accept rate 측정.** 지금까지 단일 trial만 2연속 성공. n=3~5에서 accept 비율이 어떻게 나오는지, composer axis 선택 다양성, simple direct landing vs escalation 궤적 분포. 쿼터 여력 고려해 batch 크기 결정.
+2. **iter18 log 회고 보완.** iter16 "noise-gifted landing" 표기를 iter18/19 데이터로 더 정확히 재해석: iter16도 gate off 상태였다면 pass_rate=2/3으로 자연 accept였을 것. 즉 iter16 composer 행동 자체는 이미 정상이었고, 당시 divergence gate가 *우연히* timeout artifact 때문에 통과된 것. iter18/19가 "새 regime에서 composer 행동이 원래부터 band-landing 가능했다"를 확정.
+3. **Legacy phase_monitors.jsonl 처리.** Phase 2 mirror로 모든 phase event가 trial_events에 있음. harvest/pipeline 하위 코드가 여전히 `phase_monitor_log_path` 필드를 읽는지 확인해서 deprecate 가능 여부 판단. 가능하면 Phase 3에서 삭제.
+4. **Composer axis 선택 관측 계속.** iter18은 Composite, iter19는 1-filter만. Cardinality/Cross-item rule 축이 다른 anchor에서 나타나는지. iter20 batch에서 축 분포 수집.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 19)
 
 ### 행동 변화 요약
 
@@ -560,6 +600,7 @@ if (
 | 16 | 2 | — | **첫 accepted.** inventory 앵커에서 attempt 1 pass_rate=1.0(too_easy) → Composite axis(staff 필터 추가) escalate → attempt 2 pass_rate=0.667 **in band**. bottom-up 원설계 궤적 부활 관측. 단 2/3는 solver 3명 중 1명 APITimeoutError 덕의 noise-gifted landing이므로 재현성 검증 필요 |
 | 17 | 1 | — | retry=5로 transient noise 제거 후 재실행. address 앵커 3 solvers 모두 submit, 1/3 matched → pass_rate=0.333 band 포함이지만 `_solver_divergence`가 2차 gate로 작동해 reject_too_hard 재분류. iter16 accept는 timeout 1명이 submission 풀에서 빠지며 divergence=1/2로 경계 통과한 infrastructure artifact 였음이 확정. n=3 + max_divergence=0.5는 구조적으로 band landing 불가 |
 | 18 | 2 | — | **첫 clean accept.** divergence gate off 후 rental 앵커에서 attempt 1 simple single-filter (3/3 too_easy) → Composite escalate (+staff_id 3 filters) → attempt 2 2/3 in band + committed + bundle exported. asymmetric tool surface에서 same-model qwen 페어링이 원설계 bottom-up 궤적으로 clean landing 가능함 첫 실증. trial_events.jsonl 실시간 스트리밍 실제 관측 검증 |
+| 19 | 1 | — | **2연속 accept** + Phase 2 unified logger 실사용 검증. customer 앵커에서 attempt 1 simple 1-filter로 바로 1/3 in band. iter18과 달리 escalation 없이 direct landing 궤적. trial_events.jsonl 한 파일에 composer/solver/phase 이벤트 전부 interleaved, legacy per-file trace 폴더 비어 있음 확인. iter17과 사실상 같은 signal(1/3 + 2 unique wrong)이 gate off라 자연 accept, fix 효과 직접 실증 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
