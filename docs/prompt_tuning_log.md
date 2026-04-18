@@ -499,7 +499,42 @@ if (
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 17)
+### Iteration 18 — 2026-04-18 (첫 clean accept, divergence gate 제거)
+
+**Hypothesis.** iter17이 드러낸 구조적 트랩(`max_divergence_ratio=0.5`가 n=3에서 band landing을 차단) 제거 후, same-model qwen3.5-plus 페어링이 asymmetric tool surface에서 **실제로 band 진입 가능한지** 검증. divergence gate는 commit `1573c25`에서 opt-in으로 바꿨고, main config에서 explicit 0.5 제거해 기본 None. iter18 config(`iter18_nodivergence.yaml`)는 iter17과 이 한 줄 차이.
+
+**Change.**
+- `artifacts/tmp_configs/iter18_nodivergence.yaml` — iter17 config 복제에서 `max_divergence_ratio: 0.5` 라인만 제거(default None으로 gate off).
+- 프롬프트/모델/solver 수/max_turns/band/retry=5 모두 iter17과 동일.
+
+**Trial.** `artifacts/smoke_iter18` — flow_id `real_db_trial:20260418T132511Z:286d0274`, anchor `rental_id=3583` (customer_id=574, rental_date < 2005-07-06, staff_id=2 context). **2 attempts, accepted + committed + bundle exported**. task_id `task_동일 고객 및 동일 직원의 이전 대여 내역_a3442780aaeda110`, bundle_root `artifacts/smoke_iter18/bundle`. 세션 첫 clean accept.
+
+| # | topic | slot | filter 축 | pass_rate | outcome |
+|---|---|---|---|---|---|
+| 1 | 동일 고객의 이전 대여 내역 | 2 | `customer_id=574 AND rental_date<'2005-07-06'` | 3/3 = 1.0 | reject_too_easy |
+| 2 | 동일 고객 및 동일 직원의 이전 대여 내역 | 2 | attempt1 + `AND staff_id=2` (Composite) | 2/3 = 0.667 | **accepted** |
+
+**Unified logger Phase 1 검증 ✓.** 실시간 `tail -f artifacts/smoke_iter18/debug/trial_events.jsonl`로 17 이벤트 흐름을 trial 종료 전부터 읽음. 이벤트 분해: `runner/trial_started` × 1, `composer/atomic_tool_call` × 10 (neighborhood 1 + schema_map 1 + query 8), `solver/solver_run_completed` × 6 (attempt 1의 3 solvers + attempt 2의 3 solvers). Phase event mirror는 Phase 2(commit `7b429f0`)라 iter18엔 포함 안 됨, pass_rate/canonical은 phase_monitors.jsonl 병합 필요했음.
+
+**Findings.**
+
+1. **Bottom-up 원설계 궤적 정상 재현 ✓.** Simple initial(single filter + threshold, 3/3 too_easy) → Composite axis escalation(+ staff_id) → 2/3 in band. iter16의 1회 관측이 "infrastructure noise artifact"였음을 감안하면, iter18이 **asymmetric tool surface에서 same-model qwen 페어링이 clean landing 가능**함을 보여주는 **첫 실증**.
+2. **Divergence gate 제거의 순 효과 확인.** iter17 exact 상황(1/3 + 2 unique wrong)과 iter18 situation(2/3 + 1 wrong)의 차이는 composer 저작 난이도 / solver chain 성공 여부일 뿐, gate 제거 없이는 둘 다 거부됐을 것. **divergence는 post-hoc 품질 지표로만 유효**하고 accept gate로는 over-specification이었음을 iter17+18 대조로 확정.
+3. **Composer의 axis 선택.** iter07 Next direction의 "shape-changing axis over Width" 원칙을 composer가 자연스럽게 지킴 — 3 filter composite을 escalation으로 선택. iter16과 동일 행동 패턴(Composite + threshold 축). 2회 연속 Composite 선택 관측이 "iter01~12 Width 편향이 새 tool surface에서 실제로 사라짐" 가설을 더 강화.
+4. **Solver chain 정합성.** 3 solver 모두 attempt 1과 attempt 2 에서 10~12 턴 내 submit까지 도달. attempt 2의 fail 1명은 chain 구성이 아닌 마지막 답 format/content 미세 차이로 em_mismatch. solver 수준의 2-hop+composite 체인 구성 능력 정상.
+5. **Bundle infra bug 해결 확인.** commit `ffa587c`의 `self.exporter = replace(self.exporter, snapshot_materializer=trial_materializer)` 수정이 실제 accept path에서 작동하는지 iter18에서 처음 검증됨 — bundle export 정상 완료. iter16에서 터졌던 `FileNotFoundError: artifacts/databases/sakila/schema_snapshot.json` 재발 없음.
+6. **Retry=5 효과 재확인.** iter17에서 처음 적용한 retry가 iter18에서도 3 solver 전부 submit 보장. APITimeoutError 드롭아웃 없음. pass_rate 분해능이 n=3에서 확정적(gifted accept 없음).
+
+**Next direction.**
+
+1. **iter19: 재현성 검증 batch.** iter18과 동일 config로 단일 trial이 아닌 **3~5 trial batch**를 같은 세션에서 돌려 accept rate 측정. 한 번 성공이 composer/solver 페어링의 "일관된 능력"인지 "우연한 landing"인지를 이 횟수로 판별. max_generation_attempts=5에서 accept 율이 40% 이상이면 신뢰 가능한 정상 동작.
+2. **Phase 2 로거 실사용.** commit `5cc180c`로 `trial_events.jsonl`이 composer 저작 + solver run_items + phase events까지 전부 담게 됨. iter19는 **단일 pane 분석**만으로 완결. 구 legacy per-file trace 폴더들은 iter19 debug_traces_dir에 아예 생성되지 않아야 정상.
+3. **Composer의 axis 선택 다양성 관측.** iter16/18 모두 Composite 축이었음. iter19 batch가 다른 anchor를 뽑으면 Cardinality / Cross-item rule / single Filter 축이 등장하는지, 아니면 Composite 편향이 고착됐는지. 편향이 있으면 iter20에서 Axes prompt 재조정.
+4. **iter16 accept 재해석 Cross-Iteration Summary 업데이트.** iter16 행의 "noise-gifted landing" 표기는 이제 iter18의 "clean landing" 기준으로 보완 가능 — iter16도 composer 행동 자체는 정상이었고 단지 divergence gate 때문에 pass_rate=2/3의 의미가 불확정이었다는 해석.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 18)
 
 ### 행동 변화 요약
 
@@ -524,6 +559,7 @@ if (
 | 15 | 1 | — | Workflow step 2 예시를 single-hop + all-fields-on-destination으로 재작성. film 앵커에서 여전히 2-hop 저작됨. 이유: sakila film의 1-hop 자식이 전부 ID-only 브리지라 3개 룰(single-hop / no-ID / destination-only) 교집합이 공집합. prompt 룰 세트가 over-determined. solver trace 누락으로 관측 불가(로깅 버그 발견) |
 | 16 | 2 | — | **첫 accepted.** inventory 앵커에서 attempt 1 pass_rate=1.0(too_easy) → Composite axis(staff 필터 추가) escalate → attempt 2 pass_rate=0.667 **in band**. bottom-up 원설계 궤적 부활 관측. 단 2/3는 solver 3명 중 1명 APITimeoutError 덕의 noise-gifted landing이므로 재현성 검증 필요 |
 | 17 | 1 | — | retry=5로 transient noise 제거 후 재실행. address 앵커 3 solvers 모두 submit, 1/3 matched → pass_rate=0.333 band 포함이지만 `_solver_divergence`가 2차 gate로 작동해 reject_too_hard 재분류. iter16 accept는 timeout 1명이 submission 풀에서 빠지며 divergence=1/2로 경계 통과한 infrastructure artifact 였음이 확정. n=3 + max_divergence=0.5는 구조적으로 band landing 불가 |
+| 18 | 2 | — | **첫 clean accept.** divergence gate off 후 rental 앵커에서 attempt 1 simple single-filter (3/3 too_easy) → Composite escalate (+staff_id 3 filters) → attempt 2 2/3 in band + committed + bundle exported. asymmetric tool surface에서 same-model qwen 페어링이 원설계 bottom-up 궤적으로 clean landing 가능함 첫 실증. trial_events.jsonl 실시간 스트리밍 실제 관측 검증 |
 
 ### 확정된 설계 결정 (DB-agnostic)
 
