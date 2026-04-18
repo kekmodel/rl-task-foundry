@@ -868,7 +868,41 @@ iter27_c attempt 2: `{rental_date, return_date}` 리스트를 3→2로 축소 + 
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 28)
+### Iteration 29 — 2026-04-19 (Type B selection boost, 1-sample 스모크)
+
+**Hypothesis.** iter26-28 누적에서 Type B 선택률이 1/4로 낮음(Aggregate 축 0/11 accept). 프롬프트에서 Type A를 먼저 제시한 순서 편향과 선택 가이드 부재가 원인 가설. step 2를 Type B 우선 배치 + 명시적 selection hint(phrasing 기반 결정 규칙) + Type B 예시 5→7로 확장하면 composer가 더 자주 scalar task를 고를 것.
+
+**Change.** prompts.py Workflow step 2 재구성. (a) "Selection hint" 블록 추가 — "how many/earliest/largest" 표현이면 Type B, "show me the first N/list records of" 표현이면 Type A, hub 앵커는 두 옵션 모두 가능. (b) Type B 섹션을 Type A보다 먼저 배치. (c) Type B 예시 2개 추가(country → customer_count, address → rental_count). commit `83c6d61`.
+
+**Trial.** `artifacts/tmp_configs/iter29_type_b_boost.yaml` 1-sample 스모크(smoke_iter29_a). **synthesis_failed.** 단 1회 submit 후 종료.
+
+| attempt | anchor | **task type** | label | axis | pass_rate | terminal |
+|---|---|---|---|---|---|---|
+| 1 | rental_id=8826 | **Type A** (여전히) | `[{rental_date, return_date}, …]` (rental → customer → rental top-3 by date) | Filter | 0/3 = 0.0 | reject_too_hard → **attempts left: 0, BudgetExhaustedError** |
+
+iter29_a question: "대여 기록 8826 번을 한 고객의 처음 3 개 대여 기록을 대여일 오름차순으로 알려주세요. 각 기록마다 대여 날짜와 반납 날짜를 포함해 주세요." — 3인칭적 표현("대여 기록 8826 번을 한 고객"), schema-ese 경계, 1인칭 goal과 어긋남. 약한 voice 회귀.
+
+**Findings.**
+
+1. **Type B nudge 1/1 trial에서 실패.** composer가 여전히 Type A + `{rental_date, return_date}` lock-in shape 선택. 명시적 selection hint, Type B 우선 배치, 예시 7개(Type A는 5개)까지 동원했음에도 rental_id 앵커에서 자연스러운 phrasing을 "고객의 처음 3 개 대여 기록"(= list)로 인식. N=1 샘플이긴 하지만 **phrasing 기반 hint가 anchor 타입과 맞물려 있어 선택 유도력이 약함**.
+2. **태스크 초기 bias의 구조적 원인.** 앵커가 `rental_id`처럼 이미 구체적 record인 경우 composer는 "이 record가 속한 부모를 따라가서 같은 부모의 다른 records"를 자연 답변으로 인식. 이 phrasing은 Type A로 귀결. Type B가 자연스러우려면 앵커가 hub-like (country, film, category)일 때. 현 세팅은 anchor 샘플링이 random — Type B가 적합한 앵커가 뽑힐 확률이 그만큼 낮음. 프롬프트만으로는 해결 불가.
+3. **1 submit 후 조기 종료 메커니즘 확인.** too_hard(pass_rate=0/3)면 `attempts_left=0`과 `BudgetExhaustedError`가 동시에 emit돼 trial 즉시 종료. 과거 user 언급("too_hard면 원래 종료")과 일치. iter29_a는 프롬프트 검증 기회를 사실상 첫 attempt 1장으로 제한받음. 1 samplle 결과의 통계적 의미는 낮음(conclusion 유보).
+4. **Voice 경미 회귀.** "대여 기록 8826 번을 한 고객"은 3인칭-ish 표현. iter20의 voice fix가 anchor=customer/rental 등 직접 identity일 땐 잘 작동하나 rental_id 앵커에서 customer 추론 경로에선 schema-ese 경계. iter25_c 연장선의 패턴.
+5. **Prompt 편집 자체가 해로웠는지 판단.** Selection hint + reorder 자체는 voice 회귀와 직접 연관 없음. Type A 쪽 cross-table ban, task-type-lock, voice 규칙은 모두 유지. 프롬프트 사이즈만 소폭 증가(~60 words). 1 trial 기반 추론이므로 회귀 여부는 재현 필요.
+
+**Next direction.**
+
+1. **iter30 방향 재정의.** Prompt-level Type B 유도의 효과가 약함. 두 가지 경로 후보:
+   - (a) **앵커 선택 레벨 개입**: anchor 샘플링 시 hub-like 테이블(country, film, category, staff) 가중치 상향. 이는 prompts.py 밖의 수정이며 `anchor_hint` 또는 `requested_topic` 결정 로직 대상. 통제된 Type B 증가 실험.
+   - (b) **시스템 프롬프트에서 Type B를 기본, Type A를 escalation 옵션으로 역전**: "Default to Type B unless Type A is the only natural phrasing". 강한 편향 반전이지만 Type A accept가 줄어들 수 있음.
+   - iter30은 (a) 우선. 앵커 풀이 실제로 Type B-친화 테이블로 편중되어야 결과가 나옴.
+2. **iter29 voice 회귀는 개별 1 sample — 재현 확인 후 판단.** rental 앵커에서 "대여 기록 N번을 한 고객" 표현은 composer의 자연 경향. 명시적 "anchor가 record-id인 경우, 그 record의 주체(customer/staff)를 customer-voice로 직접 부르기" 가이드 한 줄 고려.
+3. **Budget economics 경고.** iter29_a 한 번에 input 138k tokens + output 4.3k, 8턴. 1-sample이 1 attempt에서 종료되면 프롬프트 효과 검증 불가. Type B 유도 실험은 multi-trial 배치 필요하지만 quota 타이트. 앵커 레벨 개입(경로 a)이 가장 비용 효율적.
+4. **Axes 축적 현황 (변화 없음).** iter27_a, iter27_b accept 이후 cumulative 11 accepts. Filter 7, Composite 3, Aggregate 0.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 29)
 
 ### 행동 변화 요약
 
