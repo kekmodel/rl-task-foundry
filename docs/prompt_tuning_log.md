@@ -902,7 +902,46 @@ iter29_a question: "대여 기록 8826 번을 한 고객의 처음 3 개 대여 
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 29)
+### Iteration 30 — 2026-04-19 (앵커 바이어스 by 인바운드 FK 차수, 1-sample 스모크)
+
+**Hypothesis.** iter29 Type B nudge가 prompt 수준에선 한계. anchor가 rental/payment record 같은 leaf일 때 composer는 자연 phrasing을 "records of parent" = Type A로 귀결. Type B는 hub-like anchor(film, customer, staff, city, country, address)에서 자연 — 이들을 선택 확률을 높이면 Type B accept가 따라옴. `random_anchor`에 `weights = max(1, inbound_edge_count)` 적용해 구조적으로 hub 편향.
+
+**Change.** `src/rl_task_foundry/synthesis/synthesis_db.py` `random_anchor()` 수정. `random.choice` → `random.choices(candidates, weights=[max(1, len(edges_to(t))) for t in candidates])`. 로컬 변수 `hub_tables` → `candidates`로 리네임(실제로 hub 분류가 아닌 row-count 필터였음). commit `e55453d`.
+
+**Trial.** `artifacts/tmp_configs/iter30_anchor_bias.yaml` 1-sample 스모크(smoke_iter30_a). **accepted.** pass_rate=2/3=0.667, CI [0.135, 0.983], task_id `task_City rental count with composite date filters_1f8ca17c519d084f`.
+
+| attempt | anchor | **task type** | label | axis | pass_rate | reject |
+|---|---|---|---|---|---|---|
+| 1 | city=459 (Santiago de Compostela) | **Type B** | `{rental_count: 20}` (city→address→customer→rental) | Aggregate | 3/3 = 1.0 | too_easy |
+| 2 | city=459 (유지) | **Type B** (유지) | `{rental_count: 16}` + `rental_date >= 2005-06-01` | Aggregate + Filter | 3/3 = 1.0 | too_easy |
+| 3 | city=459 (유지) | **Type B** (유지) | `{rental_count: 15}` + `rental_date >= 2005-06-01` + `return_date >= 2005-07-01` | Aggregate + **Composite** | **2/3 = 0.667** ✓ | **accepted** |
+
+iter30_a attempt 3 question: "Santiago de Compostela에 거주하는 고객들의 2005-06-01 이후 대여하면서 2005-07-01 이후 반납한 기록 수는 몇 건인가요?" — 자연스러운 customer-ask, 실제 city name, 두 날짜 필터 명시, "몇 건인가요" scalar 질문. 1인칭/2인칭 섞인 user-ask voice, 금지구절 0.
+
+**Findings.**
+
+1. **Aggregate 축 최초 Accept 획득 ✓✓.** iter18~29 누적 11 accept 중 Aggregate 축 = 0이었음. iter30_a 단일 trial로 **12번째 accept가 최초의 scalar count** 태스크. Filter-dominant 천장(iter01~12 Width 편향과 구조적 대칭)이 **정성적으로 깨짐**. 축 분포 업데이트: Filter 7, Composite 3, **Aggregate 1** ← NEW, Cardinality 0, Cross-item rule 0.
+2. **iter26~29 편집의 누적 효과 동시 검증.** 이 trial 하나가 4개 iter의 변경을 동시에 증명:
+   - iter26 (Type B 도입): attempt 1에서 Type B 선택 ✓
+   - iter27 (task-type-lock): attempt 2, 3에서 Type B 유지, Type A로 전환 시도 없음 ✓
+   - iter29 (Selection hint + reorder): "몇 건인가요" 구절이 "how many X" hint와 직접 대응해 Type B 유도 ✓
+   - iter30 (anchor bias): city(inbound 1, 하지만 city→address→customer→rental 3-hop 체인이 hub-like) 선택 자체가 anchor 편향 효과. leaf rental 앵커 대신 hub-like city 앵커가 pick됨
+   즉 **프롬프트-only 개입으로 Type B를 유도하려 한 iter29가 실패한 이유는 앵커가 부적합했던 것**이라는 가설을 iter30이 직접 입증.
+3. **Type B 내 Composite escalation 실측.** attempt 1 too_easy → attempt 2에서 Filter(date >= X) 추가 → 여전히 too_easy → attempt 3에서 Composite(date >= X AND date >= Y) → band 진입. Type B escalation 경로(filter 추가, 필터 쌍 구성)가 실제로 band를 제어. 이건 iter27 task-type-lock 주석에서 예언한 "Type B는 filter 추가로 escalate" 그대로 실행됨.
+4. **Voice 자연성 회복.** iter29_a의 "대여 기록 8826 번을 한 고객" schema-ese 이후 iter30_a는 "Santiago de Compostela에 거주하는 고객들의 ... 몇 건인가요?" 자연 customer-ask. city name은 string observable, 필터 날짜도 관측값, 모든 ground 요건 충족. voice 회귀 재발 없음.
+5. **anchor bias 효과 검증됨(N=1).** city_id 앵커는 sakila에서 inbound_edge_count=1이지만 우연/가중치 조합으로 선택됨. N=1이므로 효과 강도는 미지수 — 3-trial 배치 또는 distribution 측정이 확증에 필요. 그러나 Type B 선택 자체가 실현되었다는 점에서 minimum effect 확인.
+6. **Cumulative task pool = 12 accept.** 11 → 12. Voice 11/12 clean (iter25_c 경미 제외).
+
+**Next direction.**
+
+1. **iter30 배치 확장 (2-3 trial 추가).** Type B accept가 단발인지 재현 가능한 패턴인지 확인. 앵커 가중치의 효과 실측. 배치 실행 시 anchor 분포 관찰(hub-heavy인지) + Type B 선택 빈도.
+2. **Cardinality/Cross-item rule 축은 여전히 0.** Type B Composite 경로가 열렸으므로 이제 Cardinality(N 변경) / Cross-item rule(ordering constraint) 축 관측이 다음 천장. 단기적으로는 iter30 재현 배치가 우선.
+3. **voice 가드 iter25_c 패턴**은 iter30에서 재발 없음 — rental/payment 앵커 선택률이 anchor bias로 낮아진 효과일 수도. 배치 결과 보고 판단.
+4. **`project_qwen_prompt_tuning.md` 메모리 업데이트 필요**. 현재 메모리는 iter13 상태(pass_rate 1.0→0.0 반전 직후). iter30 시점 현황: Filter 7/Composite 3/Aggregate 1 = 11 Type A + 1 Type B accept, ceiling 부분적으로 깨짐.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 30)
 
 ### 행동 변화 요약
 
