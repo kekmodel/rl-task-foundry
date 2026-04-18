@@ -18,6 +18,8 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
+import asyncpg
+
 from rl_task_foundry.tooling.common.edges import available_edges
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
 from rl_task_foundry.tooling.common.sql import coerce_scalar
@@ -175,6 +177,7 @@ def _with_error_handling(handler: Handler) -> Invoker:
             LookupError,
             RuntimeError,
             NotImplementedError,
+            asyncpg.exceptions.PostgresError,
         ) as exc:
             return _json_dumps(
                 {"error": str(exc), "error_type": type(exc).__name__}

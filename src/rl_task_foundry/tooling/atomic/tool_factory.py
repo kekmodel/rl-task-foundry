@@ -17,6 +17,8 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 
+import asyncpg
+
 from rl_task_foundry.tooling.atomic.calculus import (
     AtomicSession,
     aggregate,
@@ -162,7 +164,14 @@ def _with_error_handling(handler: Handler) -> Invoker:
         }
         try:
             result = await handler(parsed)
-        except (KeyError, ValueError, TypeError, LookupError, RuntimeError) as exc:
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+            LookupError,
+            RuntimeError,
+            asyncpg.exceptions.PostgresError,
+        ) as exc:
             return _json_dumps(
                 {"error": str(exc), "error_type": type(exc).__name__}
             )
