@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from enum import StrEnum
-from typing import Any, Callable
+from collections.abc import Callable
 
 from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
@@ -44,8 +44,8 @@ class RewardResult:
 
 def canonicalize_output(
     schema: OutputSchemaContract,
-    payload: Any,
-) -> Any:
+    payload: object,
+) -> object:
     """Canonicalize a parsed answer payload against the synthesis output schema."""
 
     return canonicalize_field(schema.root, payload, path="$")
@@ -53,10 +53,10 @@ def canonicalize_output(
 
 def canonicalize_field(
     field: OutputFieldContract,
-    value: Any,
+    value: object,
     *,
     path: str = "$",
-) -> Any:
+) -> object:
     """Canonicalize one value according to a synthesis output field contract."""
 
     if value is None:
@@ -86,9 +86,9 @@ def canonicalize_field(
 
 
 def canonical_json(
-    value: Any,
+    value: object,
     *,
-    default: Callable[[Any], Any] | None = None,
+    default: Callable[[object], object] | None = None,
 ) -> str:
     """Return a stable JSON representation for exact-match comparisons."""
 
@@ -101,13 +101,13 @@ def canonical_json(
     )
 
 
-def _canonicalize_string(value: Any, *, path: str) -> str:
+def _canonicalize_string(value: object, *, path: str) -> str:
     if not isinstance(value, str):
         raise CanonicalizationError(path, "expected string")
     return value
 
 
-def _canonicalize_enum(field: OutputFieldContract, value: Any, *, path: str) -> str:
+def _canonicalize_enum(field: OutputFieldContract, value: object, *, path: str) -> str:
     if not isinstance(value, str):
         raise CanonicalizationError(path, "expected enum string")
     if field.enum_values and value not in field.enum_values:
@@ -115,25 +115,25 @@ def _canonicalize_enum(field: OutputFieldContract, value: Any, *, path: str) -> 
     return value
 
 
-def _canonicalize_int(value: Any, *, path: str) -> int:
+def _canonicalize_int(value: object, *, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise CanonicalizationError(path, "expected int")
     return value
 
 
-def _canonicalize_float(value: Any, *, path: str) -> float:
+def _canonicalize_float(value: object, *, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CanonicalizationError(path, "expected float")
     return float(value)
 
 
-def _canonicalize_bool(value: Any, *, path: str) -> bool:
+def _canonicalize_bool(value: object, *, path: str) -> bool:
     if not isinstance(value, bool):
         raise CanonicalizationError(path, "expected bool")
     return value
 
 
-def _canonicalize_date(value: Any, *, path: str) -> str:
+def _canonicalize_date(value: object, *, path: str) -> str:
     if isinstance(value, datetime):
         return value.date().isoformat()
     if isinstance(value, date):
@@ -150,7 +150,7 @@ def _canonicalize_date(value: Any, *, path: str) -> str:
             raise CanonicalizationError(path, f"invalid ISO date value: {value!r}") from exc
 
 
-def _canonicalize_datetime(value: Any, *, path: str) -> str:
+def _canonicalize_datetime(value: object, *, path: str) -> str:
     if isinstance(value, datetime):
         return value.isoformat(timespec="seconds")
     if isinstance(value, date):
@@ -166,10 +166,10 @@ def _canonicalize_datetime(value: Any, *, path: str) -> str:
 
 def _canonicalize_object(
     field: OutputFieldContract,
-    value: Any,
+    value: object,
     *,
     path: str,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     if not isinstance(value, dict):
         raise CanonicalizationError(path, "expected object")
 
@@ -178,7 +178,7 @@ def _canonicalize_object(
     if unexpected:
         raise CanonicalizationError(path, f"unexpected object keys: {unexpected}")
 
-    canonical: dict[str, Any] = {}
+    canonical: dict[str, object] = {}
     for child in field.fields:
         child_path = _field_path(path, child.name)
         if child.name not in value:
@@ -196,10 +196,10 @@ def _canonicalize_object(
 
 def _canonicalize_list(
     field: OutputFieldContract,
-    value: Any,
+    value: object,
     *,
     path: str,
-) -> list[Any]:
+) -> list[object]:
     if not isinstance(value, list):
         raise CanonicalizationError(path, "expected list")
     if field.items is None:
@@ -229,23 +229,23 @@ def _canonicalize_list(
 
 
 def _object_sort_key(
-    element: Any,
+    element: object,
     sort_key_path: tuple[str, ...],
     item_field: OutputFieldContract,
-) -> tuple[int, tuple[Any, ...] | str, str]:
+) -> tuple[int, tuple[object, ...] | str, str]:
     if item_field.type is not OutputFieldType.OBJECT or not isinstance(element, dict):
         return (0, canonical_json(element), canonical_json(element))
 
-    primary_key_parts: list[Any] = []
+    primary_key_parts: list[object] = []
     for field_name in sort_key_path:
         primary_key_parts.append(element.get(field_name))
 
     return (1, tuple(primary_key_parts), canonical_json(element))
 
 
-def _dedupe_preserving_order(items: list[Any]) -> list[Any]:
+def _dedupe_preserving_order(items: list[object]) -> list[object]:
     seen: set[str] = set()
-    deduped: list[Any] = []
+    deduped: list[object] = []
     for item in items:
         key = canonical_json(item)
         if key in seen:
@@ -255,7 +255,7 @@ def _dedupe_preserving_order(items: list[Any]) -> list[Any]:
     return deduped
 
 
-def _unordered_sort_key(value: Any) -> tuple[int, str]:
+def _unordered_sort_key(value: object) -> tuple[int, str]:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return (0, canonical_json(value))
     return (1, canonical_json(value))
@@ -264,7 +264,7 @@ def _unordered_sort_key(value: Any) -> tuple[int, str]:
 def compute_reward(
     *,
     submitted_answer_text: str,
-    canonical_answer: Any,
+    canonical_answer: object,
     output_schema: OutputSchemaContract,
 ) -> RewardResult:
     """Pure-function reward computation for RL runtime and environment serving."""
