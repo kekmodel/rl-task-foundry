@@ -222,7 +222,14 @@ def build_synthesis_agent_instructions(
         "response. Do not refer to the anchor row as '이 대여 "
         "기록' or similar schema-internal language; translate the "
         "anchor into a customer-natural reference (e.g. a date or "
-        "the customer's own id said in their voice). Every label "
+        "the customer's own id said in their voice). "
+        "**Numeric-ID filter values** (e.g. staff_id=1, film_id=473, "
+        "category_id=6) must be resolved to the referent table's "
+        "natural name or title via a lookup tool call (sample/read "
+        "on that table) BEFORE phrasing the filter in the user "
+        "voice — writing '직원 1 번', 'film 473번', '카테고리 6번' is "
+        "schema-ese and fails voice check; write 'Mike Hillyer "
+        "직원', 'Blade Runner', '액션 영화' instead. Every label "
         "constraint — count, sort, filter threshold — surfaces as "
         "a natural preference in the ask itself.",
 
