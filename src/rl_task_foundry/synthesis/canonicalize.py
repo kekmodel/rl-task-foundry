@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from typing import Any, Callable, Literal
+from enum import StrEnum
+from typing import Any, Callable
 
 from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
@@ -27,7 +28,11 @@ class CanonicalizationError(ValueError):
         return f"{self.path}: {self.message}"
 
 
-RewardStatus = Literal["matched", "json_decode_failed", "schema_mismatch", "em_mismatch"]
+class RewardStatus(StrEnum):
+    MATCHED = "matched"
+    JSON_DECODE_FAILED = "json_decode_failed"
+    SCHEMA_MISMATCH = "schema_mismatch"
+    EM_MISMATCH = "em_mismatch"
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,7 +274,7 @@ def compute_reward(
     except json.JSONDecodeError as exc:
         return RewardResult(
             reward=0.0,
-            status="json_decode_failed",
+            status=RewardStatus.JSON_DECODE_FAILED,
             detail=str(exc),
         )
 
@@ -278,7 +283,7 @@ def compute_reward(
     except CanonicalizationError as exc:
         return RewardResult(
             reward=0.0,
-            status="schema_mismatch",
+            status=RewardStatus.SCHEMA_MISMATCH,
             detail=str(exc),
         )
 
@@ -287,14 +292,14 @@ def compute_reward(
     except CanonicalizationError as exc:
         return RewardResult(
             reward=0.0,
-            status="schema_mismatch",
+            status=RewardStatus.SCHEMA_MISMATCH,
             detail=f"canonical answer failed validation: {exc}",
         )
 
     if canonical_submitted == canonical_expected:
-        return RewardResult(reward=1.0, status="matched")
+        return RewardResult(reward=1.0, status=RewardStatus.MATCHED)
 
-    return RewardResult(reward=0.0, status="em_mismatch")
+    return RewardResult(reward=0.0, status=RewardStatus.EM_MISMATCH)
 
 
 def _field_path(base: str, child_name: str) -> str:

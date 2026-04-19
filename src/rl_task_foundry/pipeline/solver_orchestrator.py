@@ -17,7 +17,12 @@ from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import AgentRuntime, SolverEpisodeInput
-from rl_task_foundry.synthesis.canonicalize import RewardResult, canonical_json, compute_reward
+from rl_task_foundry.synthesis.canonicalize import (
+    RewardResult,
+    RewardStatus,
+    canonical_json,
+    compute_reward,
+)
 from rl_task_foundry.synthesis.contracts import TaskBundleContract
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
 from rl_task_foundry.tooling.atomic import (
@@ -158,7 +163,7 @@ class SolverOrchestrator:
         early_stop_decision: str | None = None
         if scheduled_calls:
             runs, early_stop_decision = await self._execute_solver_batches(scheduled_calls)
-        matched_solver_runs = sum(1 for run in runs if run.reward_result.status == "matched")
+        matched_solver_runs = sum(1 for run in runs if run.reward_result.status == RewardStatus.MATCHED)
         return TaskRolloutSummary(
             task_id=bundle.task_bundle.task_id,
             db_id=bundle.task_bundle.db_id,
@@ -233,7 +238,7 @@ class SolverOrchestrator:
                     "termination_reason": solver_result.termination_reason,
                     "turn_count": solver_result.turn_count,
                     "latency_ms": solver_result.latency_ms,
-                    "matched": reward_result.status == "matched",
+                    "matched": reward_result.status == RewardStatus.MATCHED,
                     "raw_output_preview": solver_result.raw_output_text[:200]
                     if solver_result.raw_output_text
                     else "",
@@ -363,7 +368,7 @@ class SolverOrchestrator:
                 continue
             early_stop_decision = calibration_decision(
                 total_solver_runs=total_solver_runs,
-                results=[run.reward_result.status == "matched" for run in runs],
+                results=[run.reward_result.status == RewardStatus.MATCHED for run in runs],
                 band=band,
                 ci_alpha=self.config.calibration.ci_alpha,
             )
@@ -426,7 +431,7 @@ def evaluate_rollout_summary(
     elif config.calibration.safe_early_termination:
         decision = calibration_decision(
             total_solver_runs=summary.planned_solver_runs,
-            results=[run.reward_result.status == "matched" for run in summary.runs],
+            results=[run.reward_result.status == RewardStatus.MATCHED for run in summary.runs],
             band=band,
             ci_alpha=config.calibration.ci_alpha,
         )
