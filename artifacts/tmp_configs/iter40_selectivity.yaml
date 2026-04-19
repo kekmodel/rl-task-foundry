@@ -1,0 +1,132 @@
+database:
+  dsn: "${DATABASE_DSN:-postgresql://sakila:sakila@127.0.0.1:5433/sakila}"
+  schema_allowlist: ["public"]
+  readonly_role: "rlvr_reader"
+  statement_timeout_ms: 5000
+  lock_timeout_ms: 1000
+  idle_tx_timeout_ms: 5000
+  solver_pool_size: 32
+  control_pool_size: 8
+
+domain:
+  name: "service_operations"
+  language: "ko"
+  scenario_description: "an end user asking the organization that owns the database for help or information"
+
+providers:
+  codex_oauth:
+    type: "openai_compatible"
+    base_url: "http://127.0.0.1:10531/v1"
+    api_key_env: "OPENAI_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
+  local_server:
+    type: "openai_compatible"
+    base_url: "${LOCAL_OPENAI_BASE_URL:-http://127.0.0.1:8000/v1}"
+    api_key_env: "LOCAL_OPENAI_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
+  anthropic_main:
+    type: "anthropic"
+    api_key_env: "ANTHROPIC_API_KEY"
+    max_concurrency: 8
+    timeout_s: 120
+  opencode_zen:
+    type: "openai_compatible"
+    base_url: "https://opencode.ai/zen/v1"
+    api_key_env: "OPENCODE_API_KEY"
+    max_concurrency: 64
+    timeout_s: 120
+    max_retries: 5
+  openrouter:
+    type: "openai_compatible"
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
+
+models:
+  composer:
+    provider: "opencode_zen"
+    model: "qwen3.5-plus"
+  solvers:
+    - {provider: "opencode_zen", model: "qwen3.5-plus"}
+    - {provider: "opencode_zen", model: "qwen3.5-plus"}
+    - {provider: "opencode_zen", model: "qwen3.5-plus"}
+
+provider_resilience:
+  circuit_breaker_window_s: 60
+  circuit_breaker_threshold: 0.3
+  probe_interval_s: 30
+  minimum_request_count: 2
+  release_semaphore_on_backoff: true
+
+atomic_tools:
+  max_tools: 300
+  bounded_result_limit: 100
+  max_batch_values: 128
+  float_precision: 2
+
+synthesis:
+  runtime:
+    max_turns: 60
+    tracing: true
+    sdk_sessions_enabled: false
+    max_generation_attempts: 5
+    max_consecutive_category_discards: 3
+    category_backoff_duration_s: 3600
+    schema_summary_max_tables: 32
+    tool_surface_summary_max_entries: 24
+    prompt_schema_orientation_max_tables: 8
+    prompt_schema_orientation_max_columns: 8
+    prompt_tool_surface_hint_limit: 16
+    label_preview_field_limit: 8
+    diagnostic_item_limit: 5
+    recent_tool_call_limit: 20
+    payload_preview_max_string_length: 400
+    payload_preview_max_list_items: 3
+    payload_preview_max_dict_items: 6
+  parallel_workers: 1
+  coverage_planner:
+    target_count_per_band: 3
+
+solver_runtime:
+  max_turns: 30
+  tracing: true
+  sdk_sessions_enabled: true
+
+calibration:
+  lower_pass_rate: 0.33
+  upper_pass_rate: 0.67
+  ci_alpha: 0.1
+  solver_batch_size: 3
+  max_solver_runs: 3
+  safe_early_termination: true
+
+dedup:
+  exact_enabled: true
+  near_dup_enabled: true
+  minhash_threshold: 0.9
+
+task_registry:
+  minhash_num_perm: 128
+  default_query_limit: 20
+  semantic_shingle_size: 3
+
+budget:
+  max_run_usd: 250.0
+  max_gpu_hours: null
+  compose_phase_usd: 40.0
+  solve_phase_usd: 180.0
+  min_accept_rate_attempts: 10
+  reserve_strategy: "phase_specific"
+
+privacy:
+  default_visibility: "blocked"
+  visibility_overrides:
+    courier_phone: "user_visible"
+    internal_ticket_note: "blocked"
+
+output:
+  run_db_path: "./artifacts/run.db"
+  traces_dir: "./artifacts/traces"

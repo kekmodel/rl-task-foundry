@@ -1323,7 +1323,46 @@ iter39_a는 "premature over-draft" 사례. customer 387의 `amount > $5` payment
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 39)
+### Iteration 40 — 2026-04-20 (composer selectivity check via profile 도구, 3-trial 배치)
+
+**Hypothesis.** iter39_a 실패 원인(submit 1 pass=0.0 too_hard — composer가 too-selective filter 선택) 해결. 개입: Type A draft 전 `profile(column)` 호출 의무화 + "25-75% row retention" 휴리스틱 + "too-generous recoverable, too-restrictive terminal" 비대칭 경고. 목표: submit 1 terminal too_hard 제거, per-task 축 확장 심화, RL actor가 감당 가능한 난도 유지.
+
+**Change.** `src/rl_task_foundry/synthesis/prompts.py` Type A 섹션에 profile 의무 규칙 12줄 추가. Config도 `synthesis.runtime.max_turns: 40 → 60` (profile 추가로 composer 탐색 비용 증가한 만큼 보상). commit `b9c3789` + config in `iter40_selectivity.yaml`.
+
+**Trial.** 3-trial 배치 순차 실행.
+
+| suffix | anchor | 실패/성공 | submit count | matched avg turns | 원인 |
+|---|---|---|---|---|---|
+| a | customer=545 | **accepted 0.667** | 5 (1 feedback + 4 submit) | progression 15.7→19.3→22.7→19.5 | profile 2회 호출, 점진 escalation ✓ 5 submit 최장 기록 |
+| b | film=912 (TROJAN TOMORROW) | **synthesis_failed (composer MaxTurns 40)** | 2 submit in 38 tool calls | — | composer over-exploring M:M bridge anchor, 40턴 budget 소진 |
+| c | city=84 (Boa Vista, Type B) | **synthesis_failed (Type B escalation invalid)** | 2 submit | 5.3 on submit 1 | submit 2에서 count target rental→payment 변경 → `difficulty_crank_invalid` → budget exhausted |
+
+iter40_a 하이라이트: profile 호출 2회, 5 submit 최대 깊이, solver s1 submit 3에서 **29턴** (max_turns=30 bound 도달) — RL actor budget 경계에서 정확히 풀어낸 이상적 training sample. Accepted matched avg 19.5턴.
+
+iter40_b 문제: composer가 profile+sample 반복하며 40턴 소진. **config fix**: `synthesis.runtime.max_turns: 40 → 60` (composer는 RL actor 아니므로 budget 조정 원칙 위반 아님).
+
+iter40_c 문제: Type B escalation에서 **aggregate target을 바꿈** (rental count → payment count). 프롬프트의 "add a filter on the joined set" 지침 위반. iter41에서 보강 필요.
+
+**Findings.**
+
+1. **iter40_a = 품질 기준 동시 달성의 이상적 케이스.** 기준 #3(5 submit 축 확장), #4(29턴 활용), #5(15.7→19.3→22.7 monotone) 모두 한 trial에서 fulfill. profile-driven filter 선택이 직접 효과: submit 1부터 Jon Stephens staff filter 정착, 이후 return_date 필터 추가가 composer의 selectivity 판단(25-75% 룰) 아래 정확히 진행됨.
+2. **Profile rule이 실제로 호출 유도.** iter40_a 2회, iter40_c 4회 호출 관측. iter34→35의 "example-driven over instruction" 원칙이 이번엔 instruction만으로도 효과 — 왜냐하면 `profile`이 이미 툴로 존재했고 "의무화" 한 줄이 활성화 트리거.
+3. **Composer budget 한계 노출 (iter40_b).** profile+sample 추가로 composer 탐색 비용 증가. 특히 M:M bridge anchor(film) 같이 structurally complex 경우 40턴 초과. config 60턴으로 완화했지만 iter40_c도 실패하여 **composer budget만이 해결책은 아님**. Anchor-level 제약(M:M bridge 회피) 병행 고려.
+4. **Type B escalation target-lock 누락.** iter40_c가 노출한 버그: composer가 "Type B 유지"는 지키지만 "같은 aggregate target" 규칙은 어김. rental count → payment count는 두 개의 다른 Type B 태스크. 프롬프트 보강 필요. iter41 target.
+5. **3개 서로 다른 실패 모드.** iter40 배치에서 (a) 성공, (b) composer budget, (c) Type B 규칙. iter39의 단일 실패 모드(selectivity)보다 복잡. 하지만 각각 다른 원인이라 **서로 독립적**으로 해결 가능.
+6. **Accept rate 1/3**, but **accepted quality is highest yet**. iter40_a가 지금까지 관측한 모든 지표(submit 깊이, solver 턴 peak, 점진 monotone)에서 최고점. 전체 루프의 상한이 올라갔다.
+7. **누적 25 accept.** 24 + iter40_a = 25. 축 분포: Filter 7, Composite 8, Aggregate 2, Cross-item 5, Cardinality 2 + 1 overflow.
+
+**Next direction.**
+
+1. **iter41 (즉시): Type B aggregate target lock 프롬프트 보강.** Type B 섹션에 "Within Type B across submits, the aggregate's target (which table you count/sum/min/max over) is locked. Change of target (rental→payment) is a type switch and will be flagged crank_invalid. Escalate by filter on the joined set ONLY." 명시. iter40_c 문제 직접 해결.
+2. **iter42 후보: M:M bridge anchor discouragement.** iter32_c/iter40_b 유사 실패 반복. `random_anchor`에 M:M bridge 테이블에서 나오는 체인 anchor 제외, 또는 프롬프트에 "M:M bridge 앵커 선택 시 agg 타겟을 actor table로 하라" 등 힌트.
+3. **Accept rate 안정화**: iter40 1/3은 iter38과 동일 수준(많은 실패). iter41에서 Type B 오류 제거, iter42에서 bridge 이슈 완화하면 2/3-3/3 회복 기대.
+4. **task pool 현황**: 25 accept, 모든 축 관측, iter40_a가 품질 peak 설정. iter41-42는 accept rate 회복 + 품질 유지.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 40)
 
 ### 행동 변화 요약
 
