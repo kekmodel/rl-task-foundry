@@ -52,6 +52,11 @@ from rl_task_foundry.tooling.common.edges import (
     TypedEdge,
     resolve_edge,
 )
+from rl_task_foundry.tooling.common.payload import (
+    ensure_int as _require_int,
+    ensure_str as _require_str,
+    ensure_str_list as _require_str_list,
+)
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot, TableSpec
 from rl_task_foundry.tooling.common.sql import (
     quote_ident,
@@ -102,38 +107,6 @@ class _ParsedSpec:
     limit: int | None
     group_by: list[str]
     aggregates: list[_AggregateClause]
-
-
-def _require_str(value: object, field: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(
-            f"{field!r} must be a string; got {type(value).__name__}"
-        )
-    return value
-
-
-def _require_int(value: object, field: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(
-            f"{field!r} must be an integer; got {type(value).__name__}"
-        )
-    return value
-
-
-def _require_str_list(raw: object, field: str) -> list[str]:
-    if not isinstance(raw, list):
-        raise TypeError(
-            f"{field!r} must be a list of strings; got {type(raw).__name__}"
-        )
-    out: list[str] = []
-    for index, item in enumerate(raw):
-        if not isinstance(item, str):
-            raise TypeError(
-                f"{field}[{index}] must be a string; got "
-                f"{type(item).__name__}"
-            )
-        out.append(item)
-    return out
 
 
 def _parse_join(raw: object) -> list[str]:

@@ -44,6 +44,12 @@ from rl_task_foundry.tooling.atomic.sql_compile import (
     _GROUP_AGGREGATE_FNS,
 )
 from rl_task_foundry.tooling.common.edges import available_edges
+from rl_task_foundry.tooling.common.payload import (
+    JsonObject,
+    require_int as _require_int,
+    require_str as _require_str,
+    require_str_list as _require_str_list,
+)
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
 from rl_task_foundry.tooling.common.sql import coerce_scalar
 
@@ -51,7 +57,6 @@ if TYPE_CHECKING:
     from agents import FunctionTool
 
 
-JsonObject = dict[str, object]
 Handler = Callable[[JsonObject], Awaitable[JsonObject]]
 Invoker = Callable[[object, str], Awaitable[str]]
 
@@ -96,40 +101,6 @@ _VALUE_ANY_OF: list[JsonObject] = [
     {"type": "null"},
     {"type": "array", "items": {}},
 ]
-
-
-def _require_str(payload: JsonObject, key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str):
-        raise TypeError(
-            f"{key!r} must be a string; got {type(value).__name__}"
-        )
-    return value
-
-
-def _require_int(payload: JsonObject, key: str) -> int:
-    value = payload.get(key)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(
-            f"{key!r} must be an integer; got {type(value).__name__}"
-        )
-    return value
-
-
-def _require_str_list(payload: JsonObject, key: str) -> list[str]:
-    raw = payload.get(key)
-    if not isinstance(raw, list):
-        raise TypeError(
-            f"{key!r} must be a list; got {type(raw).__name__}"
-        )
-    items: list[str] = []
-    for index, item in enumerate(raw):
-        if not isinstance(item, str):
-            raise TypeError(
-                f"{key}[{index}] must be a string; got {type(item).__name__}"
-            )
-        items.append(item)
-    return items
 
 
 def _json_dumps(payload: object) -> str:

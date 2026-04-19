@@ -21,6 +21,13 @@ from typing import TYPE_CHECKING
 import asyncpg
 
 from rl_task_foundry.tooling.common.edges import available_edges
+from rl_task_foundry.tooling.common.payload import (
+    JsonObject,
+    optional_int as _optional_int,
+    optional_str as _optional_str,
+    require_int as _require_int,
+    require_str as _require_str,
+)
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
 from rl_task_foundry.tooling.common.sql import coerce_scalar
 from rl_task_foundry.tooling.composer._session import ComposerSession
@@ -35,7 +42,6 @@ if TYPE_CHECKING:
     from agents import FunctionTool
 
 
-JsonObject = dict[str, object]
 Handler = Callable[[JsonObject], Awaitable[JsonObject]]
 Invoker = Callable[[object, str], Awaitable[str]]
 
@@ -185,36 +191,6 @@ def _with_error_handling(handler: Handler) -> Invoker:
         return _json_dumps(result)
 
     return invoke
-
-
-def _require_str(payload: JsonObject, key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str):
-        raise TypeError(
-            f"{key!r} must be a string; got {type(value).__name__}"
-        )
-    return value
-
-
-def _require_int(payload: JsonObject, key: str) -> int:
-    value = payload.get(key)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(
-            f"{key!r} must be an integer; got {type(value).__name__}"
-        )
-    return value
-
-
-def _optional_int(payload: JsonObject, key: str) -> int | None:
-    if key not in payload or payload[key] is None:
-        return None
-    return _require_int(payload, key)
-
-
-def _optional_str(payload: JsonObject, key: str) -> str | None:
-    if key not in payload or payload[key] is None:
-        return None
-    return _require_str(payload, key)
 
 
 _VALUE_ANY_OF = [
