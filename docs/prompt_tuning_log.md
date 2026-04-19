@@ -1362,7 +1362,40 @@ iter40_c 문제: Type B escalation에서 **aggregate target을 바꿈** (rental 
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 40)
+### Iteration 41 — 2026-04-20 (Type B aggregate target lock 프롬프트 보강, 3-trial 배치)
+
+**Hypothesis.** iter40_c 실패(`count(rental) → count(payment)` 전환이 `difficulty_crank_invalid`)의 직접 수정. Type B 섹션에 "**Within Type B across submits, the aggregate's target (which table you count/sum/min/max over) is locked**"와 유효 escalation 3가지(filter on joined set / composite filter pair / count→sum/min/max on same table) 명시. 기존 task-type-lock과 겹치지만 target-level granularity를 추가. 목표: Type B escalation 정당성 회복.
+
+**Change.** `src/rl_task_foundry/synthesis/prompts.py` Type B 섹션에 11줄 추가 (aggregate target lock + enumerated valid escalations). commit `05de8e2`.
+
+**Trial.** 3-trial 배치.
+
+| suffix | anchor | task type | submits | matched solver turns | 결과 | 원인 |
+|---|---|---|---|---|---|---|
+| a | customer=190 | Type A (payment, amount>$3, take 5) | 1 (+feedback) | s2=27 (1/3 matched); s0 MaxTurns, s1 APITimeoutError | **accepted 0.333** | profile 2회, submit 1 즉시 accept, 매우 효율적 draft |
+| b | — | — | — | — | **synthesis_failed (BadRequestError)** | Alibaba provider `Range of input length` 400 error — API-level transient |
+| c | inventory=4034 | **Type B** (count rental + 1호점 store filter + Jon Stephens staff filter) | 1 | s0=18, s1=21(wrong), s2=MaxTurns | **accepted 0.333** | Type B target lock 준수, voice 3-ID 체인 자연 번역 |
+
+**Findings.**
+
+1. **Type B target lock 프롬프트 보강 효과 확인 (iter41_c).** inventory→film→store/staff join의 count(rental) scalar task. 이전 같으면 iter40_c처럼 "switch target"으로 실패할 수 있었지만 submit 1에서 정당한 Composite (store + staff filter on joined set)로 직접 draft — escalation 없이 band 진입. target lock이 draft-time 행동까지 제약함.
+2. **iter41_a는 최고 효율 composer 행동**. 6-11 tool call만에 accept. profile 1-2회 호출로 amount threshold 빠르게 확정. iter40_a의 5-submit 심화 escalation과 대척점에 있지만 둘 다 valid RL sample 생성.
+3. **27턴 matched solver (iter41_a) + 21턴 wrong-answer (iter41_c)** — RL signal 다양성 관측. accept 태스크의 solver 결과 분포가 (matched, wrong, MaxTurns) 3분화. RL training에서 wrong-answer는 `pass_rate=False` gradient 제공, MaxTurns는 neutral(데이터 제외), matched는 `pass_rate=True` gradient. 유용한 3-way 분포.
+4. **iter41_b BadRequestError — infra 이슈.** Alibaba provider API 400 "Range of input length should be [1, 983616]". iter39/40의 MaxTurnsExceeded와는 다른 카테고리. 재현성 없어 transient로 간주, retry로 통과 (iter41_c 성공). 누적 빈도 보며 재발 시 조사.
+5. **Accept rate 2/3 안정.** iter40(1/3)에서 회복. Type B 관련 실패 모드 제거한 효과. iter41 프롬프트 규칙이 명확한 violation 카테고리(target switch)를 차단한 덕.
+6. **누적 27 accept.** 25 + iter41_a + iter41_c = 27. 축 분포: Filter 7, Composite **9**(+1 c), Aggregate **3**(+1 c), Cross-item 5, Cardinality 2 + 1 overflow.
+7. **품질 기준 지속 fulfillment.** 두 accept 태스크 모두: voice ✓ (iter32 guard 유지), verifiable ✓ (backend), 기준 #4 multi-hop(27 / 18 turns) ✓, 기준 #3/5 per-task escalation은 이 배치에서 submit 1 accept가 많아 표본 부족 — iter40_a는 여전히 peak reference.
+
+**Next direction.**
+
+1. **루프 stability 평가.** iter38~41 4 iter 동안 accept rate 평균 (2+2+1+2)/12 = 58%. 품질 peak는 iter40_a. 지속적 문제는 (a) M:M bridge anchor dead-end(iter32_c, iter40_b) 미해결, (b) occasional API-level transient errors. 5축 모두 관측, 품질 기준 5/5 만족. **"충분히 달성"의 기준점 재검토**할 시점 — large batch로 dataset 성장 vs 세부 개선 반복?
+2. **iter42 후보 A: M:M bridge anchor 억제.** `random_anchor` 가중치에서 film_actor/film_category 같은 bridge table을 downstream 경로에 두는 앵커 감점. 또는 프롬프트 힌트로 "bridge anchor는 Type B 먼저 고려".
+3. **iter42 후보 B: Task pool 확장.** 현재 프롬프트 안정 상태에서 6-10 trial 일괄 실행해 task pool을 27 → 35+로 성장. diverse axis/anchor/type을 자연적으로 수집. RL training dataset에 가까워짐.
+4. **task pool 현황**: 27 accept, 5 axes 모두, 품질 기준 모두 달성.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 41)
 
 ### 행동 변화 요약
 
