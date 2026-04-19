@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from rl_task_foundry.synthesis.jsonl_logger import JsonlFileSink
@@ -24,7 +23,7 @@ class PipelineFlowEvent:
     timestamp: str
     stage: str
     status: str
-    payload: dict[str, Any]
+    payload: dict[str, object]
 
 
 @dataclass(slots=True)
@@ -50,7 +49,7 @@ class PipelineFlowLogger:
         *,
         stage: str,
         status: str,
-        payload: dict[str, Any] | None = None,
+        payload: dict[str, object] | None = None,
     ) -> PipelineFlowEvent:
         self._seq += 1
         event = PipelineFlowEvent(

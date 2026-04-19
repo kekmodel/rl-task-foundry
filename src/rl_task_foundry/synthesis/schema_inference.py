@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
 
 from pydantic import TypeAdapter, create_model
 
@@ -22,7 +21,7 @@ def extract_output_schema_from_canonical(canonical_answer: object) -> OutputSche
     return OutputSchemaContract(root=root, primary_output_format=primary_output_format)
 
 
-def extract_prompt_schema_from_canonical(canonical_answer: object) -> dict[str, Any]:
+def extract_prompt_schema_from_canonical(canonical_answer: object) -> dict[str, object]:
     """Infer a JSON Schema payload for the solver-facing rendered prompt."""
 
     annotation = _infer_python_annotation("AnswerSchema", canonical_answer)
@@ -97,7 +96,7 @@ def _merge_list_samples(items: list[object]) -> object:
     return items[0]
 
 
-def _infer_python_annotation(model_name: str, value: object) -> Any:
+def _infer_python_annotation(model_name: str, value: object) -> object:
     if isinstance(value, dict):
         fields = {
             str(key): (_infer_python_annotation(f"{model_name}_{key}", child), ...)

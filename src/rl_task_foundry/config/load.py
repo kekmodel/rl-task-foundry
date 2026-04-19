@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -41,7 +40,7 @@ def _load_dotenv(env_path: Path) -> None:
             os.environ[key] = value
 
 
-def _expand_env(value: Any) -> Any:
+def _expand_env(value: object) -> object:
     if isinstance(value, dict):
         return {k: _expand_env(v) for k, v in value.items()}
     if isinstance(value, list):
