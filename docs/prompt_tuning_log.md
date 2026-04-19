@@ -1120,7 +1120,45 @@ iter35_a question: "제 대여 기록 중 대여일이 가장 빠른 순서로 *
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 35)
+### Iteration 36 — 2026-04-19 (iter35 배치 확장, 추가 2 trial — **20 accept 도달 + Aggregate 재현 + Cardinality 2연속**)
+
+**Hypothesis.** iter35_a 1-sample에서 Cardinality 최초 accept(N=5) 획득. (a) Cardinality 재현 가능한지, (b) N=10 / N=all matching 같은 다른 변형 관측되는지, (c) 다양한 anchor에서 동일 패턴 유지되는지 3-trial 배치로 측정. 프롬프트/코드 변경 없음 — iter35 상태 그대로 재현 배치.
+
+**Change.** 없음. `artifacts/tmp_configs/iter35_card_examples.yaml` 그대로 재사용. smoke_iter35_b → smoke_iter35_c 순차 실행.
+
+**Trial.** iter35_a + iter35_b + iter35_c 합쳐 3-trial 배치.
+
+| suffix | anchor | task type | label | primary axis | secondary | pass_rate | voice |
+|---|---|---|---|---|---|---|---|
+| a | customer=155 | Type A | `[{rental_date, return_date}] × 5` | **Cardinality (N=5)** | Cross-item | 0.667 | "제 대여 기록 … 5건" ✓ |
+| b | **inventory**=3975 | Type A | `[{rental_date, return_date}] × all matching` | **Cardinality (N=all)** | Composite (store+film+staff) | 0.333 | "2호점 SUNSET RACER 재고 + Jon Stephens 직원" ✓✓ (다중 ID 해결) |
+| c | rental=13621 | **Type B** | `{rental_count: int}` | **Aggregate** | — | 0.667 | "2005년 8월 20일에 대여한 이 기록 기준, 제 총 대여 횟수" ✓ |
+
+iter35_b attempt 연쇄:
+- attempt 1: "2호점의 SUNSET RACER 영화 재고 항목의 **모든** 대여 기록을 대여일 오름차순으로" → 3/3 too_easy (N=all matching + 기본 필터만)
+- attempt 2: + "**Jon Stephens 직원**이 처리한" → 1/3 accepted
+
+iter35_c 1-shot: submit 1에서 band 상단 hit. 2005년 8월 20일 anchor 번역으로 rental_id를 자연어화, 그 후 "제 총 대여 횟수" Type B scalar 질문.
+
+**Findings.**
+
+1. **Cardinality 축 3/3 재현 ✓ (N=5, N=all, 그리고 batch 성공).** iter35_a의 N=5 accept가 운이 아님. iter35_b는 N=all matching으로 **다른 변형**까지 관측. 축 분포 업데이트: Filter 7, Composite 3, **Aggregate 2** (+1), Cross-item rule 5, **Cardinality 2** (+1). **20 accept 달성** — 첫 milestone.
+2. **Aggregate/Type B 재현 ✓ (iter35_c).** iter30_a 이후 8 iter 만에 두 번째 Type B accept. **차이점**: iter30_a는 city hub anchor + 복합 필터 필요(attempt 3에서 accept), iter35_c는 rental leaf anchor + submit 1 즉시 accept. iter31에서 "Type B는 hub anchor에서 자연"이라는 가설을 부분 반박 — **rental leaf도 "이 기록 기준 내 총 대여 횟수" natural phrasing**으로 Type B 가능.
+3. **Voice 가드 다중 ID 해결력 실증 (iter35_b).** 한 태스크 안에 4개 numeric ID(`inventory_id`, `film_id`, `store_id`, `staff_id`) 모두 자연어로 번역: "2호점", "SUNSET RACER 영화", "재고 항목", "Jon Stephens 직원". iter25_c/29_a/30_c 누수 3건의 패턴 전체가 구조적으로 해결됨을 한 번의 trial에서 확증. voice 가드가 trivial ID 1개뿐 아니라 **composite ID chain**까지 커버.
+4. **Type A 예시 N 다변화가 composer의 draft 분포를 실제로 이동시킴.** iter35 배치 3 trial 중 3개 모두 N ≠ 3: iter35_a N=5, iter35_b N=all matching, iter35_c N=scalar. iter34 instruction-only 개입 전에는 최근 5 accept 모두 N=3이었음. 예시 레벨 개입 전후 행동 변화가 극명.
+5. **iter30~35 프롬프트 누적 시너지.** iter35_b에서 (a) iter32 voice 가드(staff_id → Jon Stephens), (b) iter32 anchor translation(inventory_id → 영화+매장), (c) iter35 예시(N=all matching) 세 개의 개입이 한 trial 안에서 독립적으로 발동해 하나의 태스크를 형성. 프롬프트 개편은 orthogonal 하게 composable — 한 축의 변경이 다른 축을 망가뜨리지 않음.
+6. **Submit 1 accept 빈도 증가.** iter35 배치에서 a, c는 submit 1 accept. iter33 batch까지는 거의 submit 2-3에서 accept였는데, iter35 이후 "예시가 더 다양해져 first draft가 band에 바로 앉는" 빈도 증가. composer의 **시작 drafting quality** 향상 신호.
+
+**Next direction.**
+
+1. **iter37: 20 accept cross-iteration 분석.** 별도 작업 (no new prompt change). 20개 accept 전체에서 (a) axis 분포 (primary + secondary), (b) anchor class 분포 (hub/leaf/bridge), (c) shape 분포 (record shape, N values), (d) band 분포 (upper/lower), (e) voice quality 6-axis 점검. 약점 진단.
+2. **iter38 후보 (분석 결과 의존)**: 축 균형(Cardinality/Aggregate만 2건씩, Filter 7건 편향), shape 다양성(record shape `{rental_date, return_date}` 여전히 과다?), band 분포(상/하단 비율).
+3. **보류**: M:M bridge anchor 회피(iter32_c dead-end). 이후 trial에서 재발 빈도 관찰.
+4. **task pool 현황**: **20 accept 달성**, 5 of 5 axes 모두 진입 완료. 축 분포 Filter 7 / Composite 3 / Aggregate 2 / Cross-item rule 5 / Cardinality 2.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 36)
 
 ### 행동 변화 요약
 
