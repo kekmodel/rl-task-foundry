@@ -1466,7 +1466,51 @@ iter43_b 상세 escalation:
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 43)
+### Iteration 44-45 — 2026-04-20 (fn-lock fix + cardinality pre-check 통합 검증, 1-sample smoke — **최종 버전 확정**)
+
+**Hypothesis.** iter41 fn-switch 버그(c198dd7) + iter45 canonical row-count pre-check(b30b6ba) 두 개입의 결합이 (a) Type B max/min/sum accept를 가능케 하는지, (b) submit-1 pass=0.0 terminal 패턴을 차단하는지. 1-sample 검증으로 "최종 prompt" 상태 선언 여부 결정.
+
+**Change.** 없음 — iter43 프롬프트 + iter41 fix + iter45 row-check 누적 상태 그대로 재실행. Config: `artifacts/tmp_configs/iter45_cardinality_precheck.yaml`.
+
+**Trial.** iter44_a (Type B count + staff filter overshoot to pass=0.0 → synthesis_failed) 후 iter45_a 1-sample.
+
+| suffix | anchor | task type | submits | 결과 | matched turns | 관찰 |
+|---|---|---|---|---|---|---|
+| iter44_a | rental=8063 | Type B count(rental) + date + staff filter | 2 | synthesis_failed (submit 2 pass=0.0) | — | composer가 Jon Stephens + July 합성에 overshoot. row-check rule 적용이 부분적 |
+| iter45_a | customer=158 | **Type B max(amount)** + date + staff filter | 3 | **accepted 0.667** | 5 → 20 (4x 증가) | 📍 **최종 버전 검증 성공** |
+
+iter45_a 상세 flow:
+- submit 1: "2005-08-01 이후 가장 큰 금액" (max, single date filter) → 3/3 matched @ 5턴 → too_easy
+- submit 2: + "Mike Hillyer 직원" staff filter → feedback (mid-flight refinement)
+- submit 3: staff를 Jon Stephens로 변경 (다른 selectivity 선택, **fn과 target은 유지** = iter41 fn-lock 준수) → 2/3 matched @ 20턴 → **accepted 0.667**
+
+**Findings.**
+
+1. **Type B max 최초 Accept ✓✓✓ (iter45_a).** 이전 5 Type B accept 모두 count였음. iter45_a의 `{max_payment: string}`이 **non-count Type B의 최초 실현**. iter43 예시 reorder + iter41 fn-lock fix + iter45 row-check 세 개입의 누적 효과.
+2. **fn-lock 준수 확인.** submit 1 → 2 → 3 전반에 걸쳐 `max(payment.amount)` 유지. sum/min/count으로 switch 시도 없음. iter43_b에서 관찰된 max→sum crank_invalid 버그가 iter41 fix로 구조적 해결.
+3. **Progressive escalation monotone (5 → 20턴).** submit 1 5턴 baseline → submit 3 20턴 accept = **4x solver effort 증가**. 기준 #5 (점진 난도 증가) 강한 실증.
+4. **Cardinality pre-check rule 부분 작동.** iter44_a는 submit 2 pass=0.0 overshoot 발생 (rule 적용 부족), iter45_a는 3 submit 모두 adequate row count. N=1 trial로 전체 효과 측정 어렵지만 iter45_a는 overshoot 없이 완주.
+5. **Voice 품질 유지.** "Jon Stephens 직원", "가장 큰 금액", 2005-08-01 date 모두 자연 customer voice. iter32 이후 voice 체인 무결.
+6. **Solver 다양성 (submit 3).** 2 matched @ 20턴 (같은 난도) + 1 wrong answer @ 16턴 = **RL training ideal**. MaxTurns 없이 모두 reasoning 완료, 정답/오답 mix.
+7. **누적 31 accept** (30 + iter45_a). Aggregate subtype 분포 갱신: count 4 + **max 1** (첫). 기타 min/sum은 0 유지.
+
+**Final state declaration.**
+
+프롬프트 최종 버전 = **iter43 (Type B subtype) + iter41 fix `c198dd7` (fn-lock) + iter45 `b30b6ba` (row-check) 누적** 상태로 확정. 이 prompt로:
+- 5 of 5 axes 전부 관측 (Filter/Composite/Aggregate/Cross-item/Cardinality)
+- Aggregate subtypes 중 count + max 모두 실현 (min/sum은 아직 0, 추후 batch 확장 시 기대)
+- Quality criteria 1~5 모두 반복 실현
+- Accept rate ~2/3 stable
+- 내부 규칙 consistency 회복 (fn-lock 버그 해결)
+- Voice 가드 완전 작동 (post-iter32 violation 0)
+- M:M bridge anchor dead-end 해결 (iter42)
+- Film anchor 정상 accept 가능 (iter42_a)
+
+다음 단계는 이 프롬프트로 **fresh batch 재구성** (사용자 계획). 현 registry는 prompt 진화 과정 snapshot이라 homogeneous quality dataset이 아님 — fresh batch가 최종 RL 데이터셋 생성 경로.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 45 — **최종 버전**)
 
 ### 행동 변화 요약
 
