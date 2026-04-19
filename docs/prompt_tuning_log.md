@@ -1049,7 +1049,38 @@ iter32_c attempt 연쇄 분석:
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 33)
+### Iteration 34 — 2026-04-19 (Cardinality 축 개방 시도 1: Type A 정의에서 N=3 하드코딩 제거, 1-sample 스모크)
+
+**Hypothesis.** 최근 4개 Cross-item accept(iter30_b, c, iter32_a, b)와 iter32 배치 내내 N=3 고정. 원인 진단: Type A 정의 문장 자체가 "list of **3** child records"로 N을 하드코딩. 개입: 정의를 "list of N child records (N ∈ {3, 5, 10, or 'all records matching'})"로 변경하고 "N=3이 기본 시작점이긴 하지만 다변화하라, 15개 prior accept에서 N=3가 Cardinality 축을 0으로 고정시켰다"는 메타 관찰을 프롬프트 안에 명시. 드래프트 단계부터 N 다변화 유도.
+
+**Change.** `src/rl_task_foundry/synthesis/prompts.py` Type A 섹션. "**Type A — list of 3 child records.**" → "**Type A — list of N child records (N ∈ {3, 5, 10, or 'all records matching <filter>'}).**" + 뒤에 7줄 추가: "N is a draft parameter — vary it. ... Do not always default to N=3 — that choice alone has saturated the Cardinality axis at 0 across 15 prior accepts." commit `b2f06c7`.
+
+**Trial.** `artifacts/tmp_configs/iter34_cardinality.yaml` 1-sample 스모크(smoke_iter34_a). **accepted.** pass_rate=1/3=0.333, task_id `task_Customer rental history - first 3 rentals_39fac5d04a1f3fd0`.
+
+| attempt | anchor | task type | label | axis | pass_rate | reject |
+|---|---|---|---|---|---|---|
+| 1 | customer=294 | Type A | `[{rental_date, return_date}]` × **3**, `sort_key=[rental_date ASC]` | **Cross-item rule** + take **3** | **1/3 = 0.333** ✓ | **accepted (submit 1)** |
+
+iter34_a question: "제 대여 기록 중 대여 날짜 기준으로 가장 빠른 **3 건**을 보여주세요" — 1인칭, 자연, N=3. 프롬프트 변경의 의도된 다변화 전혀 일어나지 않음.
+
+**Findings.**
+
+1. **가설 실패 (N=3 고정 유지).** Type A 정의에 "N ∈ {3,5,10,all matching}" 명시 + "Do not always default to N=3" 경고 + "15개 prior accept에서 N=3 saturate" 메타 관찰을 주입했으나 composer는 드래프트에서 여전히 N=3 선택. 프롬프트 instruction이 N 선택 분포를 이동시키지 못함. Cardinality 축은 여전히 **0**.
+2. **원인 가설 — instruction vs example 불일치.** 변경한 건 정의 문장과 산문 경고만이고, 실제 Type A 예시 5개(anchor=customer→rental, anchor=film→actor 등)는 여전히 N을 명시하지 않음. LLM은 "instruction 따르기"보다 "example pattern 따르기"를 체계적으로 선호. 예시 중 하나 이상에 `N=5` 또는 `[{…}, …] 모든 영화` 같은 구체 형태를 박지 않으면 instruction만으론 bias가 깨지지 않음.
+3. **부차 원인 — submit 1에 band 진입하면 escalate 시그널 소실.** iter32_a/b/34_a 3회 연속 customer/address hub 앵커 + "take 3 without filter"가 band 하/상단 진입. composer가 escalate 할 기회 자체가 없고, Escalation Axes의 Cardinality 항목(이미 존재)은 too_easy에만 발동. 드래프트 단계에서 N 다변화를 실제로 일으키는 유일한 길은 Type A 예시 자체의 N 다변화.
+4. **17번째 accept, Cross-item rule axis 5번째 관측.** 누적 17 accept. axis 분포: Filter 7, Composite 3, Aggregate 1, **Cross-item rule 5**, Cardinality 0. Cross-item은 Type A 기본 편입 이후 5연속 primary — iter26~30 전파가 composer의 기본 레퍼토리를 구조적으로 이동시켰다는 장기 관찰.
+5. **프롬프트 instruction의 한계 실증 사례.** 이번 iter는 "추상적 instruction + 경고 + 메타 관찰"이 LLM 행동을 바꾸지 못함을 보여주는 케이스. 유사 실패: iter11~14의 "Width 금지" instruction도 iter32_c attempt 5에서 여전히 Width 시도 관찰. 프롬프트 개입의 신뢰할 수 있는 단위는 **구체 예시**이며 산문 instruction은 보조적.
+
+**Next direction.**
+
+1. **iter35: Type A 예시의 N 다변화.** 이번 실패의 원인 진단을 그대로 반영 — 예시 5개 중 2-3개를 N=5, N=10, "N=all matching"으로 명시 개편. 예: `anchor=customer → rental destination: `[{rental_date, return_date}, …] × 10`` 또는 `anchor=city → customer destination: `[{first_name, last_name}, …] 해당 도시의 모든 고객``. instruction은 제거하지 않고 예시만 교체. 1-sample smoke.
+2. **iter35 보완 (동일 iter 안): Escalation Axes Cardinality 우선 순위 승격.** 현재 나열 순서 Cardinality → Cross-item → Composite → Filter. Cross-item이 이미 default가 되어 Cardinality가 "덜 매력적"으로 보임. 순서를 Cardinality → Composite → Filter → Cross-item으로 재배치 + "Cardinality is the least-observed axis; prefer it when prior escalation attempts haven't dropped pass_rate" 한 문장. 프롬프트 한 줄 추가 + 5줄 재배치.
+3. **주의**: iter35에서 iter34 프롬프트 주석(N=3 saturated 경고)은 유지. 제거하면 iter34 의도가 사라짐. 두 개입 누적해서 시너지 확인.
+4. **task pool 현황**: 17 accept, 4 of 5 axes. Cardinality 여전히 0 but 다음 iter의 명확한 타겟.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 34)
 
 ### 행동 변화 요약
 
