@@ -1008,7 +1008,48 @@ iter32_a question: "제 대여 기록 중 대여일이 가장 빠른 순서로 3
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 32)
+### Iteration 33 — 2026-04-19 (iter32 배치 확장, 추가 2 trial — voice guard 검증)
+
+**Hypothesis.** iter32_a는 ID filter 없이 submit 1에서 accept — 가드 발동 자체가 없어 inconclusive. (a) 가드가 실전 ID-filter 시나리오에서 작동하는지, (b) "가드가 ID filter 회피를 유도"(iter32 finding 2 부수효과 가설)가 실존하는지 확인. 프롬프트/코드 변경 없음 — iter32 상태 그대로 순차 배치.
+
+**Change.** 없음. `artifacts/tmp_configs/iter32_voice_guard.yaml` 그대로 재사용. smoke_iter32_b → smoke_iter32_c 순차 실행.
+
+**Trial.** iter32_a + iter32_b + iter32_c 합쳐 3-trial 배치.
+
+| suffix | anchor | anchor class | task type | final | pass_rate | axis | voice |
+|---|---|---|---|---|---|---|---|
+| a | address=539 | mid-chain | Type A | accepted (submit 1) | 0.333 | Cross-item + take 3, filter 0 | 자연 ✓ (no ID filter) |
+| b | customer=499 | hub | Type A | accepted (submit 1) | 0.667 | Cross-item + take 3, filter 0 | 자연 ✓ (no ID filter) |
+| c | film=201 | M:M bridge hub | Type A | **synthesis_failed** | — | attempt 1~5 죽음 | **"CYCLONE FAMILY 영화" ✓✓** |
+
+iter32_c는 fail이지만 voice guard의 결정적 검증 케이스. 모든 5 attempt question에서 `film_id=201`을 `"CYCLONE FAMILY 영화"`(영화 제목)로 **정확히 번역**. iter30_c가 `staff_id=1 → "직원 1 번"`으로 누수했던 정확한 패턴이 이번엔 자연어로 번역됨. tool call 중 `read(film, film_id=201, columns=[title])` 또는 유사 lookup 호출이 포함된 것으로 추정.
+
+iter32_c attempt 연쇄 분석:
+- attempt 1: `actor_id ASC, first 3` → too_easy 3/3
+- attempt 2: sort를 `last_name ASC`로 변경 → too_easy 3/3 (label 바뀌었지만 strengthen 아님 — 동일 난이도)
+- attempt 3: N 3→2 축소 → too_easy (**N 축소는 iter27_c와 동일한 weakening 패턴, 프롬프트 규칙 위반**)
+- attempt 4: `PG 등급 필터` 추가 → **`label_not_strengthened`** (배우 테이블에 rating 없음; 필터가 의미적으로 틀려 strengthen 실패)
+- attempt 5: "영화 제목 포함" 추가 → **`reject_too_easy`** (Width axis는 프롬프트에서 명시적으로 금지된 축) → `budget_exhausted`
+
+**Findings.**
+
+1. **Voice guard 검증 성공 ✓✓ (iter32_c).** `film_id=201` → `"CYCLONE FAMILY 영화"` 자연어 번역, 모든 5 attempt 일관. iter25_c(inventory_id), iter29_a(rental_id 8826번), iter30_c(직원 1 번)로 3회 재발하던 voice 회귀가 **iter32 가드로 구조적 차단**됨을 실증. composer는 film 테이블에서 title을 명시적으로 lookup해 필터에서 사용. 가드가 의도한 행동을 이끌어냄.
+2. **"가드가 ID filter 회피를 유도" 가설은 반증됨.** iter32_c는 ID filter를 적극 시도(PG rating, film title 등). 필터 회피하지 않음. iter32_a, b에서 필터가 없었던 건 composer가 submit 1에 band 진입해 escalate 불필요했기 때문이지 가드 때문이 아님. 부수효과 가설 기각.
+3. **다른 문제 노출 — M:M bridge anchor의 escalation dead-end.** film 앵커 + "출연 배우 N명" 태스크는 구조적으로 매우 단순(soft small join) → 어떤 필터를 추가해도 solver가 풀어버림. 그 결과 composer가 규칙 위반 escalation(N 축소, 의미 틀린 필터, Width)으로 내몰림. **프롬프트에 "M:M bridge 구조(film_actor, category 등)는 escalation이 어려우니 anchor 단계에서 회피"** 같은 힌트 추가 후보.
+4. **Anchor bias의 우연한 부작용.** iter30 weighted anchor가 iter32_b에서 customer(high-inbound hub, 정당) ✓, iter32_c에서 film(M:M bridge hub, 부적합)을 뽑음. inbound_edge_count만으로는 "작업 가능한 hub"와 "작업 불가능한 bridge hub"를 구분 못 함. 앵커 필터에 **M:M bridge 회피** 룰 추가 후보 (별도 iter).
+5. **누적 16 accept.** 14 + iter32_a + iter32_b = 16 accept, 4 of 5 axes. Primary-axis 분포: Filter 7, Composite 3, Aggregate 1, **Cross-item rule 4**, Cardinality 0. Cross-item은 최근 4번 연속 정당한 primary — Type A 기본 레퍼토리로 완전히 편입.
+6. **pass_rate band 분포 업데이트.** iter32_a 0.333(하단), iter32_b 0.667(상단), iter30_a 0.667, 나머지 iter30/31 하단. 5 최근 accept 중 2개 상단, 3개 하단. "하단 집중"은 거짓으로 판명 — anchor shape에 따른 변동.
+
+**Next direction.**
+
+1. **iter34: Cardinality 축 개방 (마지막 0축).** Voice guard 이슈 닫혔으니 마지막 0축으로 pivot. `Escalation Axes`의 `- **Cardinality**` 항목에 이미 "change N (e.g. 3 → 5) or switch from fixed-N to 'all records matching the filter'"가 적혀 있음 — **문제는 composer가 이걸 선택하지 않는다는 것**. Type A의 N을 3으로 고정하려는 경향 강함. 접근: (a) Type A 예시에 N=5, N=10, "all matching" 케이스 추가 (iter24 shape 다양화와 동일한 확률적 개입), (b) Workflow step 3 escalation 힌트에 "Cardinality 축을 **우선 검토**" 한 줄 추가, (c) 둘 다. 1-sample smoke.
+2. **iter35 후보: M:M bridge anchor 회피.** iter32_c dead-end 재발 가능성 있음. `random_anchor`에서 bridge 테이블(`film_actor`, `film_category`) 제외 또는 가중치 0. 하지만 bridge는 이미 `inbound_edge_count`가 낮을 것(있으면 FK만). 실제로 iter32_c film_id=201은 bridge 자체가 아니라 film. film이 high-inbound이긴 하나 다운스트림이 M:M 관계(actor). 구조적 해결은 "anchor 후보의 downstream 경로에서 bridge가 나오는 테이블은 감점" 같은 복잡한 로직 필요. deferred.
+3. **weakening 패턴 3회 관찰 (iter27_c, iter32_c attempt 3, iter32_c attempt 5).** N 축소, Width 금지 위반이 escalation dead-end에서 반복. 프롬프트의 "Never select Width after too_easy" rule이 있지만 composer가 attempt 5에서 어긴 것으로 보임. attempt 5 시점에 max_submissions 5 가까워져서 "정상 escalation 경로 탈진" 상태. 프롬프트 강화 별도 iter 고려.
+4. **task pool 현황**: 16 accept, 4 of 5 axes. Cardinality 여전히 0.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 33)
 
 ### 행동 변화 요약
 
