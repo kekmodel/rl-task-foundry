@@ -1427,7 +1427,46 @@ iter40_c 문제: Type B escalation에서 **aggregate target을 바꿈** (rental 
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 42)
+### Iteration 43 — 2026-04-20 (Type B 서브타입 다변화 — max/min/sum 예시 우선 배치, 3-trial 배치)
+
+**Hypothesis.** iter30/35/41/42 Type B accept 4건 모두 `count`. max/min 예시는 있었으나 composer가 선택 안 함 (iter34 N=3 고정 패턴과 동일). 개입: Type B 예시 순서 재배치(max/min/sum 먼저) + 4개 first-class 예시 추가(max(amount), min(payment_date), sum(amount), max(rental_date) 각각에 Korean phrasing). "iter43 현재 Type B는 count로 saturated — mix up" 메타 경고 문구 추가.
+
+**Change.** `src/rl_task_foundry/synthesis/prompts.py` Type B 예시 섹션 재구성. 4개 새 max/min/sum 예시를 count 예시 앞에 배치. commit `3dc6547`.
+
+**Trial.** 3-trial 배치.
+
+| suffix | anchor | task | 결과 | 관찰 |
+|---|---|---|---|---|
+| a | rental=11681 | Type A: 2005-08 첫 5건 | **accepted 0.333** | Type A 선택 (iter43 편향 효과 없음), Cross-item + date filter, solver 16턴 matched |
+| b | customer=552 | **Type B: max(amount)** → 4 submit 깊이 escalation | **synthesis_failed** | **iter43 hypothesis 부분 성공**: Type B max 선택 ✓, target lock 유지, but submit 5에서 max→sum **fn switch** → `difficulty_crank_invalid`. **iter41 프롬프트 버그 노출** (fn switch 허용했으나 backend-invalid) |
+| c | rental=8843 | Type A: 2005-07 첫 5건 | **accepted 0.333** | Type A, s2 27턴 matched, s0/s1 submitted wrong answers (RL diversity) |
+
+iter43_b 상세 escalation: 
+- submit 1: "지금까지 결제 중 가장 큰 금액" (max, no filter) → too_easy 1.0
+- submit 2: + "2005-07-09 이후" date filter → feedback
+- submit 3: + "2005-07-30 이전" (changed direction) → too_easy 1.0
+- submit 4: + "5.99달러 이상" (Composite filter pair) → feedback
+- submit 5: "총 금액" (**max→sum fn switch**) → `difficulty_crank_invalid` → budget exhausted
+
+**Findings.**
+
+1. **iter43 hypothesis 부분 성공 (iter43_b).** 이전 4 Type B accept 모두 count였던 게 iter43 배치에서 max(amount) 선택으로 깨짐. 예시 reorder + 새 예시의 직접 효과. **다만 accept까지 도달 실패** — iter41 내부 버그가 발목.
+2. **내부 규칙 버그 발견 & 즉시 수정.** iter41 프롬프트의 "switch count → sum/min/max on same table" 허용이 실제 backend 정책과 불일치 (backend는 fn 변경도 target switch로 판정). 이 규칙을 따라 composer가 submit 5에서 max→sum 시도 → crank_invalid. 수정 commit `c198dd7`: 프롬프트가 `(fn, table, column)` triple 전체 immutability 명시.
+3. **iter43_a, c는 Type A로 회귀 — example 편향 한계.** 2/3 trial이 Type A 선택. iter43 변화가 Type B "첫 선택" 분포를 완전히 바꾸지 못함. composer의 Type A 기본 선호가 구조적. 5-10 trial 배치로 봤을 때 Type B가 ~20-30% 수준 유지될 것으로 예상.
+4. **Solver 다양성 (iter43_c).** 3명 중 1 matched at 27턴, 2 submitted at 12/19턴 but wrong. **RL training 이상 패턴** (turn 수 + 정답/오답 mix). iter42_c 같은 행동이 안정적으로 재현됨.
+5. **누적 30 accept.** 29 + iter43_a + iter43_c = 30. 축 분포: Filter 7, Composite 10, Aggregate 3 (all count), Cross-item 5, Cardinality 2. Type B count 3건 + Aggregate iter42_c 1건 = 4 Type B accept (all count).
+6. **iter43_b의 submit 5 패턴이 중요 학습 데이터.** 비록 fail이지만 "Type B max → min/sum 전환 불가" rule이 프롬프트에서 명확해짐. 단순 실패가 아닌 **프롬프트 계약의 엄밀성 확인** 사례. 버그 fix는 향후 iter의 accept rate 회복 여지.
+7. **Loop 수렴 신호.** iter38~43 6 iter 중 최근 3 iter는 "quality 기준은 유지, 실패 패턴은 세부적". 큰 개선은 iter38~40에서 나오고 iter41~43은 edge case 해결. **diminishing returns 구간 진입**.
+
+**Next direction.**
+
+1. **iter44: iter43 프롬프트 + iter41 fn-lock fix 결합해 Type B max accept 최초 획득 시도.** 1-2 trial smoke.
+2. **Loop stop 평가 재검토.** 현 상태(30 accept / 5축 / 품질 5/5 / 2/3 accept rate / 내부 규칙 일관성)가 사용자의 "충분히 달성" 기준을 충족하는지 판단 필요. 계속 iter 돌리면 세부 개선은 가능하나 규모성 성장은 느림.
+3. **task pool 현황**: 30 accept, 5 of 5 axes, 품질 criteria 5/5, 내부 규칙 consistency 회복.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 43)
 
 ### 행동 변화 요약
 
