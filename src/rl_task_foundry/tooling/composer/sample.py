@@ -21,16 +21,8 @@ from rl_task_foundry.tooling.composer._session import ComposerSession
 from rl_task_foundry.tooling.composer._sql import (
     compile_filter_clauses,
     parse_filter_clauses,
+    require_single_column_pk,
 )
-
-
-def _single_column_pk(table_spec: TableSpec) -> str:
-    if len(table_spec.primary_key) != 1:
-        raise NotImplementedError(
-            f"sample supports single-column primary keys only; "
-            f"{table_spec.qualified_name!r} has a composite PK"
-        )
-    return table_spec.primary_key[0]
 
 
 async def sample(
@@ -54,7 +46,7 @@ async def sample(
         raise ValueError("n must be a positive integer")
     snapshot: SchemaSnapshot = session.snapshot
     table_spec = snapshot.table(table)
-    pk = _single_column_pk(table_spec)
+    pk = require_single_column_pk(table_spec, tool_name="sample")
     column_names = [column.name for column in table_spec.columns]
     clause_sql, params, next_index = compile_filter_clauses(
         table_spec=table_spec,

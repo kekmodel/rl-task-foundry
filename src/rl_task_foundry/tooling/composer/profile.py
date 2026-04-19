@@ -23,6 +23,7 @@ from rl_task_foundry.tooling.common.sql import (
 )
 from rl_task_foundry.tooling.composer._session import ComposerSession
 from rl_task_foundry.tooling.composer._sql import (
+    coerce_asyncpg_int,
     compile_filter_clauses,
     parse_filter_clauses,
 )
@@ -105,7 +106,7 @@ async def _profile_table(
             for column in table_spec.columns
         ]
     else:
-        row_count = int(_cast_int(row["row_count"]))
+        row_count = int(coerce_asyncpg_int(row["row_count"]))
         columns_payload = []
         for column in table_spec.columns:
             columns_payload.append(
@@ -113,10 +114,10 @@ async def _profile_table(
                     "name": column.name,
                     "data_type": column.data_type,
                     "distinct_count": int(
-                        _cast_int(row[f"distinct_{column.name}"])
+                        coerce_asyncpg_int(row[f"distinct_{column.name}"])
                     ),
                     "null_count": int(
-                        _cast_int(row[f"null_{column.name}"])
+                        coerce_asyncpg_int(row[f"null_{column.name}"])
                     ),
                 }
             )
@@ -125,13 +126,6 @@ async def _profile_table(
         "row_count": row_count,
         "columns": columns_payload,
     }
-
-
-def _cast_int(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        # asyncpg returns Decimal for SUM(CASE); coerce via str→int.
-        return int(str(value))
-    return value
 
 
 async def _profile_column(
@@ -163,9 +157,9 @@ async def _profile_column(
     min_value: object | None = None
     max_value: object | None = None
     if aggregate_row is not None:
-        row_count = int(_cast_int(aggregate_row["row_count"]))
-        distinct_count = int(_cast_int(aggregate_row["distinct_count"]))
-        null_count = int(_cast_int(aggregate_row["null_count"]))
+        row_count = int(coerce_asyncpg_int(aggregate_row["row_count"]))
+        distinct_count = int(coerce_asyncpg_int(aggregate_row["distinct_count"]))
+        null_count = int(coerce_asyncpg_int(aggregate_row["null_count"]))
         if _supports_min_max(column_spec):
             min_value = aggregate_row["min_value"]
             max_value = aggregate_row["max_value"]
@@ -185,7 +179,7 @@ async def _profile_column(
     )
     top_k_rows = await session.connection.fetch(top_k_sql, *params)
     top_k_payload = [
-        {"value": row["value"], "frequency": int(_cast_int(row["frequency"]))}
+        {"value": row["value"], "frequency": int(coerce_asyncpg_int(row["frequency"]))}
         for row in top_k_rows
     ]
 

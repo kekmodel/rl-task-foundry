@@ -28,15 +28,10 @@ from rl_task_foundry.tooling.common.sql import (
     readonly_select,
 )
 from rl_task_foundry.tooling.composer._session import ComposerSession
-
-
-def _single_column_pk(table_spec: TableSpec) -> str:
-    if len(table_spec.primary_key) != 1:
-        raise NotImplementedError(
-            f"neighborhood supports single-column primary keys only; "
-            f"{table_spec.qualified_name!r} has a composite PK"
-        )
-    return table_spec.primary_key[0]
+from rl_task_foundry.tooling.composer._sql import (
+    coerce_asyncpg_int,
+    require_single_column_pk,
+)
 
 
 async def _fetch_anchor_attributes(
@@ -110,7 +105,7 @@ async def _forward_edge_payload(
     total_value = await session.connection.fetchval(count_sql, source_value)
     return {
         **base_payload,
-        "total_count": _as_int(total_value),
+        "total_count": coerce_asyncpg_int(total_value),
         "sample_ids": sample_ids,
     }
 
@@ -157,15 +152,9 @@ async def _reverse_edge_payload(
     total_value = await session.connection.fetchval(count_sql, anchor_value)
     return {
         **base_payload,
-        "total_count": _as_int(total_value),
+        "total_count": coerce_asyncpg_int(total_value),
         "sample_ids": sample_ids,
     }
-
-
-def _as_int(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return int(str(value))
-    return value
 
 
 async def neighborhood(
@@ -189,7 +178,7 @@ async def neighborhood(
         raise ValueError("max_per_edge must be a positive integer")
     snapshot = session.snapshot
     table_spec = snapshot.table(table)
-    pk = _single_column_pk(table_spec)
+    pk = require_single_column_pk(table_spec, tool_name="neighborhood")
     anchor_attrs = await _fetch_anchor_attributes(
         session, table_spec, pk, row_id
     )

@@ -135,10 +135,40 @@ def compile_filter_clauses(
     return " AND ".join(parts), tuple(params), next_index
 
 
+def require_single_column_pk(table_spec: TableSpec, *, tool_name: str) -> str:
+    """Return the single PK column name; raise NotImplementedError on composite.
+
+    The composer primitives (`sample`, `neighborhood`) currently assume a
+    one-column primary key for anchor resolution. This helper centralizes
+    that assertion with a caller-specific error message.
+    """
+    if len(table_spec.primary_key) != 1:
+        raise NotImplementedError(
+            f"{tool_name} supports single-column primary keys only; "
+            f"{table_spec.qualified_name!r} has a composite PK"
+        )
+    return table_spec.primary_key[0]
+
+
+def coerce_asyncpg_int(value: object) -> int:
+    """Coerce an asyncpg-returned scalar to int.
+
+    asyncpg returns Decimal for numeric aggregates like SUM(CASE ...)
+    and COUNT DISTINCT; calling int() on Decimal works but is verbose.
+    This helper also accepts already-int values unchanged and rejects
+    bool (which is an int subclass) as schema-violating.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return int(str(value))
+    return value
+
+
 __all__ = [
     "FILTER_OPS",
     "FilterClause",
     "array_cast_for",
+    "coerce_asyncpg_int",
     "compile_filter_clauses",
     "parse_filter_clauses",
+    "require_single_column_pk",
 ]
