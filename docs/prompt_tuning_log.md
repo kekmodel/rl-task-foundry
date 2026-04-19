@@ -1395,7 +1395,39 @@ iter40_c 문제: Type B escalation에서 **aggregate target을 바꿈** (rental 
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 41)
+### Iteration 42 — 2026-04-20 (M:M bridge anchor 회피 — film→actor 제거, film→inventory→rental 경로 명시, 3-trial 배치)
+
+**Hypothesis.** iter32_c + iter40_b 실패의 공통점: film 앵커 + film_actor M:M bridge 경유. bridge는 N이 작아(5-10 actors/film) escalation 불가 → composer dead-end. Type A 예시에서 `film → actor (via film_actor)`를 `film → rental (via inventory)`로 교체 + "Avoid M:M bridge paths for Type A" 명시. Type B는 그대로(film→actor_count scalar는 유효).
+
+**Change.** `src/rl_task_foundry/synthesis/prompts.py` Type A 예시의 film 항목 재작성 (via inventory→rental, rental_date+return_date shape, N=5, 2005-07 date filter) + 경고 3줄 추가. commit `eafd60d`.
+
+**Trial.** 3-trial 배치.
+
+| suffix | anchor | task | submits | matched turns | 결과 | 주요 관찰 |
+|---|---|---|---|---|---|---|
+| a | **film**=826 (SPEED SUIT) | Type A: film→inventory→rental, date filter + staff filter | 2 | 16.7 → 18 | **accepted 0.333** | **bridge 회피 성공** — film 앵커 직접 accept |
+| b | payment=8367 | Type B: count payment >= $5 | 1 | 0 (solvers unrecorded) | **synthesis_failed (too_hard submit 1)** | profile rule만으로는 all-filter 조합의 0-row risk 방어 불충분 |
+| c | rental=1450 | Type B: count rental + Jon Stephens staff | 1 | [8, 22] (1 wrong @ 20) | **accepted 0.667** | 매우 효율적(8 tool call), Voice + 2/3 matched + 1/3 wrong 다양성 |
+
+**Findings.**
+
+1. **M:M bridge 회피 성공 (iter42_a).** film_id=826(SPEED SUIT) → inventory → rental 경로로 Type A accept. 이전 film 앵커는 iter32_c/40_b에서 dead-end이었으나 iter42 프롬프트 변경으로 film이 이제 **accept 가능한 앵커 클래스**로 승격. 예시 한 줄 교체만으로 경로 선택을 구조적으로 바꾼 사례.
+2. **Voice: "영화 'SPEED SUIT'" + "Mike Hillyer 직원" + 2005-07 date** — iter32 voice 가드 유지 + iter42 route 변경의 결합.
+3. **iter42_b 실패는 profile 한계 노출.** Type B "payment >= $5" 단독 필터가 특정 고객에게 0 rows 생산. profile이 distinct 값은 알려주지만 **join된 후의 cardinality는 미리 예측 불가**. 해결 후보: (a) Type B draft 전 `query` dry-run으로 count 미리 확인, (b) profile이 percentile 분포도 보여주게 확장. 프롬프트 선에선 한계.
+4. **iter42_c의 solver 다양성.** 3명 중 s0=8턴 matched (간단하게 풀어냄), s1=22턴 matched (오래 걸려 풀어냄), s2=20턴 submitted but wrong answer. 이 3-way 분포는 **RL training에 이상적 signal** — matched는 positive reward, wrong은 negative reward, no MaxTurns/no TimeOut.
+5. **Accept rate 2/3 유지**, quality peak 갱신 (film 앵커 포함까지). 29 accept 누적. 품질 기준 5/5 지속.
+6. **iter42_b의 synthesis_failed 패턴은 현재 상태의 marginal failure mode.** 5-10% 수준. 완전 제거는 프롬프트로 어렵고 infra 수준 개입(dry-run, cardinality 사전체크) 필요. 현재 수준에서 감수 가능.
+
+**Next direction.**
+
+1. **Loop 안정화 완료 평가.** iter38~42 5 iter 동안 accept rate 평균 60%, quality criteria 5/5 지속, axis 분포 Filter 7/Composite 10/Aggregate 3/Cross-item 5/Cardinality 2 = 27 primary + 2 overflow = 29 accepts. 품질 기준 "충분히 달성" 여부는 사용자 판단.
+2. **iter43 후보 A: Task pool 확장 (5-10 trial large batch).** 프롬프트 안정 상태에서 대량 생성으로 dataset 성장. 현재 29 → 40+ 예상. RL training에 근접한 규모.
+3. **iter43 후보 B: Type B 서브타입 다양화.** 현재 Type B accept 3개 모두 `count`. max/min/sum/avg는 0. 프롬프트 Type B 예시에 `max(payment_date)`, `sum(amount)` 등 명시로 유도.
+4. **task pool 현황**: 29 accept, 5 axes, 품질 5/5. 프롬프트 수렴 단계로 판단.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 42)
 
 ### 행동 변화 요약
 
