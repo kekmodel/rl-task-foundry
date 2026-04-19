@@ -977,7 +977,38 @@ iter30_c attempt path: (1) rental_date ASC + take 3 → 3/3 too_easy → (2) + `
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 31)
+### Iteration 32 — 2026-04-19 (voice guard for numeric-ID filters, 1-sample 스모크)
+
+**Hypothesis.** iter25_c(inventory_id) → iter29_a(rental_id) → iter30_c(staff_id=1 → "직원 1 번")로 3회 재발한 voice 회귀를 프롬프트 수준에서 차단. 기존 voice rule은 anchor 번역만 커버 — filter 술어 안의 numeric ID는 사각지대. "Numeric-ID filter values must be resolved to the referent table's natural name/title via a lookup tool call BEFORE phrasing the filter in user voice" 룰 추가로 회귀 차단을 관측.
+
+**Change.** `src/rl_task_foundry/synthesis/prompts.py` voice 섹션의 anchor-translation 문장 다음에 filter ID 값 가드 삽입. 예시 3쌍: `'직원 1 번' → 'Mike Hillyer 직원'`, `'film 473번' → 'Blade Runner'`, `'카테고리 6번' → '액션 영화'`. commit `c46269d`.
+
+**Trial.** `artifacts/tmp_configs/iter32_voice_guard.yaml` 1-sample 스모크(smoke_iter32_a). **accepted.** pass_rate=1/3=0.333, CI [0.017, 0.865], task_id `task_Customer rental history from address_689452ac123e1a45`.
+
+| attempt | anchor | task type | label | axis | pass_rate | reject |
+|---|---|---|---|---|---|---|
+| 1 | address=539 | Type A | `[{rental_date, return_date}]` × 3, `sort_key=[rental_date ASC]` | **Cross-item rule** + take 3 | **1/3 = 0.333** ✓ | **accepted (submit 1)** |
+
+iter32_a question: "제 대여 기록 중 대여일이 가장 빠른 순서로 3 건을 보여주세요" — 1인칭 customer ask, 자연스러움, 필터 전무(ordering만). tool call 순서: `profile → sample × 3 → query`. staff / film / category 등 lookup 없음 — ID 필터가 question에 포함되지 않았으므로 voice guard의 **발동 대상 자체가 없음**.
+
+**Findings.**
+
+1. **Inconclusive smoke for voice guard ✗.** 핵심 가설(ID filter 번역 의무화) 검증이 **실행되지 않음**. composer가 필터 없이 "ordering + take 3"만으로 submit 1에서 band 진입, staff_id/film_id 등 ID 필터를 쓰지 않음. 가드는 코드상 존재하지만 이 trial에서 활성화된 적 없어 효과/부작용 모두 관측 불가.
+2. **부수효과 가설: 가드가 ID-filter 사용을 억제했을 가능성.** iter30_b, c 둘 다 staff_id 필터로 escalate했는데 iter32_a는 필터 전무로 직행. 가드가 "ID filter를 쓰려면 lookup 한 번 더 필요"를 암묵적으로 비용화해서 composer가 ID 필터를 회피했을 수 있음. N=1이라 확증 불가 — 추가 trial 필요. 만약 이 패턴 계속되면 태스크 단순화라는 **역효과**.
+3. **15번째 accept, Cross-item rule axis 3번째 관측.** 누적 15 accept. axis 분포: Filter 7, Composite 3, Aggregate 1, **Cross-item rule 3**, Cardinality 0. Cross-item은 이제 2순위 안정화. iter30_b, c, iter32_a 모두 `rental_date ASC + take 3` — ordering 패턴이 composer의 Type A 기본 레퍼토리로 편입됨.
+4. **Submit 1 accept의 드문 케이스.** iter18~31 대부분 2~3 attempt로 band 진입, iter32_a는 1번에 도달. (a) "Cross-item + take 3"의 평균 난이도가 band 하단과 맞음, (b) address 앵커가 customer 추론 체인을 단순화, 두 요인 복합. 이상치는 아님.
+5. **pass_rate 하단 클러스터링 심화.** iter30_b(0.333), c(0.333), 32_a(0.333) 3연속 하한값. 최근 accept 4/4 = 하한 경계. "minimum escalation" 구조화. 강도 힌트는 여전히 deferred.
+
+**Next direction.**
+
+1. **iter32 배치 확장 (1-2 trial 추가)** — voice guard가 ID-filter 태스크에서 실제 발동하는 장면을 봐야 가설 검증 가능. anchor 분포가 달라지면 staff_id/film_id/category_id 필터 태스크가 등장할 확률 있음. 만약 3-trial 내내 ID filter 0이면 **가드의 부수효과(가설 2) 실존 신호** — 프롬프트 완화(lookup을 "권장"으로 낮추거나 예시 축소) 고려.
+2. **iter33 후보: Cardinality 축 개방** — 마지막 0축. voice guard 효과/부작용 확정 후 진행.
+3. **pass_rate 중간 겨냥 힌트**는 관찰만.
+4. **task pool 현황**: 15 accept, 4 of 5 axes. Cardinality만 남음.
+
+---
+
+## Cross-Iteration Summary (iter 1-7, extended through iter 32)
 
 ### 행동 변화 요약
 
