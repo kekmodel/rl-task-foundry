@@ -14,11 +14,7 @@ without the SDK present.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
-
-import asyncpg
 
 from rl_task_foundry.tooling.common.edges import available_edges
 from rl_task_foundry.tooling.common.payload import (
@@ -30,6 +26,12 @@ from rl_task_foundry.tooling.common.payload import (
 )
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
 from rl_task_foundry.tooling.common.sql import coerce_scalar
+from rl_task_foundry.tooling.common.tool_runtime import (
+    Handler,
+    Invoker,
+    json_dumps_tool as _json_dumps,
+    wrap_tool_handler as _with_error_handling,
+)
 from rl_task_foundry.tooling.composer._session import ComposerSession
 from rl_task_foundry.tooling.composer._sql import FILTER_OPS
 from rl_task_foundry.tooling.composer.neighborhood import neighborhood
@@ -40,10 +42,6 @@ from rl_task_foundry.tooling.composer.schema_map import schema_map
 
 if TYPE_CHECKING:
     from agents import FunctionTool
-
-
-Handler = Callable[[JsonObject], Awaitable[JsonObject]]
-Invoker = Callable[[object, str], Awaitable[str]]
 
 
 _AGGREGATE_FNS = ("avg", "count", "max", "min", "sum")
@@ -147,50 +145,6 @@ def _coerce_query_spec(
         )
         rebuilt.append(rewritten)
     return {**spec, "filter": rebuilt}
-
-
-def _json_dumps(payload: object) -> str:
-    return json.dumps(payload, default=str, ensure_ascii=False)
-
-
-def _with_error_handling(handler: Handler) -> Invoker:
-    async def invoke(_tool_context: object, input_json: str) -> str:
-        try:
-            parsed_raw: object = json.loads(input_json) if input_json else {}
-        except json.JSONDecodeError as exc:
-            return _json_dumps(
-                {
-                    "error": f"invalid JSON input: {exc}",
-                    "error_type": "JSONDecodeError",
-                }
-            )
-        if not isinstance(parsed_raw, dict):
-            return _json_dumps(
-                {
-                    "error": "tool input must be a JSON object",
-                    "error_type": "TypeError",
-                }
-            )
-        parsed: JsonObject = {
-            str(key): value for key, value in parsed_raw.items()
-        }
-        try:
-            result = await handler(parsed)
-        except (
-            KeyError,
-            ValueError,
-            TypeError,
-            LookupError,
-            RuntimeError,
-            NotImplementedError,
-            asyncpg.exceptions.PostgresError,
-        ) as exc:
-            return _json_dumps(
-                {"error": str(exc), "error_type": type(exc).__name__}
-            )
-        return _json_dumps(result)
-
-    return invoke
 
 
 _VALUE_ANY_OF = [

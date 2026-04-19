@@ -13,11 +13,7 @@ without the SDK present (mirrors `synthesis.submit_draft_tool`).
 
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
-
-import asyncpg
 
 from rl_task_foundry.tooling.atomic.calculus import (
     AtomicSession,
@@ -52,13 +48,15 @@ from rl_task_foundry.tooling.common.payload import (
 )
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
 from rl_task_foundry.tooling.common.sql import coerce_scalar
+from rl_task_foundry.tooling.common.tool_runtime import (
+    Handler,
+    Invoker,
+    json_dumps_tool as _json_dumps,
+    wrap_tool_handler as _with_error_handling,
+)
 
 if TYPE_CHECKING:
     from agents import FunctionTool
-
-
-Handler = Callable[[JsonObject], Awaitable[JsonObject]]
-Invoker = Callable[[object, str], Awaitable[str]]
 
 
 def _all_table_names(snapshot: SchemaSnapshot) -> list[str]:
@@ -103,52 +101,9 @@ _VALUE_ANY_OF: list[JsonObject] = [
 ]
 
 
-def _json_dumps(payload: object) -> str:
-    return json.dumps(payload, default=str, ensure_ascii=False)
-
-
 def _cursor_payload(session: AtomicSession, cursor_id: CursorId) -> JsonObject:
     plan = session.store.resolve(cursor_id)
     return {"cursor_id": str(cursor_id), "target_table": plan.target_table}
-
-
-def _with_error_handling(handler: Handler) -> Invoker:
-    async def invoke(_tool_context: object, input_json: str) -> str:
-        try:
-            parsed_raw: object = json.loads(input_json) if input_json else {}
-        except json.JSONDecodeError as exc:
-            return _json_dumps(
-                {
-                    "error": f"invalid JSON input: {exc}",
-                    "error_type": "JSONDecodeError",
-                }
-            )
-        if not isinstance(parsed_raw, dict):
-            return _json_dumps(
-                {
-                    "error": "tool input must be a JSON object",
-                    "error_type": "TypeError",
-                }
-            )
-        parsed: JsonObject = {
-            str(key): value for key, value in parsed_raw.items()
-        }
-        try:
-            result = await handler(parsed)
-        except (
-            KeyError,
-            ValueError,
-            TypeError,
-            LookupError,
-            RuntimeError,
-            asyncpg.exceptions.PostgresError,
-        ) as exc:
-            return _json_dumps(
-                {"error": str(exc), "error_type": type(exc).__name__}
-            )
-        return _json_dumps(result)
-
-    return invoke
 
 
 # ---------- individual tool builders ----------
