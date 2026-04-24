@@ -1550,7 +1550,76 @@ iter45_a 상세 flow:
 
 ---
 
-## Cross-Iteration Summary (iter 1-7, extended through iter 45 — **최종 버전**)
+### Iteration 46_b — 2026-04-25 (throttled opencode_zen 재시도, 사용자 중단)
+
+**Hypothesis.** iter46_a의 quota miss는 transient rate-limit이라 가정하고 SDK retry/concurrency 보강으로 통과 가능 검증. opencode_zen `max_concurrency: 16→8`, `max_retries: default 2→5`, `timeout_s: 120→180`으로 hardening해서 동일 1-sample smoke 재실행.
+
+**Change.** `rl_task_foundry.postgres_air.yaml`의 `providers.opencode_zen` 블록만 수정. prompt/code 변경 없음.
+
+**Trial.** iter46_b 1-sample. 24분 진행 중 사용자 중단 (배경: 너무 오래 걸림).
+
+| 단계 | 시각 | 결과 |
+|---|---|---|
+| composer (5 tool calls) | 00:39-00:43 (~4min) | ✓ task submitted (`task_account bookings with price filter_*`) |
+| solver_2 | 137s | RateLimitError |
+| solver_1 | 462s (13 turns) | **completed, submitted** |
+| solver_0 | 497s | MaxTurnsExceeded |
+| solver_3, 4 | 161s 각 | RateLimitError |
+| solver_5 | 464s | RateLimitError |
+| solver_6 | 179s | RateLimitError |
+| solver_7~29 | — | 미실행 (사용자 중단) |
+
+**Findings.**
+
+1. **example pack 첫 양성 신호 ✓✓**: composer가 anchor=account=577127 → query `booking WHERE account_id=577127` (3 rows: `{booking_id:188522, booking_ref:"HVZE12", price:1723}` 등) → query `booking WHERE account_id=577127 AND price>1000` (escalated, 3 rows) submit. **이 chain이 example pack의 Type A 템플릿 #1 ("anchor=account → booking + filter on price")과 정확히 일치**. iter46 hypothesis 1차 검증 — 동적 local pack이 sakila 시스템 prompt를 압도해서 postgres_air 패턴 채택. anchor와 데이터 둘 다 실 postgres_air ("MCLEAN577127@magic.email" 같은 실 booking row).
+2. **`max_retries=5` 설정이 hard quota에선 역효과**: opencode_zen의 `insufficient_quota`는 transient 아니라 하드 cap이라 SDK가 retry budget(0.5+1+2+4+8s = ~15s) 다 소진하고 같은 429 받음. 각 solver가 ~3분씩 낭비 중. iter47부터는 max_retries=2로 환원, transient 보호만 유지.
+3. **opencode_zen aggregator 구조의 본질적 위험성**: 사용자 wallet에 $16.45 남았는데도 `insufficient_quota` 발생 → opencode_zen이 자체 Alibaba 계정의 token budget 공유 모델임을 시사. 사용자 결제와 별개의 upstream cap이 본인 trial을 막을 수 있음. 장기 트랙은 다른 provider 또는 Alibaba direct 권장.
+4. **bug fix는 부분 검증**: 5 RateLimitError + 1 matched + 1 MaxTurns 분포 — 이전 같으면 5/7로 false too_hard였겠지만 fix 적용 후 RateLimit 5개 분모 제외. 단 solver_phase가 끝까지 못 가서 최종 quality_gate 결과 직접 관측은 미완.
+
+**Next direction.** OpenRouter로 갈아타고 iter46_c 발사. opencode_zen은 본 트랙에서 일시 폐기.
+
+---
+
+### Iteration 46_c — 2026-04-25 (OpenRouter qwen3.5-plus-02-15, 사용자 중단)
+
+**Hypothesis.** opencode_zen의 hard quota를 회피하기 위해 동일 모델(qwen3.5-plus 02-15)을 OpenRouter 경유로 호출. 같은 weight, per-customer wallet quota → 다른 사용자 burst 영향 없음. iter46_b의 composer 성공이 재현되는지 + solver phase 끝까지 가서 bug fix 최종 검증.
+
+**Change.** `rl_task_foundry.postgres_air.yaml`의 `models.composer`와 30개 `models.solvers` 전부 `provider: opencode_zen, model: qwen3.5-plus` → `provider: openrouter, model: qwen/qwen3.5-plus-02-15`. `providers.openrouter` 블록도 hardening (`max_concurrency: 16→8`, `timeout_s: 120→180`, `max_retries: 3`).
+
+**Trial.** iter46_c 1-sample. **5시간 진행 후 사용자 중단**. 30 solver는 모두 완료, composer phase는 두 번 실행됨 (1차 01:15-01:19, 2차 05:58-05:59 — 사이에 4시간 공백).
+
+Composer 11 tool calls:
+- 01:15-01:19: schema_map(account) → neighborhood(account 125813) → profile(booking.price WHERE account_id=125813) → sample(booking n=5 WHERE account_id=125813) → query(price≥500) → query(aggregate sum on price≥500) → query(aggregate sum on price all) → query(price≥1000)
+- 05:58-05:59: profile(booking.update_ts) → query(price≥1000+update_ts filter) → query(final)
+
+Solver 30/30 완료 결과:
+
+| 결과 | 수 | 비고 |
+|---|---|---|
+| ✓ matched (status=completed) | **3** (s22 13turn, s27 12turn, s29 11turn) | 실제 답 제출 일치 |
+| ✗ MaxTurnsExceeded (status=failed) | 9 | 16-turn 한도 도달 |
+| ✗ UserError (status=failed) | 18 | SDK-level error (RateLimit 아님) |
+| ✗ RateLimitError | **0** | OpenRouter 안정성 ✓ |
+
+**Findings.**
+
+1. **example pack 가설 재검증 ✓**: iter46_b와 같은 pattern (anchor=account → booking + price filter + sum aggregate). Type B `sum(price) where price≥X` shape 채택 — iter43의 Type B 다변화(count/max/min/sum) 효과까지 cross-DB 이전. 우연 아님.
+2. **OpenRouter 안정성 입증 ✓**: 30 solver 발사에서 RateLimitError 0건. opencode_zen aggregator 구조 vs OpenRouter per-customer wallet의 차이가 명확. 향후 iter는 OpenRouter 디폴트 권장.
+3. **🚨 Bug fix v1 설계 결함 노출 (중요)**: `solver_result.status != "failed"` 한 조건 필터가 너무 coarse. `status="failed"`는 인프라 실패(RateLimit/Timeout/BadRequest)와 capability 실패(MaxTurnsExceeded/UserError) 둘 다에 set됨. iter46_c 결과 적용 시:
+   - 현재 fix: evaluable=3 (matched만), pass_rate=3/3=1.0 → **false too_easy**
+   - 의도된 거동: evaluable=12 (matched+MaxTurns만), pass_rate=3/12=0.25 → in band
+   - UserError 18개는 SDK 단의 일과성 에러로 판단되어 제외 가능, MaxTurns 9개는 capability 실패로 분모 포함 필요. iter47에서 termination_reason 기반 세분 필터 (`fix v2`) 필요.
+4. **mysterious 4-hour gap (01:19 → 05:53)**: composer phase 1과 2 사이에 4시간 공백. 가능 원인: (a) OpenRouter thinking-mode가 매우 긴 reasoning 응답 생성 (qwen3.5-plus는 thinking model), (b) SDK retry 무한 루프, (c) network 일시 중단. trial_events.jsonl에 그 사이 이벤트 0개 — composer LLM 호출이 실제로 그렇게 오래 걸렸거나 SDK가 silent retry 중. iter47 발사 전 OpenRouter 로그/usage 확인 필수.
+5. **Trial 시간 한도 부재**: 5시간 trial은 비효율적. `max_solver_runs=30` ceiling이 지나치게 큼 — calibration이 batch_size=3로 점진 진행하되 too_easy/too_hard 결정 시 조기 종료해야 했는데 30개 다 돌았다는 건 calibration_decision이 fix v1의 잘못된 분모로 "uncertain" 판정 유지한 결과 가능성.
+
+**Next direction.**
+
+1. **iter47 발사 전 필수 작업 3가지**:
+   - (a) **bug fix v2**: `_evaluable_runs()`에 termination_reason 기반 분기 추가. 인프라 실패 그룹(`RateLimitError`, `APITimeoutError`, `BadRequestError`, `ConnectionError`, `InternalServerError`, `UserError` 등 SDK 일과성)만 분모 제외. capability 실패(`MaxTurnsExceeded`, wrong answer)는 분모 포함. 회귀 테스트도 보강.
+   - (b) **4-hour gap 조사**: iter46_c trial_events.jsonl 시간 분석 + OpenRouter dashboard usage 확인. 만약 thinking-mode 무한 루프면 max_completion_tokens 강제 cap 필요. SDK retry 무한이면 client config 점검.
+   - (c) **trial 시간 가드**: `max_solver_runs: 30→10`으로 줄이고, `solver_runtime.max_turns: 16→24`로 올려서 MaxTurns 발생률 자체를 감소. 이 둘은 trade-off — 양쪽 다 줄여 평균 trial 시간 ~10분 목표.
+2. **iter47 본 실험 (위 3가지 적용 후)**: 1-sample smoke로 fix v2 + reduced solver count 동작 확인. 그 후 3-trial 배치.
+3. **provider 결정**: OpenRouter를 본 트랙으로 채택. opencode_zen은 quota 회복 시 비교 trial 1회만 (cleanness 검증용).
 
 ### 행동 변화 요약
 
