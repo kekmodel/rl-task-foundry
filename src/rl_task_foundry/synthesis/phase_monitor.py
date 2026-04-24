@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from rl_task_foundry.synthesis.jsonl_logger import JsonlFileSink
 
@@ -24,10 +23,10 @@ class PipelinePhaseMonitorRecord:
     timestamp: str
     phase: str
     status: str
-    expected_contract: dict[str, Any]
-    actual_data: dict[str, Any]
-    checks: dict[str, Any]
-    diagnostics: dict[str, Any]
+    expected_contract: dict[str, object]
+    actual_data: dict[str, object]
+    checks: dict[str, object]
+    diagnostics: dict[str, object]
 
 
 @dataclass(slots=True)
@@ -36,7 +35,7 @@ class PipelinePhaseMonitorLogger:
     flow_kind: str
     flow_id: str
     mirror_phase_monitor_log_path: Path | None = None
-    event_logger: Any = None
+    event_logger: object | None = None
     _seq: int = field(default=0, init=False, repr=False)
     _primary_sink: JsonlFileSink = field(init=False, repr=False)
     _mirror_sink: JsonlFileSink | None = field(default=None, init=False, repr=False)
@@ -54,10 +53,10 @@ class PipelinePhaseMonitorLogger:
         *,
         phase: str,
         status: str,
-        expected_contract: dict[str, Any] | None = None,
-        actual_data: dict[str, Any] | None = None,
-        checks: dict[str, Any] | None = None,
-        diagnostics: dict[str, Any] | None = None,
+        expected_contract: dict[str, object] | None = None,
+        actual_data: dict[str, object] | None = None,
+        checks: dict[str, object] | None = None,
+        diagnostics: dict[str, object] | None = None,
     ) -> PipelinePhaseMonitorRecord:
         self._seq += 1
         record = PipelinePhaseMonitorRecord(

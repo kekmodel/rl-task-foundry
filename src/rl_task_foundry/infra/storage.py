@@ -5,8 +5,6 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 
 SCHEMA_STATEMENTS = (
@@ -144,7 +142,7 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             raise
 
 
-def _json_payload(payload: dict[str, Any]) -> str:
+def _json_payload(payload: dict[str, object]) -> str:
     return canonical_json(payload, default=str)
 
 
@@ -170,7 +168,7 @@ def record_task(
     run_id: str,
     task_id: str,
     status: str,
-    payload: dict[str, Any],
+    payload: dict[str, object],
 ) -> None:
     conn.execute(
         """
@@ -187,7 +185,7 @@ def record_verification_result(
     run_id: str,
     task_id: str,
     solver_id: str,
-    payload: dict[str, Any],
+    payload: dict[str, object],
 ) -> None:
     conn.execute(
         """
@@ -203,7 +201,7 @@ def record_accepted_example(
     *,
     run_id: str,
     task_id: str,
-    payload: dict[str, Any],
+    payload: dict[str, object],
 ) -> None:
     conn.execute(
         """
@@ -219,7 +217,7 @@ def record_event(
     *,
     run_id: str,
     event_type: str,
-    payload: dict[str, Any],
+    payload: dict[str, object],
 ) -> None:
     conn.execute(
         """
@@ -234,7 +232,7 @@ def record_budget_reservation(
     conn: sqlite3.Connection,
     *,
     reservation_id: str,
-    payload: dict[str, Any],
+    payload: dict[str, object],
 ) -> None:
     conn.execute(
         """
