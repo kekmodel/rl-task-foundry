@@ -96,6 +96,7 @@ class _SynthesisBackendProtocol(Protocol):
         tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
         data_profile: DataProfile | None = None,
+        examples_pack: object | None = None,
         max_turns: int,
     ) -> SynthesisConversationResult: ...
 
@@ -786,6 +787,7 @@ class SynthesisAgentRuntime:
                     max_turns=self.config.synthesis.runtime.max_turns,
                     anchor_hint=anchor_hint,
                     data_profile=data_profile,
+                    examples_pack=self.config.domain.examples_pack,
                 )
             except Exception as exc:  # pragma: no cover
                 breaker.record_failure()

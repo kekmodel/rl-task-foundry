@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
@@ -60,12 +60,12 @@ class SynthesisConversationResult:
 def _build_agent(
     sdk: SimpleNamespace,
     *,
-    model: Any,
+    model: object,
     model_name: str,
     tools: list[object],
-    tool_use_behavior: Any,
+    tool_use_behavior: object,
     runtime_config: SynthesisRuntimeConfig,
-) -> Any:
+) -> object:
     return sdk.Agent(
         name="synthesis",
         instructions=build_synthesis_agent_instructions(runtime_config),
@@ -96,8 +96,8 @@ class OpenAIAgentsSynthesisBackend:
     provider_config: ProviderConfig
     runtime_config: SynthesisRuntimeConfig
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
-    _model: Any | None = field(default=None, init=False, repr=False)
-    _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], Any]] = {}
+    _model: object | None = field(default=None, init=False, repr=False)
+    _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], object]] = {}
 
     @property
     def provider_name(self) -> str:
@@ -116,7 +116,7 @@ class OpenAIAgentsSynthesisBackend:
             self._sdk = _shared_load_sdk_components(include_tools_to_final_output=True)
         return self._sdk
 
-    def _build_model(self, sdk: SimpleNamespace) -> Any:
+    def _build_model(self, sdk: SimpleNamespace) -> object:
         if self._model is not None:
             return self._model
         if self.provider_config.type not in {"openai", "openai_compatible"}:
@@ -160,10 +160,10 @@ class OpenAIAgentsSynthesisBackend:
         self,
         sdk: SimpleNamespace,
         conversation: SynthesisConversation,
-    ) -> Any:
+    ) -> object:
         controller = conversation.controller
 
-        def _finalize_on_submit(_context_wrapper: Any, tool_results: list[Any]) -> Any:
+        def _finalize_on_submit(_context_wrapper: object, tool_results: list[object]) -> object:
             for tool_result in tool_results:
                 if getattr(getattr(tool_result, "tool", None), "name", None) != "submit_draft":
                     continue
@@ -198,6 +198,7 @@ class OpenAIAgentsSynthesisBackend:
         max_turns: int,
         anchor_hint: dict[str, object] | None = None,
         data_profile: DataProfile | None = None,
+        examples_pack: object | None = None,
     ) -> SynthesisConversationResult:
         sdk = self._sdk_components()
         if hasattr(sdk, "set_tracing_disabled"):
@@ -224,6 +225,7 @@ class OpenAIAgentsSynthesisBackend:
             runtime_config=self.runtime_config,
             anchor_hint=anchor_hint,
             data_profile=data_profile,
+            examples_pack=examples_pack,
         )
         started_at = perf_counter()
         try:

@@ -62,6 +62,7 @@ class ScriptedComposerBackend:
         tool_surface_summary: Mapping[str, object],
         anchor_hint: Mapping[str, object] | None = None,
         data_profile: DataProfile | None = None,
+        examples_pack: object | None = None,
         max_turns: int,
     ) -> SynthesisConversationResult:
         del (
@@ -73,6 +74,7 @@ class ScriptedComposerBackend:
             tool_surface_summary,
             anchor_hint,
             data_profile,
+            examples_pack,
         )
         self._last_max_turns = max_turns
         controller = conversation.controller

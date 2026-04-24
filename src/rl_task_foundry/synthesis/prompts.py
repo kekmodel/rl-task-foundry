@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as _json
 
-from rl_task_foundry.config.models import SynthesisRuntimeConfig
+from rl_task_foundry.config.models import ExamplePack, SynthesisRuntimeConfig
 from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.synthesis.contracts import topic_phrase
 from rl_task_foundry.synthesis.turn_budget import build_tool_call_budget_instruction
@@ -457,6 +457,32 @@ def _render_solver_primitive_lines(
     return lines
 
 
+def _render_examples_pack(pack: ExamplePack) -> str | None:
+    has_examples = pack.type_a_examples or pack.type_b_examples or pack.pitfalls
+    if not has_examples:
+        return None
+    lines: list[str] = [
+        f"# Local Examples — {pack.label}",
+        (
+            "These examples reflect the current DB's structure and observed "
+            "cardinality. Use them as the primary template; the worked "
+            "examples in the system instruction are reference patterns from "
+            "a different DB and may not match this DB's tables, fanout, or "
+            "natural names. When the two conflict, prefer these local examples."
+        ),
+    ]
+    if pack.type_a_examples:
+        lines.append("\n**Type A (list of N child records) — local templates:**")
+        lines.extend(f"- {entry}" for entry in pack.type_a_examples)
+    if pack.type_b_examples:
+        lines.append("\n**Type B (single scalar over an FK-joined set) — local templates:**")
+        lines.extend(f"- {entry}" for entry in pack.type_b_examples)
+    if pack.pitfalls:
+        lines.append("\n**Local structural pitfalls to avoid:**")
+        lines.extend(f"- {entry}" for entry in pack.pitfalls)
+    return "\n".join(lines)
+
+
 def build_synthesis_input(
     *,
     domain_name: str,
@@ -468,6 +494,7 @@ def build_synthesis_input(
     runtime_config: SynthesisRuntimeConfig,
     anchor_hint: dict[str, object] | None = None,
     data_profile: DataProfile | None = None,
+    examples_pack: ExamplePack | None = None,
 ) -> str:
     sections: list[str] = []
 
@@ -617,6 +644,12 @@ def build_synthesis_input(
             "# Schema Topology\n"
             + "\n".join(topology_lines)
         )
+
+    # ── Local Examples (per-DB pack) ──
+    if examples_pack is not None:
+        rendered_pack = _render_examples_pack(examples_pack)
+        if rendered_pack is not None:
+            sections.append(rendered_pack)
 
     # ── Data Distributions ──
     if data_profile is not None:

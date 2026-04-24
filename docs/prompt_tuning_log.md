@@ -1510,6 +1510,46 @@ iter45_a 상세 flow:
 
 ---
 
+### Iteration 46 — 2026-04-24 (cross-DB robustness 시도 1: postgres_air + 동적 example pack 주입)
+
+**Hypothesis.** iter45에서 sakila 단일 DB의 prompt가 수렴(31 accept, 5 axes, 품질 5/5, 내부 규칙 일관). robustness를 두 번째 DB로 검증하려 postgres_air(항공 예약, 30M boarding_pass, 21M passenger, 5.9M booking, 692 airport)를 도입했더니 smoke03만 24/24 matched로 깨끗하게 통과하고 seq01~05 5회 모두 다른 모드로 실패. 로그 포렌식 결과 **두 가지 독립 문제** 식별: (a) `solver_orchestrator.py:206-226`이 `RateLimitError` 같은 인프라 예외로 죽은 solver run을 reward 계산을 거쳐 UNMATCHED로 분모에 포함시켜 false too_hard 유발 (실증: seq01에서 24/30 RateLimit + 6 정상 = 5/30 → too_hard로 거절), (b) 시스템 prompt의 "Hub-like anchors (customer, film, category, country, staff)", "customer→rental N=10 in-band", "Avoid film_actor M:M" 같은 **load-bearing instruction이 sakila-specific** — postgres_air에서는 부분적으로 false인 진술. iter34→iter35 비교가 결정적 증거: 추상 원칙으로 바꾸면 행동이 안 움직이고, 예시를 직접 교체하면 첫 trial에 행동 변화. 그래서 sakila 시스템 prompt는 손대지 않고 (제거 시 sakila quality 회귀 위험), **per-DB example pack을 user-message에 동적으로 주입**해서 LLM이 local examples를 더 가까운 신호로 따라가게 한다 (iter35 effect의 cross-DB 일반화 가설).
+
+**Change.** 4개 파일 변경.
+
+1. `src/rl_task_foundry/pipeline/solver_orchestrator.py` — `_evaluable_runs(runs)` 헬퍼 추가, `run_bundle`/`_execute_solver_batches`/`evaluate_rollout_summary` 3 site에서 `solver_result.status != "failed"` 필터 적용, `TaskRolloutSummary.failed_solver_runs` 필드 신설. RateLimit 등 인프라 예외 run을 calibration 분모에서 제외하되 observability를 위해 별도 카운트.
+2. `src/rl_task_foundry/config/models.py` — `ExamplePack` 모델 신설 (label / type_a_examples / type_b_examples / pitfalls), `DomainConfig.examples_pack: ExamplePack | None` 필드 추가.
+3. `src/rl_task_foundry/synthesis/prompts.py` — `_render_examples_pack` 헬퍼 + `build_synthesis_input(examples_pack=...)` 인자 + Topology와 Data Distributions 사이에 `# Local Examples — {pack.label}` 섹션 삽입. 메타룰 1단락 명시: "When the two conflict, prefer these local examples".
+4. `src/rl_task_foundry/synthesis/{backend_openai_agents,backend_scripted,runtime}.py` — `examples_pack` 인자를 `run_synthesis` Protocol 및 두 backend 구현에 통과, runtime이 `self.config.domain.examples_pack` 전달.
+5. `rl_task_foundry.postgres_air.yaml` — `domain.examples_pack` 본문 작성: Type A 3개 (account→booking N=3, airport→flight N=10, passenger→boarding_pass N=all), Type B 5개 (count×2, max, sum, min — iter43 패턴), pitfalls 4개 (작은 reference 테이블, booking_leg bridge, boarding_pass 30M scan 위험, airport departure/arrival 양방향 edge).
+
+회귀 테스트 1개 추가 (`tests/test_pipeline_solver_orchestrator.py::test_solver_orchestrator_excludes_failed_runs_from_pass_rate`) — 3 solver 중 1개 RuntimeError 시 total_solver_runs=2, matched=2, failed_solver_runs=1, pass_rate=1.0 검증. **8/8 통과.**
+
+**Trial.** postgres_air 컨테이너 재생성(이전 세션에서 제거됨) 후 1-sample smoke `iter46_a` 실행. 결과: **synthesis_failed (composer-side RateLimitError, opencode_zen/qwen3.5-plus, Alibaba 429 token-quota)** at composer turn 3. 정상 진행된 부분: (a) `schema_map(root_table=booking, depth=2)` 1회 호출 정상, (b) `neighborhood(table=booking, row_id=4355730, max_per_edge=5)` 1회 호출 정상 — anchor가 postgres_air의 booking row (`booking_ref="9BBW32"`, `booking_name="Your flight to Oakland"`)로 결정됨. 즉 schema introspection은 postgres_air를 정확히 보고 있고, anchor 선택도 postgres_air 도메인. 그러나 composer의 세 번째 LLM call에서 Alibaba quota 소진 → submit_draft 도달 못 함. solver phase 미시작 → bug fix 검증/example pack 효과 측정 모두 불가.
+
+| 단계 | 상태 | 비고 |
+|---|---|---|
+| schema_map | ✓ | postgres_air 테이블 정확히 인식 |
+| neighborhood (booking 4355730) | ✓ | "Your flight to Oakland" — 실제 데이터 |
+| 다음 LLM 추론 | ✗ | RateLimitError 429 |
+| submit_draft | — | 미도달 |
+| solver phase | — | 미진입 |
+
+**Findings.**
+
+1. **iter46_a는 quota miss (가설 검증 실패)**. opencode_zen이 직전 사용으로 token window 소진된 상태였고, 첫 두 tool call까지는 cache hit/저비용으로 통과했으나 세 번째 LLM 추론에서 429. 이건 prompt/code 문제가 아니라 provider 가용성 문제 — solver_orchestrator bug fix와 example pack 효과는 둘 다 **이번 trial로는 측정 불가**.
+2. **단편적 양성 신호 1개**: anchor가 postgres_air booking으로 결정. 이전 sakila trial들이 customer/film을 강제 선택하던 패턴이 sakila 시스템 prompt에 있음에도, 동적 schema_summary가 booking을 anchor로 노출했고 composer가 그것을 따랐다. 단 anchor 선택은 `random_anchor` 메커니즘 영향 받으므로 prompt 효과인지 별개. example pack 효과 입증 아님.
+3. **bug fix는 잘 동작함이 단편 검증**: trial이 `synthesis_failed` (composer-phase) 카테고리로 분류되어 정상 종료. solver-phase 진입했더라면 fix가 발동했겠지만 이번엔 그 코드 path 미실행. `failed_solver_runs` 필드 작동 여부는 solver-phase trial에서만 검증 가능.
+
+**Next direction.**
+
+1. **iter46_b 재시도 — quota 회복 또는 provider 분산.** 두 가지 옵션:
+   - 옵션 A: opencode_zen quota window 회복 대기 (Alibaba는 일반적으로 rolling 1-hour 또는 daily limit) → 동일 config 그대로 재실행. 가장 cleanest 비교 (iter45 sakila 페어와 같은 pair).
+   - 옵션 B: 임시로 composer/solver를 다른 provider (anthropic_main 또는 openrouter)로 일시 변경해 example pack hypothesis만 검증. 변수가 추가되지만 quota 의존성 제거. 이 방식은 iter45 prompt-tuning과 다른 트랙으로 구분 표기.
+2. **iter47 후보 (iter46 재시도 성공 가정)**: 3-trial 배치로 재현성 검증 + (a) composer가 local pack 템플릿(account→booking, airport→flight, passenger→boarding_pass) 중 어느 것을 채택하는지, (b) Type B fn 분포(count/max/min/sum), (c) sakila 어휘 누수 측정 결과로 다음 분기.
+3. **인프라 후속 작업**: 현 trial에서 quota dry는 sakila iter44~45 stress 시점부터 누적된 결과 가능성. 다음 iter 전에 quota window 회복 시간 확보 필요. 또는 prompt_tuning_log에 provider별 quota tracking 컬럼 추가 검토.
+
+---
+
 ## Cross-Iteration Summary (iter 1-7, extended through iter 45 — **최종 버전**)
 
 ### 행동 변화 요약

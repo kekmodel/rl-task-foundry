@@ -1,0 +1,211 @@
+database:
+  dsn: "${DATABASE_DSN:-postgresql://postgres_air:postgres_air@127.0.0.1:5434/postgres_air}"
+  schema_allowlist: ["postgres_air"]
+  readonly_role: "rlvr_reader"
+  statement_timeout_ms: 30000
+  lock_timeout_ms: 1000
+  idle_tx_timeout_ms: 30000
+  solver_pool_size: 32
+  control_pool_size: 8
+
+domain:
+  name: "service_operations"
+  language: "ko"
+  scenario_description: "an end user asking the organization that owns the database for help or information"
+  examples_pack:
+    label: "postgres_air (airline reservations) reference templates"
+    type_a_examples:
+      - >-
+        anchor=account → booking (via account.account_id), **N=3 + filter on price**:
+        `[{booking_ref, price, email}, …]` × 3 — 자연스러운 ask 예시
+        '제 예약 중 가격이 500달러 이상인 최근 예약 3건의 예약번호와 가격'.
+        (account→booking 카디널리티는 사용자별 ~1-10건이라 N=3 안전, price filter가 multi-hop reasoning 강제)
+      - >-
+        anchor=airport → flight (via airport.airport_code = flight.departure_airport),
+        **N=10 + filter on scheduled_departure 윈도**: `[{flight_no, scheduled_departure}, …]` × 10 —
+        '인천공항에서 2024-08-01부터 2024-08-07까지 출발 예정인 첫 10편 항공편'.
+        (대형 허브의 일주일 윈도는 보통 수백~수천 편이라 N=10이 in-band)
+      - >-
+        anchor=passenger → boarding_pass (via passenger.passenger_id = boarding_pass.passenger_id),
+        **N='all matching' + filter on precheck**: `[{seat, boarding_time, booking_leg_id}, …]`
+        해당 승객의 모든 precheck 탑승권. 일반 승객은 boarding_pass가 1-3건이라
+        '모든 matching'이 자연스러운 카디널리티 (N=3 강제하면 부자연).
+    type_b_examples:
+      - >-
+        **count** — anchor=account → booking: `{booking_count: 5}` (via account→booking) —
+        '제가 지금까지 한 예약은 총 몇 건인가요?'.
+      - >-
+        **count** — anchor=airport → flight (departure 측 join): `{outbound_flight_count: 432}`
+        (via airport.airport_code = flight.departure_airport, filter on date window) —
+        '이 공항에서 2024년 8월에 출발 예정인 항공편은 몇 편인가요?'.
+      - >-
+        **max(scheduled_arrival)** — anchor=passenger → flight (via passenger → boarding_pass →
+        booking_leg → flight): `{last_arrival: '2024-08-12 18:30'}` —
+        '제가 마지막으로 도착한 항공편의 도착 시각은?' (4-hop 체인이 multi-hop reasoning을 강제).
+      - >-
+        **sum(price)** — anchor=account → booking: `{total_spent: 4567.50}` (via account→booking,
+        sum on price column, numeric 일치) — '제가 지금까지 결제한 예약 총 금액은?'.
+      - >-
+        **min(scheduled_departure)** — anchor=airport → flight (departure): `{first_departure:
+        '2024-06-01 04:30'}` (via airport.airport_code = flight.departure_airport) —
+        '이 공항에서 가장 일찍 출발한 항공편 시각은?'.
+    pitfalls:
+      - >-
+        `aircraft` (12행)와 `frequent_flyer` (소수)는 매우 작은 reference 테이블이라
+        anchor로 쓰면 Type A 솔버 trivial. Type B `count`로만 한정하거나 anchor로 쓰지 말 것.
+      - >-
+        `booking_leg`는 booking↔flight 사이의 bridge. flight 앵커에서 Type A로 가려면
+        `flight → booking_leg` (leg_num 정렬) 직접 hop을 쓰고, `flight → booking_leg → boarding_pass`로
+        과도하게 늘리면 30M boarding_pass 위에서 fanout이 폭발해 0/all matching 모두 부자연.
+      - >-
+        `boarding_pass` (30M행)는 강한 filter (특정 passenger_id, booking_leg_id, 또는
+        boarding_time 1-day 윈도) 없이 anchor 또는 destination으로 쓰면 profile/sample이 timeout.
+      - >-
+        `airport`는 flight에 departure_airport와 arrival_airport 두 FK로 연결됨. 어느 쪽인지
+        question 안에 '출발/도착' 명시. 미명시면 solver가 잘못된 edge 골라 wrong answer로 빠짐.
+
+providers:
+  codex_oauth:
+    type: "openai_compatible"
+    base_url: "http://127.0.0.1:10531/v1"
+    api_key_env: "OPENAI_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
+  local_server:
+    type: "openai_compatible"
+    base_url: "${LOCAL_OPENAI_BASE_URL:-http://127.0.0.1:8000/v1}"
+    api_key_env: "LOCAL_OPENAI_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
+  anthropic_main:
+    type: "anthropic"
+    api_key_env: "ANTHROPIC_API_KEY"
+    max_concurrency: 8
+    timeout_s: 120
+  opencode_zen:
+    type: "openai_compatible"
+    base_url: "https://opencode.ai/zen/v1"
+    api_key_env: "OPENCODE_API_KEY"
+    max_concurrency: 8
+    timeout_s: 180
+    max_retries: 5
+  openrouter:
+    type: "openai_compatible"
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    max_concurrency: 8
+    timeout_s: 180
+    max_retries: 3
+
+models:
+  composer:
+    provider: "openrouter"
+    model: "qwen/qwen3.5-plus-02-15"
+  solvers:
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
+
+provider_resilience:
+  circuit_breaker_window_s: 60
+  circuit_breaker_threshold: 0.3
+  probe_interval_s: 30
+  minimum_request_count: 2
+  release_semaphore_on_backoff: true
+
+atomic_tools:
+  max_tools: 300
+  bounded_result_limit: 100
+  max_batch_values: 128
+  float_precision: 2
+
+synthesis:
+  runtime:
+    max_turns: 20
+    tracing: true
+    sdk_sessions_enabled: false
+    max_generation_attempts: 5
+    max_consecutive_category_discards: 3
+    category_backoff_duration_s: 3600
+    schema_summary_max_tables: 32
+    tool_surface_summary_max_entries: 24
+    prompt_schema_orientation_max_tables: 8
+    prompt_schema_orientation_max_columns: 8
+    prompt_tool_surface_hint_limit: 16
+    label_preview_field_limit: 8
+    diagnostic_item_limit: 5
+    recent_tool_call_limit: 20
+    payload_preview_max_string_length: 400
+    payload_preview_max_list_items: 3
+    payload_preview_max_dict_items: 6
+  parallel_workers: 4
+  coverage_planner:
+    target_count_per_band: 3
+
+solver_runtime:
+  max_turns: 16
+  tracing: true
+  sdk_sessions_enabled: true
+
+calibration:
+  lower_pass_rate: 0.25
+  upper_pass_rate: 0.75
+  ci_alpha: 0.1
+  solver_batch_size: 3
+  max_solver_runs: 30
+  safe_early_termination: true
+
+dedup:
+  exact_enabled: true
+  near_dup_enabled: true
+  minhash_threshold: 0.9
+
+task_registry:
+  minhash_num_perm: 128
+  default_query_limit: 20
+  semantic_shingle_size: 3
+
+budget:
+  max_run_usd: 250.0
+  max_gpu_hours: null
+  compose_phase_usd: 40.0
+  solve_phase_usd: 180.0
+  min_accept_rate_attempts: 10
+  reserve_strategy: "phase_specific"
+
+privacy:
+  default_visibility: "blocked"
+  visibility_overrides:
+    courier_phone: "user_visible"
+    internal_ticket_note: "blocked"
+
+output:
+  run_db_path: "./artifacts/postgres_air/run.db"
+  traces_dir: "./artifacts/postgres_air/traces"

@@ -26,12 +26,20 @@ class DatabaseConfig(StrictModel):
     max_total_connections: int | None = Field(default=None, ge=1)
 
 
+class ExamplePack(StrictModel):
+    label: str
+    type_a_examples: list[str] = Field(default_factory=list)
+    type_b_examples: list[str] = Field(default_factory=list)
+    pitfalls: list[str] = Field(default_factory=list)
+
+
 class DomainConfig(StrictModel):
     name: str
     language: str = Field(default="ko", min_length=2)
     scenario_description: str = (
         "an end user asking the organization that owns the database for help or information"
     )
+    examples_pack: ExamplePack | None = None
 
 
 class ProviderConfig(StrictModel):
