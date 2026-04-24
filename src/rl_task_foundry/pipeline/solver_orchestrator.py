@@ -83,12 +83,21 @@ class TaskRolloutSummary:
     matched_solver_runs: int
     early_stop_decision: str | None = None
     runs: tuple[TaskSolverRun, ...] = ()
+    failed_solver_runs: int = 0
 
     @property
     def pass_rate(self) -> float:
         if self.total_solver_runs == 0:
             return 0.0
         return self.matched_solver_runs / self.total_solver_runs
+
+
+def _evaluable_runs(runs: list["TaskSolverRun"]) -> list["TaskSolverRun"]:
+    # Infrastructure failures (RateLimitError, BadRequestError, APITimeoutError,
+    # etc.) surface as solver_result.status == "failed" with empty raw_output.
+    # Excluding them keeps pass_rate a measure of task difficulty rather than
+    # provider availability.
+    return [r for r in runs if r.solver_result.status != "failed"]
 
 
 class TaskQualityGateStatus(StrEnum):
@@ -163,15 +172,17 @@ class SolverOrchestrator:
         early_stop_decision: str | None = None
         if scheduled_calls:
             runs, early_stop_decision = await self._execute_solver_batches(scheduled_calls)
-        matched_solver_runs = sum(1 for run in runs if run.reward_result.status == RewardStatus.MATCHED)
+        evaluable = _evaluable_runs(runs)
+        matched_solver_runs = sum(1 for run in evaluable if run.reward_result.status == RewardStatus.MATCHED)
         return TaskRolloutSummary(
             task_id=bundle.task_bundle.task_id,
             db_id=bundle.task_bundle.db_id,
             planned_solver_runs=planned_solver_runs,
-            total_solver_runs=len(runs),
+            total_solver_runs=len(evaluable),
             matched_solver_runs=matched_solver_runs,
             early_stop_decision=early_stop_decision,
             runs=tuple(runs),
+            failed_solver_runs=len(runs) - len(evaluable),
         )
 
     async def close(self) -> None:
@@ -368,7 +379,7 @@ class SolverOrchestrator:
                 continue
             early_stop_decision = calibration_decision(
                 total_solver_runs=total_solver_runs,
-                results=[run.reward_result.status == RewardStatus.MATCHED for run in runs],
+                results=[run.reward_result.status == RewardStatus.MATCHED for run in _evaluable_runs(runs)],
                 band=band,
                 ci_alpha=self.config.calibration.ci_alpha,
             )
@@ -431,7 +442,7 @@ def evaluate_rollout_summary(
     elif config.calibration.safe_early_termination:
         decision = calibration_decision(
             total_solver_runs=summary.planned_solver_runs,
-            results=[run.reward_result.status == RewardStatus.MATCHED for run in summary.runs],
+            results=[run.reward_result.status == RewardStatus.MATCHED for run in _evaluable_runs(list(summary.runs))],
             band=band,
             ci_alpha=config.calibration.ci_alpha,
         )

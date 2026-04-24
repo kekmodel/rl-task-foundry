@@ -230,6 +230,52 @@ def test_evaluate_rollout_summary_survives_malformed_json_raw_output(
     assert gate.total_solver_runs == 4
 
 
+class _FailingRuntime:
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    async def run(self, episode):
+        raise self._exc
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_excludes_failed_runs_from_pass_rate(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{i}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for i in range(3)
+    ]
+    seen: list[int] = []
+    runtimes = iter([
+        _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', seen),
+        _FailingRuntime(RuntimeError("simulated rate limit")),
+        _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', seen),
+    ])
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: next(runtimes),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.total_solver_runs == 2
+    assert summary.matched_solver_runs == 2
+    assert summary.failed_solver_runs == 1
+    assert summary.pass_rate == 1.0
+    assert len(summary.runs) == 3
+
+
 def test_solver_orchestrator_module_has_no_legacy_imports() -> None:
     module_path = Path("src/rl_task_foundry/pipeline/solver_orchestrator.py")
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
