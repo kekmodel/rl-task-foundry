@@ -301,11 +301,13 @@ class SubmitDraftPayload(StrictModel):
             "exactly from the latest successful query result. For scalar, the "
             "JSON must encode one object with the aggregate field. For list, "
             "it must encode an array of row objects. Do not expose hidden "
-            "PK/FK handle values as answer values. The label must answer the "
-            "exact scope of user_request; if the request is about the hidden "
-            "entity's own records, the latest query must be scoped to that "
-            "entity before you copy the result. Do not submit a global answer "
-            "that can be produced without the hidden entity."
+            "PK/FK handle values as answer values, and do not make a raw "
+            "handle the main selected answer merely because it is easy to "
+            "query. The label must answer the exact scope of user_request; if "
+            "the request is about the hidden entity's own records, the latest "
+            "query must be scoped to that entity before you copy the result. "
+            "Do not submit a global answer that can be produced without the "
+            "hidden entity."
         ),
     )
     entity_json: str = Field(
@@ -327,7 +329,8 @@ class SubmitDraftPayload(StrictModel):
             "body. The user does not know DB tables, rows, primary keys, "
             "foreign keys, or hidden structural handles. Use a visible value "
             "only when it appeared in tool evidence. Use 'my'/'own' wording "
-            "only when label and the latest query are actually scoped to entity."
+            "only when the hidden context naturally represents the requester "
+            "or their records and the latest query is scoped to that context."
         ),
     )
     answer_contract: AnswerContract = Field(

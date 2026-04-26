@@ -743,6 +743,9 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     assert "JSON string" in label_schema["description"]
     assert "scoped to that entity" in label_schema["description"]
     assert "Use 'my'/'own' wording only" in schema["properties"]["user_request"]["description"]
+    assert "hidden context naturally represents the requester" in (
+        schema["properties"]["user_request"]["description"]
+    )
     assert "Include the entity scope" in schema["properties"]["answer_contract"]["description"]
     assert SubmitDraftPayload.model_validate(
         {
@@ -811,6 +814,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "decorative anchor" in schema_surface
     assert "observed values derived from it" in schema_surface
     assert "global answer that can be produced without the hidden entity" in schema_surface
+    assert "do not make a raw handle the main selected answer" in schema_surface
     assert "not valid customer-context tasks" in schema_surface
     assert "raw hidden values must not appear in user_request" in schema_surface
     assert "Bad: '<entity type> 38'" not in schema_surface

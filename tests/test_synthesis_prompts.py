@@ -247,6 +247,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# User Request" in instructions
     assert "configured target language" in instructions
     assert "customer does not know DB tables" in instructions
+    assert "Use first-person ownership only" in instructions
+    assert "non-user subject" in instructions
     assert "Bad patterns" not in instructions
     assert "'<entity type> 38'" not in instructions
     assert "'<table>_id=38'" not in instructions
@@ -269,6 +271,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not reformat" in instructions
     assert "unrelated global answer is invalid" in instructions
     assert "Prefer user-visible non-handle values" in instructions
+    assert "Do not make a raw handle the main selected answer" in instructions
     assert "current query evidence marks it user-visible" in instructions
     assert "Each `phrase` must be an exact substring of `user_request`" in instructions
     assert "exactly one correct structured result" in instructions
@@ -284,6 +287,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "List tasks" in instructions
     assert "avoid trivial 0/1 results" in instructions
     assert "homogeneous ordered list" in instructions
+    assert "at least one non-handle visible field" in instructions
     assert "Open-ended recommendations" in instructions
     assert "filters, thresholds, ordering, limit, and tie-breaks" in instructions
 

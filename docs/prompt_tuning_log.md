@@ -2461,3 +2461,33 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
   -> 40 passed. Targeted ruff and `git diff --check` passed.
+
+## Iteration 57 — strict submit smoke quality review
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_nano_strict_submit_02`, pagila,
+  composer/solver `openrouter/openai/gpt-5.4-nano`, target 1.
+- **Result**:
+  Target reached on the first attempt in about 87 seconds. The accepted draft
+  matched `18/20` solver runs with no failed-status solver runs. The earlier
+  provider BadRequest from strict schema was fixed by typing
+  `answer_contract.predicates[].value` as JSON scalar or scalar-list instead of
+  unconstrained `object`.
+- **Quality review**:
+  The accepted task still exposed an authoring quality issue:
+  hidden entity was `{"category_id": 5}`, but the user request said
+  "제가 최근에 빌린 코미디(Comedy) 영화의 대여 ID..." and the label centered on
+  `rental_id`. That is not a solver-path problem and should not change reward:
+  solver still only needs exact `submit_result`. The issue is composer
+  naturalness/context selection: first-person ownership was attached to a
+  category anchor, and a raw handle became the main answer.
+- **Fix**:
+  Strengthened composer prompt and `submit_draft` field descriptions:
+  use first-person ownership only when the hidden context naturally represents
+  the requester/account/session/order/records; for non-user subjects, use
+  neutral wording. Do not make raw handles the main selected answer merely
+  because they are easy to query; list tasks should include at least one
+  non-handle visible field when selecting rows.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
+  -> 40 passed. Targeted ruff and `git diff --check` passed.
