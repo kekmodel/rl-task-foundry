@@ -2628,3 +2628,34 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest tests/test_tool_choice_for_model.py -q` -> 6 passed.
   Targeted ruff passed.
+
+## Iteration 64 — allow scalar item-complexity strengthening
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_kimi_toolchoice_01`, pagila,
+  composer `openrouter/moonshotai/kimi-k2.5`, solver
+  `openrouter/openai/gpt-5.4-nano`.
+- **Result**:
+  The Kimi tool-choice fix worked: the composer called data tools and
+  `submit_draft` normally. The draft still failed because every evaluated
+  candidate was solved by all 20 Nano solvers (`20/20`, reported CI
+  `[0.8609, 1.0]`). The useful quality signal was the last retry: Kimi tried
+  to strengthen the same scalar payment summary by adding grounded aggregate
+  output fields (`min`, `max`, `avg`), but the incremental validator rejected
+  this as `operation_changed/no_new_structural_constraint`.
+- **Fix**:
+  Incremental evidence comparison now treats added query output sources as a
+  valid strengthening when all previous output sources are preserved. Removing
+  or replacing previous output sources is still rejected. Feedback wording was
+  updated to allow grounded scalar output-field growth over the same evidence
+  path, not only new filters/order/cardinality.
+- **Why this follows the principles**:
+  This is structural metadata from the latest `query` result, not a
+  token/name heuristic. It preserves exact label grounding and keeps the same
+  answer kind, while allowing the composer to choose a DB-adaptive difficulty
+  direction: item complexity.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_incremental_evidence_allows_added_scalar_output_fields tests/test_synthesis_runtime.py::test_incremental_evidence_rejects_replaced_output_fields -q`
+  -> 2 passed.
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py -q`
+  -> 61 passed. Targeted ruff passed.

@@ -685,7 +685,9 @@ def _query_evidence_incremental_errors(
     errors: list[str] = []
     if current.kind != previous.kind:
         errors.append("kind_changed")
-    if current.output_sources != previous.output_sources:
+    previous_outputs = set(previous.output_sources)
+    current_outputs = set(current.output_sources)
+    if not previous_outputs.issubset(current_outputs):
         errors.append("operation_changed")
 
     previous_predicates = set(previous.predicates)
@@ -702,6 +704,7 @@ def _query_evidence_incremental_errors(
 
     added_predicate = bool(current_predicates - previous_predicates)
     added_order = bool(current_order - previous_order)
+    added_output_source = bool(current_outputs - previous_outputs)
     strengthened_cardinality = False
     if current.kind == "list":
         if previous.item_count is None and current.item_count is not None:
@@ -719,7 +722,12 @@ def _query_evidence_incremental_errors(
         ):
             errors.append("cardinality_weakened")
 
-    if not (added_predicate or added_order or strengthened_cardinality):
+    if not (
+        added_predicate
+        or added_order
+        or added_output_source
+        or strengthened_cardinality
+    ):
         errors.append("no_new_structural_constraint")
     return list(dict.fromkeys(errors))
 
@@ -1444,7 +1452,7 @@ class SubmitDraftController:
                 "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
-                "Rejected. After a specificity rejection, keep the same answer kind and query output target, preserve prior filters/order, and add a new grounded structural constraint that the current database evidence supports."  # noqa: E501
+                "Rejected. After a specificity rejection, keep the same answer kind, preserve prior filters/order and existing query output fields, then add a grounded filter, order, cardinality, or output field that the current database evidence supports."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. submit_draft arguments did not match the required schema."

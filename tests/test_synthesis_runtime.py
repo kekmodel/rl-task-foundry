@@ -31,6 +31,8 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftErrorCode,
     SubmitDraftPayload,
+    _query_evidence_incremental_errors,
+    _query_evidence_signature,
     build_submit_draft_sdk_tool,
 )
 from rl_task_foundry.synthesis.submit_draft_validators import _ungrounded_answer_strings
@@ -203,6 +205,72 @@ def test_submit_draft_feedback_examples_are_database_agnostic(tmp_path: Path) ->
         "order 17",
     ):
         assert db_specific not in message
+
+
+def _aggregate_source(fn: str, column: str = "amount") -> dict[str, object]:
+    return {
+        "kind": "aggregate",
+        "fn": fn,
+        "table": "payment",
+        "column": column,
+        "value_exposes_source": True,
+    }
+
+
+def _signature_from_sources(
+    sources: list[dict[str, object]],
+) -> object:
+    return _query_evidence_signature(
+        {
+            "column_sources": sources,
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "payment",
+                    "column": "customer_id",
+                    "op": "eq",
+                    "value": 558,
+                }
+            ],
+            "rows": [{"dummy": 1}],
+        },
+        answer_kind="scalar",
+    )
+
+
+def test_incremental_evidence_allows_added_scalar_output_fields() -> None:
+    previous = _signature_from_sources([
+        _aggregate_source("sum"),
+        _aggregate_source("count", "payment_id"),
+    ])
+    current = _signature_from_sources([
+        _aggregate_source("sum"),
+        _aggregate_source("count", "payment_id"),
+        _aggregate_source("min"),
+        _aggregate_source("max"),
+        _aggregate_source("avg"),
+    ])
+
+    assert _query_evidence_incremental_errors(
+        previous=previous,
+        current=current,
+    ) == []
+
+
+def test_incremental_evidence_rejects_replaced_output_fields() -> None:
+    previous = _signature_from_sources([
+        _aggregate_source("sum"),
+        _aggregate_source("count", "payment_id"),
+    ])
+    current = _signature_from_sources([
+        _aggregate_source("min"),
+        _aggregate_source("max"),
+    ])
+
+    errors = _query_evidence_incremental_errors(previous=previous, current=current)
+
+    assert "operation_changed" in errors
+
 
 def _config_with_synthesis_output(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
@@ -1644,7 +1712,7 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
 
     second_message = await controller.submit(second_payload)
 
-    assert "keep the same answer kind and query output target" in second_message
+    assert "preserve prior filters/order and existing query output fields" in second_message
     assert controller.accepted_draft is None
 
 
