@@ -123,6 +123,8 @@ class SynthesisRuntimeConfig(StrictModel):
     max_turns: int = Field(default=50, ge=1)
     tracing: bool = True
     sdk_sessions_enabled: bool = False
+    anchor_candidates_enabled: bool = False
+    anchor_candidate_limit: int = Field(default=10, ge=1)
     max_generation_attempts: int = Field(default=5, ge=1)
     max_consecutive_category_discards: int = Field(default=3, ge=1)
     category_backoff_duration_s: int = Field(default=3600, ge=1)

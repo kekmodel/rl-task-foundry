@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,47 +19,12 @@ def _conversation_with_controller(controller: object) -> SynthesisConversation:
     )
 
 
-def test_synthesis_backend_write_artifact_creates_dir_once_per_kind(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    backend = OpenAIAgentsSynthesisBackend(
-        model_ref=ModelRef(provider="codex_oauth", model="gpt-5.4-mini"),
-        provider_config=ProviderConfig(
-            type="openai_compatible",
-            base_url="http://127.0.0.1:10531/v1",
-            api_key_env="MISSING_OPENAI_KEY",
-            max_concurrency=8,
-            timeout_s=30,
-        ),
-        runtime_config=SynthesisRuntimeConfig(),
-    )
+class _RecordingEventLogger:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
 
-    mkdir_calls: list[Path] = []
-    original_mkdir = Path.mkdir
-
-    def _recording_mkdir(self: Path, *args, **kwargs):
-        mkdir_calls.append(self)
-        return original_mkdir(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "mkdir", _recording_mkdir)
-
-    backend._write_artifact(
-        kind="transcripts",
-        db_id="sakila",
-        requested_topic="assignment",
-        payload={"a": 1},
-    )
-    first_transcript_dir_calls = mkdir_calls.count(tmp_path / "traces" / "transcripts")
-    backend._write_artifact(
-        kind="transcripts",
-        db_id="sakila",
-        requested_topic="assignment",
-        payload={"a": 2},
-    )
-
-    transcript_dir = tmp_path / "traces" / "transcripts"
-    assert mkdir_calls.count(transcript_dir) == first_transcript_dir_calls
+    def log_sync(self, **kwargs: object) -> None:
+        self.events.append(dict(kwargs))
 
 
 def test_synthesis_backend_reuses_shared_model_client(monkeypatch) -> None:
@@ -125,8 +89,7 @@ def test_synthesis_backend_reuses_shared_model_client(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_synthesis_backend_writes_artifacts_before_reraising_runner_error(
-    tmp_path: Path,
+async def test_synthesis_backend_logs_unified_event_before_reraising_runner_error(
     monkeypatch,
 ) -> None:
     class FakeAsyncOpenAI:
@@ -180,11 +143,13 @@ async def test_synthesis_backend_writes_artifacts_before_reraising_runner_error(
         ),
         runtime_config=SynthesisRuntimeConfig(max_turns=50),
     )
+    event_logger = _RecordingEventLogger()
     conversation = _conversation_with_controller(
         SimpleNamespace(
             _atomic_tool_calls=[],
             record_atomic_tool_call=lambda **_kwargs: None,
             _terminated_too_hard=False,
+            event_logger=event_logger,
         )
     )
 
@@ -201,25 +166,17 @@ async def test_synthesis_backend_writes_artifacts_before_reraising_runner_error(
             max_turns=50,
         )
 
-    transcript_path = (
-        tmp_path
-        / "traces"
-        / "transcripts"
-        / "sakila__assignment__synthesis__codex_oauth__gpt-5.4-mini.json"
-    )
-    tool_trace_path = (
-        tmp_path
-        / "traces"
-        / "tool_traces"
-        / "sakila__assignment__synthesis__codex_oauth__gpt-5.4-mini.json"
-    )
-    assert transcript_path.exists()
-    assert tool_trace_path.exists()
-    transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-    tool_trace = json.loads(tool_trace_path.read_text(encoding="utf-8"))
-    assert transcript["error"]["type"] == "MaxTurnsExceeded"
-    assert transcript["max_turns"] == 50
-    assert tool_trace["error"]["type"] == "MaxTurnsExceeded"
+    assert len(event_logger.events) == 1
+    event = event_logger.events[0]
+    assert event["actor"] == "composer"
+    assert event["event_type"] == "synthesis_failed"
+    payload = event["payload"]
+    assert isinstance(payload, dict)
+    assert payload["error_type"] == "MaxTurnsExceeded"
+    assert payload["error_detail"] == "Max turns (50) exceeded"
+    assert payload["max_turns"] == 50
+    assert payload["run_items"] == []
+    assert isinstance(payload["latency_ms"], int)
 
 
 @pytest.mark.asyncio
@@ -261,14 +218,14 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
                 [
                     SimpleNamespace(
                         tool=SimpleNamespace(name="submit_draft"),
-                        output="Accepted: solver pass rate 4/6.",
+                        output="Accepted: Draft accepted.",
                     )
                 ],
             )
             assert finalize.is_final_output is True
-            assert finalize.final_output == "Accepted: solver pass rate 4/6."
+            assert finalize.final_output == "Accepted: Draft accepted."
             return SimpleNamespace(
-                final_output="Accepted: solver pass rate 4/6.",
+                final_output="Accepted: Draft accepted.",
                 new_items=[],
                 context_wrapper=SimpleNamespace(usage=SimpleNamespace(requests=1)),
                 _current_turn=1,
@@ -320,7 +277,7 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
         max_turns=50,
     )
 
-    assert result.final_output_text == "Accepted: solver pass rate 4/6."
+    assert result.final_output_text == "Accepted: Draft accepted."
     assert FakeAgent.last_instance.kwargs["reset_tool_choice"] is False
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
 
@@ -357,7 +314,7 @@ def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
                 tool=SimpleNamespace(name="submit_draft"),
                 output=(
                     "FeedbackError: Fix the identifier chain and resubmit. "
-                    "Next step: Make another atomic tool call if needed,"
+                    "Next step: Make another data-tool call if needed,"
                     " then call submit_draft again. "
                     "Do not stop with plain text. Attempts left: 2."
                 ),
@@ -387,7 +344,7 @@ def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> No
                 tool=SimpleNamespace(name="submit_draft"),
                 output=(
                     "FeedbackError: Fix the identifier chain and resubmit. "
-                    "Next step: Make another atomic tool call if needed,"
+                    "Next step: Make another data-tool call if needed,"
                     " then call submit_draft again. "
                     "Do not stop with plain text. Attempts left: 0. "
                     "BudgetExhaustedError: No more attempts."
@@ -418,8 +375,8 @@ def test_synthesis_tool_use_behavior_finalizes_on_too_hard_termination() -> None
             SimpleNamespace(
                 tool=SimpleNamespace(name="submit_draft"),
                 output=(
-                    "RejectedError: solver pass rate 0/12. Primary issue: "
-                    "Too hard — no solver passed. This conversation is "
+                    "RejectedError: Draft is overconstrained. Primary issue: "
+                    "The current draft is not reachable enough. This conversation is "
                     "terminated. Attempts left: 0."
                 ),
             )

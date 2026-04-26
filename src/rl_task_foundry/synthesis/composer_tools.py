@@ -1,4 +1,4 @@
-"""Synthesis-side wiring for the composer toolset.
+"""Synthesis-side wiring for the authoring toolset.
 
 Bridges `tooling.composer.build_composer_tools` into the synthesis
 conversation:
@@ -12,9 +12,8 @@ conversation:
 - `build_instrumented_composer_tools` composes the two pieces.
 
 - `summarize_composer_tool_surface` produces a small JSON summary that
-  the synthesis prompt can consume in place of the atomic-bundle
-  surface summary. Prompt rewrites (checklist step 6) will dress this
-  up; for now we just ship name+description.
+  the synthesis prompt can consume without hidden evaluator/runtime
+  inventory.
 
 The `agents` package is imported lazily so this module stays importable
 without the SDK.
@@ -91,25 +90,14 @@ def build_instrumented_composer_tools(
     return [instrument_composer_tool(tool, controller) for tool in raw_tools]
 
 
-_SOLVER_ATOMIC_PRIMITIVES: dict[str, tuple[str, ...]] = {
-    "set_producing": ("rows_where", "rows_via", "intersect"),
-    "set_annotating": ("order_by",),
-    "set_materializing": ("take", "count", "aggregate", "group_top"),
-    "row_reading": ("read",),
-}
-
-
 def summarize_composer_tool_surface(
     tools: list["FunctionTool"],
 ) -> dict[str, object]:
-    """JSON summary of the composer toolset plus the solver primitive
-    inventory, both rendered by `synthesis/prompts.build_synthesis_input`.
+    """JSON summary of the callable composer toolset.
 
-    The composer entries (name + description) come straight from the
-    FunctionTool instances built for this conversation. The solver
-    primitive groups are fixed — the prompt surfaces them so the
-    composer can anticipate how a solver will re-derive the canonical
-    answer via an atomic calculus chain.
+    Keep evaluator/runtime internals out of the composer prompt. The composer
+    needs to know which tools it may call, not which hidden tools will later
+    judge or reproduce the answer.
     """
     entries: list[dict[str, object]] = []
     for tool in tools:
@@ -119,10 +107,6 @@ def summarize_composer_tool_surface(
     return {
         "tool_count": len(tools),
         "tools": entries,
-        "solver_primitives": {
-            group: list(names)
-            for group, names in _SOLVER_ATOMIC_PRIMITIVES.items()
-        },
     }
 
 

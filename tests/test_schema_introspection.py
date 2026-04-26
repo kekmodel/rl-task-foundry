@@ -30,7 +30,7 @@ def test_classify_columns_prefers_qualified_overrides():
     ]
 
 
-def test_classify_columns_promotes_safe_catalog_fields_to_internal():
+def test_classify_columns_uses_default_without_name_token_promotion():
     columns = [
         ColumnRef(schema_name="public", table_name="language", column_name="name"),
         ColumnRef(schema_name="public", table_name="film", column_name="title"),
@@ -44,14 +44,42 @@ def test_classify_columns_promotes_safe_catalog_fields_to_internal():
     )
 
     assert [column.visibility for column in classified] == [
-        "internal",
-        "internal",
+        "blocked",
+        "blocked",
         "blocked",
     ]
 
 
+def test_classify_columns_keeps_all_fields_visible_by_default_without_name_rules():
+    columns = [
+        ColumnRef(schema_name="public", table_name="film", column_name="title"),
+        ColumnRef(schema_name="public", table_name="category", column_name="name"),
+        ColumnRef(schema_name="public", table_name="actor", column_name="first_name"),
+        ColumnRef(schema_name="public", table_name="customer", column_name="first_name"),
+        ColumnRef(schema_name="public", table_name="staff", column_name="name"),
+        ColumnRef(schema_name="public", table_name="customer", column_name="email"),
+        ColumnRef(schema_name="public", table_name="customer", column_name="api_token"),
+    ]
+
+    classified = classify_columns(
+        columns,
+        default_visibility="user_visible",
+        overrides={},
+    )
+
+    assert [column.visibility for column in classified] == [
+        "user_visible",
+        "user_visible",
+        "user_visible",
+        "user_visible",
+        "user_visible",
+        "user_visible",
+        "user_visible",
+    ]
+
+
 @pytest.mark.asyncio
-async def test_postgres_schema_introspector_reads_sakila_schema():
+async def test_postgres_schema_introspector_reads_pagila_schema():
     config = load_config("rl_task_foundry.yaml")
     introspector = PostgresSchemaIntrospector(
         database=config.database,
@@ -63,14 +91,15 @@ async def test_postgres_schema_introspector_reads_sakila_schema():
 
     assert "customer" in graph.table_names()
     assert "payment" in graph.table_names()
+    assert "payment_p2022_01" not in graph.table_names()
 
     customer = graph.get_table("customer", schema_name="public")
     assert customer.primary_key == ("customer_id",)
     assert customer.get_column("customer_id").is_primary_key is True
-    assert customer.get_column("email").visibility == "internal"
+    assert customer.get_column("email").visibility == config.privacy.default_visibility
 
     language = graph.get_table("language", schema_name="public")
-    assert language.get_column("name").visibility == "internal"
+    assert language.get_column("name").visibility == "user_visible"
 
     film_actor = graph.get_table("film_actor", schema_name="public")
     assert film_actor.primary_key == ("actor_id", "film_id")

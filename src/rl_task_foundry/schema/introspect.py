@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import asyncpg
 
 from rl_task_foundry.config.models import DatabaseConfig
-from rl_task_foundry.infra.db import control_session_settings
+from rl_task_foundry.infra.db import _apply_session_settings, control_session_settings
 from rl_task_foundry.infra.privacy import Visibility
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
 from rl_task_foundry.schema.sensitivity import ColumnRef, classify_columns
@@ -23,8 +23,18 @@ SELECT
 FROM pg_class AS cls
 JOIN pg_namespace AS ns
   ON ns.oid = cls.relnamespace
-WHERE cls.relkind = 'r'
+WHERE cls.relkind IN ('r', 'p')
   AND ns.nspname = ANY($1::text[])
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_inherits AS inh
+    JOIN pg_class AS parent
+      ON parent.oid = inh.inhparent
+    JOIN pg_namespace AS parent_ns
+      ON parent_ns.oid = parent.relnamespace
+    WHERE inh.inhrelid = cls.oid
+      AND parent_ns.nspname = ANY($1::text[])
+  )
 ORDER BY ns.nspname, cls.relname
 """
 
@@ -40,8 +50,24 @@ FROM information_schema.columns AS cols
 JOIN information_schema.tables AS tbl
   ON tbl.table_schema = cols.table_schema
  AND tbl.table_name = cols.table_name
+JOIN pg_namespace AS ns
+  ON ns.nspname = cols.table_schema
+JOIN pg_class AS cls
+  ON cls.relnamespace = ns.oid
+ AND cls.relname = cols.table_name
 WHERE tbl.table_type = 'BASE TABLE'
   AND cols.table_schema = ANY($1::text[])
+  AND cls.relkind IN ('r', 'p')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_inherits AS inh
+    JOIN pg_class AS parent
+      ON parent.oid = inh.inhparent
+    JOIN pg_namespace AS parent_ns
+      ON parent_ns.oid = parent.relnamespace
+    WHERE inh.inhrelid = cls.oid
+      AND parent_ns.nspname = ANY($1::text[])
+  )
 ORDER BY cols.table_schema, cols.table_name, cols.ordinal_position
 """
 
@@ -65,17 +91,28 @@ JOIN pg_attribute AS att
   ON att.attrelid = tbl.oid
  AND att.attnum = key_cols.attnum
 WHERE pg_idx.indisunique
-  AND tbl.relkind = 'r'
+  AND tbl.relkind IN ('r', 'p')
   AND ns.nspname = ANY($1::text[])
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_inherits AS inh
+    JOIN pg_class AS parent
+      ON parent.oid = inh.inhparent
+    JOIN pg_namespace AS parent_ns
+      ON parent_ns.oid = parent.relnamespace
+    WHERE inh.inhrelid = tbl.oid
+      AND parent_ns.nspname = ANY($1::text[])
+  )
 GROUP BY ns.nspname, tbl.relname, idx.relname, pg_idx.indisprimary
 ORDER BY ns.nspname, tbl.relname, idx.relname
 """
 
 _FOREIGN_KEY_QUERY = """
+WITH fk_constraints AS (
 SELECT
   con.conname AS constraint_name,
-  src_ns.nspname AS source_schema,
-  src_tbl.relname AS source_table,
+  COALESCE(src_parent_ns.nspname, src_ns.nspname) AS source_schema,
+  COALESCE(src_parent.relname, src_tbl.relname) AS source_table,
   tgt_ns.nspname AS target_schema,
   tgt_tbl.relname AS target_table,
   ARRAY_AGG(src_att.attname ORDER BY key_cols.ordinality) AS source_columns,
@@ -85,6 +122,12 @@ JOIN pg_class AS src_tbl
   ON src_tbl.oid = con.conrelid
 JOIN pg_namespace AS src_ns
   ON src_ns.oid = src_tbl.relnamespace
+LEFT JOIN pg_inherits AS src_inherits
+  ON src_inherits.inhrelid = src_tbl.oid
+LEFT JOIN pg_class AS src_parent
+  ON src_parent.oid = src_inherits.inhparent
+LEFT JOIN pg_namespace AS src_parent_ns
+  ON src_parent_ns.oid = src_parent.relnamespace
 JOIN pg_class AS tgt_tbl
   ON tgt_tbl.oid = con.confrelid
 JOIN pg_namespace AS tgt_ns
@@ -99,15 +142,32 @@ JOIN pg_attribute AS tgt_att
   ON tgt_att.attrelid = tgt_tbl.oid
  AND tgt_att.attnum = key_cols.tgt_attnum
 WHERE con.contype = 'f'
-  AND src_ns.nspname = ANY($1::text[])
+  AND COALESCE(src_parent_ns.nspname, src_ns.nspname) = ANY($1::text[])
   AND tgt_ns.nspname = ANY($1::text[])
 GROUP BY
   con.conname,
-  src_ns.nspname,
-  src_tbl.relname,
+  COALESCE(src_parent_ns.nspname, src_ns.nspname),
+  COALESCE(src_parent.relname, src_tbl.relname),
   tgt_ns.nspname,
   tgt_tbl.relname
-ORDER BY src_ns.nspname, src_tbl.relname, con.conname
+)
+SELECT
+  MIN(constraint_name) AS constraint_name,
+  source_schema,
+  source_table,
+  target_schema,
+  target_table,
+  source_columns,
+  target_columns
+FROM fk_constraints
+GROUP BY
+  source_schema,
+  source_table,
+  target_schema,
+  target_table,
+  source_columns,
+  target_columns
+ORDER BY source_schema, source_table, constraint_name
 """
 
 _PG_STATS_QUERY = """
@@ -133,9 +193,10 @@ class PostgresSchemaIntrospector:
     async def introspect(self) -> SchemaGraph:
         conn = await asyncpg.connect(dsn=self.database.dsn)
         try:
-            settings = control_session_settings(self.database)
-            for statement in settings.timeout_sql:
-                await conn.execute(statement)
+            await _apply_session_settings(
+                conn,
+                control_session_settings(self.database),
+            )
 
             table_rows, column_rows, unique_rows, fk_rows, stats_rows = await self._fetch_metadata(
                 conn

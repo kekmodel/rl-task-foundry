@@ -19,9 +19,6 @@ import yaml
 from datasketch import MinHash, MinHashLSH
 
 from rl_task_foundry.config.models import AppConfig, TaskRegistryConfig
-from rl_task_foundry.synthesis.snapshot_materializer import (
-    SchemaSnapshotMaterializer,
-)
 from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
     OutputFieldType,
@@ -31,6 +28,9 @@ from rl_task_foundry.synthesis.contracts import (
     normalize_topic,
 )
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
+from rl_task_foundry.synthesis.snapshot_materializer import (
+    SchemaSnapshotMaterializer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1167,7 +1167,7 @@ def _decode_minhash_to_minhash(signature: str, *, num_perm: int) -> MinHash | No
 
 
 def _semantic_shingles(text: str, *, shingle_size: int) -> tuple[str, ...]:
-    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    normalized = re.sub(r"\s+", " ", text.strip().casefold())
     if not normalized:
         return ("<empty>",)
     tokens = re.findall(r"\w+", normalized)

@@ -1,8 +1,9 @@
 """CursorPlan — immutable query plan composed by the atomic calculus.
 
-A cursor is an opaque `CursorId` backed by a `CursorPlan`. Plans are
-built by `rows_where`, extended by `rows_via` / `intersect` / `order_by`,
-and materialized by `take` / `count` / `aggregate` / `group_top`.
+Internally a cursor is an opaque `CursorId` backed by a `CursorPlan`. The
+actor-facing v2 tool surface exposes session-local record-set resource IDs instead
+of these hashes, but the execution engine keeps content-hashed cursors so plans
+remain immutable and naturally deduplicated.
 
 Content-hashed IDs give two properties:
 - Structurally identical plans produce the same ID (natural deduplication).
@@ -22,11 +23,31 @@ CursorId = NewType("CursorId", str)
 
 Direction = Literal["asc", "desc"]
 
-FilterOp = Literal["eq", "in", "lt", "gt", "lte", "gte", "like"]
+FilterOp = Literal[
+    "eq",
+    "neq",
+    "in",
+    "lt",
+    "gt",
+    "lte",
+    "gte",
+    "like",
+    "is_null",
+    "is_not_null",
+]
 
 _FILTER_OPS: frozenset[FilterOp] = frozenset(
-    ("eq", "in", "lt", "gt", "lte", "gte", "like")
+    ("eq", "neq", "in", "lt", "gt", "lte", "gte", "like", "is_null", "is_not_null")
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TableNode:
+    table: str
+
+    @property
+    def target_table(self) -> str:
+        return self.table
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +60,18 @@ class WhereNode:
     @property
     def target_table(self) -> str:
         return self.table
+
+
+@dataclass(frozen=True, slots=True)
+class FilterNode:
+    source: "CursorPlan"
+    column: str
+    op: FilterOp
+    value: object
+
+    @property
+    def target_table(self) -> str:
+        return self.source.target_table
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +105,7 @@ class OrderNode:
         return self.source.target_table
 
 
-CursorPlan = Union[WhereNode, ViaNode, IntersectNode, OrderNode]
+CursorPlan = Union[TableNode, WhereNode, FilterNode, ViaNode, IntersectNode, OrderNode]
 
 
 def plan_target_table(plan: CursorPlan) -> str:
@@ -83,10 +116,23 @@ def plan_to_dict(plan: CursorPlan) -> dict[str, object]:
     """Canonical JSON-compatible representation. Used for hashing and
     trace emission; stable keys let two runtimes reproduce the same ID.
     """
+    if isinstance(plan, TableNode):
+        return {
+            "kind": "table",
+            "table": plan.table,
+        }
     if isinstance(plan, WhereNode):
         return {
             "kind": "where",
             "table": plan.table,
+            "column": plan.column,
+            "op": plan.op,
+            "value": plan.value,
+        }
+    if isinstance(plan, FilterNode):
+        return {
+            "kind": "filter",
+            "source": plan_to_dict(plan.source),
             "column": plan.column,
             "op": plan.op,
             "value": plan.value,
@@ -99,9 +145,9 @@ def plan_to_dict(plan: CursorPlan) -> dict[str, object]:
                 "label": plan.edge.label,
                 "direction": plan.edge.direction.value,
                 "source_table": plan.edge.spec.source_table,
-                "source_column": plan.edge.spec.source_column,
+                "source_columns": list(plan.edge.spec.source_columns),
                 "target_table": plan.edge.spec.target_table,
-                "target_column": plan.edge.spec.target_column,
+                "target_columns": list(plan.edge.spec.target_columns),
             },
         }
     if isinstance(plan, IntersectNode):
@@ -138,6 +184,9 @@ class CursorStore:
     def __init__(self, *, max_entries: int = 256) -> None:
         self._plans: dict[CursorId, CursorPlan] = {}
         self._max_entries = max_entries
+        self._public_by_cursor: dict[CursorId, str] = {}
+        self._cursor_by_public: dict[str, CursorId] = {}
+        self._next_public_index = 1
 
     def intern(self, plan: CursorPlan) -> CursorId:
         cursor_id = hash_plan(plan)
@@ -156,6 +205,26 @@ class CursorStore:
         except KeyError as exc:
             raise KeyError(
                 f"cursor {cursor_id!r} not found in this session"
+            ) from exc
+
+    def expose(self, cursor_id: CursorId) -> str:
+        """Return a session-local actor-facing record-set resource id."""
+        self.resolve(cursor_id)
+        existing = self._public_by_cursor.get(cursor_id)
+        if existing is not None:
+            return existing
+        public_id = f"record_set_{self._next_public_index}"
+        self._next_public_index += 1
+        self._public_by_cursor[cursor_id] = public_id
+        self._cursor_by_public[public_id] = cursor_id
+        return public_id
+
+    def resolve_public(self, record_set_id: str) -> CursorId:
+        try:
+            return self._cursor_by_public[record_set_id]
+        except KeyError as exc:
+            raise KeyError(
+                f"record set {record_set_id!r} not found in this session"
             ) from exc
 
     def __len__(self) -> int:
@@ -186,8 +255,10 @@ __all__ = [
     "CursorStore",
     "Direction",
     "FilterOp",
+    "FilterNode",
     "IntersectNode",
     "OrderNode",
+    "TableNode",
     "ViaNode",
     "WhereNode",
     "hash_plan",

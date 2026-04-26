@@ -25,8 +25,14 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.infra.db import DatabasePools
+import asyncpg
+
+from rl_task_foundry.config.models import AppConfig, DatabaseConfig
+from rl_task_foundry.infra.db import (
+    DatabasePools,
+    _apply_session_settings,
+    mutating_control_session_settings,
+)
 from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 from rl_task_foundry.schema.graph import (
     ColumnProfile,
@@ -48,7 +54,6 @@ from rl_task_foundry.synthesis.real_db_trial import (
 )
 from rl_task_foundry.synthesis.submit_draft_tool import SubmitDraftPayload
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
-
 
 PROOF_DB_ID = "proof_trip_fixture"
 PROOF_TASK_TOPIC = "itinerary"
@@ -467,87 +472,195 @@ def build_proof_composer_script() -> ScriptedComposerScript:
                 "table": "proof_anchors",
                 "row_count": 1,
                 "columns": [
-                    {"name": "anchor_id", "distinct": 1},
-                    {"name": "season", "distinct": 1, "top": ["spring"]},
-                    {"name": "budget_bucket", "distinct": 1, "top": ["mid"]},
+                    {
+                        "name": "anchor_id",
+                        "data_type": "integer",
+                        "distinct_count": 1,
+                        "null_count": 0,
+                    },
+                    {
+                        "name": "season",
+                        "data_type": "text",
+                        "distinct_count": 1,
+                        "null_count": 0,
+                    },
+                    {
+                        "name": "budget_bucket",
+                        "data_type": "text",
+                        "distinct_count": 1,
+                        "null_count": 0,
+                    },
                 ],
             },
         ),
         ScriptedAtomicToolCall(
             tool_name="sample",
-            params={
+            params={"table": "proof_cities", "n": 10},
+            result={
                 "table": "proof_cities",
-                "columns": ["city_id", "city_name", "region_name"],
-                "limit": 10,
+                "row_count": 3,
+                "rows": [
+                    {"city_id": 101, "city_name": "Seoul", "region_name": "capital"},
+                    {"city_id": 102, "city_name": "Suwon", "region_name": "capital_belt"},
+                    {"city_id": 103, "city_name": "Incheon", "region_name": "capital_belt"},
+                ],
             },
-            result=[
-                {"city_id": 101, "city_name": "Seoul", "region_name": "capital"},
-                {"city_id": 102, "city_name": "Suwon", "region_name": "capital_belt"},
-                {"city_id": 103, "city_name": "Incheon", "region_name": "capital_belt"},
-            ],
         ),
         ScriptedAtomicToolCall(
             tool_name="sample",
-            params={
+            params={"table": "proof_lodgings", "n": 10},
+            result={
                 "table": "proof_lodgings",
-                "columns": ["lodging_id", "city_id", "lodging_name", "nightly_cost"],
-                "limit": 10,
+                "row_count": 3,
+                "rows": [
+                    {
+                        "lodging_id": 201,
+                        "city_id": 101,
+                        "lodging_name": "Seoul Station Stay",
+                        "nightly_cost": 110,
+                    },
+                    {
+                        "lodging_id": 202,
+                        "city_id": 102,
+                        "lodging_name": "Suwon Fortress Hotel",
+                        "nightly_cost": 100,
+                    },
+                    {
+                        "lodging_id": 203,
+                        "city_id": 103,
+                        "lodging_name": "Incheon Harbor Inn",
+                        "nightly_cost": 95,
+                    },
+                ],
             },
-            result=[
-                {
-                    "lodging_id": 201,
-                    "city_id": 101,
-                    "lodging_name": "Seoul Station Stay",
-                    "nightly_cost": 110,
-                },
-                {
-                    "lodging_id": 202,
-                    "city_id": 102,
-                    "lodging_name": "Suwon Fortress Hotel",
-                    "nightly_cost": 100,
-                },
-                {
-                    "lodging_id": 203,
-                    "city_id": 103,
-                    "lodging_name": "Incheon Harbor Inn",
-                    "nightly_cost": 95,
-                },
-            ],
         ),
         ScriptedAtomicToolCall(
             tool_name="sample",
-            params={
+            params={"table": "proof_activities", "n": 10},
+            result={
                 "table": "proof_activities",
-                "columns": ["activity_id", "city_id", "activity_name", "ticket_cost"],
-                "limit": 10,
+                "row_count": 3,
+                "rows": [
+                    {
+                        "activity_id": 301,
+                        "city_id": 101,
+                        "activity_name": "Han River Night Walk",
+                        "ticket_cost": 70,
+                    },
+                    {
+                        "activity_id": 302,
+                        "city_id": 102,
+                        "activity_name": "Fortress Loop Tour",
+                        "ticket_cost": 60,
+                    },
+                    {
+                        "activity_id": 303,
+                        "city_id": 103,
+                        "activity_name": "Harbor Sunset Ferry",
+                        "ticket_cost": 75,
+                    },
+                ],
             },
-            result=[
-                {
-                    "activity_id": 301,
-                    "city_id": 101,
-                    "activity_name": "Han River Night Walk",
-                    "ticket_cost": 70,
-                },
-                {
-                    "activity_id": 302,
-                    "city_id": 102,
-                    "activity_name": "Fortress Loop Tour",
-                    "ticket_cost": 60,
-                },
-                {
-                    "activity_id": 303,
-                    "city_id": 103,
-                    "activity_name": "Harbor Sunset Ferry",
-                    "ticket_cost": 75,
-                },
-            ],
         ),
         ScriptedAtomicToolCall(
             tool_name="neighborhood",
-            params={"table": "proof_cities", "id": 101, "edge": "proof_city_links"},
-            result=[
-                {"neighbor_city_id": 102, "city_name": "Suwon"},
-            ],
+            params={"table": "proof_cities", "row_id": 101, "max_per_edge": 5},
+            result={
+                "anchor": {
+                    "table": "proof_cities",
+                    "row_id": 101,
+                    "attributes": {"city_id": 101, "city_name": "Seoul"},
+                },
+                "edges": [
+                    {
+                        "destination_table": "proof_city_links",
+                        "total_count": 1,
+                        "sample_ids": [102],
+                        "preview": [{"neighbor_city_id": 102, "city_name": "Suwon"}],
+                    }
+                ],
+            },
+        ),
+        ScriptedAtomicToolCall(
+            tool_name="query",
+            params={"spec": {"proof": "canonical_itinerary"}},
+            result={
+                "columns": [
+                    "day",
+                    "city",
+                    "lodging",
+                    "activity",
+                    "total_cost",
+                ],
+                "column_sources": [
+                    {
+                        "output": "day",
+                        "kind": "select",
+                        "table": "proof_itinerary",
+                        "column": "day",
+                        "visibility": "user_visible",
+                        "is_handle": False,
+                        "value_exposes_source": True,
+                    },
+                    {
+                        "output": "city",
+                        "kind": "select",
+                        "table": "proof_cities",
+                        "column": "city_name",
+                        "visibility": "user_visible",
+                        "is_handle": False,
+                        "value_exposes_source": True,
+                    },
+                    {
+                        "output": "lodging",
+                        "kind": "select",
+                        "table": "proof_lodgings",
+                        "column": "lodging_name",
+                        "visibility": "user_visible",
+                        "is_handle": False,
+                        "value_exposes_source": True,
+                    },
+                    {
+                        "output": "activity",
+                        "kind": "select",
+                        "table": "proof_activities",
+                        "column": "activity_name",
+                        "visibility": "user_visible",
+                        "is_handle": False,
+                        "value_exposes_source": True,
+                    },
+                    {
+                        "output": "total_cost",
+                        "kind": "select",
+                        "table": "proof_itinerary",
+                        "column": "total_cost",
+                        "visibility": "user_visible",
+                        "is_handle": False,
+                        "value_exposes_source": True,
+                    },
+                ],
+                "referenced_columns": [
+                    {
+                        "usage": "where",
+                        "table": "proof_itinerary",
+                        "column": "total_cost",
+                        "visibility": "user_visible",
+                        "is_handle": False,
+                        "op": "lte",
+                        "value": 250,
+                    },
+                    {
+                        "usage": "order_by",
+                        "table": "proof_cities",
+                        "column": "city_name",
+                        "visibility": "user_visible",
+                        "is_handle": False,
+                        "direction": "asc",
+                    },
+                ],
+                "rows": PROOF_CANONICAL_ANSWER,
+                "row_count": len(PROOF_CANONICAL_ANSWER),
+            },
         ),
     ]
     submit_payload = SubmitDraftPayload.model_validate(
@@ -556,6 +669,35 @@ def build_proof_composer_script() -> ScriptedComposerScript:
             "label": PROOF_CANONICAL_ANSWER,
             "entity": PROOF_ANCHOR_ENTITY,
             "question": build_proof_question(),
+            "answer_contract": {
+                "kind": "list",
+                "operation": {
+                    "fn": "select",
+                    "table": "proof_cities",
+                    "column": None,
+                    "phrase": "일정표",
+                },
+                "predicates": [
+                    {
+                        "table": "proof_itinerary",
+                        "column": "total_cost",
+                        "op": "lte",
+                        "value": 250,
+                        "phrase": "total_cost는 250 이하여야",
+                    }
+                ],
+                "order_by": [
+                    {
+                        "table": "proof_cities",
+                        "column": "city_name",
+                        "direction": "asc",
+                        "phrase": "사전순이 가장 앞서는",
+                    }
+                ],
+                "limit": 3,
+                "limit_phrase": "3일",
+                "evidence": "latest_query",
+            },
         }
     )
     return ScriptedComposerScript(
@@ -642,9 +784,14 @@ def _build_proof_app_config(base_config: AppConfig, schema_name: str) -> AppConf
     )
 
 
-async def _ensure_proof_schema(pools: DatabasePools, schema_name: str) -> None:
+async def _ensure_proof_schema(database: DatabaseConfig, schema_name: str) -> None:
     quoted = f'"{schema_name}"'
-    async with pools.control_connection() as conn:
+    conn = await asyncpg.connect(dsn=database.dsn)
+    try:
+        await _apply_session_settings(
+            conn,
+            mutating_control_session_settings(database),
+        )
         async with conn.transaction():
             await conn.execute(f"CREATE SCHEMA {quoted}")
             await conn.execute(f"SET LOCAL search_path TO {quoted}")
@@ -652,12 +799,21 @@ async def _ensure_proof_schema(pools: DatabasePools, schema_name: str) -> None:
                 await conn.execute(statement)
             for statement in _split_sql_statements(PROOF_FIXTURE_SEED):
                 await conn.execute(statement)
+    finally:
+        await conn.close()
 
 
-async def _drop_proof_schema(pools: DatabasePools, schema_name: str) -> None:
+async def _drop_proof_schema(database: DatabaseConfig, schema_name: str) -> None:
     quoted = f'"{schema_name}"'
-    async with pools.control_connection() as conn:
+    conn = await asyncpg.connect(dsn=database.dsn)
+    try:
+        await _apply_session_settings(
+            conn,
+            mutating_control_session_settings(database),
+        )
         await conn.execute(f"DROP SCHEMA IF EXISTS {quoted} CASCADE")
+    finally:
+        await conn.close()
 
 
 async def run_proof_task(
@@ -673,7 +829,7 @@ async def run_proof_task(
     resolved_schema = schema_name or f"proof_trial_{uuid.uuid4().hex[:8]}"
     proof_config = _build_proof_app_config(config, resolved_schema)
     pools = await DatabasePools.create(proof_config.database)
-    await _ensure_proof_schema(pools, resolved_schema)
+    await _ensure_proof_schema(proof_config.database, resolved_schema)
     synthesis_db: SynthesisDb | None = None
     solver_orchestrator: SolverOrchestrator | None = None
     try:
@@ -724,7 +880,7 @@ async def run_proof_task(
                 await synthesis_db.close()
         finally:
             try:
-                await _drop_proof_schema(pools, resolved_schema)
+                await _drop_proof_schema(proof_config.database, resolved_schema)
             finally:
                 await pools.close()
 

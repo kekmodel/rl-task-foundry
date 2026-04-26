@@ -14,11 +14,11 @@ from typing import Any
 
 from rl_task_foundry.config.models import AppConfig, DatabaseConfig, DomainConfig
 from rl_task_foundry.infra.checkpoint import CheckpointStore, ensure_checkpoint
+from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.contracts import (
     StrictModel,
     TaskBundleStatus,
 )
-from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.orchestrator import (
     SynthesisDbRegistryEntry,
     SynthesisOrchestrator,
@@ -208,7 +208,6 @@ class SynthesisRegistryRunner:
             assert self.orchestrator is not None
             assert self.checkpoint is not None
             assert self.task_registry is not None
-            orchestrator = self.orchestrator
             checkpoint = self.checkpoint
             task_registry = self.task_registry
             outcome: SynthesisRegistryRunOutcome | None = None
@@ -264,6 +263,8 @@ class SynthesisRegistryRunner:
                                 return
 
                             assert step.decision.db_id is not None
+                            task_bundle = step.draft.task_bundle
+                            quality_metrics = task_bundle.quality_metrics
                             phase_monitor.emit(
                                 phase="quality_gate",
                                 status="accept",
@@ -272,18 +273,22 @@ class SynthesisRegistryRunner:
                                     "internal_submit_draft_acceptance": True,
                                 },
                                 actual_data={
-                                    "task_id": step.draft.task_bundle.task_id,
-                                    "pass_rate": step.draft.task_bundle.quality_metrics.solver_pass_rate,
-                                    "ci_low": step.draft.task_bundle.quality_metrics.solver_ci_low,
-                                    "ci_high": step.draft.task_bundle.quality_metrics.solver_ci_high,
+                                    "task_id": task_bundle.task_id,
+                                    "pass_rate": quality_metrics.solver_pass_rate,
+                                    "ci_low": quality_metrics.solver_ci_low,
+                                    "ci_high": quality_metrics.solver_ci_high,
+                                    "planned_solver_runs": quality_metrics.solver_planned_runs,
+                                    "completed_solver_runs": quality_metrics.solver_completed_runs,
+                                    "evaluable_solver_runs": quality_metrics.solver_evaluable_runs,
+                                    "failed_solver_runs": quality_metrics.solver_failed_runs,
                                 },
                                 checks={
-                                    "accepted": step.draft.task_bundle.status is TaskBundleStatus.ACCEPTED,
+                                    "accepted": task_bundle.status is TaskBundleStatus.ACCEPTED
                                 },
                                 diagnostics={"step_index": step_counter},
                             )
                             generated_drafts += 1
-                            generated_task_ids.append(step.draft.task_bundle.task_id)
+                            generated_task_ids.append(task_bundle.task_id)
                             quality_accepted_tasks += 1
                             commit_result = task_registry.commit_draft(step.draft)
                             phase_monitor.emit(
@@ -291,7 +296,7 @@ class SynthesisRegistryRunner:
                                 status=commit_result.status.value,
                                 expected_contract={"step_index": step_counter},
                                 actual_data={
-                                    "task_id": step.draft.task_bundle.task_id,
+                                    "task_id": task_bundle.task_id,
                                     "registry_task_id": commit_result.task_id,
                                     "status": commit_result.status.value,
                                 },
@@ -301,12 +306,12 @@ class SynthesisRegistryRunner:
                             steps.append(
                                 SynthesisRegistryStepSummary(
                                     decision=step.decision,
-                                    draft_task_id=step.draft.task_bundle.task_id,
+                                    draft_task_id=task_bundle.task_id,
                                     draft_created_at=step.draft.created_at,
                                     quality_gate_status="accept",
-                                    quality_gate_pass_rate=step.draft.task_bundle.quality_metrics.solver_pass_rate,
-                                    quality_gate_ci_low=step.draft.task_bundle.quality_metrics.solver_ci_low,
-                                    quality_gate_ci_high=step.draft.task_bundle.quality_metrics.solver_ci_high,
+                                    quality_gate_pass_rate=quality_metrics.solver_pass_rate,
+                                    quality_gate_ci_low=quality_metrics.solver_ci_low,
+                                    quality_gate_ci_high=quality_metrics.solver_ci_high,
                                     registry_status=commit_result.status,
                                     registry_task_id=commit_result.task_id,
                                 )
@@ -320,9 +325,13 @@ class SynthesisRegistryRunner:
                                     "created_at": step.draft.created_at.isoformat(),
                                     "registry_status": commit_result.status.value,
                                     "quality_gate_status": "accept",
-                                    "solver_pass_rate": step.draft.task_bundle.quality_metrics.solver_pass_rate,
-                                    "solver_ci_low": step.draft.task_bundle.quality_metrics.solver_ci_low,
-                                    "solver_ci_high": step.draft.task_bundle.quality_metrics.solver_ci_high,
+                                    "solver_pass_rate": quality_metrics.solver_pass_rate,
+                                    "solver_ci_low": quality_metrics.solver_ci_low,
+                                    "solver_ci_high": quality_metrics.solver_ci_high,
+                                    "solver_planned_runs": quality_metrics.solver_planned_runs,
+                                    "solver_completed_runs": quality_metrics.solver_completed_runs,
+                                    "solver_evaluable_runs": quality_metrics.solver_evaluable_runs,
+                                    "solver_failed_runs": quality_metrics.solver_failed_runs,
                                 },
                             )
                             checkpoint.flush()

@@ -1,5 +1,5 @@
 database:
-  dsn: "${DATABASE_DSN:-postgresql://sakila:sakila@127.0.0.1:5433/sakila}"
+  dsn: "${DATABASE_DSN:-postgresql://pagila:pagila@127.0.0.1:5433/pagila}"
   schema_allowlist: ["public"]
   readonly_role: "rlvr_reader"
   statement_timeout_ms: 5000
@@ -98,6 +98,8 @@ synthesis:
     max_turns: 20
     tracing: true
     sdk_sessions_enabled: false
+    anchor_candidates_enabled: false
+    anchor_candidate_limit: 10
     max_generation_attempts: 5
     max_consecutive_category_discards: 3
     category_backoff_duration_s: 3600
@@ -148,7 +150,7 @@ budget:
   reserve_strategy: "phase_specific"
 
 privacy:
-  default_visibility: "blocked"
+  default_visibility: "user_visible"
   visibility_overrides:
     courier_phone: "user_visible"
     internal_ticket_note: "blocked"

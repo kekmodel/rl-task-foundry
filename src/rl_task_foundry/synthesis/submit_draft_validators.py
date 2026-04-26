@@ -8,7 +8,6 @@ turns into error codes and feedback messages.
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
 
 
@@ -22,6 +21,40 @@ def _value_tree_contains_scalar(value: object, target: object) -> bool:
     return False
 
 
+_ANCHOR_VALUE_PARAM_KEYS = frozenset(
+    {
+        "id",
+        "ids",
+        "pk",
+        "pks",
+        "primary_key",
+        "primary_keys",
+        "record_id",
+        "record_ids",
+        "row_id",
+        "row_ids",
+        "value",
+        "values",
+    }
+)
+
+
+def _params_contain_anchor_value(value: object, target: object) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = str(key).lower()
+            if normalized_key in _ANCHOR_VALUE_PARAM_KEYS:
+                if _value_tree_contains_scalar(item, target):
+                    return True
+                continue
+            if isinstance(item, (dict, list)) and _params_contain_anchor_value(item, target):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_params_contain_anchor_value(item, target) for item in value)
+    return False
+
+
 def _tool_call_depends_on_anchor_entity(
     record: dict[str, object],
     *,
@@ -30,7 +63,7 @@ def _tool_call_depends_on_anchor_entity(
     params = record.get("params")
     if not isinstance(params, dict):
         return False
-    return any(_value_tree_contains_scalar(params, value) for value in anchor_entity.values())
+    return any(_params_contain_anchor_value(params, value) for value in anchor_entity.values())
 
 
 def _collect_observed_strings(value: object, *, strings: set[str]) -> None:
@@ -96,12 +129,8 @@ def _is_anchor_connected_call(
         if isinstance(v, str):
             anchor_values.add(v.strip().lower())
     all_known = anchor_values | known_anchor_values
-    for param_value in params.values():
-        if isinstance(param_value, (dict, list)):
-            continue
-        if param_value in all_known:
-            return True
-        if isinstance(param_value, str) and param_value.strip().lower() in all_known:
+    for known_value in all_known:
+        if _params_contain_anchor_value(params, known_value):
             return True
     return False
 
@@ -206,18 +235,3 @@ def _observed_anchor_readable_string_surface(
             continue
         _collect_observed_strings(record.get("result"), strings=observed_strings)
     return bool(observed_strings)
-
-
-_IDENTIFIER_FIELD_TOKEN_RE = re.compile(
-    r"(?<![a-z0-9_])[a-z][a-z0-9_]*_ids?(?![a-z0-9_])",
-    re.IGNORECASE,
-)
-
-
-def _contains_raw_identifier_token(text: str) -> bool:
-    return _IDENTIFIER_FIELD_TOKEN_RE.search(text.lower()) is not None
-
-
-def _contains_entity_placeholder_token(text: str) -> bool:
-    lowered = text.lower()
-    return "<entity>" in lowered or "&lt;entity&gt;" in lowered

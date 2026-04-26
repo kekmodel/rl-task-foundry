@@ -567,8 +567,8 @@ atomic tool architecture에서는 actor-facing parity와 bundle self-containment
 
 - solver prompt constant
 - tool definitions identical per `db_id`
-- `Submit Result Format` 밖 field-name leakage 금지
-- `submit_result(answer_text: string)` constant contract
+- rendered prompt에는 submit-format schema block을 넣지 않음
+- `submit_result(...)`는 task-specific endpoint schema로 노출
 - environment bundle self-containment
 
 ## Review Strategy

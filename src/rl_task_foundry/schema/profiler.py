@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 import asyncpg
 
 from rl_task_foundry.config.models import DatabaseConfig
-from rl_task_foundry.infra.db import SessionSettings, control_session_settings
+from rl_task_foundry.infra.db import _apply_session_settings, control_session_settings
 from rl_task_foundry.schema.graph import SchemaGraph, TableProfile
+from rl_task_foundry.tooling.common.sql import quote_ident, quote_table, readonly_select
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,15 +76,16 @@ async def profile_database(
 ) -> DataProfile:
     conn = await asyncpg.connect(database.dsn)
     try:
-        settings = control_session_settings(database)
-        for sql in settings.timeout_sql:
-            await conn.execute(sql)
+        await _apply_session_settings(conn, control_session_settings(database))
         profile = DataProfile()
 
         for table in graph.tables:
-            if (table.row_estimate or 0) < 10:
+            if table.row_estimate is not None and table.row_estimate < 10:
                 continue
-            await _profile_table(conn, table, profile)
+            try:
+                await _profile_table(conn, table, profile)
+            except asyncpg.PostgresError:
+                continue
 
         return profile
     finally:
@@ -97,22 +98,24 @@ async def _profile_table(
     profile: DataProfile,
 ) -> None:
     qualified = f"{table.schema_name}.{table.table_name}"
+    quoted_table = quote_table(table.schema_name, table.table_name)
 
     for col in table.columns:
+        quoted_column = quote_ident(col.column_name)
         if col.is_primary_key or col.is_foreign_key:
-            continue
-        if col.column_name in ("last_update", "active", "activebool"):
             continue
 
         if col.data_type in _NUMERIC_TYPES:
             row = await conn.fetchrow(
-                f"SELECT avg({col.column_name}::float) AS mean, "
-                f"stddev({col.column_name}::float) AS std, "
-                f"min({col.column_name}::float) AS min_val, "
-                f"max({col.column_name}::float) AS max_val, "
-                f"count(distinct {col.column_name}) AS distinct_count "
-                f"FROM {qualified} "
-                f"WHERE {col.column_name} IS NOT NULL"
+                readonly_select(
+                    f"SELECT avg({quoted_column}::float) AS mean, "
+                    f"stddev({quoted_column}::float) AS std, "
+                    f"min({quoted_column}::float) AS min_val, "
+                    f"max({quoted_column}::float) AS max_val, "
+                    f"count(distinct {quoted_column}) AS distinct_count "
+                    f"FROM {quoted_table} "
+                    f"WHERE {quoted_column} IS NOT NULL"
+                )
             )
             if row and row["mean"] is not None and row["std"] is not None:
                 mean = float(row["mean"])
@@ -141,12 +144,14 @@ async def _profile_table(
             if distinct_count is not None and distinct_count < 2:
                 continue
             rows = await conn.fetch(
-                f"SELECT {col.column_name} AS val, count(*) AS cnt "
-                f"FROM {qualified} "
-                f"WHERE {col.column_name} IS NOT NULL "
-                f"GROUP BY {col.column_name} "
-                f"ORDER BY cnt DESC "
-                f"LIMIT {_CATEGORICAL_MAX_DISTINCT}"
+                readonly_select(
+                    f"SELECT {quoted_column} AS val, count(*) AS cnt "
+                    f"FROM {quoted_table} "
+                    f"WHERE {quoted_column} IS NOT NULL "
+                    f"GROUP BY {quoted_column} "
+                    f"ORDER BY cnt DESC "
+                    f"LIMIT {_CATEGORICAL_MAX_DISTINCT}"
+                )
             )
             if len(rows) >= 2:
                 categories = [str(r["val"]) for r in rows]

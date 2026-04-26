@@ -13,6 +13,9 @@ def test_budget_instruction_uses_tool_call_language_not_turns() -> None:
     assert "# Commit Rule" in text
     # Never say "turns" in the budget text — keep vocabulary concrete.
     assert "turn" not in text.lower().split("tool calls")[0]
+    assert "data tools" in text
+    for leaked in ("composer tools", "too_easy", "too_hard", "trial"):
+        assert leaked not in text
 
 
 def test_budget_instruction_derives_first_submit_deadline_as_third_of_budget() -> None:
@@ -37,25 +40,24 @@ def test_synthesis_instructions_embed_the_budget_block() -> None:
     assert "# Commit Rule" in text
 
 
-def test_synthesis_instructions_contain_never_block_with_hard_prohibitions() -> None:
+def test_synthesis_instructions_contain_hard_prohibitions() -> None:
     runtime_config = SynthesisRuntimeConfig(max_turns=20)
     text = build_synthesis_agent_instructions(runtime_config)
 
-    assert "# Never" in text
     for prohibition in (
-        "Never write SQL",
-        "Never weaken",
-        "Never concatenate",
+        "do not write SQL",
+        "not as raw user-facing wording",
+        "Do not invent ids",
+        "Do not reformat",
     ):
         assert prohibition in text
 
 
-def test_synthesis_instructions_embed_submit_draft_format_block() -> None:
+def test_synthesis_instructions_defer_submit_draft_shape_to_tool_schema() -> None:
     runtime_config = SynthesisRuntimeConfig(max_turns=20)
     text = build_synthesis_agent_instructions(runtime_config)
 
-    assert "# submit_draft" in text
-    assert "topic = " in text
-    assert "entity = " in text
-    assert "label = " in text
-    assert "question = " in text
+    assert "# submit_draft" not in text
+    assert "topic = " not in text
+    assert "entity = " not in text
+    assert "follow that tool's schema exactly" in text

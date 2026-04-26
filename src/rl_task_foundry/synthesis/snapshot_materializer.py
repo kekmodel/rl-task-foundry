@@ -20,8 +20,7 @@ from pathlib import Path
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_to_dict
 
-
-TOOLING_VERSION = "atomic-calculus-v1"
+TOOLING_VERSION = "atomic-resource-api-v4"
 
 _COMPOSER_TOOLS: tuple[str, ...] = (
     "schema_map",
@@ -31,15 +30,18 @@ _COMPOSER_TOOLS: tuple[str, ...] = (
     "query",
 )
 _ATOMIC_PRIMITIVES: tuple[str, ...] = (
-    "rows_where",
-    "rows_via",
-    "intersect",
-    "order_by",
-    "take",
-    "count",
-    "aggregate",
-    "group_top",
-    "read",
+    "create_record_set",
+    "filter_record_set",
+    "filter_record_set_by_values",
+    "filter_record_set_by_pattern",
+    "filter_record_set_by_null",
+    "follow_relation",
+    "intersect_record_sets",
+    "sort_record_set",
+    "list_record_refs",
+    "count_records",
+    "aggregate_records",
+    "get_record",
 )
 
 

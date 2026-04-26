@@ -2,14 +2,15 @@
 
 Set-producing plans (WhereNode / ViaNode / IntersectNode) are first lowered
 into an "id stream" subquery — a SELECT that yields a single column `id`
-holding primary-key values of the plan's target table, preserving
-multiplicity for rows_via chains.
+holding primary-key values of the plan's target table. A record_set represents
+unique target records; relation traversal deduplicates by destination primary
+key.
 
 Materializers wrap the id stream:
 
-- compile_take: DISTINCT + ORDER BY + LIMIT (dedup for ViaNode chains)
-- compile_count: COUNT(*) over the bag
-- compile_aggregate: SUM/AVG/MIN/MAX(column) joined back to target table
+- compile_take: ORDER BY + LIMIT over unique record ids
+- compile_count: COUNT(*) over unique record ids
+- compile_aggregate: SUM/AVG/MIN/MAX(column) over unique target records
 - compile_group_top: GROUP BY group_column + aggregate + LIMIT
 
 compile_read reads named columns of a single row by primary key; it does
@@ -22,21 +23,21 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rl_task_foundry.tooling.atomic.cursor import (
+    _FILTER_OPS,
     CursorPlan,
+    FilterNode,
     IntersectNode,
     OrderNode,
+    TableNode,
     ViaNode,
     WhereNode,
-    _FILTER_OPS,
 )
-from rl_task_foundry.tooling.common.edges import EdgeDirection
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot, TableSpec
 from rl_task_foundry.tooling.common.sql import (
     quote_ident,
     quote_table,
     readonly_select,
 )
-
 
 AggregateFn = Literal["sum", "avg", "min", "max"]
 GroupAggregateFn = Literal["count", "sum", "avg", "min", "max"]
@@ -65,6 +66,11 @@ def _pk_expression(table: TableSpec, alias: str) -> str:
     ``id`` as a single column regardless of PK arity.
     """
 
+    if not table.primary_key:
+        raise ValueError(
+            f"table {table.qualified_name!r} has no primary key; row-set "
+            "materialization requires a primary key"
+        )
     if len(table.primary_key) == 1:
         return f"{alias}.{quote_ident(table.primary_key[0])}"
     parts = ", ".join(
@@ -74,8 +80,35 @@ def _pk_expression(table: TableSpec, alias: str) -> str:
 
 
 def _deterministic_tiebreak(table: TableSpec, alias: str) -> str:
+    if not table.primary_key:
+        raise ValueError(
+            f"table {table.qualified_name!r} has no primary key; deterministic "
+            "row ordering requires a primary key"
+        )
     return ", ".join(
         f"{alias}.{quote_ident(column)} ASC" for column in table.primary_key
+    )
+
+
+def _limit_offset_clause(limit: int, offset: int) -> str:
+    clause = f"LIMIT {int(limit)}"
+    if offset:
+        clause += f" OFFSET {int(offset)}"
+    return clause
+
+
+def _join_columns_predicate(
+    *,
+    left_alias: str,
+    left_columns: tuple[str, ...],
+    right_alias: str,
+    right_columns: tuple[str, ...],
+) -> str:
+    if len(left_columns) != len(right_columns):
+        raise ValueError("join column lists must have the same length")
+    return " AND ".join(
+        f"{left_alias}.{quote_ident(left)} = {right_alias}.{quote_ident(right)}"
+        for left, right in zip(left_columns, right_columns, strict=True)
     )
 
 
@@ -91,18 +124,29 @@ def _compile_where_predicate(
     op = plan.op
     if op not in _FILTER_OPS:
         raise ValueError(f"unsupported op: {op!r}")
+    if op == "is_null":
+        return f"{qualified} IS NULL", (), param_start
+    if op == "is_not_null":
+        return f"{qualified} IS NOT NULL", (), param_start
     if op == "in":
         if not isinstance(plan.value, list) or len(plan.value) == 0:
             raise ValueError("op='in' requires a non-empty list value")
+        if any(item is None for item in plan.value):
+            raise TypeError("op='in' does not accept null list items")
         predicate = f"{qualified} = ANY(${param_start}::{_array_cast(column.data_type)})"
         return predicate, (list(plan.value),), param_start + 1
     if op == "like":
+        if plan.value is None:
+            raise TypeError("op='like' requires a non-null string pattern")
         if not isinstance(plan.value, str):
             raise TypeError("op='like' requires a string pattern")
         predicate = f"{qualified} ILIKE ${param_start}"
         return predicate, (plan.value,), param_start + 1
+    if plan.value is None:
+        raise TypeError(f"op={op!r} requires a non-null value")
     sql_op = {
         "eq": "=",
+        "neq": "<>",
         "lt": "<",
         "gt": ">",
         "lte": "<=",
@@ -113,18 +157,46 @@ def _compile_where_predicate(
 
 
 def _array_cast(data_type: str) -> str:
-    # Minimal set; extend as new DBs appear. asyncpg handles most scalar
-    # arrays via ANY when the base element type is inferred.
+    # Schema introspection stores PostgreSQL udt_name values such as int4,
+    # bool, and enum type names. Cast arrays to the column's actual element
+    # type so `column = ANY($1::type[])` works across arbitrary DBs.
     mapping = {
+        "int2": "int2[]",
+        "int4": "int4[]",
+        "int8": "int8[]",
         "integer": "int4[]",
         "bigint": "int8[]",
         "smallint": "int2[]",
+        "serial": "int4[]",
+        "bigserial": "int8[]",
+        "smallserial": "int2[]",
+        "float4": "float4[]",
+        "float8": "float8[]",
+        "real": "float4[]",
+        "double precision": "float8[]",
+        "numeric": "numeric[]",
+        "decimal": "numeric[]",
+        "money": "money[]",
+        "bool": "bool[]",
+        "boolean": "bool[]",
         "text": "text[]",
+        "bpchar": "bpchar[]",
+        "char": "bpchar[]",
+        "character": "bpchar[]",
         "character varying": "text[]",
         "varchar": "text[]",
         "uuid": "uuid[]",
+        "date": "date[]",
+        "time": "time[]",
+        "timetz": "timetz[]",
+        "timestamp": "timestamp[]",
+        "timestamptz": "timestamptz[]",
+        "timestamp without time zone": "timestamp[]",
+        "timestamp with time zone": "timestamptz[]",
+        "bytea": "bytea[]",
     }
-    return mapping.get(data_type, "text[]")
+    normalized = data_type.strip().lower()
+    return mapping.get(normalized, f"{quote_ident(data_type)}[]")
 
 
 def _collect_order(plan: CursorPlan) -> tuple[CursorPlan, list[tuple[str, str]]]:
@@ -157,6 +229,53 @@ def _compile_where_id_stream(
     return sql, params, next_idx
 
 
+def _compile_table_id_stream(
+    snapshot: SchemaSnapshot,
+    plan: TableNode,
+    param_start: int,
+) -> tuple[str, tuple[object, ...], int]:
+    table = snapshot.table(plan.table)
+    alias = "t"
+    pk_expr = _pk_expression(table, alias)
+    sql = (
+        f"SELECT {pk_expr} AS id "
+        f"FROM {quote_table(table.schema, table.name)} AS {alias}"
+    )
+    return sql, (), param_start
+
+
+def _compile_filter_id_stream(
+    snapshot: SchemaSnapshot,
+    plan: FilterNode,
+    param_start: int,
+) -> tuple[str, tuple[object, ...], int]:
+    inner_sql, params, next_idx = _compile_id_stream(
+        snapshot, plan.source, param_start
+    )
+    target = snapshot.table(plan.target_table)
+    target_pk_expr = _pk_expression(target, "tgt")
+    where_plan = WhereNode(
+        table=plan.target_table,
+        column=plan.column,
+        op=plan.op,
+        value=plan.value,
+    )
+    predicate, filter_params, final_idx = _compile_where_predicate(
+        snapshot=snapshot,
+        plan=where_plan,
+        alias="tgt",
+        param_start=next_idx,
+    )
+    sql = (
+        f"SELECT base.id AS id "
+        f"FROM ({inner_sql}) AS base "
+        f"JOIN {quote_table(target.schema, target.name)} AS tgt "
+        f"ON {target_pk_expr} = base.id "
+        f"WHERE {predicate}"
+    )
+    return sql, params + filter_params, final_idx
+
+
 def _compile_via_id_stream(
     snapshot: SchemaSnapshot,
     plan: ViaNode,
@@ -170,22 +289,19 @@ def _compile_via_id_stream(
     dest_spec = snapshot.table(edge.destination_table)
     origin_pk_expr = _pk_expression(origin_spec, "origin")
     dest_pk_expr = _pk_expression(dest_spec, "dst")
-    if edge.direction is EdgeDirection.FORWARD:
-        # Join origin.<source_column> = dest.<target_column>; inner emits
-        # origin PKs so we self-join origin to get source_column values.
-        origin_match_col = edge.spec.source_column
-        dest_match_col = edge.spec.target_column
-    else:
-        origin_match_col = edge.spec.target_column
-        dest_match_col = edge.spec.source_column
+    join_predicate = _join_columns_predicate(
+        left_alias="dst",
+        left_columns=edge.destination_columns,
+        right_alias="origin",
+        right_columns=edge.origin_columns,
+    )
     sql = (
-        f"SELECT {dest_pk_expr} AS id "
+        f"SELECT DISTINCT {dest_pk_expr} AS id "
         f"FROM ({inner_sql}) AS inner_stream "
         f"JOIN {quote_table(origin_spec.schema, origin_spec.name)} AS origin "
         f"ON {origin_pk_expr} = inner_stream.id "
         f"JOIN {quote_table(dest_spec.schema, dest_spec.name)} AS dst "
-        f"ON dst.{quote_ident(dest_match_col)} "
-        f"= origin.{quote_ident(origin_match_col)}"
+        f"ON {join_predicate}"
     )
     return sql, params, next_idx
 
@@ -223,8 +339,12 @@ def _compile_id_stream(
         # Ordering is not set-producing; strip for any caller that passes
         # a plan still wearing its OrderNode wrappers.
         return _compile_id_stream(snapshot, plan.source, param_start)
+    if isinstance(plan, TableNode):
+        return _compile_table_id_stream(snapshot, plan, param_start)
     if isinstance(plan, WhereNode):
         return _compile_where_id_stream(snapshot, plan, param_start)
+    if isinstance(plan, FilterNode):
+        return _compile_filter_id_stream(snapshot, plan, param_start)
     if isinstance(plan, ViaNode):
         return _compile_via_id_stream(snapshot, plan, param_start)
     if isinstance(plan, IntersectNode):
@@ -236,21 +356,22 @@ def compile_take(
     snapshot: SchemaSnapshot,
     plan: CursorPlan,
     limit: int,
+    offset: int = 0,
 ) -> CompiledQuery:
     """Compile a plan into a SELECT returning primary-key values.
 
-    WhereNode plans emit a direct SELECT with ORDER BY + PK tiebreak. Plans
-    that may introduce join multiplicity (ViaNode) or set deduplication
-    (IntersectNode) go through a GROUP BY dedup path — the outermost query
-    groups by `id` and orders by MIN/MAX(order_column) per group, matching
-    the declared ASC/DESC direction.
+    WhereNode plans emit a direct SELECT with ORDER BY + PK tiebreak. Wrapped
+    plans go through the same GROUP BY path used for deterministic ordering of
+    unique record ids.
     """
     inner, orderings = _collect_order(plan)
+    if isinstance(inner, TableNode):
+        return _compile_take_table(snapshot, inner, orderings, limit, offset)
     if isinstance(inner, WhereNode):
-        return _compile_take_where(snapshot, inner, orderings, limit)
-    if not isinstance(inner, (ViaNode, IntersectNode)):
+        return _compile_take_where(snapshot, inner, orderings, limit, offset)
+    if not isinstance(inner, (FilterNode, ViaNode, IntersectNode)):
         raise TypeError(
-            f"compile_take expected Where/Via/Intersect base; got "
+            f"compile_take expected Table/Where/Filter/Via/Intersect base; got "
             f"{type(inner).__name__}"
         )
     target = snapshot.table(inner.target_table)
@@ -260,7 +381,7 @@ def compile_take(
         sql = readonly_select(
             f"SELECT id FROM ({base_sql}) AS base "
             f"GROUP BY id ORDER BY id ASC "
-            f"LIMIT {int(limit)}"
+            f"{_limit_offset_clause(limit, offset)}"
         )
         return CompiledQuery(sql=sql, params=params)
     order_clauses: list[str] = []
@@ -278,9 +399,35 @@ def compile_take(
         f"ON {target_pk_expr} = base.id "
         f"GROUP BY base.id "
         f"ORDER BY {', '.join(order_clauses)} "
-        f"LIMIT {int(limit)}"
+        f"{_limit_offset_clause(limit, offset)}"
     )
     return CompiledQuery(sql=sql, params=params)
+
+
+def _compile_take_table(
+    snapshot: SchemaSnapshot,
+    inner: TableNode,
+    orderings: list[tuple[str, str]],
+    limit: int,
+    offset: int,
+) -> CompiledQuery:
+    table = snapshot.table(inner.table)
+    alias = "t"
+    order_clauses: list[str] = []
+    for column_name, direction in orderings:
+        table.column(column_name)
+        order_clauses.append(
+            f"{alias}.{quote_ident(column_name)} {direction.upper()}"
+        )
+    order_clauses.append(_deterministic_tiebreak(table, alias))
+    pk_expr = _pk_expression(table, alias)
+    sql = readonly_select(
+        f"SELECT {pk_expr} AS id "
+        f"FROM {quote_table(table.schema, table.name)} AS {alias} "
+        f"ORDER BY {', '.join(order_clauses)} "
+        f"{_limit_offset_clause(limit, offset)}"
+    )
+    return CompiledQuery(sql=sql, params=())
 
 
 def _compile_take_where(
@@ -288,6 +435,7 @@ def _compile_take_where(
     inner: WhereNode,
     orderings: list[tuple[str, str]],
     limit: int,
+    offset: int,
 ) -> CompiledQuery:
     table = snapshot.table(inner.table)
     alias = "t"
@@ -307,7 +455,7 @@ def _compile_take_where(
         f"FROM {quote_table(table.schema, table.name)} AS {alias} "
         f"WHERE {predicate} "
         f"ORDER BY {', '.join(order_clauses)} "
-        f"LIMIT {int(limit)}"
+        f"{_limit_offset_clause(limit, offset)}"
     )
     return CompiledQuery(sql=sql, params=params)
 
@@ -316,15 +464,11 @@ def compile_count(
     snapshot: SchemaSnapshot,
     plan: CursorPlan,
 ) -> CompiledQuery:
-    """Compile COUNT(*) over the plan's row bag.
-
-    Multiplicity is preserved — rows_via chains contribute one count entry
-    per joined source row, matching the spec's bag semantics.
-    """
+    """Compile COUNT(*) over the plan's unique target records."""
     inner, _orderings = _collect_order(plan)
-    if not isinstance(inner, (WhereNode, ViaNode, IntersectNode)):
+    if not isinstance(inner, (TableNode, WhereNode, FilterNode, ViaNode, IntersectNode)):
         raise TypeError(
-            f"compile_count expected Where/Via/Intersect base; got "
+            f"compile_count expected Table/Where/Filter/Via/Intersect base; got "
             f"{type(inner).__name__}"
         )
     base_sql, params, _ = _compile_id_stream(snapshot, inner, 1)
@@ -341,17 +485,16 @@ def compile_aggregate(
     column: str,
 ) -> CompiledQuery:
     """Compile a scalar aggregate (SUM/AVG/MIN/MAX) of `column` over the
-    plan's row bag. The column is resolved against the plan's target table
-    and the join to that table preserves multiplicity.
+    plan's unique target records.
     """
     if fn not in _AGGREGATE_FNS:
         raise ValueError(
             f"fn must be one of {sorted(_AGGREGATE_FNS)}; got {fn!r}"
         )
     inner, _orderings = _collect_order(plan)
-    if not isinstance(inner, (WhereNode, ViaNode, IntersectNode)):
+    if not isinstance(inner, (TableNode, WhereNode, FilterNode, ViaNode, IntersectNode)):
         raise TypeError(
-            f"compile_aggregate expected Where/Via/Intersect base; got "
+            f"compile_aggregate expected Table/Where/Filter/Via/Intersect base; got "
             f"{type(inner).__name__}"
         )
     target = snapshot.table(inner.target_table)
@@ -390,9 +533,9 @@ def compile_group_top(
         if agg_column is None:
             raise ValueError(f"fn={fn!r} requires agg_column")
     inner, _orderings = _collect_order(plan)
-    if not isinstance(inner, (WhereNode, ViaNode, IntersectNode)):
+    if not isinstance(inner, (TableNode, WhereNode, FilterNode, ViaNode, IntersectNode)):
         raise TypeError(
-            f"compile_group_top expected Where/Via/Intersect base; got "
+            f"compile_group_top expected Table/Where/Filter/Via/Intersect base; got "
             f"{type(inner).__name__}"
         )
     target = snapshot.table(inner.target_table)
@@ -440,6 +583,11 @@ def compile_read(
         table.column(column_name)
         selected.append(f"t.{quote_ident(column_name)}")
     pk_cols = table.primary_key
+    if not pk_cols:
+        raise ValueError(
+            f"table {table.qualified_name!r} has no primary key; get_row "
+            "requires a primary key"
+        )
     if len(pk_cols) == 1:
         pk = pk_cols[0]
         table.column(pk)

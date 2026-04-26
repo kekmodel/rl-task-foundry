@@ -14,7 +14,7 @@ from rl_task_foundry.synthesis.contracts import (
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 
 
-def test_build_rendered_user_prompt_uses_entity_block_and_auto_schema() -> None:
+def test_build_rendered_user_prompt_uses_only_entity_and_user_request() -> None:
     task = TaskContract(
         question="3일 itinerary를 만들어 주세요.",
         topic="itinerary",
@@ -54,13 +54,25 @@ def test_build_rendered_user_prompt_uses_entity_block_and_auto_schema() -> None:
     assert prompt.startswith("<entity>\n")
     assert '{"customer_id": 148}' in prompt
     assert "</entity>\n\n3일 itinerary를 만들어 주세요." in prompt
-    assert "\n\n# Submit Result Format\n" in prompt
+    assert "# Submit Result Format" not in prompt
+    assert '"type": "array"' not in prompt
+    assert '"properties"' not in prompt
     assert "Constraints:" not in prompt
     assert "Instance Parameters:" not in prompt
     assert "submit_result as a JSON string matching this schema" not in prompt
-    assert '"type": "array"' in prompt
-    assert '"day"' in prompt
-    assert '"city"' in prompt
+    for authoring_term in (
+        "curriculum",
+        "specificity",
+        "Cardinality",
+        "Item-complexity",
+        "pass rate",
+        "quality gate",
+        "solver",
+        "actor",
+        "training",
+        "feedback",
+    ):
+        assert authoring_term not in prompt
 
 
 def test_build_rendered_user_prompt_does_not_duplicate_prebuilt_entity_block() -> None:
@@ -87,7 +99,7 @@ def test_build_rendered_user_prompt_does_not_duplicate_prebuilt_entity_block() -
 
     assert prompt.count("<entity>") == 1
     assert prompt.startswith('<entity>\n{"customer_id": 148}\n</entity>\n\n')
-    assert "\n\n# Submit Result Format\n" in prompt
+    assert "# Submit Result Format" not in prompt
 
 
 def test_synthesis_rendered_prompt_builder_module_has_zero_legacy_imports() -> None:

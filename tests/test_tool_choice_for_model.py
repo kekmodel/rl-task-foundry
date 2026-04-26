@@ -20,3 +20,8 @@ def test_tool_choice_is_auto_for_qwen_thinking_model() -> None:
 def test_tool_choice_is_auto_for_deepseek_reasoning() -> None:
     assert tool_choice_for_model("deepseek-r1") == "auto"
     assert tool_choice_for_model("deepseek-v3-reasoning") == "auto"
+
+
+def test_tool_choice_is_auto_for_minimax_compatible_endpoint() -> None:
+    assert tool_choice_for_model("minimax-m2.5") == "auto"
+    assert tool_choice_for_model("MiniMax-M2.7") == "auto"

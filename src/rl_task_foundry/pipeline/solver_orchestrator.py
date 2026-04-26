@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
+
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
 from rl_task_foundry.calibration.runner import calibration_decision
 from rl_task_foundry.config.models import AppConfig, ProviderConfig, SolverModelConfig
@@ -25,13 +26,13 @@ from rl_task_foundry.synthesis.canonicalize import (
 )
 from rl_task_foundry.synthesis.contracts import TaskBundleContract
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
+from rl_task_foundry.synthesis.snapshot_materializer import TOOLING_VERSION
 from rl_task_foundry.tooling.atomic import (
     AtomicSession,
     CursorStore,
     build_atomic_tools,
 )
 from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_from_graph
-
 
 SdkToolsFactory = Callable[[TaskBundleContract], Awaitable[list[object]]]
 
@@ -78,26 +79,89 @@ class TaskSolverRun:
 class TaskRolloutSummary:
     task_id: str
     db_id: str
+    # Target evaluable solver samples for this rollout. Infrastructure
+    # failures do not shrink this denominator; the orchestrator schedules
+    # replacement attempts until this target is reached or the attempt budget
+    # is exhausted.
     planned_solver_runs: int
+    # Completed solver calls, including excluded infrastructure failures.
     total_solver_runs: int
     matched_solver_runs: int
     early_stop_decision: str | None = None
     runs: tuple[TaskSolverRun, ...] = ()
+    evaluable_solver_runs: int | None = None
     failed_solver_runs: int = 0
 
     @property
     def pass_rate(self) -> float:
-        if self.total_solver_runs == 0:
+        denominator = self.pass_rate_denominator
+        if denominator == 0:
             return 0.0
-        return self.matched_solver_runs / self.total_solver_runs
+        return self.matched_solver_runs / denominator
+
+    @property
+    def completed_solver_runs(self) -> int:
+        return self.total_solver_runs
+
+    @property
+    def pass_rate_denominator(self) -> int:
+        if self.evaluable_solver_runs is not None:
+            return self.evaluable_solver_runs
+        return self.total_solver_runs
+
+
+_EXCLUDED_INFRA_FAILURE_REASONS = frozenset(
+    {
+        "APIConnectionError",
+        "APIStatusError",
+        "APITimeoutError",
+        "AuthenticationError",
+        "BadRequestError",
+        "ConnectError",
+        "ConnectTimeout",
+        "ConnectionError",
+        "InternalServerError",
+        "NotFoundError",
+        "PermissionDeniedError",
+        "PoolTimeout",
+        "RateLimitError",
+        "ReadError",
+        "ReadTimeout",
+        "ServiceUnavailableError",
+        "TimeoutError",
+        "UnprocessableEntityError",
+    }
+)
+
+
+def _excluded_from_pass_rate(solver_result: SolverResult) -> bool:
+    if solver_result.status != "failed":
+        return False
+    return solver_result.termination_reason in _EXCLUDED_INFRA_FAILURE_REASONS
 
 
 def _evaluable_runs(runs: list["TaskSolverRun"]) -> list["TaskSolverRun"]:
-    # Infrastructure failures (RateLimitError, BadRequestError, APITimeoutError,
-    # etc.) surface as solver_result.status == "failed" with empty raw_output.
-    # Excluding them keeps pass_rate a measure of task difficulty rather than
-    # provider availability.
-    return [r for r in runs if r.solver_result.status != "failed"]
+    # Be conservative: only clearly infrastructural provider/runtime failures
+    # are excluded. Unknown SDK errors, UserError, MaxTurnsExceeded, invalid
+    # submits, and wrong answers are actor/runtime outcomes and count in the
+    # denominator.
+    return [
+        r
+        for r in runs
+        if not _excluded_from_pass_rate(r.solver_result)
+    ]
+
+
+def _solver_attempt_budget(target_evaluable_runs: int) -> int:
+    """Finite guardrail for top-up runs when the provider is unhealthy.
+
+    Normal rollouts stop as soon as the target number of evaluable solver
+    samples is reached. If every call is an infrastructure failure, this
+    budget prevents an infinite retry loop while still allowing one
+    replacement attempt per target sample.
+    """
+
+    return max(target_evaluable_runs, target_evaluable_runs * 2)
 
 
 class TaskQualityGateStatus(StrEnum):
@@ -111,11 +175,15 @@ class TaskQualityGateSummary:
     status: TaskQualityGateStatus
     pass_rate: float
     matched_solver_runs: int
+    # Completed solver calls, including excluded infrastructure failures.
     total_solver_runs: int
     ci_lower: float
     ci_upper: float
     band_lower: float
     band_upper: float
+    planned_solver_runs: int | None = None
+    evaluable_solver_runs: int | None = None
+    failed_solver_runs: int = 0
     unique_answers: int = 0
     divergence_ratio: float = 0.0
 
@@ -153,35 +221,45 @@ class SolverOrchestrator:
         return await self.run_bundle(TaskRolloutBundle.from_draft(draft))
 
     async def run_bundle(self, bundle: TaskRolloutBundle) -> TaskRolloutSummary:
-        runs: list[TaskSolverRun] = []
-        calls: list[TaskSolverRunFactory] = []
-        for solver_index, solver_config in enumerate(self.config.models.solvers):
+        solver_configs = list(self.config.models.solvers)
+        target_evaluable_runs = min(
+            len(solver_configs), self.config.calibration.max_solver_runs
+        )
+
+        def call_for_attempt(attempt_index: int) -> TaskSolverRunFactory:
+            solver_config = solver_configs[attempt_index % len(solver_configs)]
             provider_config = self.config.providers[solver_config.provider]
-            calls.append(
-                partial(
-                    self._run_solver,
-                    solver_config=solver_config,
-                    provider_config=provider_config,
-                    solver_index=solver_index,
-                    bundle=bundle,
-                )
+            return partial(
+                self._run_solver,
+                solver_config=solver_config,
+                provider_config=provider_config,
+                solver_index=attempt_index,
+                bundle=bundle,
             )
 
-        planned_solver_runs = min(len(calls), self.config.calibration.max_solver_runs)
-        scheduled_calls = calls[:planned_solver_runs]
+        runs: list[TaskSolverRun] = []
         early_stop_decision: str | None = None
-        if scheduled_calls:
-            runs, early_stop_decision = await self._execute_solver_batches(scheduled_calls)
+        if target_evaluable_runs:
+            runs, early_stop_decision = await self._execute_solver_batches(
+                call_for_attempt,
+                target_evaluable_runs=target_evaluable_runs,
+                max_attempts=_solver_attempt_budget(target_evaluable_runs),
+            )
         evaluable = _evaluable_runs(runs)
-        matched_solver_runs = sum(1 for run in evaluable if run.reward_result.status == RewardStatus.MATCHED)
+        matched_solver_runs = sum(
+            1
+            for run in evaluable
+            if run.reward_result.status == RewardStatus.MATCHED
+        )
         return TaskRolloutSummary(
             task_id=bundle.task_bundle.task_id,
             db_id=bundle.task_bundle.db_id,
-            planned_solver_runs=planned_solver_runs,
-            total_solver_runs=len(evaluable),
+            planned_solver_runs=target_evaluable_runs,
+            total_solver_runs=len(runs),
             matched_solver_runs=matched_solver_runs,
             early_stop_decision=early_stop_decision,
             runs=tuple(runs),
+            evaluable_solver_runs=len(evaluable),
             failed_solver_runs=len(runs) - len(evaluable),
         )
 
@@ -238,6 +316,10 @@ class SolverOrchestrator:
         if self.event_logger is not None:
             termination_metadata = solver_result.termination_metadata or {}
             run_items = termination_metadata.get("run_items", [])
+            atomic_trace_events = termination_metadata.get(
+                "atomic_trace_events", []
+            )
+            excluded_from_pass_rate = _excluded_from_pass_rate(solver_result)
             self.event_logger.log_sync(
                 actor="solver",
                 actor_id=solver_config.solver_id,
@@ -250,10 +332,22 @@ class SolverOrchestrator:
                     "turn_count": solver_result.turn_count,
                     "latency_ms": solver_result.latency_ms,
                     "matched": reward_result.status == RewardStatus.MATCHED,
+                    "excluded_from_pass_rate": excluded_from_pass_rate,
+                    "failure_class": "infra_excluded"
+                    if excluded_from_pass_rate
+                    else "evaluable",
+                    "failure_detail": termination_metadata.get("detail", ""),
                     "raw_output_preview": solver_result.raw_output_text[:200]
                     if solver_result.raw_output_text
                     else "",
                     "run_items": run_items,
+                    "final_output_preview": termination_metadata.get(
+                        "final_output_preview", ""
+                    ),
+                    "atomic_trace_version": termination_metadata.get(
+                        "atomic_trace_version"
+                    ),
+                    "atomic_trace_events": atomic_trace_events,
                 },
             )
         return TaskSolverRun(
@@ -285,7 +379,10 @@ class SolverOrchestrator:
         snapshot = await self._schema_snapshot(bundle.task_bundle.db_id)
         async with pools.solver_connection() as conn:
             session = AtomicSession(
-                snapshot=snapshot, connection=conn, store=CursorStore()
+                snapshot=snapshot,
+                connection=conn,
+                store=CursorStore(),
+                max_fetch_limit=self.config.atomic_tools.bounded_result_limit,
             )
             sdk_tools = build_atomic_tools(session)
             runtime = self._runtime_for_solver(
@@ -294,7 +391,15 @@ class SolverOrchestrator:
                 task_bundle=bundle.task_bundle,
                 sdk_tools=sdk_tools,
             )
-            return await runtime.run(episode)
+            solver_result = await runtime.run(episode)
+            if session.trace_events:
+                metadata = dict(solver_result.termination_metadata)
+                metadata["atomic_trace_version"] = f"{TOOLING_VERSION}.trace.v1"
+                metadata["atomic_trace_events"] = list(session.trace_events)
+                solver_result = solver_result.model_copy(
+                    update={"termination_metadata": metadata}
+                )
+            return solver_result
 
     def _provider_semaphore(self, provider_name: str) -> asyncio.Semaphore:
         semaphore = self._provider_semaphores.get(provider_name)
@@ -353,33 +458,53 @@ class SolverOrchestrator:
 
     async def _execute_solver_batches(
         self,
-        calls: list[TaskSolverRunFactory],
+        call_for_attempt: Callable[[int], TaskSolverRunFactory],
+        *,
+        target_evaluable_runs: int,
+        max_attempts: int,
     ) -> tuple[list[TaskSolverRun], str | None]:
         runs: list[TaskSolverRun] = []
-        total_solver_runs = len(calls)
-        if total_solver_runs == 0:
+        if target_evaluable_runs <= 0 or max_attempts <= 0:
             return runs, None
 
         batch_size = max(
             1,
-            min(self.config.calibration.solver_batch_size, total_solver_runs),
+            min(self.config.calibration.solver_batch_size, target_evaluable_runs),
         )
-        cursor = 0
+        attempts_started = 0
         early_stop_decision: str | None = None
         band = PassRateBand(
             lower=self.config.calibration.lower_pass_rate,
             upper=self.config.calibration.upper_pass_rate,
         )
 
-        while cursor < total_solver_runs:
-            batch = calls[cursor : cursor + batch_size]
-            cursor += len(batch)
+        while attempts_started < max_attempts:
+            evaluable = _evaluable_runs(runs)
+            if len(evaluable) >= target_evaluable_runs:
+                break
+            needed = target_evaluable_runs - len(evaluable)
+            remaining_attempts = max_attempts - attempts_started
+            batch_count = min(batch_size, needed, remaining_attempts)
+            batch = [
+                call_for_attempt(attempt_index)
+                for attempt_index in range(
+                    attempts_started,
+                    attempts_started + batch_count,
+                )
+            ]
+            attempts_started += batch_count
             runs.extend(await asyncio.gather(*(call() for call in batch)))
             if not self.config.calibration.safe_early_termination:
                 continue
+            evaluable_after_batch = _evaluable_runs(runs)
+            if len(evaluable_after_batch) < target_evaluable_runs:
+                continue
             early_stop_decision = calibration_decision(
-                total_solver_runs=total_solver_runs,
-                results=[run.reward_result.status == RewardStatus.MATCHED for run in _evaluable_runs(runs)],
+                total_solver_runs=target_evaluable_runs,
+                results=[
+                    run.reward_result.status == RewardStatus.MATCHED
+                    for run in evaluable_after_batch
+                ],
                 band=band,
                 ci_alpha=self.config.calibration.ci_alpha,
             )
@@ -425,8 +550,23 @@ def evaluate_rollout_summary(
     config: AppConfig,
     summary: TaskRolloutSummary,
 ) -> TaskQualityGateSummary:
-    if summary.total_solver_runs <= 0:
+    evaluable_solver_runs = getattr(
+        summary,
+        "pass_rate_denominator",
+        summary.total_solver_runs,
+    )
+    if evaluable_solver_runs <= 0:
         raise ValueError("task rollout summary must include at least one solver run")
+    if (
+        summary.early_stop_decision is None
+        and summary.planned_solver_runs > 0
+        and evaluable_solver_runs < summary.planned_solver_runs
+    ):
+        raise ValueError(
+            "task rollout ended before the target evaluable solver denominator "
+            f"was reached: {evaluable_solver_runs}/"
+            f"{summary.planned_solver_runs}"
+        )
 
     band = PassRateBand(
         lower=config.calibration.lower_pass_rate,
@@ -434,15 +574,18 @@ def evaluate_rollout_summary(
     )
     interval = clopper_pearson_interval(
         successes=summary.matched_solver_runs,
-        trials=summary.total_solver_runs,
+        trials=evaluable_solver_runs,
         alpha=config.calibration.ci_alpha,
     )
     if summary.early_stop_decision is not None:
         decision = summary.early_stop_decision
     elif config.calibration.safe_early_termination:
         decision = calibration_decision(
-            total_solver_runs=summary.planned_solver_runs,
-            results=[run.reward_result.status == RewardStatus.MATCHED for run in _evaluable_runs(list(summary.runs))],
+            total_solver_runs=evaluable_solver_runs,
+            results=[
+                run.reward_result.status == RewardStatus.MATCHED
+                for run in _evaluable_runs(list(summary.runs))
+            ],
             band=band,
             ci_alpha=config.calibration.ci_alpha,
         )
@@ -482,6 +625,9 @@ def evaluate_rollout_summary(
         ci_upper=interval.upper,
         band_lower=band.lower,
         band_upper=band.upper,
+        planned_solver_runs=summary.planned_solver_runs,
+        evaluable_solver_runs=evaluable_solver_runs,
+        failed_solver_runs=getattr(summary, "failed_solver_runs", 0),
         unique_answers=unique_answers,
         divergence_ratio=divergence_ratio,
     )

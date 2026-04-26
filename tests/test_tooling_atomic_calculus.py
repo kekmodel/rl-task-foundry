@@ -2,7 +2,7 @@
 
 Integration coverage for the data paths (take/count/aggregate/group_top
 execution) lives in tests/test_tooling_atomic_integration.py which runs
-against sakila.
+against pagila.
 """
 
 from __future__ import annotations
@@ -15,15 +15,9 @@ from rl_task_foundry.schema.graph import (
     SchemaGraph,
     TableProfile,
 )
-from rl_task_foundry.tooling.atomic import (
-    AtomicSession,
-    CursorStore,
-    IntersectNode,
-    ViaNode,
-    intersect,
-    rows_via,
-    rows_where,
-)
+from rl_task_foundry.tooling.atomic import AtomicSession, CursorStore
+from rl_task_foundry.tooling.atomic.calculus import intersect, rows_via, rows_where
+from rl_task_foundry.tooling.atomic.cursor import IntersectNode, ViaNode
 from rl_task_foundry.tooling.common import snapshot_from_graph
 
 

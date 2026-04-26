@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
 from typing import ClassVar
@@ -11,9 +10,10 @@ from typing import ClassVar
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
     build_reasoning_replay_hook,
+    tool_choice_for_model,
 )
 from rl_task_foundry.infra.sdk_helpers import (
-    tool_choice_for_model,
+    extract_run_error_items as _extract_run_error_items,
 )
 from rl_task_foundry.infra.sdk_helpers import (
     extract_token_usage as _extract_token_usage,
@@ -32,9 +32,6 @@ from rl_task_foundry.infra.sdk_helpers import (
 )
 from rl_task_foundry.infra.sdk_helpers import (
     summarize_run_item as _summarize_run_item,
-)
-from rl_task_foundry.infra.sdk_helpers import (
-    extract_run_error_items as _extract_run_error_items,
 )
 from rl_task_foundry.schema.profiler import DataProfile
 from rl_task_foundry.synthesis.conversation import SynthesisConversation
@@ -199,6 +196,7 @@ class OpenAIAgentsSynthesisBackend:
         anchor_hint: dict[str, object] | None = None,
         data_profile: DataProfile | None = None,
         examples_pack: object | None = None,
+        affordance_map: dict[str, object] | None = None,
     ) -> SynthesisConversationResult:
         sdk = self._sdk_components()
         if hasattr(sdk, "set_tracing_disabled"):
@@ -226,6 +224,7 @@ class OpenAIAgentsSynthesisBackend:
             anchor_hint=anchor_hint,
             data_profile=data_profile,
             examples_pack=examples_pack,
+            affordance_map=affordance_map,
         )
         started_at = perf_counter()
         try:

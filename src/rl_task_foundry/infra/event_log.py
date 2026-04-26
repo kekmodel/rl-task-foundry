@@ -10,10 +10,10 @@ composer/solver/runner event as one line. The design premise:
 - A single JSONL lets ``tail -f`` stream every actor interleaved in
   real time, and jq-style filters pull the per-actor view when needed.
 
-Each line is a small dict. We avoid pretty-printing and never dump
-Agent/FunctionTool payloads here — the compact summarizer in
-``sdk_helpers.summarize_run_item`` handles that for the per-file
-traces that are kept alongside for now.
+Each line is a small dict. We avoid pretty-printing and keep heavyweight raw
+payloads out of the primary timeline; SDK run items and tool traces should be
+summarized into structured fields, with optional artifact paths used only when
+a large debug payload genuinely needs a sidecar file.
 """
 
 from __future__ import annotations

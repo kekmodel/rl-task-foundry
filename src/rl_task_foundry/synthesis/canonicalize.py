@@ -7,10 +7,10 @@ not import from the legacy truth/tasks/tools directories scheduled for removal.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from enum import StrEnum
-from collections.abc import Callable
 
 from rl_task_foundry.synthesis.contracts import (
     OutputFieldContract,
@@ -204,6 +204,11 @@ def _canonicalize_list(
         raise CanonicalizationError(path, "expected list")
     if field.items is None:
         raise CanonicalizationError(path, "list field is missing item schema")
+    if field.length is not None and len(value) != field.length:
+        raise CanonicalizationError(
+            path,
+            f"expected list with exactly {field.length} items",
+        )
 
     items = [
         canonicalize_field(field.items, item, path=f"{path}[{index}]")

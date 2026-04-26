@@ -1,5 +1,9 @@
 # Tooling Redesign: Asymmetric Composer/Solver Toolsets
 
+> Historical note: this document records the first atomic-calculus redesign.
+> The current solver-facing surface is the resource-oriented v2 API described
+> in [`atomic-resource-api-v2.md`](./atomic-resource-api-v2.md).
+
 > **Status:** design spec. All checklist items are complete. Landing chain: atomic scaffold `f63be79`, calculus `201f6f9`, atomic tool_factory `03e9690`, `Any` sweep `b3a5c44`, composer `schema_map` `7f92ae2`, `sample` `398d175`, `query` DSL `804f7da`, `profile` `92e54ce`, `neighborhood` `a9b6d78`, composer tool_factory `852d7c9`, synthesis rewire `0558b45`, solver rewire `52b3fdd`, prompt rewrite `4f0b6d5`, bundle export migration `fdee2f6`, atomic_tools codegen retirement `a51af0d`, proof composer rewrite (ephemeral PG schema + scripted backend). Remaining open item is iter13+ prompt tuning against the real DB.
 
 ## Motivation
@@ -63,7 +67,7 @@ Ten primitives. The solver sees each as a separate tool with table/column/edge p
 - `rows_where(table, column, op ∈ {eq,in,lt,gt,lte,gte,like}, value) → cursor`
   Create a filtered cursor. `op='any'` intentionally absent — no unfiltered entry point.
 - `rows_via(cursor, edge) → cursor`
-  Project through a typed FK edge. Multiplicity preserved (bag semantics); materialization steps decide whether to dedupe.
+  Project through a typed FK edge. In the current resource API, the result is a set of unique destination records by primary key.
 - `intersect(cursor_a, cursor_b) → cursor`
   Set intersection. Both operands must be cursors over the same target table.
 
@@ -77,7 +81,7 @@ Ten primitives. The solver sees each as a separate tool with table/column/edge p
 - `take(cursor, n) → [row_id, …]` with `2 ≤ n ≤ 5`.
   Dedup applied. `n=1` is intentionally disallowed to prevent `sort+limit=1` shortcuts that would replace `aggregate(max) + rows_where(eq, max)` chains.
 - `count(cursor) → int`
-  Bag count (multiplicity preserved).
+  Count unique target records.
 - `aggregate(cursor, fn ∈ {sum,avg,min,max}, column) → value`
   Scalar aggregate over the cursor.
 - `group_top(cursor, group_column, agg, n) → [(group_value, agg_value), …]` with `2 ≤ n ≤ 5`.
@@ -127,14 +131,14 @@ class OrderNode:
 
 A `CursorStore` maps cursor IDs to plans within an `AtomicSession`. The session scopes cursors to one conversation (solver run). On session close, the store is discarded.
 
-### Multiplicity
+### Record-set semantics
 
 - `rows_where` yields distinct rows (each row is itself).
-- `rows_via` with a forward FK (many-to-one, e.g. `rental.customer_id → customer`) preserves multiplicity — each source rental contributes one customer occurrence to the target cursor.
-- `rows_via` with a reverse FK (one-to-many, e.g. `customer ← rental.customer_id`) preserves multiplicity naturally.
+- `rows_via` with a forward FK (many-to-one, e.g. `rental.customer_id → customer`) returns unique destination rows.
+- `rows_via` with a reverse FK (one-to-many, e.g. `customer ← rental.customer_id`) returns unique destination rows.
 - `intersect` takes intersection of distinct row IDs.
 - `take` applies `DISTINCT` + `ORDER BY` + `LIMIT`. Tie-break by primary key (secondary order asc) for determinism.
-- `count` and `aggregate` respect multiplicity by default.
+- `count` and `aggregate` operate over unique target records.
 - `group_top` always dedupes by `(group_column, aggregate)` before selecting top.
 
 ### Deterministic chains
@@ -146,14 +150,14 @@ A `CursorStore` maps cursor IDs to plans within an `AtomicSession`. The session 
 
 The solver's call budget (30 tool calls) is preserved. Each atomic function call consumes one turn. The RL-facing trace records the function name, parameters, and output (plan summary or materialized values) — not raw SQL.
 
-## Composer analytic DSL (preview — full spec next session)
+## Composer analytic DSL
 
 Five primitives:
 
 - `schema_map(root_table=None, depth=2)` — graph of tables/columns/edges with hub/bridge tags. One call to orient.
-- `profile(table, column=None, predicate=None)` — column distributions (min/max/top-k modes/quartiles/distinct count). Designed for calibrating filter difficulty.
-- `neighborhood(table, row_id, depth=2, max_per_edge=5)` — anchor-rooted entity graph with sample IDs per edge.
-- `query(spec)` — JSON spec DSL over select/filter/join-via-edge/sort/limit/aggregate/group-by. One call expresses anything `atomic` can express as a chain. Used to author canonical answers.
+- `profile(table, column=None, predicate=None)` — row_count plus column distributions. Designed for calibrating filter difficulty.
+- `neighborhood(table, row_id, depth=1, max_per_edge=5)` — anchor-rooted entity graph with sample row IDs per edge.
+- `query(spec)` — JSON spec DSL over select/filter/join-via-edge/sort/limit/aggregate/group-by. Used to author canonical answers.
 - `sample(table, n=5, seed, predicate=None)` — representative rows.
 
 The composer does not have `read`, `take`, `aggregate` primitives — it only sees the analytic DSL. It does not require atomic tools to compute canonical answers; its `query` output is the source of truth.
@@ -192,7 +196,11 @@ Order matters: do (1) before (2).
 
 ## Open questions
 
-- **`rows_via` over many-column FKs.** Sakila's FKs are single-column; IMDb has some composite FKs. Current `TypedEdge` represents single-column edges only. Document limitation; handle composite edges as a later extension.
+- **Composite FK edge labels.** Composite FKs now execute through atomic
+  `follow_relation`, composer `query`, and composer `neighborhood`. Current
+  labels stay human-readable (`src.(a,b)->dst.(x,y)`). If larger customer DBs
+  produce unwieldy or colliding labels, split the actor-visible label from a
+  stable opaque relation id.
 - **`in` op list size.** Current bound is `MAX_BATCH_VALUES=128`. Keep the same bound; enforce in `rows_where` input validator.
 - **Composer SQL escape hatch.** The composer design deliberately stays above raw SQL. If task diversity ceilings appear, revisit with a restricted `sql_readonly(sql, max_rows=N)` tool. Not in initial scope.
 - **Cursor TTL in long synthesis conversations.** If qwen keeps cursor IDs in its prompt context across many turns, the `CursorStore` grows. Cap at ~100 cursors per session with LRU eviction; emit a warning if referenced cursor no longer exists.

@@ -27,6 +27,10 @@ def accepted_draft_with_quality_metrics(
             "solver_pass_rate": quality_gate_summary.pass_rate,
             "solver_ci_low": quality_gate_summary.ci_lower,
             "solver_ci_high": quality_gate_summary.ci_upper,
+            "solver_planned_runs": quality_gate_summary.planned_solver_runs,
+            "solver_completed_runs": quality_gate_summary.total_solver_runs,
+            "solver_evaluable_runs": quality_gate_summary.evaluable_solver_runs,
+            "solver_failed_runs": quality_gate_summary.failed_solver_runs,
         }
     )
     task_bundle_payload = draft.task_bundle.model_dump(mode="python")

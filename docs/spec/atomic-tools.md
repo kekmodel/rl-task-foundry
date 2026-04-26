@@ -1,70 +1,149 @@
 # Atomic Tools
 
-## Tool Architecture
+This page summarizes the current solver-facing atomic tool contract. The
+historical v2 design details live in
+[`atomic-resource-api-v2.md`](./atomic-resource-api-v2.md).
 
-Atomic tools are generated per database from schema structure. They are shared across all task bundles for the same `db_id`.
+## Architecture
 
-The synthesis agent does not generate tool code.
+Atomic tools are generated per database from `SchemaSnapshot`. The action
+language is fixed, while table enums and record_set metadata are generated from
+the introspected schema.
+
+The synthesis agent does not generate tool code. New databases should require
+configuration and introspection, not hand-written Python tools.
+
+## Current Solver Surface
+
+The solver receives twelve resource-oriented tools:
+
+```text
+create_record_set(table) -> record_set resource
+filter_record_set(record_set_id, column, op, value) -> record_set resource
+filter_record_set_by_values(record_set_id, column, values) -> record_set resource
+filter_record_set_by_pattern(record_set_id, column, pattern) -> record_set resource
+filter_record_set_by_null(record_set_id, column, op) -> record_set resource
+follow_relation(source_record_set_id, edge_label) -> record_set resource
+intersect_record_sets(left_record_set_id, right_record_set_id) -> record_set resource
+sort_record_set(record_set_id, column, direction) -> record_set resource
+list_record_refs(record_set_id, limit, offset?) -> record_ref list
+count_records(record_set_id) -> count
+aggregate_records(record_set_id, fn, column) -> scalar
+get_record(table, record_id, columns) -> object
+```
+
+The old internal `CursorPlan` engine still exists, but actor-visible responses
+use record-set resource handles such as `record_set_1`.
+
+`record_set` semantics are set semantics: a resource contains unique records by
+the target table's primary key. `follow_relation` deduplicates destination
+records, and `count_records` / `aggregate_records` operate over those unique
+records. This keeps the actor-facing API consistent with ordinary resource
+endpoints and prevents hidden join multiplicity from changing answers.
+
+## Response Contract
+
+All solver-visible atomic outputs use an API-style envelope.
+
+```json
+{
+  "ok": true,
+  "resource": {
+    "id": "record_set_1",
+    "type": "record_set",
+    "table": "customer"
+  }
+}
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "count": 12
+  }
+}
+```
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "action_error",
+    "code": "edge_wrong_origin"
+  }
+}
+```
+
+Visible errors must not include repair hints, valid-edge lists, candidate
+columns, or next-action suggestions.
+
+## Hidden Trace
+
+The same calls append structural events to `AtomicSession.trace_events`.
+Those events are copied to `SolverResult.termination_metadata` as
+`atomic_trace_events` after the solver run, separate from actor-visible tool
+observations.
 
 ## Atomicity Rules
 
 Allowed:
 
-- single-table `SELECT`
-- one-hop FK traversal
-- single aggregate over a single table
-- single grouped aggregate over one grouping column
+- creating a record-set resource from one table
+- applying one scalar, value-list, pattern, or null filter to an existing record set
+- traversing one FK relation per call
+- intersecting two record sets with the same target table
+- annotating a record set with one sort column per call
+- listing paginated record references
+- counting or aggregating one record set
+- getting selected columns from one record
 
 Forbidden:
 
-- multi-hop joins inside one tool
-- subqueries
+- raw SQL
+- arbitrary multi-hop joins inside one tool
+- high-level query DSL for the solver
+- schema-map or valid-action hint tools for the solver
+- grouped top-k shortcuts in the core solver surface
 - window functions
 - arbitrary helper tools that jump directly to the final answer
 
-## Tool Families
+## Limit Policy
 
-- `T1` Point Lookup
-- `T2` Bounded Enumeration
-- `T3` Single-Column Filter
-- `T4` FK Traversal
-- `T5` Distinct Values
-- `T6` Filtered Aggregate
-- `T7` Sorted Top-K
-- `T8` Grouped Aggregate Top-K
+The actor may request natural page sizes, including `limit=1`. The environment
+uses realistic API safety limits instead of artificial anti-shortcut constraints:
 
-## Important Contract Details
+- read-only database access
+- statement timeout
+- configured maximum page size
+- maximum observation size
+- connection and concurrency limits
 
-- all multi-row tools accept a `limit` parameter
-- runtime caps `limit` by `bounded_result_limit`
-- `T6` includes `COUNT`
-- `AVG` and floating-point `SUM` use DB-side `ROUND(..., float_precision)`
-- `T7` supports both filtered and unfiltered top-k retrieval
-- `T8` supports grouped `SUM/AVG/COUNT/MIN/MAX` with deterministic tie-break ordering
-- filtered `T8` descriptions follow the same surface pattern as filtered `T7`:
-  `Rank {group_column} groups for a specific {filter_column} by their {agg} in {table}, {direction}.`
+Oversized or unhelpful requests are handled by environment failure and reward,
+not by hiding normal API actions from the actor.
 
-## Compression Policy
+## Completeness Boundary
 
-When tool count must be reduced, the compression drop order is:
+Within the intended SQL subset, actors should be able to reach values by
+composition:
 
-```text
-aggregate -> grouped_aggregate -> sorted_top_k -> like -> distinct -> range -> in
-```
+- whole table scan: `create_record_set`
+- conjunction: repeated filter endpoints or `intersect_record_sets`
+- FK joins: chained `follow_relation`
+- deterministic selection: `sort_record_set` + `list_record_refs`
+- scalar facts: `count_records`, `aggregate_records`, or `list_record_refs` + `get_record`
+- later records: `list_record_refs` with pagination
 
-The core lookup, traversal, and bounded enumeration surface is kept longest.
+Out of scope:
 
-## SQL Contract
+- OR / NOT / anti-join
+- outer join
+- recursive CTE
+- window functions
+- computed expressions
+- date bucketing
+- string transformation
+- raw SQL
 
-- database access is read-only
-- tool output must stay within declared `returns_schema`
-- deterministic ordering is required whenever multiple rows may be returned
-- actor-visible tool semantics must remain stable across task bundles sharing the same database
-
-## Seeded Row Ordering
-
-- synthesis runs use one per-run shuffle seed for unordered multi-row tool results
-- solver runs use one per-solver shuffle seed for unordered multi-row tool results
-- unordered `list_*`, `filter_*`, and reverse traversal tools use seeded row ordering
-- `sorted_top_k` keeps its explicit sort key and uses the seed only as a deterministic tie-breaker
-- scalar aggregate and count tools do not use shuffle ordering
+Task generation must stay inside the reachable subset unless the actor
+interface is deliberately extended.

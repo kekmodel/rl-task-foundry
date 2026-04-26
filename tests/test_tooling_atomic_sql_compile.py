@@ -34,7 +34,7 @@ from rl_task_foundry.tooling.common import (
 def _column(
     table: str,
     name: str,
-    data_type: str = "integer",
+    data_type: str = "int4",
     *,
     is_primary_key: bool = False,
     is_foreign_key: bool = False,
@@ -125,6 +125,46 @@ def _customer_rental_snapshot():
     )
 
 
+def _composite_order_snapshot():
+    order = TableProfile(
+        schema_name="public",
+        table_name="order",
+        columns=[
+            _column("order", "tenant_id", is_primary_key=True),
+            _column("order", "order_id", is_primary_key=True),
+            _column("order", "status", data_type="text"),
+        ],
+        primary_key=("tenant_id", "order_id"),
+    )
+    line_item = TableProfile(
+        schema_name="public",
+        table_name="line_item",
+        columns=[
+            _column("line_item", "tenant_id", is_foreign_key=True),
+            _column("line_item", "order_id", is_foreign_key=True),
+            _column("line_item", "line_no", is_primary_key=True),
+            _column("line_item", "sku", data_type="text"),
+        ],
+        primary_key=("tenant_id", "order_id", "line_no"),
+    )
+    return snapshot_from_graph(
+        SchemaGraph(
+            tables=[order, line_item],
+            edges=[
+                ForeignKeyEdge(
+                    constraint_name="line_item_order_fk",
+                    source_schema="public",
+                    source_table="line_item",
+                    source_columns=("tenant_id", "order_id"),
+                    target_schema="public",
+                    target_table="order",
+                    target_columns=("tenant_id", "order_id"),
+                )
+            ],
+        )
+    )
+
+
 def test_compile_take_emits_parameterized_sql_with_pk_tiebreak():
     snapshot = _rental_snapshot()
     plan = WhereNode(
@@ -164,6 +204,34 @@ def test_compile_take_supports_in_op_with_array_cast():
     assert compiled.params == ([45, 46, 47],)
 
 
+def test_compile_take_supports_neq_and_nullary_ops():
+    snapshot = _rental_snapshot()
+    neq = compile_take(
+        snapshot,
+        WhereNode(table="rental", column="customer_id", op="neq", value=45),
+        limit=5,
+    )
+    assert "WHERE t.\"customer_id\" <> $1" in neq.sql
+    assert neq.params == (45,)
+
+    is_null = compile_take(
+        snapshot,
+        WhereNode(table="rental", column="customer_id", op="is_null", value=None),
+        limit=5,
+    )
+    assert "WHERE t.\"customer_id\" IS NULL" in is_null.sql
+    assert is_null.params == ()
+
+
+def test_compile_take_rejects_null_for_binary_ops():
+    snapshot = _rental_snapshot()
+    plan = WhereNode(
+        table="rental", column="customer_id", op="eq", value=None
+    )
+    with pytest.raises(TypeError, match="non-null"):
+        compile_take(snapshot, plan, limit=5)
+
+
 def test_compile_read_selects_named_columns():
     snapshot = _rental_snapshot()
     compiled = compile_read(
@@ -199,7 +267,7 @@ def test_compile_take_forward_via_joins_through_fk():
     )
     via = ViaNode(source=base, edge=edge)
     compiled = compile_take(snapshot, via, limit=3)
-    assert "SELECT dst.\"customer_id\" AS id" in compiled.sql
+    assert "SELECT DISTINCT dst.\"customer_id\" AS id" in compiled.sql
     assert (
         "JOIN \"public\".\"rental\" AS origin "
         "ON origin.\"rental_id\" = inner_stream.id"
@@ -210,6 +278,29 @@ def test_compile_take_forward_via_joins_through_fk():
     ) in compiled.sql
     assert "GROUP BY id ORDER BY id ASC LIMIT 3" in compiled.sql
     assert compiled.params == ("2005-01-01",)
+
+
+def test_compile_take_forward_via_supports_composite_fk():
+    snapshot = _composite_order_snapshot()
+    edge = resolve_edge(
+        snapshot,
+        "line_item",
+        "line_item.(tenant_id,order_id)->order.(tenant_id,order_id)",
+    )
+    base = WhereNode(table="line_item", column="sku", op="eq", value="A-1")
+    via = ViaNode(source=base, edge=edge)
+
+    compiled = compile_take(snapshot, via, limit=3)
+
+    assert (
+        "SELECT DISTINCT (dst.\"tenant_id\", dst.\"order_id\") AS id"
+        in compiled.sql
+    )
+    assert (
+        "ON dst.\"tenant_id\" = origin.\"tenant_id\" "
+        "AND dst.\"order_id\" = origin.\"order_id\""
+    ) in compiled.sql
+    assert compiled.params == ("A-1",)
 
 
 def test_compile_take_reverse_via_joins_from_parent_to_child():
@@ -226,7 +317,7 @@ def test_compile_take_reverse_via_joins_from_parent_to_child():
     )
     via = ViaNode(source=base, edge=typed)
     compiled = compile_take(snapshot, via, limit=3)
-    assert "SELECT dst.\"rental_id\" AS id" in compiled.sql
+    assert "SELECT DISTINCT dst.\"rental_id\" AS id" in compiled.sql
     assert (
         "JOIN \"public\".\"customer\" AS origin "
         "ON origin.\"customer_id\" = inner_stream.id"
@@ -293,7 +384,7 @@ def test_compile_take_rejects_intersect_with_mismatched_targets():
 # ---------- count ----------
 
 
-def test_compile_count_preserves_multiplicity_for_via_chains():
+def test_compile_count_deduplicates_destination_records_for_via_chains():
     snapshot = _customer_rental_snapshot()
     edge = resolve_edge(
         snapshot, "rental", "rental.customer_id->customer"
@@ -304,7 +395,7 @@ def test_compile_count_preserves_multiplicity_for_via_chains():
     via = ViaNode(source=base, edge=edge)
     compiled = compile_count(snapshot, via)
     assert compiled.sql.startswith("SELECT COUNT(*) AS cnt FROM (")
-    assert "SELECT dst.\"customer_id\" AS id" in compiled.sql
+    assert "SELECT DISTINCT dst.\"customer_id\" AS id" in compiled.sql
     assert compiled.params == (45,)
 
 

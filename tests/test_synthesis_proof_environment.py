@@ -27,6 +27,7 @@ def _proof_config(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
     output = OutputConfig(
         run_db_path=tmp_path / "run.db",
+        traces_dir=tmp_path / "traces",
     )
     return config.model_copy(update={"output": output}, deep=True)
 
@@ -63,7 +64,8 @@ def test_build_proof_composer_script_payload_matches_canonical_answer() -> None:
     assert script.submit_payload.topic == PROOF_TASK_TOPIC
     assert script.submit_payload.parsed_entity == PROOF_ANCHOR_ENTITY
     assert script.submit_payload.label == PROOF_CANONICAL_ANSWER
-    assert script.submit_payload.question.startswith("<entity>\n")
+    assert not script.submit_payload.user_request.startswith("<entity>\n")
+    assert "봄 시즌 3일 출장" in script.submit_payload.user_request
     tool_names = [call.tool_name for call in script.atomic_tool_calls]
     assert "sample" in tool_names
     # Every answer string must appear in at least one tool-call result so the

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -65,9 +64,7 @@ def _sample_episode() -> SolverEpisodeInput:
             "<entity>\n"
             '{"order_id": 7}\n'
             "</entity>\n\n"
-            "현재 배송 상태는 무엇인가요?\n\n"
-            "# Submit Result Format\n"
-            '{"type":"object","properties":{"delivery_status":{"type":"string"}}}\n'
+            "현재 배송 상태는 무엇인가요?"
         ),
     )
 
@@ -124,7 +121,7 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
             return SimpleNamespace(
                 final_output={
                     "submitted": True,
-                    "answer_text": '{"delivery_status":"IN_TRANSIT"}',
+                    "answer": {"delivery_status": "IN_TRANSIT"},
                 },
                 _current_turn=3,
                 context_wrapper=SimpleNamespace(
@@ -347,7 +344,7 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backe
             return SimpleNamespace(
                 final_output={
                     "submitted": True,
-                    "answer_text": '{"delivery_status":"IN_TRANSIT"}',
+                    "answer": {"delivery_status": "IN_TRANSIT"},
                 },
                 _current_turn=1,
                 context_wrapper=SimpleNamespace(usage=SimpleNamespace(requests=1)),
@@ -423,11 +420,111 @@ async def test_openai_agents_solver_backend_reuses_cached_sdk_model_across_backe
     assert len(FakeChatModel.calls) == 1
 
 
-def test_submit_result_tool_is_cached_singleton() -> None:
-    first = backend_module._make_submit_result_tool()
-    second = backend_module._make_submit_result_tool()
+def test_submit_result_tool_uses_task_specific_object_schema() -> None:
+    tool = backend_module._make_submit_result_tool(
+        _sample_episode().task_bundle.task.output_schema
+    )
 
-    assert first is second
+    schema = tool.params_json_schema
+
+    assert schema["type"] == "object"
+    assert schema["required"] == ["delivery_status"]
+    assert schema["properties"]["delivery_status"]["type"] == "string"
+    assert (
+        "Exact value from tool responses"
+        in schema["properties"]["delivery_status"]["description"]
+    )
+    assert "Preserve capitalization" in schema["properties"]["delivery_status"]["description"]
+    assert schema["additionalProperties"] is False
+    assert tool.description == "Submit the final structured result."
+
+
+def test_submit_result_tool_wraps_non_object_roots() -> None:
+    output_schema = OutputSchemaContract(
+        root=OutputFieldContract(
+            name="answer",
+            type=OutputFieldType.LIST,
+            ordered=True,
+            length=2,
+            items=OutputFieldContract(
+                name="item",
+                type=OutputFieldType.OBJECT,
+                fields=[
+                    OutputFieldContract(name="day", type=OutputFieldType.INT),
+                    OutputFieldContract(name="city", type=OutputFieldType.STRING),
+                ],
+            ),
+        ),
+        primary_output_format="json_array",
+    )
+
+    tool = backend_module._make_submit_result_tool(output_schema)
+    schema = tool.params_json_schema
+
+    assert schema["type"] == "object"
+    assert schema["required"] == ["answer"]
+    assert schema["properties"]["answer"]["type"] == "array"
+    assert schema["properties"]["answer"]["minItems"] == 2
+    assert schema["properties"]["answer"]["maxItems"] == 2
+    assert schema["properties"]["answer"]["description"] == (
+        "Final structured result items. Preserve the required item order."
+    )
+    assert schema["properties"]["answer"]["items"]["required"] == ["day", "city"]
+    assert (
+        "Preserve capitalization"
+        in schema["properties"]["answer"]["items"]["properties"]["city"]["description"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_result_tool_rejects_wrong_list_length() -> None:
+    output_schema = OutputSchemaContract(
+        root=OutputFieldContract(
+            name="answer",
+            type=OutputFieldType.LIST,
+            ordered=True,
+            length=2,
+            items=OutputFieldContract(name="item", type=OutputFieldType.STRING),
+        ),
+        primary_output_format="json_array",
+    )
+    tool = backend_module._make_submit_result_tool(output_schema)
+
+    result = await tool.on_invoke_tool(  # pyright: ignore[reportAttributeAccessIssue]
+        None,
+        json.dumps({"answer": ["only-one"]}),
+    )
+
+    assert result["submitted"] is False
+    assert "exactly 2 items" in result["details"][0]["msg"]
+
+
+@pytest.mark.asyncio
+async def test_submit_result_tool_rejects_schema_object_as_answer() -> None:
+    tool = backend_module._make_submit_result_tool(
+        _sample_episode().task_bundle.task.output_schema
+    )
+
+    result = await tool.on_invoke_tool(  # pyright: ignore[reportAttributeAccessIssue]
+        None,
+        json.dumps(
+            {
+                "properties": {
+                    "delivery_status": {
+                        "title": "Delivery Status",
+                        "type": "string",
+                    }
+                },
+                "required": ["delivery_status"],
+                "title": "AnswerSchema",
+                "type": "object",
+            }
+        ),
+    )
+
+    assert result["submitted"] is False
+    assert result["error"] == "submit_result payload failed schema validation"
+    assert "unexpected object keys" in result["details"][0]["msg"]
 
 
 def test_extract_turn_count_preserves_explicit_zero() -> None:
@@ -474,7 +571,7 @@ def test_tool_use_behavior_stops_on_failed_submit():
                 output={
                     "submitted": False,
                     "error": "submit_result payload failed schema validation",
-                    "details": [{"loc": ["answer_text"], "msg": "Field required"}],
+                    "details": [{"loc": ["submit_result"], "msg": "expected object"}],
                 },
             )
         ],
@@ -501,20 +598,20 @@ def test_tool_use_behavior_serializes_successful_submit_as_json_string():
                 tool=SimpleNamespace(name="submit_result"),
                 output={
                     "submitted": True,
-                    "answer_text": '{"store_id":1}',
+                    "answer": {"store_id": 1},
                 },
             )
         ],
     )
 
     assert result.is_final_output is True
-    assert result.final_output == '{"answer_text": "{\\"store_id\\":1}", "submitted": true}'
+    assert result.final_output == '{"answer": {"store_id": 1}, "submitted": true}'
 
 
 def test_extract_submission_output_accepts_json_stringified_submit_payload():
     submitted_answer_text, structured_output, status, termination_reason, termination_metadata = (
         backend_module._extract_submission_output(
-            '{"submitted": true, "answer_text": "{\\"store_id\\":1}"}'
+            '{"submitted": true, "answer": {"store_id": 1}}'
         )
     )
 
@@ -539,46 +636,9 @@ def test_extract_submission_output_rejects_python_repr_success_payload():
     assert termination_metadata == {}
 
 
-def test_solver_backend_write_artifact_creates_dir_once_per_kind(
-    tmp_path: Path,
-    monkeypatch,
-):
-    backend = OpenAIAgentsSolverBackend(
-        solver_config=SolverModelConfig(
-            solver_id="solver_a",
-            provider="codex_oauth",
-            model="gpt-5.4-mini",
-        ),
-        provider_config=ProviderConfig(
-            type="openai_compatible",
-            base_url="http://127.0.0.1:10531/v1",
-            api_key_env="MISSING_OPENAI_KEY",
-            max_concurrency=8,
-            timeout_s=30,
-        ),
-        runtime_config=SolverRuntimeConfig(max_turns=8),
-    )
-
-    mkdir_calls: list[Path] = []
-    original_mkdir = Path.mkdir
-
-    def _recording_mkdir(self: Path, *args, **kwargs):
-        mkdir_calls.append(self)
-        return original_mkdir(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "mkdir", _recording_mkdir)
-
-    backend._write_artifact("transcripts", "task_a", {"a": 1})
-    first_transcript_dir_calls = mkdir_calls.count(tmp_path / "traces" / "transcripts")
-    backend._write_artifact("transcripts", "task_a", {"a": 2})
-
-    transcript_dir = tmp_path / "traces" / "transcripts"
-    assert mkdir_calls.count(transcript_dir) == first_transcript_dir_calls
-
-
 @pytest.mark.asyncio
-async def test_openai_agents_solver_backend_writes_transcript_before_missing_submit_error(
-    tmp_path, monkeypatch
+async def test_openai_agents_solver_backend_records_missing_submit_in_metadata(
+    monkeypatch,
 ):
     episode = _sample_episode()
 
@@ -650,8 +710,15 @@ async def test_openai_agents_solver_backend_writes_transcript_before_missing_sub
         sdk_tools=[],
     )
 
-    with pytest.raises(RuntimeError, match="did not submit an answer"):
-        await backend.run(episode)
+    result = await backend.run(episode)
 
-    transcript_path = tmp_path / "traces" / "transcripts" / "task_assignment_solver__solver_a.json"
-    assert transcript_path.exists()
+    assert result.status == "invalid_submit"
+    assert result.termination_reason == "missing_submit_result"
+    assert result.raw_output_text == ""
+    assert result.structured_output is None
+    assert result.termination_metadata["final_output_preview"] == (
+        '{"delivery_status":"IN_TRANSIT"}'
+    )
+    assert result.termination_metadata["run_items"] == [
+        {"type": "str", "text_preview": "tool-call(delivery_lookup)"}
+    ]

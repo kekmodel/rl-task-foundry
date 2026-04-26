@@ -1,4 +1,4 @@
-"""schema_map primitive — orient the composer inside the schema graph.
+"""schema_map primitive — inspect a schema graph.
 
 Returns a JSON-ready slice of the schema centered at `root_table`
 (or the whole schema when `root_table is None`), with hub/bridge tags
@@ -9,9 +9,9 @@ hub: tables in the top third of the (in-degree + out-degree) ranking,
      i.e. heavy FK participants. Useful for agents looking for
      "everywhere-referenced" entities.
 
-bridge: tables with two or more outgoing FK edges. Classic m:n junction
-     tables (rental_inventory, film_actor) have this shape and often
-     serve as stepping stones between otherwise disconnected subgraphs.
+bridge: tables with two or more outgoing FK edges. Many m:n junction tables
+     have this shape and often serve as stepping stones between otherwise
+     disconnected subgraphs.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ def _describe_table(table: TableSpec) -> dict[str, object]:
     return {
         "schema": table.schema,
         "name": table.name,
+        "handle": table.handle,
         "primary_key": list(table.primary_key),
         "columns": [
             {
@@ -38,8 +39,9 @@ def _describe_table(table: TableSpec) -> dict[str, object]:
                 "is_nullable": column.is_nullable,
                 "is_primary_key": column.is_primary_key,
                 "is_foreign_key": column.is_foreign_key,
+                "visibility": column.visibility,
             }
-            for column in table.columns
+            for column in table.exposed_columns
         ],
     }
 
@@ -47,9 +49,9 @@ def _describe_table(table: TableSpec) -> dict[str, object]:
 def _describe_edge(edge: EdgeSpec) -> dict[str, object]:
     return {
         "source_table": edge.source_table,
-        "source_column": edge.source_column,
+        "source_columns": list(edge.source_columns),
         "target_table": edge.target_table,
-        "target_column": edge.target_column,
+        "target_columns": list(edge.target_columns),
         "forward_label": edge.forward_label,
     }
 
@@ -87,12 +89,12 @@ def _bfs_tables(
 ) -> list[str]:
     if depth < 0:
         raise ValueError("depth must be non-negative")
-    snapshot.table(root)  # validate
-    visited: set[str] = {root}
-    order: list[str] = [root]
+    root_handle = snapshot.table(root).handle
+    visited: set[str] = {root_handle}
+    order: list[str] = [root_handle]
     if depth == 0:
         return order
-    frontier: deque[tuple[str, int]] = deque([(root, 0)])
+    frontier: deque[tuple[str, int]] = deque([(root_handle, 0)])
     while frontier:
         current, current_depth = frontier.popleft()
         if current_depth >= depth:
@@ -149,9 +151,11 @@ def schema_map(
     slice so they highlight local structure.
     """
     if root_table is None:
-        included_names = [table.name for table in snapshot.tables]
+        canonical_root = None
+        included_names = [table.handle for table in snapshot.tables]
     else:
-        included_names = _bfs_tables(snapshot, root_table, depth)
+        canonical_root = snapshot.table(root_table).handle
+        included_names = _bfs_tables(snapshot, canonical_root, depth)
     included_set = set(included_names)
     tables_payload = [
         _describe_table(snapshot.table(name)) for name in included_names
@@ -162,7 +166,7 @@ def schema_map(
         name: _typed_edge_labels(snapshot, name) for name in included_names
     }
     return {
-        "root_table": root_table,
+        "root_table": canonical_root,
         "depth": depth,
         "tables": tables_payload,
         "edges": edges_payload,

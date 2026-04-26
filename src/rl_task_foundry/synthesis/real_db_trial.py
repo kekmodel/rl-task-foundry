@@ -14,14 +14,11 @@ from typing import cast
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.db import DatabasePools
+from rl_task_foundry.infra.event_log import TrialEventLogger
 from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
-from rl_task_foundry.synthesis.snapshot_materializer import (
-    SchemaSnapshotMaterializer,
-)
-from rl_task_foundry.infra.event_log import TrialEventLogger
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
@@ -31,6 +28,9 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisProviderUnavailableError,
     SynthesisRuntimeError,
     _SynthesisBackendProtocol,
+)
+from rl_task_foundry.synthesis.snapshot_materializer import (
+    SchemaSnapshotMaterializer,
 )
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.task_registry import (
@@ -203,6 +203,15 @@ class RealDbTrialRunner:
             checks={"debug_root_ready": debug_root.exists()},
             diagnostics={},
         )
+        trial_materializer = SchemaSnapshotMaterializer(
+            root_dir=debug_root / "databases"
+        )
+        if self.synthesis_db is not None:
+            self.synthesis_db.use_snapshot_materializer(trial_materializer)
+        if hasattr(self.exporter, "snapshot_materializer"):
+            self.exporter = replace(
+                self.exporter, snapshot_materializer=trial_materializer
+            )
         runtime = self._synthesis_runtime_for_trial(
             debug_traces_dir, phase_monitor, event_logger=event_logger
         )
@@ -219,12 +228,6 @@ class RealDbTrialRunner:
         # ``artifacts/databases/<db_id>/`` path and raises
         # FileNotFoundError even though the snapshot was written into
         # ``<output_root>/debug/databases/<db_id>/``.
-        trial_materializer = SchemaSnapshotMaterializer(
-            root_dir=debug_root / "databases"
-        )
-        self.exporter = replace(
-            self.exporter, snapshot_materializer=trial_materializer
-        )
         try:
             draft = await runtime.synthesize_environment_draft(
                 db_id=db_id,

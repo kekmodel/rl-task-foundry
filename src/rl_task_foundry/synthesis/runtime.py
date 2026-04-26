@@ -20,7 +20,12 @@ from rl_task_foundry.pipeline.provider_resilience import (
 )
 from rl_task_foundry.schema.graph import SchemaGraph
 from rl_task_foundry.schema.profiler import DataProfile
+from rl_task_foundry.synthesis.affordance_map import build_db_affordance_map
 from rl_task_foundry.synthesis.canonicalize import canonical_json
+from rl_task_foundry.synthesis.composer_tools import (
+    build_instrumented_composer_tools,
+    summarize_composer_tool_surface,
+)
 from rl_task_foundry.synthesis.contracts import (
     RolloutConstraintsContract,
     RuntimeValue,
@@ -32,10 +37,6 @@ from rl_task_foundry.synthesis.contracts import (
     TopicName,
     normalize_topic,
 )
-from rl_task_foundry.synthesis.composer_tools import (
-    build_instrumented_composer_tools,
-    summarize_composer_tool_surface,
-)
 from rl_task_foundry.synthesis.conversation import SynthesisConversation
 from rl_task_foundry.synthesis.phase_monitor import (
     PipelinePhaseMonitorLogger,
@@ -44,12 +45,12 @@ from rl_task_foundry.synthesis.phase_monitor import (
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.rendered_prompt_builder import build_rendered_user_prompt
 from rl_task_foundry.synthesis.schema_inference import extract_output_schema_from_canonical
+from rl_task_foundry.synthesis.snapshot_materializer import TOOLING_VERSION
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftErrorCode,
     SubmitDraftPayload,
 )
-from rl_task_foundry.synthesis.snapshot_materializer import TOOLING_VERSION
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_to_dict
 from rl_task_foundry.tooling.composer import (
@@ -97,6 +98,7 @@ class _SynthesisBackendProtocol(Protocol):
         anchor_hint: dict[str, object] | None = None,
         data_profile: DataProfile | None = None,
         examples_pack: object | None = None,
+        affordance_map: dict[str, object] | None = None,
         max_turns: int,
     ) -> SynthesisConversationResult: ...
 
@@ -313,15 +315,18 @@ def summarize_schema_graph(
     limited_tables = graph.tables[:max_tables]
     for table in limited_tables:
         columns = table.columns
+        exposed_columns = [
+            c
+            for c in columns
+            if c.visibility != "blocked" or c.is_primary_key or c.is_foreign_key
+        ]
         readable = [
             c.column_name
-            for c in columns
-            if not c.is_primary_key
-            and not c.is_foreign_key
-            and not c.column_name.endswith("_id")
+            for c in exposed_columns
+            if not c.is_primary_key and not c.is_foreign_key
         ]
         fk_cols = [
-            c.column_name for c in columns if c.is_foreign_key
+            c.column_name for c in exposed_columns if c.is_foreign_key
         ]
         outbound = graph.edges_from(
             table.table_name, schema_name=table.schema_name
@@ -336,7 +341,7 @@ def summarize_schema_graph(
                 "row_estimate": table.row_estimate,
                 "primary_key": list(table.primary_key),
                 "column_names": [
-                    c.column_name for c in columns
+                    c.column_name for c in exposed_columns
                 ],
                 "readable_columns": readable,
                 "fk_columns": fk_cols,
@@ -503,7 +508,15 @@ class SynthesisAgentRuntime:
             resolved_graph,
             max_tables=self.config.synthesis.runtime.schema_summary_max_tables,
         )
-        anchor_hint = await synthesis_db.random_anchor()
+        affordance_map = build_db_affordance_map(
+            resolved_graph,
+            data_profile=data_profile,
+        )
+        anchor_hint = None
+        if self.config.synthesis.runtime.anchor_candidates_enabled:
+            anchor_hint = await synthesis_db.random_anchor_candidates(
+                limit=self.config.synthesis.runtime.anchor_candidate_limit,
+            )
         shuffle_seed = _shuffle_seed(
             "synthesis",
             db_id,
@@ -527,7 +540,7 @@ class SynthesisAgentRuntime:
             event_logger=self.event_logger,
         )
         pools = await synthesis_db.ensure_database_pools()
-        async with pools.solver_connection() as conn:
+        async with pools.control_connection() as conn:
             composer_session = ComposerSession(
                 snapshot=schema_snapshot, connection=conn
             )
@@ -544,6 +557,7 @@ class SynthesisAgentRuntime:
                 tool_surface_summary=tool_surface_summary,
                 anchor_hint=anchor_hint,
                 data_profile=data_profile,
+                affordance_map=affordance_map,
             )
         if controller.accepted_draft is None:
             attempts = self._generation_attempts_from_submit_records(
@@ -761,6 +775,7 @@ class SynthesisAgentRuntime:
         tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
         data_profile: DataProfile | None = None,
+        affordance_map: dict[str, object] | None = None,
     ) -> SynthesisConversationResult:
         candidate_backends = self.synthesis_backends or []
         if not candidate_backends:
@@ -787,6 +802,7 @@ class SynthesisAgentRuntime:
                     max_turns=self.config.synthesis.runtime.max_turns,
                     anchor_hint=anchor_hint,
                     data_profile=data_profile,
+                    affordance_map=affordance_map,
                     examples_pack=self.config.domain.examples_pack,
                 )
             except Exception as exc:  # pragma: no cover
@@ -851,7 +867,7 @@ class SynthesisAgentRuntime:
         canonical_input = submission.canonical_answer
         output_schema = extract_output_schema_from_canonical(canonical_input)
         task = TaskContract(
-            question=submission.question,
+            question=submission.user_request,
             topic=selected_topic,
             output_schema=output_schema,
             constraint_summary=[],

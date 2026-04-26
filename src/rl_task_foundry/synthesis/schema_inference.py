@@ -41,12 +41,11 @@ def _infer_output_field(name: str, value: object) -> OutputFieldContract:
     if isinstance(value, list):
         sample = _merge_list_samples(value)
         item = _infer_output_field("item", sample)
-        ordered, sort_key = _infer_list_ordering(item)
         return OutputFieldContract(
             name=name,
             type=OutputFieldType.LIST,
-            ordered=ordered,
-            sort_key=sort_key,
+            ordered=True,
+            length=len(value),
             items=item,
         )
     if isinstance(value, bool):
@@ -60,34 +59,6 @@ def _infer_output_field(name: str, value: object) -> OutputFieldContract:
     if isinstance(value, date):
         return OutputFieldContract(name=name, type=OutputFieldType.DATE)
     return OutputFieldContract(name=name, type=OutputFieldType.STRING)
-
-
-_PRIMITIVE_FIELD_TYPES: frozenset[OutputFieldType] = frozenset(
-    {
-        OutputFieldType.STRING,
-        OutputFieldType.INT,
-        OutputFieldType.FLOAT,
-        OutputFieldType.BOOL,
-        OutputFieldType.DATE,
-        OutputFieldType.DATETIME,
-        OutputFieldType.ENUM,
-    }
-)
-
-
-def _infer_list_ordering(
-    item: OutputFieldContract,
-) -> tuple[bool, tuple[str, ...] | None]:
-    if item.type is not OutputFieldType.OBJECT:
-        return False, None
-    primitive_field_names = tuple(
-        child.name
-        for child in item.fields
-        if child.type in _PRIMITIVE_FIELD_TYPES and not child.nullable
-    )
-    if not primitive_field_names:
-        return True, None
-    return False, primitive_field_names
 
 
 def _merge_list_samples(items: list[object]) -> object:

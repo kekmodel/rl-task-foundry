@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal
@@ -33,9 +32,6 @@ class CategoryTaxonomy:
     OTHER = TopicName("other")
 
 
-_WORD_SEPARATOR_RE = re.compile(r"[_\-\s]+")
-
-
 def normalize_topic(value: object) -> str:
     if isinstance(value, TopicName):
         return str(value)
@@ -47,7 +43,7 @@ def normalize_topic(value: object) -> str:
 
 
 def normalize_words(value: str, *, lowercase: bool = False) -> str:
-    normalized = _WORD_SEPARATOR_RE.sub(" ", value).strip()
+    normalized = value.strip()
     if lowercase:
         return normalized.lower()
     return normalized
@@ -99,6 +95,7 @@ class OutputFieldContract(StrictModel):
     ordered: bool = False
     sort_key: tuple[str, ...] | None = None
     unique_elements: bool = False
+    length: int | None = None
     enum_values: list[str] = Field(default_factory=list)
     fields: list[OutputFieldContract] = Field(default_factory=list)
     items: OutputFieldContract | None = None
@@ -119,8 +116,12 @@ class OutputFieldContract(StrictModel):
         if self.type == OutputFieldType.LIST:
             if self.items is None:
                 raise ValueError("list output fields must declare items")
+            if self.length is not None and self.length < 0:
+                raise ValueError("list output field length must be non-negative")
         elif self.items is not None:
             raise ValueError("only list output fields may declare items")
+        if self.type != OutputFieldType.LIST and self.length is not None:
+            raise ValueError("length is only allowed for list output fields")
         if self.sort_key is not None:
             if self.type != OutputFieldType.LIST:
                 raise ValueError("sort_key is only allowed for list output fields")
@@ -214,6 +215,10 @@ class TaskQualityMetrics(StrictModel):
     solver_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_low: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_high: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_planned_runs: int | None = Field(default=None, ge=0)
+    solver_completed_runs: int | None = Field(default=None, ge=0)
+    solver_evaluable_runs: int | None = Field(default=None, ge=0)
+    solver_failed_runs: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def _validate_interval(self) -> TaskQualityMetrics:

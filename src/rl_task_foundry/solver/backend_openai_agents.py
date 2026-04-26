@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import cache
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
@@ -14,9 +13,10 @@ from typing import Any, ClassVar
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
     build_reasoning_replay_hook,
+    tool_choice_for_model,
 )
 from rl_task_foundry.infra.sdk_helpers import (
-    tool_choice_for_model,
+    extract_run_error_items as _extract_run_error_items,
 )
 from rl_task_foundry.infra.sdk_helpers import (
     extract_token_usage as _extract_token_usage,
@@ -36,11 +36,18 @@ from rl_task_foundry.infra.sdk_helpers import (
 from rl_task_foundry.infra.sdk_helpers import (
     summarize_run_item as _summarize_run_item,
 )
-from rl_task_foundry.infra.sdk_helpers import (
-    extract_run_error_items as _extract_run_error_items,
-)
 from rl_task_foundry.solver.models import SolverResult
 from rl_task_foundry.solver.runtime import SolverEpisodeInput
+from rl_task_foundry.synthesis.canonicalize import (
+    CanonicalizationError,
+    canonical_json,
+    canonicalize_output,
+)
+from rl_task_foundry.synthesis.contracts import (
+    OutputFieldContract,
+    OutputFieldType,
+    OutputSchemaContract,
+)
 
 
 def _load_sdk_components() -> SimpleNamespace:
@@ -65,6 +72,18 @@ def _failure_raw_output_text(error: Exception) -> str:
     return ""
 
 
+def _final_output_preview(final_output: Any, *, limit: int = 2000) -> str:
+    if isinstance(final_output, str):
+        text = final_output
+    elif isinstance(final_output, dict):
+        text = json.dumps(final_output, ensure_ascii=False, sort_keys=True)
+    else:
+        text = str(final_output)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...[truncated]"
+
+
 def _extract_tool_calls(run_result: Any) -> list[dict[str, Any]]:
     tool_calls: list[dict[str, Any]] = []
     for item in getattr(run_result, "new_items", []) or []:
@@ -79,7 +98,7 @@ def _is_successful_submission(output: Any) -> bool:
     return (
         isinstance(output, dict)
         and output.get("submitted") is True
-        and isinstance(output.get("answer_text"), str)
+        and ("answer" in output or isinstance(output.get("answer_text"), str))
     )
 
 
@@ -96,14 +115,18 @@ def _extract_submission_output(
             final_output = normalized_output
     if _is_successful_submission(final_output):
         assert isinstance(final_output, dict)
-        answer_text = final_output["answer_text"]
+        if "answer" in final_output:
+            answer = final_output["answer"]
+            answer_text = canonical_json(answer, default=str)
+        else:
+            answer_text = final_output["answer_text"]
+            try:
+                answer = json.loads(answer_text)
+            except json.JSONDecodeError:
+                answer = None
         structured_output: dict[str, object] | None = None
-        try:
-            parsed = json.loads(answer_text)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict):
-            structured_output = dict(parsed)
+        if isinstance(answer, dict):
+            structured_output = dict(answer)
         return answer_text, structured_output, "completed", "submitted", {}
     if _is_failed_submission(final_output):
         assert isinstance(final_output, dict)
@@ -125,26 +148,19 @@ def _parse_submission_output_string(final_output: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-@cache
-def _make_submit_result_tool() -> object:
+_SUBMIT_RESULT_EXACT_VALUE_CONTRACT = (
+    "Use exact values copied from tool responses. Do not change string "
+    "capitalization, spelling, punctuation, whitespace, numeric precision, or "
+    "date/time format unless the user explicitly asks for that transformation."
+)
+
+
+def _make_submit_result_tool(output_schema: OutputSchemaContract) -> object:
     from agents import FunctionTool
     from agents.strict_schema import ensure_strict_json_schema
 
     params_json_schema = ensure_strict_json_schema(
-        {
-            "type": "object",
-            "properties": {
-                "answer_text": {
-                    "type": "string",
-                    "description": (
-                        "Final answer as a JSON string"
-                        " matching the rendered prompt format."
-                    ),
-                }
-            },
-            "required": ["answer_text"],
-            "additionalProperties": False,
-        }
+        _submit_result_params_schema(output_schema)
     )
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> Any:
@@ -154,25 +170,139 @@ def _make_submit_result_tool() -> object:
             return {
                 "submitted": False,
                 "error": "submit_result payload failed schema validation",
-                "details": [{"loc": ["answer_text"], "msg": f"invalid JSON: {exc}"}],
+                "details": [{"loc": ["submit_result"], "msg": f"invalid JSON: {exc}"}],
             }
-        if not isinstance(payload, dict) or not isinstance(payload.get("answer_text"), str):
+        if not isinstance(payload, dict):
             return {
                 "submitted": False,
                 "error": "submit_result payload failed schema validation",
-                "details": [{"loc": ["answer_text"], "msg": "Field required"}],
+                "details": [{"loc": ["submit_result"], "msg": "expected object"}],
             }
-        return {"submitted": True, "answer_text": payload["answer_text"]}
+        if output_schema.root.type is OutputFieldType.OBJECT:
+            submitted_answer = payload
+        else:
+            submitted_answer = payload.get("answer")
+        try:
+            canonical_answer = canonicalize_output(output_schema, submitted_answer)
+        except CanonicalizationError as exc:
+            return {
+                "submitted": False,
+                "error": "submit_result payload failed schema validation",
+                "details": [{"loc": ["submit_result"], "msg": str(exc)}],
+            }
+        return {"submitted": True, "answer": canonical_answer}
 
     return FunctionTool(
         name="submit_result",
-        description=(
-            "Submit your final answer as a JSON string matching the rendered prompt schema."
-        ),
+        description="Submit the final structured result.",
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
         strict_json_schema=True,
     )
+
+
+def _submit_result_params_schema(output_schema: OutputSchemaContract) -> dict[str, object]:
+    if output_schema.root.type is OutputFieldType.OBJECT:
+        return _output_field_json_schema(output_schema.root)
+    return {
+        "type": "object",
+        "description": "Final structured result payload.",
+        "properties": {
+            "answer": _output_field_json_schema(output_schema.root),
+        },
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+
+
+def _output_field_json_schema(field: OutputFieldContract) -> dict[str, object]:
+    if field.type is OutputFieldType.OBJECT:
+        schema: dict[str, object] = {
+            "type": "object",
+            "description": _output_field_description(field),
+            "properties": {
+                child.name: _output_field_json_schema(child)
+                for child in field.fields
+            },
+            "required": [child.name for child in field.fields],
+            "additionalProperties": False,
+        }
+    elif field.type is OutputFieldType.LIST:
+        schema = {
+            "type": "array",
+            "description": _output_field_description(field),
+            "items": (
+                _output_field_json_schema(field.items)
+                if field.items is not None
+                else {}
+            ),
+        }
+        if field.length is not None:
+            schema["minItems"] = field.length
+            schema["maxItems"] = field.length
+    elif field.type is OutputFieldType.INT:
+        schema = {"type": "integer", "description": _output_field_description(field)}
+    elif field.type is OutputFieldType.FLOAT:
+        schema = {"type": "number", "description": _output_field_description(field)}
+    elif field.type is OutputFieldType.BOOL:
+        schema = {"type": "boolean", "description": _output_field_description(field)}
+    elif field.type in {
+        OutputFieldType.STRING,
+        OutputFieldType.DATE,
+        OutputFieldType.DATETIME,
+    }:
+        schema = {"type": "string", "description": _output_field_description(field)}
+    elif field.type is OutputFieldType.ENUM:
+        schema = {
+            "type": "string",
+            "description": _output_field_description(field),
+            "enum": list(field.enum_values),
+        }
+    else:  # pragma: no cover
+        raise ValueError(f"unsupported output field type: {field.type}")
+
+    if field.nullable:
+        return {
+            "anyOf": [schema, {"type": "null"}],
+            "description": _output_field_description(field),
+        }
+    return schema
+
+
+def _output_field_description(field: OutputFieldContract) -> str:
+    prefix = f"{field.description.strip()} " if field.description.strip() else ""
+    if field.type is OutputFieldType.LIST:
+        order = " Preserve the required item order." if field.ordered else ""
+        return f"{prefix}Final structured result items.{order}"
+    if field.type is OutputFieldType.OBJECT:
+        return f"{prefix}Final structured result object."
+    if field.type is OutputFieldType.STRING:
+        return (
+            f"{prefix}Exact value from tool responses. Preserve capitalization, "
+            "spelling, punctuation, and whitespace."
+        )
+    if field.type is OutputFieldType.DATE:
+        return f"{prefix}Exact date value from tool responses. Preserve date format."
+    if field.type is OutputFieldType.DATETIME:
+        return (
+            f"{prefix}Exact date/time value from tool responses. Preserve "
+            "date/time format and timezone."
+        )
+    if field.type is OutputFieldType.ENUM:
+        return (
+            f"{prefix}Use one allowed value exactly as shown. Preserve "
+            "capitalization, spelling, punctuation, and whitespace."
+        )
+    if field.type is OutputFieldType.FLOAT:
+        return (
+            f"{prefix}Exact numeric value from tool responses. Do "
+            "not round or reformat it."
+        )
+    if field.type is OutputFieldType.INT:
+        return f"{prefix}Exact integer value from tool responses."
+    if field.type is OutputFieldType.BOOL:
+        return f"{prefix}Exact boolean value from tool responses."
+    return f"{prefix}{_SUBMIT_RESULT_EXACT_VALUE_CONTRACT}"
 
 
 @dataclass(slots=True)
@@ -285,7 +415,7 @@ class OpenAIAgentsSolverBackend:
 
         task_id, rendered_user_prompt = self._coerce_run_input(episode)
         tools = self._build_tools()
-        tools.append(_make_submit_result_tool())
+        tools.append(_make_submit_result_tool(episode.task_bundle.task.output_schema))
         agent = sdk.Agent(
             name=self.solver_config.solver_id,
             instructions=None,
@@ -340,9 +470,6 @@ class OpenAIAgentsSolverBackend:
             termination_reason,
             termination_metadata,
         ) = _extract_submission_output(run_result.final_output)
-        raw_output_text = _raw_output_text(run_result.final_output, submitted_answer_text)
-        if submitted_answer_text is None and status == "completed":
-            raise RuntimeError("Solver run did not submit an answer via submit_result()")
 
         # run_items summary travels back on termination_metadata so the
         # orchestrator can include it in the solver_run_completed event.
@@ -350,6 +477,27 @@ class OpenAIAgentsSolverBackend:
         metadata["run_items"] = [
             _summarize_run_item(item) for item in getattr(run_result, "new_items", [])
         ]
+        if submitted_answer_text is None and status == "completed":
+            metadata["final_output_preview"] = _final_output_preview(
+                run_result.final_output
+            )
+            return SolverResult(
+                task_id=task_id,
+                solver_id=self.solver_config.solver_id,
+                provider=self.solver_config.provider,
+                model=self.solver_config.model,
+                raw_output_text="",
+                structured_output=None,
+                explicit_memory_events=[],
+                token_usage=_extract_token_usage(run_result),
+                latency_ms=latency_ms,
+                turn_count=_extract_turn_count(run_result),
+                status="invalid_submit",
+                termination_reason="missing_submit_result",
+                termination_metadata=metadata,
+            )
+
+        raw_output_text = _raw_output_text(run_result.final_output, submitted_answer_text)
 
         return SolverResult(
             task_id=task_id,

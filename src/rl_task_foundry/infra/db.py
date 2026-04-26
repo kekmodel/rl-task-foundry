@@ -21,7 +21,7 @@ def control_session_settings(config: DatabaseConfig) -> SessionSettings:
     """Return SQL statements required for a safe control-plane session."""
 
     return SessionSettings(
-        readonly_sql=(),
+        readonly_sql=_readonly_sql(config),
         timeout_sql=(
             f"SET statement_timeout = {config.statement_timeout_ms}",
             f"SET lock_timeout = {config.lock_timeout_ms}",
@@ -31,14 +31,31 @@ def control_session_settings(config: DatabaseConfig) -> SessionSettings:
     )
 
 
+def mutating_control_session_settings(config: DatabaseConfig) -> SessionSettings:
+    """Return settings for explicit fixture/setup lanes that must write.
+
+    Normal control/composer sessions are read-only. This helper exists so
+    test fixture DDL and other explicit maintenance operations do not weaken
+    the default safety contract by reusing the read-only control lane.
+    """
+
+    base = control_session_settings(config)
+    return SessionSettings(readonly_sql=(), timeout_sql=base.timeout_sql)
+
+
 def solver_session_settings(config: DatabaseConfig) -> SessionSettings:
     """Return SQL statements required for a safe solver session."""
 
+    readonly_sql = list(_readonly_sql(config))
+    base = control_session_settings(config)
+    return SessionSettings(readonly_sql=tuple(readonly_sql), timeout_sql=base.timeout_sql)
+
+
+def _readonly_sql(config: DatabaseConfig) -> tuple[str, ...]:
     readonly_sql = ["SET default_transaction_read_only = on"]
     if config.readonly_role:
         readonly_sql.append(f"SET ROLE {config.readonly_role}")
-    base = control_session_settings(config)
-    return SessionSettings(readonly_sql=tuple(readonly_sql), timeout_sql=base.timeout_sql)
+    return tuple(readonly_sql)
 
 
 async def _apply_session_settings(conn: Any, settings: SessionSettings) -> None:
@@ -133,12 +150,14 @@ async def smoke_test_connection(config: DatabaseConfig) -> dict[str, str]:
 
     conn = await asyncpg.connect(dsn=config.dsn)
     try:
+        await _apply_session_settings(conn, control_session_settings(config))
         row = await conn.fetchrow(
             """
             SELECT
                 current_database()::text AS database_name,
                 current_user::text AS user_name,
-                current_schema()::text AS schema_name
+                current_schema()::text AS schema_name,
+                current_setting('default_transaction_read_only')::text AS read_only
             """
         )
         assert row is not None
@@ -146,6 +165,7 @@ async def smoke_test_connection(config: DatabaseConfig) -> dict[str, str]:
             "database_name": row["database_name"],
             "user_name": row["user_name"],
             "schema_name": row["schema_name"],
+            "read_only": row["read_only"],
         }
     finally:
         await conn.close()

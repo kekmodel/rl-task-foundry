@@ -1,5 +1,5 @@
 database:
-  dsn: "${DATABASE_DSN:-postgresql://sakila:sakila@127.0.0.1:5433/sakila}"
+  dsn: "${DATABASE_DSN:-postgresql://pagila:pagila@127.0.0.1:5433/pagila}"
   schema_allowlist: ["public"]
   readonly_role: "rlvr_reader"
   statement_timeout_ms: 5000

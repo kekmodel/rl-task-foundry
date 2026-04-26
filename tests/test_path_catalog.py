@@ -119,7 +119,7 @@ def test_build_path_catalog_detects_shortcuts_and_features():
     assert indirect.difficulty_features["has_nullable_hop"] is True
 
 
-async def _load_sakila_catalog():
+async def _load_pagila_catalog():
     config = load_config("rl_task_foundry.yaml")
     introspector = PostgresSchemaIntrospector(
         database=config.database,
@@ -131,8 +131,8 @@ async def _load_sakila_catalog():
 
 
 @pytest.mark.asyncio
-async def test_build_path_catalog_reads_real_sakila_paths():
-    catalog = await _load_sakila_catalog()
+async def test_build_path_catalog_reads_real_pagila_paths():
+    catalog = await _load_pagila_catalog()
     customer_paths = catalog.for_root("customer")
     path_ids = {path.path_id for path in customer_paths}
     assert "customer.address.city" in path_ids

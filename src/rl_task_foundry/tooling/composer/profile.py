@@ -4,7 +4,7 @@ Two shapes:
 
 - `column=None` — table overview: total row count plus per-column
   distinct/null counts. One SQL round-trip assembled as a single
-  aggregate SELECT so every column shows up in a single row.
+  aggregate SELECT so every column shows up in one result object.
 - `column=<name>` — single-column detail: distinct count, null count,
   min, max, plus a top-k frequency list. Two SQL round-trips
   (aggregates + grouped top-k).
@@ -27,7 +27,6 @@ from rl_task_foundry.tooling.composer._sql import (
     compile_filter_clauses,
     parse_filter_clauses,
 )
-
 
 _MIN_MAX_TYPES = {
     "integer",
@@ -79,7 +78,8 @@ async def _profile_table(
 ) -> dict[str, object]:
     where_sql, params, _ = _build_where(table_spec, predicate, 1)
     select_parts: list[str] = ["COUNT(*) AS row_count"]
-    for column in table_spec.columns:
+    columns = table_spec.exposed_columns
+    for column in columns:
         ident = quote_ident(column.name)
         select_parts.append(
             f"COUNT(DISTINCT t.{ident}) AS \"distinct_{column.name}\""
@@ -100,19 +100,21 @@ async def _profile_table(
             {
                 "name": column.name,
                 "data_type": column.data_type,
+                "visibility": column.visibility,
                 "distinct_count": 0,
                 "null_count": 0,
             }
-            for column in table_spec.columns
+            for column in columns
         ]
     else:
         row_count = int(coerce_asyncpg_int(row["row_count"]))
         columns_payload = []
-        for column in table_spec.columns:
+        for column in columns:
             columns_payload.append(
                 {
                     "name": column.name,
                     "data_type": column.data_type,
+                    "visibility": column.visibility,
                     "distinct_count": int(
                         coerce_asyncpg_int(row[f"distinct_{column.name}"])
                     ),
@@ -122,7 +124,7 @@ async def _profile_table(
                 }
             )
     return {
-        "table": table_spec.name,
+        "table": table_spec.handle,
         "row_count": row_count,
         "columns": columns_payload,
     }
@@ -184,7 +186,7 @@ async def _profile_column(
     ]
 
     payload: dict[str, object] = {
-        "table": table_spec.name,
+        "table": table_spec.handle,
         "column": column_spec.name,
         "data_type": column_spec.data_type,
         "row_count": row_count,
@@ -219,7 +221,7 @@ async def profile(
     table_spec = session.snapshot.table(table)
     if column is None:
         return await _profile_table(session, table_spec, predicate)
-    column_spec = table_spec.column(column)
+    column_spec = table_spec.exposed_column(column)
     return await _profile_column(
         session, table_spec, column_spec, predicate, top_k
     )

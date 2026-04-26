@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -16,8 +17,10 @@ from rl_task_foundry.pipeline.solver_orchestrator import (
 )
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
 from rl_task_foundry.solver.models import SolverResult
+from rl_task_foundry.solver.runtime import SolverEpisodeInput
 from rl_task_foundry.synthesis.canonicalize import RewardResult
 from tests.test_synthesis_task_registry import _sample_draft
+from tests.test_tooling_atomic_tool_factory import _snapshot, _StubConnection
 
 
 async def _empty_sdk_tools(_task_bundle: object) -> list[object]:
@@ -59,6 +62,47 @@ class _FakeRuntime:
             raw_output_text=self.raw_output_text,
             status="completed",
         )
+
+
+class _InvokingAtomicRuntime:
+    def __init__(self, sdk_tools: list[object]) -> None:
+        self.sdk_tools = sdk_tools
+
+    async def run(self, episode) -> SolverResult:
+        tools = {
+            getattr(tool, "name"): tool
+            for tool in self.sdk_tools
+        }
+        await tools["create_record_set"].on_invoke_tool(  # pyright: ignore[reportAttributeAccessIssue]
+            None,
+            '{"table":"customer"}',
+        )
+        return SolverResult(
+            task_id=episode.task_id,
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+            raw_output_text='{"customer":"Alice","day":"2026-04-12"}',
+            status="completed",
+            termination_metadata={"run_items": []},
+        )
+
+
+class _FakeDatabasePools:
+    @asynccontextmanager
+    async def solver_connection(self):
+        yield _StubConnection()
+
+    async def close(self) -> None:
+        return None
+
+
+class _FakeEventLogger:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def log_sync(self, **event: object) -> None:
+        self.events.append(event)
 
 
 @pytest.mark.asyncio
@@ -129,6 +173,50 @@ async def test_solver_orchestrator_invokes_sdk_tools_factory_per_solver_run(
 
 
 @pytest.mark.asyncio
+async def test_solver_orchestrator_attaches_atomic_trace_metadata(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    solver_config = config.models.solvers[0]
+    provider_config = config.providers[solver_config.provider]
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: _InvokingAtomicRuntime(_args[3]),
+        database_pools=_FakeDatabasePools(),  # type: ignore[arg-type]
+    )
+    orchestrator._schema_snapshot_cache[draft.task_bundle.db_id] = _snapshot()
+    episode = SolverEpisodeInput(
+        task_bundle=draft.task_bundle,
+        rendered_user_prompt=draft.rendered_user_prompt,
+    )
+
+    try:
+        result = await orchestrator._run_with_tools(
+            solver_config=solver_config,
+            provider_config=provider_config,
+            bundle=draft,
+            episode=episode,
+        )
+    finally:
+        await orchestrator.close()
+
+    assert result.termination_metadata["atomic_trace_version"] == (
+        "atomic-resource-api-v4.trace.v1"
+    )
+    events = result.termination_metadata["atomic_trace_events"]
+    assert isinstance(events, list)
+    assert events[0]["operation"] == "create_record_set"
+    output_resource = events[0]["output_resource"]
+    assert output_resource["id"] == "record_set_1"
+    assert output_resource["type"] == "record_set"
+    assert output_resource["table"] == "customer"
+    assert "columns" not in output_resource
+    assert "relations" not in output_resource
+    assert result.termination_metadata["run_items"] == []
+
+
+@pytest.mark.asyncio
 async def test_solver_orchestrator_close_clears_snapshot_cache(
     tmp_path: Path,
 ) -> None:
@@ -182,6 +270,25 @@ def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> Non
     gate = evaluate_rollout_summary(config, summary)
 
     assert gate.status is TaskQualityGateStatus.ACCEPT
+
+
+def test_evaluate_rollout_summary_rejects_incomplete_evaluable_denominator(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    summary = TaskRolloutSummary(
+        task_id="task_assignment_registrytest",
+        db_id="sakila",
+        planned_solver_runs=3,
+        total_solver_runs=3,
+        matched_solver_runs=2,
+        runs=(),
+        evaluable_solver_runs=2,
+        failed_solver_runs=1,
+    )
+
+    with pytest.raises(ValueError, match="target evaluable solver denominator"):
+        evaluate_rollout_summary(config, summary)
 
 
 def _make_run(*, solver_id: str, raw: str, matched: bool) -> TaskSolverRun:
@@ -242,6 +349,9 @@ class _FailingRuntime:
 async def test_solver_orchestrator_excludes_failed_runs_from_pass_rate(
     tmp_path: Path,
 ) -> None:
+    class RateLimitError(RuntimeError):
+        pass
+
     draft = _sample_draft()
     config = _config(tmp_path)
     config.models.solvers = [
@@ -255,7 +365,8 @@ async def test_solver_orchestrator_excludes_failed_runs_from_pass_rate(
     seen: list[int] = []
     runtimes = iter([
         _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', seen),
-        _FailingRuntime(RuntimeError("simulated rate limit")),
+        _FailingRuntime(RateLimitError("simulated rate limit")),
+        _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', seen),
         _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', seen),
     ])
     orchestrator = SolverOrchestrator(
@@ -269,11 +380,209 @@ async def test_solver_orchestrator_excludes_failed_runs_from_pass_rate(
     finally:
         await orchestrator.close()
 
-    assert summary.total_solver_runs == 2
-    assert summary.matched_solver_runs == 2
+    assert summary.planned_solver_runs == 3
+    assert summary.total_solver_runs == 4
+    assert summary.evaluable_solver_runs == 3
+    assert summary.matched_solver_runs == 3
     assert summary.failed_solver_runs == 1
     assert summary.pass_rate == 1.0
-    assert len(summary.runs) == 3
+    assert len(summary.runs) == 4
+    gate = evaluate_rollout_summary(config, summary)
+    assert gate.total_solver_runs == 4
+    assert gate.evaluable_solver_runs == 3
+    assert gate.failed_solver_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_counts_wrong_answers_as_evaluable_without_topup(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{i}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for i in range(3)
+    ]
+    runtimes = iter([
+        _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', []),
+        _FakeRuntime('{"customer":"Bob","day":"2026-04-12"}', []),
+        _FakeRuntime('{"customer":"Carol","day":"2026-04-12"}', []),
+    ])
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: next(runtimes),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.planned_solver_runs == 3
+    assert summary.total_solver_runs == 3
+    assert summary.evaluable_solver_runs == 3
+    assert summary.matched_solver_runs == 1
+    assert summary.failed_solver_runs == 0
+    assert summary.pass_rate == pytest.approx(1 / 3)
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_fills_evaluable_denominator_before_decision(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(
+        update={"solver_batch_size": 1, "max_solver_runs": 5}
+    )
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{i}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for i in range(5)
+    ]
+    runtimes = iter([
+        _FakeRuntime('{"customer":"wrong","day":"2026-04-12"}', [])
+        for _ in range(5)
+    ])
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: next(runtimes),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.planned_solver_runs == 5
+    assert summary.total_solver_runs == 5
+    assert summary.evaluable_solver_runs == 5
+    assert summary.matched_solver_runs == 0
+    assert summary.early_stop_decision == "reject_too_hard"
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_counts_user_error_as_evaluable_actor_failure(
+    tmp_path: Path,
+) -> None:
+    class UserError(RuntimeError):
+        pass
+
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{i}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for i in range(3)
+    ]
+    runtimes = iter([
+        _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', []),
+        _FailingRuntime(UserError("model stopped after tool calls")),
+        _FailingRuntime(UserError("model stopped after tool calls")),
+    ])
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: next(runtimes),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.total_solver_runs == 3
+    assert summary.evaluable_solver_runs == 3
+    assert summary.matched_solver_runs == 1
+    assert summary.failed_solver_runs == 0
+    assert summary.pass_rate == pytest.approx(1 / 3)
+    gate = evaluate_rollout_summary(config, summary)
+    assert gate.status is TaskQualityGateStatus.ACCEPT
+    assert gate.total_solver_runs == 3
+    assert gate.evaluable_solver_runs == 3
+
+
+@pytest.mark.asyncio
+async def test_solver_event_log_marks_user_error_as_evaluable(
+    tmp_path: Path,
+) -> None:
+    class UserError(RuntimeError):
+        pass
+
+    draft = _sample_draft()
+    event_logger = _FakeEventLogger()
+    orchestrator = SolverOrchestrator(
+        _config(tmp_path),
+        runtime_factory=lambda *_args: _FailingRuntime(
+            UserError("model stopped after tool calls")
+        ),
+        sdk_tools_factory=_empty_sdk_tools,
+        event_logger=event_logger,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.evaluable_solver_runs == 1
+    assert summary.failed_solver_runs == 0
+    payload = event_logger.events[0]["payload"]
+    assert isinstance(payload, dict)
+    assert payload["termination_reason"] == "UserError"
+    assert payload["excluded_from_pass_rate"] is False
+    assert payload["failure_class"] == "evaluable"
+    assert payload["failure_detail"] == "model stopped after tool calls"
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_counts_max_turns_as_evaluable_actor_failure(
+    tmp_path: Path,
+) -> None:
+    class MaxTurnsExceeded(RuntimeError):
+        pass
+
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{i}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for i in range(3)
+    ]
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: _FailingRuntime(
+            MaxTurnsExceeded("max turns exceeded")
+        ),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.total_solver_runs == 3
+    assert summary.evaluable_solver_runs == 3
+    assert summary.matched_solver_runs == 0
+    assert summary.failed_solver_runs == 0
+    gate = evaluate_rollout_summary(config, summary)
+    assert gate.status is TaskQualityGateStatus.REJECT_TOO_HARD
 
 
 def test_solver_orchestrator_module_has_no_legacy_imports() -> None:

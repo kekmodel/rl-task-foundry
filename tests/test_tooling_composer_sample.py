@@ -1,7 +1,7 @@
 """Tests for tooling.composer.sample.
 
 Unit tests use a recording stub connection so we can assert on SQL text
-and parameter bindings. Integration tests run against live sakila.
+and parameter bindings. Integration tests run against live pagila.
 """
 
 from __future__ import annotations
@@ -49,10 +49,11 @@ class _RecordingConnection:
 def _column(
     table: str,
     name: str,
-    data_type: str = "integer",
+    data_type: str = "int4",
     *,
     is_primary_key: bool = False,
     is_foreign_key: bool = False,
+    visibility: str = "user_visible",
 ) -> ColumnProfile:
     return ColumnProfile(
         schema_name="public",
@@ -61,7 +62,7 @@ def _column(
         data_type=data_type,
         ordinal_position=1,
         is_nullable=False,
-        visibility="user_visible",
+        visibility=visibility,  # type: ignore[arg-type]
         is_primary_key=is_primary_key,
         is_foreign_key=is_foreign_key,
     )
@@ -76,6 +77,7 @@ def _snapshot():
             _column("customer", "store_id"),
             _column("customer", "active"),
             _column("customer", "first_name", data_type="text"),
+            _column("customer", "api_token", data_type="text", visibility="blocked"),
         ],
         primary_key=("customer_id",),
     )
@@ -103,11 +105,33 @@ def _snapshot():
     )
 
 
+def _composite_pk_snapshot():
+    payment = TableProfile(
+        schema_name="public",
+        table_name="payment",
+        columns=[
+            _column("payment", "customer_id", is_primary_key=True),
+            _column("payment", "payment_id", is_primary_key=True),
+            _column("payment", "amount", data_type="numeric"),
+        ],
+        primary_key=("customer_id", "payment_id"),
+    )
+    return snapshot_from_graph(SchemaGraph(tables=[payment], edges=[]))
+
+
 def _stub_session(
     rows: list[dict[str, object]] | None = None,
 ) -> tuple[ComposerSession, _RecordingConnection]:
     conn = _RecordingConnection(rows=rows)
     session = ComposerSession(snapshot=_snapshot(), connection=conn)
+    return session, conn
+
+
+def _stub_composite_session(
+    rows: list[dict[str, object]] | None = None,
+) -> tuple[ComposerSession, _RecordingConnection]:
+    conn = _RecordingConnection(rows=rows)
+    session = ComposerSession(snapshot=_composite_pk_snapshot(), connection=conn)
     return session, conn
 
 
@@ -127,13 +151,69 @@ async def test_sample_without_seed_orders_by_primary_key_ascending():
 
 
 @pytest.mark.asyncio
+async def test_sample_omits_blocked_non_handle_columns():
+    session, conn = _stub_session(
+        rows=[
+            {
+                "customer_id": 1,
+                "store_id": 2,
+                "active": True,
+                "first_name": "ALICE",
+                "api_token": "secret",
+            }
+        ]
+    )
+
+    rows = await sample(session, table="customer", n=1)
+    sql, _ = conn.calls[0]
+
+    assert "api_token" not in sql
+    assert rows == [
+        {
+            "customer_id": 1,
+            "store_id": 2,
+            "active": True,
+            "first_name": "ALICE",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_sample_with_seed_orders_by_md5_of_pk_plus_seed():
     session, conn = _stub_session()
     await sample(session, table="customer", n=4, seed=42)
     sql, params = conn.calls[0]
-    assert "md5((t.\"customer_id\")::text || $1)" in sql
+    assert "md5((COALESCE((t.\"customer_id\")::text, '')) || $1)" in sql
+    assert 't."customer_id" ASC' in sql
     assert params == ("42",)
     assert sql.endswith("LIMIT 4")
+
+
+@pytest.mark.asyncio
+async def test_sample_orders_composite_primary_key_tables():
+    session, conn = _stub_composite_session()
+
+    await sample(session, table="payment", n=3)
+
+    sql, params = conn.calls[0]
+    assert 'ORDER BY t."customer_id" ASC, t."payment_id" ASC' in sql
+    assert sql.endswith("LIMIT 3")
+    assert params == ()
+
+
+@pytest.mark.asyncio
+async def test_sample_seed_supports_composite_primary_key_tables():
+    session, conn = _stub_composite_session()
+
+    await sample(session, table="payment", n=3, seed=99)
+
+    sql, params = conn.calls[0]
+    assert (
+        'md5((COALESCE((t."customer_id")::text, \'\') || \'|\' || '
+        'COALESCE((t."payment_id")::text, \'\')) || $1)'
+    ) in sql
+    assert 't."customer_id" ASC, t."payment_id" ASC' in sql
+    assert params == ("99",)
 
 
 @pytest.mark.asyncio
@@ -151,7 +231,8 @@ async def test_sample_with_predicate_binds_params_before_seed():
     )
     sql, params = conn.calls[0]
     assert "WHERE t.\"store_id\" = $1 AND t.\"active\" = $2" in sql
-    assert "md5((t.\"customer_id\")::text || $3)" in sql
+    assert "md5((COALESCE((t.\"customer_id\")::text, '')) || $3)" in sql
+    assert 't."customer_id" ASC' in sql
     assert params == (1, 1, "7")
 
 
@@ -163,7 +244,7 @@ async def test_sample_predicate_with_in_uses_array_cast():
         table="customer",
         n=2,
         predicate=[
-            {"column": "store_id", "op": "in", "value": [1, 2]},
+            {"column": "store_id", "op": "in", "value": ["1", "2"]},
         ],
     )
     sql, params = conn.calls[0]
@@ -242,7 +323,7 @@ async def test_sample_rejects_non_list_predicate():
         )
 
 
-# ---------- integration against sakila ----------
+# ---------- integration against pagila ----------
 
 
 async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
@@ -260,7 +341,7 @@ async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
 
 
 @pytest.mark.asyncio
-async def test_sample_runs_against_live_sakila_customer_table():
+async def test_sample_runs_against_live_pagila_customer_table():
     session, conn = await _live_session()
     try:
         rows = await sample(session, table="customer", n=3)
@@ -288,7 +369,7 @@ async def test_sample_seed_is_reproducible_across_calls():
 
 
 @pytest.mark.asyncio
-async def test_sample_honors_predicate_against_sakila():
+async def test_sample_honors_predicate_against_pagila():
     session, conn = await _live_session()
     try:
         rows = await sample(
@@ -299,5 +380,16 @@ async def test_sample_honors_predicate_against_sakila():
         )
         assert len(rows) == 3
         assert all(row["store_id"] == 1 for row in rows)
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_sample_runs_against_live_pagila_composite_pk_table():
+    session, conn = await _live_session()
+    try:
+        rows = await sample(session, table="payment", n=3)
+        assert len(rows) == 3
+        assert all("payment_id" in row for row in rows)
     finally:
         await conn.close()

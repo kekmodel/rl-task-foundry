@@ -3,11 +3,26 @@ from pathlib import Path
 from rl_task_foundry.config import load_config
 
 
+def _write_config_from_repo_default(
+    source: Path,
+    target: Path,
+    *,
+    dsn_expr: str,
+) -> None:
+    text = source.read_text(encoding="utf-8")
+    text = text.replace(
+        '  dsn: "${DATABASE_DSN:-postgresql://pagila:pagila@127.0.0.1:5433/pagila}"',
+        f'  dsn: "{dsn_expr}"',
+        1,
+    )
+    target.write_text(text, encoding="utf-8")
+
+
 def test_load_config_uses_solver_run_count_source_of_truth():
     config = load_config(Path("rl_task_foundry.yaml"))
     assert config.models.total_solver_runs == 30
     assert config.output.run_db_path.name == "run.db"
-    assert config.database.dsn == "postgresql://sakila:sakila@127.0.0.1:5433/sakila"
+    assert config.database.dsn == "postgresql://pagila:pagila@127.0.0.1:5433/pagila"
     assert config.budget.max_gpu_hours is None
     assert "codex_oauth" in config.providers
     assert "local_server" in config.providers
@@ -17,6 +32,8 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.atomic_tools.max_batch_values == 128
     assert config.atomic_tools.float_precision == 2
     assert config.synthesis.runtime.max_turns == 20
+    assert config.synthesis.runtime.anchor_candidates_enabled is False
+    assert config.synthesis.runtime.anchor_candidate_limit == 10
     assert config.synthesis.runtime.max_generation_attempts == 5
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
     assert config.synthesis.runtime.category_backoff_duration_s == 3600
@@ -52,3 +69,57 @@ def test_load_config_applies_runtime_model_overrides():
     assert config.models.composer.provider == "local_server"
     assert all(solver.provider == "local_server" for solver in config.models.solvers)
     assert all(solver.model == "local-gpt" for solver in config.models.solvers)
+
+
+def test_load_config_reads_cwd_dotenv_for_tmp_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_config = Path.cwd() / "rl_task_foundry.yaml"
+    config_dir = tmp_path / "tmp_configs"
+    config_dir.mkdir()
+    config_path = config_dir / "trial.yaml"
+    _write_config_from_repo_default(
+        repo_config,
+        config_path,
+        dsn_expr="${TMP_TRIAL_DSN:-postgresql://fallback/fallback}",
+    )
+    (tmp_path / ".env").write_text(
+        "TMP_TRIAL_DSN=postgresql://root-env/root\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TMP_TRIAL_DSN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(config_path)
+
+    assert config.database.dsn == "postgresql://root-env/root"
+
+
+def test_load_config_prefers_config_local_dotenv_over_cwd_dotenv(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_config = Path.cwd() / "rl_task_foundry.yaml"
+    config_dir = tmp_path / "tmp_configs"
+    config_dir.mkdir()
+    config_path = config_dir / "trial.yaml"
+    _write_config_from_repo_default(
+        repo_config,
+        config_path,
+        dsn_expr="${TMP_TRIAL_DSN:-postgresql://fallback/fallback}",
+    )
+    (tmp_path / ".env").write_text(
+        "TMP_TRIAL_DSN=postgresql://root-env/root\n",
+        encoding="utf-8",
+    )
+    (config_dir / ".env").write_text(
+        "TMP_TRIAL_DSN=postgresql://config-env/config\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TMP_TRIAL_DSN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(config_path)
+
+    assert config.database.dsn == "postgresql://config-env/config"

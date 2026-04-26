@@ -186,6 +186,22 @@ def test_unique_elements_removes_duplicate_objects() -> None:
     assert canonical == ["cultural", "modern", "scenic"]
 
 
+def test_list_length_contract_rejects_wrong_item_count() -> None:
+    schema = OutputSchemaContract(
+        root=OutputFieldContract(
+            name="tags",
+            type=OutputFieldType.LIST,
+            ordered=True,
+            length=2,
+            items=OutputFieldContract(name="tag", type=OutputFieldType.STRING),
+        ),
+        primary_output_format="json_array",
+    )
+
+    with pytest.raises(CanonicalizationError, match="exactly 2 items"):
+        canonicalize_output(schema, ["scenic"])
+
+
 def test_schema_rejects_unordered_object_list_without_sort_key() -> None:
     with pytest.raises(ValidationError, match="unordered list of objects must declare sort_key"):
         OutputFieldContract(

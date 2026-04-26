@@ -126,7 +126,11 @@ def load_config(
     """Load and validate application configuration."""
 
     config_path = Path(path)
-    _load_dotenv(config_path.parent / ".env")
+    config_env_path = (config_path.parent / ".env").resolve()
+    cwd_env_path = Path(".env").resolve()
+    _load_dotenv(config_env_path)
+    if cwd_env_path != config_env_path:
+        _load_dotenv(cwd_env_path)
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config = AppConfig.model_validate(_expand_env(data))
     return apply_model_overrides(

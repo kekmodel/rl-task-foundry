@@ -13,8 +13,8 @@ from rl_task_foundry.schema.graph import (
 )
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.snapshot_materializer import (
-    SchemaSnapshotMaterializer,
     TOOLING_VERSION,
+    SchemaSnapshotMaterializer,
 )
 from rl_task_foundry.synthesis.task_registry import TaskRegistryWriter
 from rl_task_foundry.tooling.common import snapshot_from_graph
@@ -129,7 +129,8 @@ def test_task_bundle_exporter_writes_single_task_layout(tmp_path: Path) -> None:
     )
     assert version_payload["tooling_version"] == TOOLING_VERSION
     assert "schema_map" in version_payload["composer_tools"]
-    assert "rows_where" in version_payload["atomic_primitives"]
+    assert "create_record_set" in version_payload["atomic_primitives"]
+    assert "group_top" not in version_payload["atomic_primitives"]
 
     payload = yaml.safe_load((task_dir / "task.yaml").read_text(encoding="utf-8"))
     assert payload["task_id"] == draft.task_bundle.task_id

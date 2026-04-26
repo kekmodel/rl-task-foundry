@@ -55,6 +55,7 @@ def _column(
     data_type: str = "integer",
     *,
     is_primary_key: bool = False,
+    visibility: str = "user_visible",
 ) -> ColumnProfile:
     return ColumnProfile(
         schema_name="public",
@@ -63,7 +64,7 @@ def _column(
         data_type=data_type,
         ordinal_position=1,
         is_nullable=False,
-        visibility="user_visible",
+        visibility=visibility,  # type: ignore[arg-type]
         is_primary_key=is_primary_key,
     )
 
@@ -76,6 +77,7 @@ def _snapshot():
             _column("customer", "customer_id", is_primary_key=True),
             _column("customer", "store_id"),
             _column("customer", "first_name", data_type="text"),
+            _column("customer", "api_token", data_type="text", visibility="blocked"),
         ],
         primary_key=("customer_id",),
     )
@@ -118,6 +120,7 @@ async def test_profile_table_emits_per_column_distinct_and_null_counts():
     assert names == ["customer_id", "store_id", "first_name"]
     sql, _ = conn.calls[0]
     assert "COUNT(*) AS row_count" in sql
+    assert "api_token" not in sql
     assert "COUNT(DISTINCT t.\"store_id\") AS \"distinct_store_id\"" in sql
 
 
@@ -230,6 +233,13 @@ async def test_profile_rejects_unknown_column():
 
 
 @pytest.mark.asyncio
+async def test_profile_rejects_blocked_non_handle_column():
+    session, _ = _stub_session()
+    with pytest.raises(KeyError):
+        await profile(session, table="customer", column="api_token")
+
+
+@pytest.mark.asyncio
 async def test_profile_rejects_non_positive_top_k():
     session, _ = _stub_session()
     with pytest.raises(ValueError):
@@ -284,7 +294,7 @@ async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
 
 
 @pytest.mark.asyncio
-async def test_profile_table_against_sakila_customer():
+async def test_profile_table_against_pagila_customer():
     session, conn = await _live_session()
     try:
         payload = await profile(session, table="customer")
@@ -301,7 +311,7 @@ async def test_profile_table_against_sakila_customer():
 
 
 @pytest.mark.asyncio
-async def test_profile_column_store_id_against_sakila():
+async def test_profile_column_store_id_against_pagila():
     session, conn = await _live_session()
     try:
         payload = await profile(

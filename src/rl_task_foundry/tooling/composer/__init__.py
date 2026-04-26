@@ -1,4 +1,4 @@
-"""Composer analytic DSL — high-bandwidth recon tools for the synthesis agent.
+"""Composer analytic DSL — high-bandwidth authoring tools.
 
 See docs/spec/tooling-redesign.md. Philosophy is deliberately separate
 from the atomic calculus: composer primitives are coarse one-call tools

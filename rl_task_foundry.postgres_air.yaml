@@ -201,7 +201,7 @@ budget:
   reserve_strategy: "phase_specific"
 
 privacy:
-  default_visibility: "blocked"
+  default_visibility: "user_visible"
   visibility_overrides:
     courier_phone: "user_visible"
     internal_ticket_note: "blocked"

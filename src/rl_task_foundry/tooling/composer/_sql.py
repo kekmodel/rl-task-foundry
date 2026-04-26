@@ -11,15 +11,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rl_task_foundry.tooling.common.schema import TableSpec
-from rl_task_foundry.tooling.common.sql import coerce_param, quote_ident
-
+from rl_task_foundry.tooling.common.sql import (
+    coerce_param,
+    coerce_scalar,
+    quote_ident,
+)
 
 FILTER_OPS: frozenset[str] = frozenset(
-    ("eq", "in", "lt", "gt", "lte", "gte", "like")
+    ("eq", "neq", "in", "lt", "gt", "lte", "gte", "like", "is_null", "is_not_null")
 )
 
 _SQL_BINARY_OPS: dict[str, str] = {
     "eq": "=",
+    "neq": "<>",
     "lt": "<",
     "gt": ">",
     "lte": "<=",
@@ -27,18 +31,45 @@ _SQL_BINARY_OPS: dict[str, str] = {
 }
 
 _ARRAY_CAST: dict[str, str] = {
+    "int2": "int2[]",
+    "int4": "int4[]",
+    "int8": "int8[]",
     "integer": "int4[]",
     "bigint": "int8[]",
     "smallint": "int2[]",
+    "serial": "int4[]",
+    "bigserial": "int8[]",
+    "smallserial": "int2[]",
+    "float4": "float4[]",
+    "float8": "float8[]",
+    "real": "float4[]",
+    "double precision": "float8[]",
+    "numeric": "numeric[]",
+    "decimal": "numeric[]",
+    "money": "money[]",
+    "bool": "bool[]",
+    "boolean": "bool[]",
     "text": "text[]",
+    "bpchar": "bpchar[]",
+    "char": "bpchar[]",
+    "character": "bpchar[]",
     "character varying": "text[]",
     "varchar": "text[]",
     "uuid": "uuid[]",
+    "date": "date[]",
+    "time": "time[]",
+    "timetz": "timetz[]",
+    "timestamp": "timestamp[]",
+    "timestamptz": "timestamptz[]",
+    "timestamp without time zone": "timestamp[]",
+    "timestamp with time zone": "timestamptz[]",
+    "bytea": "bytea[]",
 }
 
 
 def array_cast_for(data_type: str) -> str:
-    return _ARRAY_CAST.get(data_type, "text[]")
+    normalized = data_type.strip().lower()
+    return _ARRAY_CAST.get(normalized, f"{quote_ident(data_type)}[]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,14 +133,26 @@ def compile_filter_clauses(
                 f"unsupported op {clause.op!r}; expected one of "
                 f"{sorted(FILTER_OPS)}"
             )
-        column_spec = table_spec.column(clause.column)
+        column_spec = table_spec.exposed_column(clause.column)
         qualified = f"{alias}.{quote_ident(clause.column)}"
-        value = coerce_param(clause.value)
+        value = coerce_scalar(clause.value, column_spec.data_type)
+        value = coerce_param(value)
+        if clause.op == "is_null":
+            parts.append(f"{qualified} IS NULL")
+            continue
+        if clause.op == "is_not_null":
+            parts.append(f"{qualified} IS NOT NULL")
+            continue
         if clause.op == "in":
             if not isinstance(value, list) or len(value) == 0:
                 raise ValueError(
                     f"predicate on {clause.column!r} with op='in' "
                     "requires a non-empty list value"
+                )
+            if any(item is None for item in value):
+                raise TypeError(
+                    f"predicate on {clause.column!r} with op='in' "
+                    "does not accept null list items"
                 )
             parts.append(
                 f"{qualified} = ANY(${next_index}::"
@@ -119,6 +162,11 @@ def compile_filter_clauses(
             next_index += 1
             continue
         if clause.op == "like":
+            if value is None:
+                raise TypeError(
+                    f"predicate on {clause.column!r} with op='like' "
+                    "requires a non-null string pattern"
+                )
             if not isinstance(value, str):
                 raise TypeError(
                     f"predicate on {clause.column!r} with op='like' "
@@ -128,6 +176,11 @@ def compile_filter_clauses(
             params.append(value)
             next_index += 1
             continue
+        if value is None:
+            raise TypeError(
+                f"predicate on {clause.column!r} with op={clause.op!r} "
+                "requires a non-null value"
+            )
         sql_op = _SQL_BINARY_OPS[clause.op]
         parts.append(f"{qualified} {sql_op} ${next_index}")
         params.append(value)
@@ -138,9 +191,8 @@ def compile_filter_clauses(
 def require_single_column_pk(table_spec: TableSpec, *, tool_name: str) -> str:
     """Return the single PK column name; raise NotImplementedError on composite.
 
-    The composer primitives (`sample`, `neighborhood`) currently assume a
-    one-column primary key for anchor resolution. This helper centralizes
-    that assertion with a caller-specific error message.
+    Some composer primitives need scalar anchor resolution. This helper
+    centralizes that assertion with a caller-specific error message.
     """
     if len(table_spec.primary_key) != 1:
         raise NotImplementedError(

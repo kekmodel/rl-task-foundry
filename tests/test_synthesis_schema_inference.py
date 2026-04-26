@@ -9,16 +9,17 @@ from rl_task_foundry.synthesis.schema_inference import (
 )
 
 
-def test_list_of_primitives_defaults_to_unordered_without_sort_key() -> None:
+def test_list_of_primitives_defaults_to_ordered_without_sort_key() -> None:
     schema = extract_output_schema_from_canonical(["seoul", "busan", "jeju"])
 
     assert schema.root.type is OutputFieldType.LIST
-    assert schema.root.ordered is False
+    assert schema.root.ordered is True
     assert schema.root.sort_key is None
+    assert schema.root.length == 3
     assert schema.primary_output_format == "json_array"
 
 
-def test_list_of_objects_defaults_to_unordered_with_auto_sort_key() -> None:
+def test_list_of_objects_defaults_to_ordered_without_auto_sort_key() -> None:
     schema = extract_output_schema_from_canonical(
         [
             {"customer_id": 1, "customer_name": "alice"},
@@ -27,11 +28,12 @@ def test_list_of_objects_defaults_to_unordered_with_auto_sort_key() -> None:
     )
 
     assert schema.root.type is OutputFieldType.LIST
-    assert schema.root.ordered is False
-    assert schema.root.sort_key == ("customer_id", "customer_name")
+    assert schema.root.ordered is True
+    assert schema.root.sort_key is None
+    assert schema.root.length == 2
 
 
-def test_nested_list_inside_object_also_defaults_unordered() -> None:
+def test_nested_list_inside_object_also_defaults_ordered() -> None:
     schema = extract_output_schema_from_canonical(
         {
             "anchor_customer": "alice",
@@ -45,16 +47,18 @@ def test_nested_list_inside_object_also_defaults_unordered() -> None:
     assert schema.root.type is OutputFieldType.OBJECT
     list_field = next(child for child in schema.root.fields if child.name == "top_rentals")
     assert list_field.type is OutputFieldType.LIST
-    assert list_field.ordered is False
-    assert list_field.sort_key == ("film", "days")
+    assert list_field.ordered is True
+    assert list_field.sort_key is None
+    assert list_field.length == 2
 
 
-def test_empty_list_defaults_to_unordered_with_fallback_item() -> None:
+def test_empty_list_defaults_to_ordered_with_fallback_item() -> None:
     schema = extract_output_schema_from_canonical([])
 
     assert schema.root.type is OutputFieldType.LIST
-    assert schema.root.ordered is False
+    assert schema.root.ordered is True
     assert schema.root.sort_key is None
+    assert schema.root.length == 0
 
 
 def test_list_of_objects_without_primitive_fields_falls_back_to_ordered() -> None:
@@ -70,7 +74,7 @@ def test_list_of_objects_without_primitive_fields_falls_back_to_ordered() -> Non
     assert schema.root.sort_key is None
 
 
-def test_reward_matches_same_items_in_different_order() -> None:
+def test_reward_rejects_same_objects_in_different_order() -> None:
     canonical_answer = [
         {"customer_id": 1, "customer_name": "alice"},
         {"customer_id": 2, "customer_name": "bob"},
@@ -89,11 +93,11 @@ def test_reward_matches_same_items_in_different_order() -> None:
         output_schema=schema,
     )
 
-    assert result.status == "matched"
-    assert result.reward == 1.0
+    assert result.status == "em_mismatch"
+    assert result.reward == 0.0
 
 
-def test_reward_matches_list_of_primitives_in_different_order() -> None:
+def test_reward_rejects_primitive_list_in_different_order() -> None:
     canonical_answer = ["alice", "bob", "charlie"]
     schema = extract_output_schema_from_canonical(canonical_answer)
 
@@ -103,5 +107,5 @@ def test_reward_matches_list_of_primitives_in_different_order() -> None:
         output_schema=schema,
     )
 
-    assert result.status == "matched"
-    assert result.reward == 1.0
+    assert result.status == "em_mismatch"
+    assert result.reward == 0.0

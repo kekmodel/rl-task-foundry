@@ -66,6 +66,7 @@ def _column(
     is_primary_key: bool = False,
     is_foreign_key: bool = False,
     is_nullable: bool = False,
+    visibility: str = "user_visible",
 ) -> ColumnProfile:
     return ColumnProfile(
         schema_name="public",
@@ -74,7 +75,7 @@ def _column(
         data_type=data_type,
         ordinal_position=1,
         is_nullable=is_nullable,
-        visibility="user_visible",
+        visibility=visibility,  # type: ignore[arg-type]
         is_primary_key=is_primary_key,
         is_foreign_key=is_foreign_key,
     )
@@ -88,6 +89,7 @@ def _snapshot():
             _column("customer", "customer_id", is_primary_key=True),
             _column("customer", "store_id", is_foreign_key=True),
             _column("customer", "first_name", data_type="text"),
+            _column("customer", "api_token", data_type="text", visibility="blocked"),
         ],
         primary_key=("customer_id",),
     )
@@ -131,9 +133,55 @@ def _snapshot():
     )
 
 
+def _composite_snapshot():
+    order = TableProfile(
+        schema_name="public",
+        table_name="order",
+        columns=[
+            _column("order", "tenant_id", is_primary_key=True),
+            _column("order", "order_id", is_primary_key=True),
+            _column("order", "status", data_type="text"),
+        ],
+        primary_key=("tenant_id", "order_id"),
+    )
+    line_item = TableProfile(
+        schema_name="public",
+        table_name="line_item",
+        columns=[
+            _column("line_item", "tenant_id", is_primary_key=True, is_foreign_key=True),
+            _column("line_item", "order_id", is_primary_key=True, is_foreign_key=True),
+            _column("line_item", "line_no", is_primary_key=True),
+            _column("line_item", "sku", data_type="text"),
+        ],
+        primary_key=("tenant_id", "order_id", "line_no"),
+    )
+    return snapshot_from_graph(
+        SchemaGraph(
+            tables=[order, line_item],
+            edges=[
+                ForeignKeyEdge(
+                    constraint_name="line_item_order",
+                    source_schema="public",
+                    source_table="line_item",
+                    source_columns=("tenant_id", "order_id"),
+                    target_schema="public",
+                    target_table="order",
+                    target_columns=("tenant_id", "order_id"),
+                )
+            ],
+        )
+    )
+
+
 def _stub_session() -> tuple[ComposerSession, _ScriptedConnection]:
     conn = _ScriptedConnection()
     session = ComposerSession(snapshot=_snapshot(), connection=conn)
+    return session, conn
+
+
+def _composite_session() -> tuple[ComposerSession, _ScriptedConnection]:
+    conn = _ScriptedConnection()
+    session = ComposerSession(snapshot=_composite_snapshot(), connection=conn)
     return session, conn
 
 
@@ -159,6 +207,11 @@ async def test_neighborhood_forward_edge_with_pk_target_skips_lookup():
     assert isinstance(anchor, dict)
     assert anchor["table"] == "customer"
     assert anchor["row_id"] == 45
+    attrs = anchor["attributes"]
+    assert isinstance(attrs, dict)
+    assert "api_token" not in attrs
+    anchor_sql = conn.calls[0][1]
+    assert "api_token" not in anchor_sql
     edges = payload["edges"]
     assert isinstance(edges, list)
     forward = next(
@@ -220,6 +273,40 @@ async def test_neighborhood_null_fk_reports_zero_count_for_forward_edge():
     assert forward["sample_ids"] == []
 
 
+@pytest.mark.asyncio
+async def test_neighborhood_supports_composite_anchor_and_composite_fk_shortcut():
+    session, conn = _composite_session()
+    conn.fetchrow_results = [
+        {
+            "tenant_id": 7,
+            "order_id": 9,
+            "line_no": 1,
+            "sku": "A-1",
+        }
+    ]
+
+    payload = await neighborhood(
+        session,
+        table="line_item",
+        row_id=[7, 9, 1],
+    )
+
+    assert conn.calls[0][0] == "fetchrow"
+    assert conn.calls[0][2] == (7, 9, 1)
+    assert "t.\"tenant_id\" = $1" in conn.calls[0][1]
+    assert "t.\"order_id\" = $2" in conn.calls[0][1]
+    assert "t.\"line_no\" = $3" in conn.calls[0][1]
+    edges = payload["edges"]
+    assert isinstance(edges, list)
+    forward = edges[0]
+    assert isinstance(forward, dict)
+    assert forward["label"] == (
+        "line_item.(tenant_id,order_id)->order.(tenant_id,order_id)"
+    )
+    assert forward["sample_ids"] == [[7, 9]]
+    assert forward["total_count"] == 1
+
+
 # ---------- validation ----------
 
 
@@ -256,7 +343,7 @@ async def test_neighborhood_rejects_non_positive_max_per_edge():
         )
 
 
-# ---------- integration against sakila ----------
+# ---------- integration against pagila ----------
 
 
 async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
@@ -274,7 +361,7 @@ async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
 
 
 @pytest.mark.asyncio
-async def test_neighborhood_against_sakila_customer_45():
+async def test_neighborhood_against_pagila_customer_45():
     session, conn = await _live_session()
     try:
         payload = await neighborhood(

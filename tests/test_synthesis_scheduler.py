@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from rl_task_foundry.synthesis.scheduler import (
     SynthesisDbSnapshot,
     SynthesisDomainScheduler,

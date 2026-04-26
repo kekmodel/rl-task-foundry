@@ -23,17 +23,19 @@ def _column(
     name: str,
     data_type: str = "integer",
     *,
+    schema: str = "public",
     is_primary_key: bool = False,
     is_foreign_key: bool = False,
+    visibility: str = "user_visible",
 ) -> ColumnProfile:
     return ColumnProfile(
-        schema_name="public",
+        schema_name=schema,
         table_name=table,
         column_name=name,
         data_type=data_type,
         ordinal_position=1,
         is_nullable=False,
-        visibility="user_visible",
+        visibility=visibility,  # type: ignore[arg-type]
         is_primary_key=is_primary_key,
         is_foreign_key=is_foreign_key,
     )
@@ -45,13 +47,16 @@ def _fk(
     src_col: str,
     tgt_table: str,
     tgt_col: str,
+    *,
+    src_schema: str = "public",
+    tgt_schema: str = "public",
 ) -> ForeignKeyEdge:
     return ForeignKeyEdge(
         constraint_name=name,
-        source_schema="public",
+        source_schema=src_schema,
         source_table=src_table,
         source_columns=(src_col,),
-        target_schema="public",
+        target_schema=tgt_schema,
         target_table=tgt_table,
         target_columns=(tgt_col,),
     )
@@ -135,6 +140,111 @@ def test_schema_map_returns_whole_schema_when_root_table_omitted():
         "inventory",
         "film",
         "payment",
+    }
+
+
+def test_schema_map_omits_blocked_non_handle_columns_but_keeps_handles():
+    account = TableProfile(
+        schema_name="public",
+        table_name="account",
+        columns=[
+            _column("account", "account_id", is_primary_key=True, visibility="blocked"),
+            _column("account", "customer_id", is_foreign_key=True, visibility="blocked"),
+            _column("account", "status", data_type="text"),
+            _column("account", "api_token", data_type="text", visibility="blocked"),
+        ],
+        primary_key=("account_id",),
+    )
+    customer = TableProfile(
+        schema_name="public",
+        table_name="customer",
+        columns=[_column("customer", "customer_id", is_primary_key=True)],
+        primary_key=("customer_id",),
+    )
+    snapshot = snapshot_from_graph(
+        SchemaGraph(
+            tables=[account, customer],
+            edges=[
+                _fk(
+                    "account_customer",
+                    "account",
+                    "customer_id",
+                    "customer",
+                    "customer_id",
+                )
+            ],
+        )
+    )
+
+    payload = schema_map(snapshot, root_table="account", depth=0)
+    tables = payload["tables"]
+    assert isinstance(tables, list)
+    table = tables[0]
+    assert isinstance(table, dict)
+    columns = table["columns"]
+    assert isinstance(columns, list)
+    by_name = {column["name"]: column for column in columns if isinstance(column, dict)}
+
+    assert set(by_name) == {"account_id", "customer_id", "status"}
+    assert by_name["account_id"]["visibility"] == "blocked"
+    assert by_name["customer_id"]["is_foreign_key"] is True
+
+
+def test_schema_map_uses_handles_when_table_names_collide_across_schemas():
+    public_customer = TableProfile(
+        schema_name="public",
+        table_name="customer",
+        columns=[
+            _column("customer", "id", schema="public", is_primary_key=True),
+        ],
+        primary_key=("id",),
+    )
+    crm_customer = TableProfile(
+        schema_name="crm",
+        table_name="customer",
+        columns=[
+            _column("customer", "id", schema="crm", is_primary_key=True),
+            _column(
+                "customer",
+                "public_customer_id",
+                schema="crm",
+                is_foreign_key=True,
+            ),
+        ],
+        primary_key=("id",),
+    )
+    snapshot = snapshot_from_graph(
+        SchemaGraph(
+            tables=[public_customer, crm_customer],
+            edges=[
+                _fk(
+                    "crm_customer_public_customer",
+                    "customer",
+                    "public_customer_id",
+                    "customer",
+                    "id",
+                    src_schema="crm",
+                    tgt_schema="public",
+                )
+            ],
+        )
+    )
+
+    payload = schema_map(snapshot, root_table="crm.customer", depth=1)
+    assert payload["root_table"] == "crm.customer"
+    tables = payload["tables"]
+    assert isinstance(tables, list)
+    handles = {
+        table["handle"] for table in tables if isinstance(table, dict)
+    }
+    assert handles == {"crm.customer", "public.customer"}
+    typed_edges = payload["typed_edges"]
+    assert isinstance(typed_edges, dict)
+    assert "crm.customer" in typed_edges
+    assert "crm%2Ecustomer.public_customer_id->public%2Ecustomer" in {
+        edge["label"]
+        for edge in typed_edges["crm.customer"]
+        if isinstance(edge, dict)
     }
 
 

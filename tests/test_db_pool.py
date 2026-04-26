@@ -54,7 +54,7 @@ async def test_database_pools_create_solver_and_control_lanes(monkeypatch):
     monkeypatch.setattr(db_module.asyncpg, "create_pool", fake_create_pool)
 
     config = DatabaseConfig(
-        dsn="postgresql://sakila:sakila@127.0.0.1:5433/sakila",
+        dsn="postgresql://pagila:pagila@127.0.0.1:5433/pagila",
         readonly_role="rlvr_reader",
         solver_pool_size=12,
         control_pool_size=3,
@@ -67,7 +67,8 @@ async def test_database_pools_create_solver_and_control_lanes(monkeypatch):
     assert created[1]["max_size"] == 3
     assert "SET default_transaction_read_only = on" in pools[0].conn.statements
     assert "SET ROLE rlvr_reader" in pools[0].conn.statements
-    assert "SET default_transaction_read_only = on" not in pools[1].conn.statements
+    assert "SET default_transaction_read_only = on" in pools[1].conn.statements
+    assert "SET ROLE rlvr_reader" in pools[1].conn.statements
 
     async with pools_obj.solver_connection() as solver_conn:
         assert solver_conn is pools[0].conn
@@ -84,7 +85,7 @@ async def test_apply_session_settings_ignores_missing_readonly_role() -> None:
     conn = _FakeConn(fail_on_role=True)
     settings = db_module.solver_session_settings(
         DatabaseConfig(
-            dsn="postgresql://sakila:sakila@127.0.0.1:5433/sakila",
+            dsn="postgresql://pagila:pagila@127.0.0.1:5433/pagila",
             readonly_role="rlvr_reader",
         )
     )
@@ -94,3 +95,15 @@ async def test_apply_session_settings_ignores_missing_readonly_role() -> None:
     assert "SET default_transaction_read_only = on" in conn.statements
     assert "SET ROLE rlvr_reader" in conn.statements
     assert "SET statement_timeout = 5000" in conn.statements
+
+
+def test_mutating_control_session_settings_are_explicitly_not_readonly() -> None:
+    settings = db_module.mutating_control_session_settings(
+        DatabaseConfig(
+            dsn="postgresql://pagila:pagila@127.0.0.1:5433/pagila",
+            readonly_role="rlvr_reader",
+        )
+    )
+
+    assert settings.readonly_sql == ()
+    assert "SET statement_timeout = 5000" in settings.timeout_sql

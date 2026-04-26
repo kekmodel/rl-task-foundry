@@ -74,6 +74,18 @@ def test_cursor_store_resolves_to_original_plan():
     assert store.resolve(cursor_id) == plan
 
 
+def test_cursor_store_exposes_stable_record_set_aliases():
+    store = CursorStore()
+    first = store.intern(_where(45))
+    second = store.intern(_where(46))
+
+    assert store.expose(first) == "record_set_1"
+    assert store.expose(first) == "record_set_1"
+    assert store.expose(second) == "record_set_2"
+    assert store.resolve_public("record_set_1") == first
+    assert store.resolve_public("record_set_2") == second
+
+
 def test_cursor_store_raises_when_capacity_exceeded():
     store = CursorStore(max_entries=2)
     store.intern(_where(1))

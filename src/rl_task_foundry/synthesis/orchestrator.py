@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol

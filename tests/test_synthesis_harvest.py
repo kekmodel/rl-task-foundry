@@ -12,11 +12,9 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.synthesis.harvest import (
     HarvestOutcome,
     HarvestRunner,
-    HarvestSummary,
 )
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
-    RealDbTrialStatus,
 )
 from rl_task_foundry.synthesis.runtime import (
     SynthesisArtifactDiagnostics,
@@ -207,7 +205,7 @@ async def test_harvest_runner_reaches_target(tmp_path: Path) -> None:
     assert (out / "trials" / "trial_0001" / "debug" / "phase_monitors.jsonl").exists()
     # mirror aggregation includes harvest events + every trial's events
     aggregate = (out / "phase_monitors.jsonl").read_text().strip().splitlines()
-    flow_kinds = {json.loads(l)["flow_kind"] for l in aggregate}
+    flow_kinds = {json.loads(line)["flow_kind"] for line in aggregate}
     assert "harvest" in flow_kinds
     assert "real_db_trial" in flow_kinds
 

@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, time
 from decimal import Decimal
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -40,6 +38,7 @@ _THINKING_MODE_MODEL_MARKERS: tuple[str, ...] = (
     "qwen",
     "deepseek-r",
     "reasoning",
+    "minimax",
 )
 
 
@@ -47,9 +46,10 @@ def tool_choice_for_model(model: str) -> str:
     """Return the correct `tool_choice` value for the target model.
 
     Alibaba's qwen thinking-mode gateway rejects `tool_choice="required"` and
-    tool-object forms. Other reasoning-first providers (DeepSeek R-series) have
-    the same constraint. Relax to `"auto"` for those; keep `"required"` for
-    non-thinking models where we want the SDK to enforce tool-use each turn.
+    tool-object forms. Other reasoning-first providers (DeepSeek R-series) and
+    MiniMax's OpenCode-compatible endpoint have the same constraint. Relax to
+    `"auto"` for those; keep `"required"` for models where the endpoint supports
+    SDK-enforced tool-use each turn.
     """
 
     lowered = model.lower()
@@ -154,9 +154,14 @@ def extract_tool_call_name(item: Any) -> str | None:
                 return value
     if isinstance(item, str) and item.startswith("tool-call(") and item.endswith(")"):
         return item[len("tool-call(") : -1]
-    match = re.search(r"tool-call\(([^)]+)\)", repr(item))
-    if match:
-        return match.group(1)
+    text = repr(item)
+    marker = "tool-call("
+    start = text.find(marker)
+    if start >= 0:
+        name_start = start + len(marker)
+        name_end = text.find(")", name_start)
+        if name_end > name_start:
+            return text[name_start:name_end]
     return None
 
 
@@ -185,9 +190,14 @@ def preview_payload(
     max_dict_items: int,
 ) -> object:
     if isinstance(value, str):
-        return value[:max_string_length]
+        if len(value) <= max_string_length:
+            return value
+        return (
+            f"{value[:max_string_length]}... "
+            f"[truncated; total_chars={len(value)}]"
+        )
     if isinstance(value, list):
-        return [
+        preview = [
             preview_payload(
                 item,
                 max_string_length=max_string_length,
@@ -196,15 +206,40 @@ def preview_payload(
             )
             for item in value[:max_list_items]
         ]
+        if len(value) > max_list_items:
+            preview.append(
+                {
+                    "__preview_truncated__": {
+                        "kind": "list",
+                        "shown_items": max_list_items,
+                        "total_items": len(value),
+                        "last_item_preview": preview_payload(
+                            value[-1],
+                            max_string_length=max_string_length,
+                            max_list_items=max_list_items,
+                            max_dict_items=max_dict_items,
+                        ),
+                    }
+                }
+            )
+        return preview
     if isinstance(value, dict):
         preview: dict[str, object] = {}
-        for key, item in list(value.items())[:max_dict_items]:
+        items = list(value.items())
+        for key, item in items[:max_dict_items]:
             preview[str(key)] = preview_payload(
                 item,
                 max_string_length=max_string_length,
                 max_list_items=max_list_items,
                 max_dict_items=max_dict_items,
             )
+        if len(items) > max_dict_items:
+            preview["__preview_truncated__"] = {
+                "kind": "dict",
+                "shown_keys": max_dict_items,
+                "total_keys": len(items),
+                "omitted_keys": [str(key) for key, _ in items[max_dict_items:]],
+            }
         return preview
     return value
 

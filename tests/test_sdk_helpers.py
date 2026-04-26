@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from rl_task_foundry.infra.sdk_helpers import make_sdk_tool
+from rl_task_foundry.infra.sdk_helpers import make_sdk_tool, preview_payload
 
 
 @pytest.mark.asyncio
@@ -93,4 +93,66 @@ async def test_make_sdk_tool_strips_trailing_whitespace_from_char_columns() -> N
         "name": "English",
         "code": "EN",
         "normal": "Hello",
+    }
+
+
+def test_preview_payload_marks_truncated_strings_lists_and_dicts() -> None:
+    payload = {
+        "join": [
+            {"as": "a"},
+            {"as": "b"},
+            {"as": "c"},
+            {"as": "d"},
+        ],
+        "long_text": "abcdefghijklmnopqrstuvwxy",
+        "where": [
+            {"column": "a"},
+            {"column": "b"},
+            {"column": "c"},
+            {"column": "d"},
+        ],
+        "extra": "hidden",
+    }
+
+    preview = preview_payload(
+        payload,
+        max_string_length=20,
+        max_list_items=3,
+        max_dict_items=3,
+    )
+
+    assert preview == {
+        "join": [
+            {"as": "a"},
+            {"as": "b"},
+            {"as": "c"},
+            {
+                "__preview_truncated__": {
+                    "kind": "list",
+                    "shown_items": 3,
+                    "total_items": 4,
+                    "last_item_preview": {"as": "d"},
+                }
+            },
+        ],
+        "long_text": "abcdefghijklmnopqrst... [truncated; total_chars=25]",
+        "where": [
+            {"column": "a"},
+            {"column": "b"},
+            {"column": "c"},
+            {
+                "__preview_truncated__": {
+                    "kind": "list",
+                    "shown_items": 3,
+                    "total_items": 4,
+                    "last_item_preview": {"column": "d"},
+                }
+            },
+        ],
+        "__preview_truncated__": {
+            "kind": "dict",
+            "shown_keys": 3,
+            "total_keys": 4,
+            "omitted_keys": ["extra"],
+        },
     }
