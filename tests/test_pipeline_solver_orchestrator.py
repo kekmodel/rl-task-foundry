@@ -272,6 +272,26 @@ def test_evaluate_rollout_summary_accepts_in_band_results(tmp_path: Path) -> Non
     assert gate.status is TaskQualityGateStatus.ACCEPT
 
 
+def test_evaluate_rollout_summary_marks_out_of_band_ci_overlap_inconclusive(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    summary = TaskRolloutSummary(
+        task_id="task_assignment_registrytest",
+        db_id="sakila",
+        planned_solver_runs=30,
+        total_solver_runs=30,
+        matched_solver_runs=24,
+        runs=(),
+    )
+
+    gate = evaluate_rollout_summary(config, summary)
+
+    assert gate.status is TaskQualityGateStatus.CALIBRATION_INCONCLUSIVE
+    assert gate.pass_rate == pytest.approx(0.8)
+    assert gate.ci_lower < config.calibration.upper_pass_rate < gate.ci_upper
+
+
 def test_evaluate_rollout_summary_rejects_incomplete_evaluable_denominator(
     tmp_path: Path,
 ) -> None:
@@ -438,7 +458,11 @@ async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
     draft = _sample_draft()
     config = _config(tmp_path)
     config.calibration = config.calibration.model_copy(
-        update={"solver_batch_size": 1, "max_solver_runs": 5}
+        update={
+            "solver_batch_size": 3,
+            "max_solver_runs": 30,
+            "safe_early_termination": True,
+        }
     )
     config.models.solvers = [
         SolverModelConfig(
@@ -446,11 +470,11 @@ async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
             provider="codex_oauth",
             model="gpt-5.4-mini",
         )
-        for i in range(5)
+        for i in range(30)
     ]
     runtimes = iter([
         _FakeRuntime('{"customer":"wrong","day":"2026-04-12"}', [])
-        for _ in range(5)
+        for _ in range(30)
     ])
     orchestrator = SolverOrchestrator(
         config,
@@ -463,12 +487,11 @@ async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
     finally:
         await orchestrator.close()
 
-    assert summary.planned_solver_runs == 5
-    # After four misses, even a remaining success would end at 1/5 = 0.2,
-    # below the lower pass-rate bound. This is an exact deterministic bound,
-    # not a heuristic rejection.
-    assert summary.total_solver_runs == 4
-    assert summary.evaluable_solver_runs == 4
+    assert summary.planned_solver_runs == 30
+    # Exact Clopper-Pearson CI for 9/9 misses still has upper >= 0.25;
+    # 12/12 misses has upper < 0.25 at alpha=0.1.
+    assert summary.total_solver_runs == 12
+    assert summary.evaluable_solver_runs == 12
     assert summary.matched_solver_runs == 0
     assert summary.early_stop_decision == "reject_too_hard"
 
@@ -628,7 +651,7 @@ async def test_solver_orchestrator_counts_max_turns_as_evaluable_actor_failure(
     assert summary.matched_solver_runs == 0
     assert summary.failed_solver_runs == 0
     gate = evaluate_rollout_summary(config, summary)
-    assert gate.status is TaskQualityGateStatus.REJECT_TOO_HARD
+    assert gate.status is TaskQualityGateStatus.CALIBRATION_INCONCLUSIVE
 
 
 def test_solver_orchestrator_module_has_no_legacy_imports() -> None:

@@ -2305,3 +2305,31 @@ Solver 30/30 완료 결과:
 - **Terminal status**: accepted | reject_too_easy (band still above) | reject_too_hard (band still below) | MaxTurnsExceeded | other
 - **Ladder climb observed**: which rungs were visible in each submission's label structure
 - **Regression signals**: agent over-exploring after rejection, repeating same rung, weakening label, etc.
+
+## Iteration 51 — exact-CI calibration semantics
+
+- **Postgres_air trial after concurrency fix**:
+  `artifacts/trial_postgres_air_minimax_03` reached solver rollout with
+  composer/solvers on `opencode_zen/minimax-m2.5`. Composer needed feedback to
+  preserve `numeric` values as exact JSON strings, then produced the task
+  "제 최근 예약 중 가격이 1500달러 이상인 가장 최근 예약 5건의 예약번호와 가격".
+  Solver rollout completed 30 evaluable runs, with `24/30 = 0.8` matched and
+  no infrastructure exclusions.
+- **Calibration bug found**:
+  The early-stop path had moved to exact Clopper-Pearson CI, but final
+  `evaluate_rollout_summary` still fell back to point-estimate difficulty
+  rejection when the CI decision was inconclusive. For `24/30` at
+  `alpha=0.1`, exact CI is approximately `[0.643, 0.909]`, which overlaps the
+  configured upper bound `0.75`; this is not a statistically decisive
+  `reject_too_easy`.
+- **Fix**:
+  Calibration decisions now return too-easy / too-hard only when the exact
+  Clopper-Pearson interval is fully above / below the configured band. If the
+  observed point estimate is outside the band but the CI overlaps it, the
+  quality gate reports `calibration_inconclusive`. Point-in-band drafts remain
+  acceptable, with CI persisted as quality metadata. This keeps the gate
+  statistically honest without making every in-band finite sample require
+  interval containment.
+- **Verification**:
+  `uv run pytest -q tests/test_calibration.py tests/test_pipeline_solver_orchestrator.py tests/test_synthesis_runtime.py`
+  -> 53 passed. Targeted `uv run ruff check src tests` passed.

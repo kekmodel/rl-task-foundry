@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
-from rl_task_foundry.calibration.early_stop import EarlyStopDecision, safe_early_stop
+from rl_task_foundry.calibration.early_stop import EarlyStopDecision
 
 
 class PassExactResult(Protocol):
@@ -39,19 +39,36 @@ def calibration_decision(
     band: PassRateBand,
     ci_alpha: float,
 ) -> EarlyStopDecision:
-    """Combine deterministic bounds and CI-based banding."""
+    """Return a decision only when the exact binomial CI is decisive."""
 
     completed_solver_runs = len(results)
     passes_so_far = sum(1 for result in results if _passed(result))
-    deterministic = safe_early_stop(
+    return calibration_decision_from_counts(
         total_solver_runs=total_solver_runs,
         completed_solver_runs=completed_solver_runs,
         passes_so_far=passes_so_far,
-        lower_bound=band.lower,
-        upper_bound=band.upper,
+        band=band,
+        ci_alpha=ci_alpha,
     )
-    if deterministic != "continue":
-        return deterministic
+
+
+def calibration_decision_from_counts(
+    *,
+    total_solver_runs: int,
+    completed_solver_runs: int,
+    passes_so_far: int,
+    band: PassRateBand,
+    ci_alpha: float,
+) -> EarlyStopDecision:
+    """Return an exact-CI calibration decision from aggregate counts.
+
+    ``total_solver_runs`` is retained for call-site clarity: callers may plan
+    more solver samples, but confidence is based only on completed evaluable
+    Bernoulli trials.
+    """
+
+    if completed_solver_runs <= 0:
+        return "continue"
     interval = clopper_pearson_interval(
         successes=passes_so_far,
         trials=completed_solver_runs,

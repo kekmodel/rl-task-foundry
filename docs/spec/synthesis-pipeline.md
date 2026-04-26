@@ -177,6 +177,13 @@ failure is clearly infrastructural. Unknown `UserError` failures count as
 evaluable failed attempts, because otherwise a task can be falsely rejected as
 too easy when only one of several solver calls actually submits.
 
+Calibration decisions use an exact Clopper-Pearson binomial confidence interval
+for statistically decisive too-easy / too-hard rejection and early termination.
+When the observed point estimate falls outside the target band but the exact
+confidence interval still overlaps the band, the result is
+`calibration_inconclusive`, not a hard difficulty rejection. Point-in-band
+drafts may still be accepted with the CI recorded as quality metadata.
+
 After a too-easy rejection, the next draft must change the reward-visible
 canonical label, not only the wording or output field name. For single-field
 scalar labels, if the answer operation is unchanged and the scalar value is

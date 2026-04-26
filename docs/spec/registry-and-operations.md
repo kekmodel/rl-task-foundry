@@ -8,11 +8,14 @@ The current acceptance path is intentionally simple.
 LABEL_CONSTRUCTION -> TASK_SYNTHESIS -> solver pass-rate -> registry
 ```
 
-A task bundle is accepted only when solver pass-rate falls inside the configured band.
+A task bundle is accepted when the observed solver pass-rate falls inside the
+configured band. Difficulty rejection requires the exact confidence interval to
+fall outside the band.
 
-- pass rate below the lower bound: reject as too hard
-- pass rate above the upper bound: request a harder retry
+- exact CI below the lower bound: reject as too hard
+- exact CI above the upper bound: request a harder retry
 - pass rate inside the band: accept
+- point estimate outside the band but exact CI overlaps it: calibration inconclusive
 
 The exact numeric band and rollout sizes are hyperparameters, not fixed semantics.
 

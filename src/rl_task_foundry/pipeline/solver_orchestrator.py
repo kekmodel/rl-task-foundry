@@ -11,7 +11,10 @@ from functools import partial
 from pathlib import Path
 
 from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
-from rl_task_foundry.calibration.runner import calibration_decision
+from rl_task_foundry.calibration.runner import (
+    calibration_decision,
+    calibration_decision_from_counts,
+)
 from rl_task_foundry.config.models import AppConfig, ProviderConfig, SolverModelConfig
 from rl_task_foundry.infra.db import DatabasePools, ensure_attached_database_pools
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
@@ -168,6 +171,7 @@ class TaskQualityGateStatus(StrEnum):
     ACCEPT = "accept"
     REJECT_TOO_HARD = "reject_too_hard"
     REJECT_TOO_EASY = "reject_too_easy"
+    CALIBRATION_INCONCLUSIVE = "calibration_inconclusive"
 
 
 @dataclass(frozen=True, slots=True)
@@ -580,12 +584,10 @@ def evaluate_rollout_summary(
     if summary.early_stop_decision is not None:
         decision = summary.early_stop_decision
     elif config.calibration.safe_early_termination:
-        decision = calibration_decision(
+        decision = calibration_decision_from_counts(
             total_solver_runs=evaluable_solver_runs,
-            results=[
-                run.reward_result.status == RewardStatus.MATCHED
-                for run in _evaluable_runs(list(summary.runs))
-            ],
+            completed_solver_runs=evaluable_solver_runs,
+            passes_so_far=summary.matched_solver_runs,
             band=band,
             ci_alpha=config.calibration.ci_alpha,
         )
@@ -595,6 +597,8 @@ def evaluate_rollout_summary(
     if decision == "continue":
         if band.contains(summary.pass_rate):
             status = TaskQualityGateStatus.ACCEPT
+        elif config.calibration.safe_early_termination:
+            status = TaskQualityGateStatus.CALIBRATION_INCONCLUSIVE
         elif summary.pass_rate < band.lower:
             status = TaskQualityGateStatus.REJECT_TOO_HARD
         else:

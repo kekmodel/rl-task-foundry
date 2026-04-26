@@ -915,8 +915,8 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
         config=_config_with_synthesis_output(tmp_path),
         requested_topic="assignment",
         solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=5,
-            total_solver_runs=6,
+            matched_solver_runs=30,
+            total_solver_runs=30,
         ),
         build_draft=lambda payload: type(
             "Draft",
@@ -1000,8 +1000,8 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
         config=_config_with_synthesis_output(tmp_path),
         requested_topic="assignment",
         solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=5,
-            total_solver_runs=6,
+            matched_solver_runs=30,
+            total_solver_runs=30,
         ),
         build_draft=lambda payload: type(
             "Draft",
@@ -1246,8 +1246,8 @@ async def test_submit_draft_treats_list_limit_one_as_rows_array(
         config=_config_with_synthesis_output(tmp_path),
         requested_topic="assignment",
         solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=5,
-            total_solver_runs=6,
+            matched_solver_runs=30,
+            total_solver_runs=30,
         ),
         build_draft=lambda payload: type(
             "Draft",
@@ -1581,8 +1581,8 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
         config=_config_with_synthesis_output(tmp_path),
         requested_topic="assignment",
         solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=5,
-            total_solver_runs=6,
+            matched_solver_runs=30,
+            total_solver_runs=30,
         ),
         build_draft=lambda payload: type(
             "Draft",
@@ -1627,8 +1627,8 @@ async def test_submit_draft_too_easy_rejects_renamed_same_scalar_value(
         config=_config_with_synthesis_output(tmp_path),
         requested_topic="rental_status",
         solver_orchestrator=_FakeSolverOrchestrator(
-            matched_solver_runs=5,
-            total_solver_runs=6,
+            matched_solver_runs=30,
+            total_solver_runs=30,
         ),
         build_draft=lambda payload: type(
             "Draft",

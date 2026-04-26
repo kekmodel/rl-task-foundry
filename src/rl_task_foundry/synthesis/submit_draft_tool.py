@@ -62,6 +62,7 @@ class SubmitDraftErrorCode(StrEnum):
     DRAFT_VALIDATION_FAILED = "draft_validation_failed"
     REJECT_TOO_EASY = "reject_too_easy"
     REJECT_TOO_HARD = "reject_too_hard"
+    CALIBRATION_INCONCLUSIVE = "calibration_inconclusive"
 
 
 _FEEDBACK_ONLY_ERROR_CODES = frozenset(
@@ -1339,6 +1340,70 @@ class SubmitDraftController:
                 evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
                 failed_solver_runs=quality_gate_summary.failed_solver_runs,
                 diagnostics={},
+                payload=payload,
+                search_cost_observations=search_cost_observations,
+            )
+
+        if quality_gate_summary.status is TaskQualityGateStatus.CALIBRATION_INCONCLUSIVE:
+            if quality_gate_summary.pass_rate > quality_gate_summary.band_upper:
+                self._needs_label_change = True
+                self._last_answer_contract = payload.answer_contract
+                strengthening_guidance = _too_easy_retry_guidance(
+                    answer_kind=payload.answer_contract.kind
+                )
+                return self._record_rejection(
+                    submission_index=submission_index,
+                    message=_render_structured_message(
+                        kind="RejectedError",
+                        result="Draft needs clearer specificity.",
+                        primary=(
+                            "The current draft is still too direct to accept "
+                            "confidently. Make one grounded specificity change to the "
+                            "canonical label, not just the wording."
+                        ),
+                        important=strengthening_guidance.strip(),
+                        next_step=(
+                            "Make at least one new tool call "
+                            "for the new evidence, then "
+                            "resubmit."
+                        ),
+                        attempts_left=max(0, attempts_left_after),
+                    ),
+                    error_codes=[SubmitDraftErrorCode.CALIBRATION_INCONCLUSIVE],
+                    pass_rate=quality_gate_summary.pass_rate,
+                    matched_solver_runs=quality_gate_summary.matched_solver_runs,
+                    planned_solver_runs=quality_gate_summary.planned_solver_runs,
+                    total_solver_runs=quality_gate_summary.total_solver_runs,
+                    evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
+                    failed_solver_runs=quality_gate_summary.failed_solver_runs,
+                    diagnostics={},
+                    payload=payload,
+                    search_cost_observations=search_cost_observations,
+                )
+
+            self._terminated_too_hard = True
+            return self._record_rejection(
+                submission_index=submission_index,
+                message=_render_structured_message(
+                    kind="RejectedError",
+                    result="Draft is not clearly reachable enough.",
+                    primary=(
+                        "The current draft is not clearly reachable enough. "
+                        "This conversation is terminated. "
+                        "Do not call submit_draft again."
+                    ),
+                    attempts_left=0,
+                ),
+                error_codes=[SubmitDraftErrorCode.CALIBRATION_INCONCLUSIVE],
+                pass_rate=quality_gate_summary.pass_rate,
+                matched_solver_runs=quality_gate_summary.matched_solver_runs,
+                planned_solver_runs=quality_gate_summary.planned_solver_runs,
+                total_solver_runs=quality_gate_summary.total_solver_runs,
+                evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
+                failed_solver_runs=quality_gate_summary.failed_solver_runs,
+                diagnostics={
+                    "terminal_rejection": True,
+                },
                 payload=payload,
                 search_cost_observations=search_cost_observations,
             )
