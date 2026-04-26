@@ -20,6 +20,7 @@ from rl_task_foundry.tooling.atomic.tool_factory import (
     build_get_record_tool,
     build_intersect_record_sets_tool,
     build_list_record_refs_tool,
+    build_list_records_tool,
     build_sort_record_set_tool,
 )
 
@@ -38,5 +39,6 @@ __all__ = [
     "build_get_record_tool",
     "build_intersect_record_sets_tool",
     "build_list_record_refs_tool",
+    "build_list_records_tool",
     "build_sort_record_set_tool",
 ]

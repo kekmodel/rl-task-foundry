@@ -2659,3 +2659,41 @@ Solver 30/30 완료 결과:
   -> 2 passed.
   `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py -q`
   -> 61 passed. Targeted ruff passed.
+
+## Iteration 65 — source-aligned related field materialization
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_kimi_scalar_strengthening_01`, pagila,
+  composer `openrouter/moonshotai/kimi-k2.5`, solver
+  `openrouter/openai/gpt-5.4-nano`.
+- **Result**:
+  Kimi now produced valid drafts and scalar strengthening reached the solver.
+  The first two drafts were solved by all sampled Nano solvers. The third
+  draft asked for the five most recent qualifying payments plus each payment's
+  related film title; it was grounded by the composer but the solver went
+  `0/4` with no environment failures.
+- **Diagnosis**:
+  The failure exposed a solver tool-surface gap. `follow_relation` correctly
+  returns a unique destination `record_set`, but that set loses the per-source
+  item alignment needed for list answers such as "each payment with its film
+  title." The solver could still retrieve the answer by reading every payment,
+  rental, inventory, and film one at a time, but that blows up turn count for
+  ordinary list-size tasks.
+- **Fix**:
+  Added solver endpoint `list_records`, which lists records from an existing
+  `record_set` in order while projecting requested direct fields and fields
+  reached through single-record FK paths. Fan-out paths are rejected as a
+  request error instead of fabricating ambiguous list rows. The atomic tooling
+  version was bumped to `atomic-resource-api-v5`.
+- **Why this follows the principles**:
+  This is structural, DB-agnostic FK metadata only. It does not validate
+  semantic quality, does not use token/name heuristics, and preserves the
+  actor reachability guarantee for bounded list answers with related per-item
+  fields.
+- **Verification**:
+  `uv run pytest tests/test_tooling_atomic_tool_factory.py::test_v2_materializing_tools_record_hidden_trace_events tests/test_tooling_atomic_tool_factory.py::test_v2_list_records_preserves_source_alignment_across_fk_path -q`
+  -> 2 passed.
+  `uv run pytest tests/test_tooling_atomic_tool_factory.py tests/test_synthesis_prompts.py tests/test_pipeline_solver_orchestrator.py tests/test_synthesis_bundle_exporter.py -q`
+  -> 47 passed.
+  `uv run pytest -q` -> 415 passed. `uv run ruff check .` and
+  `git diff --check` passed.

@@ -227,6 +227,7 @@ def test_build_atomic_tools_returns_tools_in_calculus_order():
         "intersect_record_sets",
         "sort_record_set",
         "list_record_refs",
+        "list_records",
         "count_records",
         "aggregate_records",
         "get_record",
@@ -242,6 +243,7 @@ def test_package_public_surface_is_v2_only():
         "build_filter_record_set_by_null_tool",
         "build_sort_record_set_tool",
         "build_list_record_refs_tool",
+        "build_list_records_tool",
         "build_get_record_tool",
     ):
         assert hasattr(atomic_public, endpoint_builder)
@@ -559,6 +561,22 @@ async def test_v2_materializing_tools_record_hidden_trace_events():
         {"record_set_id": base_resource["id"], "limit": 1},
     )
     assert fetched["ok"] is True
+    listed = await _invoke(
+        tools["list_records"],
+        {
+            "record_set_id": base_resource["id"],
+            "limit": 1,
+            "offset": 0,
+            "fields": [{"name": "store_id", "column": "store_id", "path": []}],
+        },
+    )
+    assert listed["ok"] is True
+    assert listed["data"] == {
+        "items": [{"store_id": 1}],
+        "limit": 1,
+        "offset": 0,
+        "returned": 1,
+    }
     counted = await _invoke(
         tools["count_records"],
         {"record_set_id": base_resource["id"]},
@@ -579,6 +597,7 @@ async def test_v2_materializing_tools_record_hidden_trace_events():
     assert [event["operation"] for event in events] == [
         "create_record_set",
         "list_record_refs",
+        "list_records",
         "count_records",
         "aggregate_records",
         "get_record",
@@ -598,9 +617,17 @@ async def test_v2_materializing_tools_record_hidden_trace_events():
         "table": "customer",
         "returned": 1,
     }
-    assert events[2]["result_shape"] == {"kind": "scalar", "field": "count"}
-    assert events[3]["aggregate"] == {"fn": "sum", "column": "store_id"}
-    assert events[4]["record_ref"] == {
+    assert events[2]["result_shape"] == {
+        "kind": "record_list",
+        "table": "customer",
+        "returned": 1,
+    }
+    assert events[2]["fields"] == [
+        {"name": "store_id", "path": [], "column": "store_id"}
+    ]
+    assert events[3]["result_shape"] == {"kind": "scalar", "field": "count"}
+    assert events[4]["aggregate"] == {"fn": "sum", "column": "store_id"}
+    assert events[5]["record_ref"] == {
         "type": "record_ref",
         "table": "customer",
         "id": 123,
@@ -900,6 +927,111 @@ async def test_v2_resource_tool_chain_against_pagila():
 
 
 @pytest.mark.asyncio
+async def test_v2_list_records_preserves_source_alignment_across_fk_path():
+    session, conn = await _live_session()
+    try:
+        tools = {tool.name: tool for tool in build_atomic_tools(session)}
+
+        base = await _invoke(tools["create_record_set"], {"table": "payment"})
+        base_resource = base["resource"]
+        assert isinstance(base_resource, dict)
+
+        customer_filtered = await _invoke(
+            tools["filter_record_set"],
+            {
+                "record_set_id": base_resource["id"],
+                "column": "customer_id",
+                "op": "eq",
+                "value": 487,
+            },
+        )
+        customer_resource = customer_filtered["resource"]
+        assert isinstance(customer_resource, dict)
+
+        amount_filtered = await _invoke(
+            tools["filter_record_set"],
+            {
+                "record_set_id": customer_resource["id"],
+                "column": "amount",
+                "op": "gt",
+                "value": 2,
+            },
+        )
+        amount_resource = amount_filtered["resource"]
+        assert isinstance(amount_resource, dict)
+
+        sorted_payments = await _invoke(
+            tools["sort_record_set"],
+            {
+                "record_set_id": amount_resource["id"],
+                "column": "payment_date",
+                "direction": "desc",
+            },
+        )
+        sorted_resource = sorted_payments["resource"]
+        assert isinstance(sorted_resource, dict)
+
+        listed = await _invoke(
+            tools["list_records"],
+            {
+                "record_set_id": sorted_resource["id"],
+                "limit": 5,
+                "offset": 0,
+                "fields": [
+                    {"name": "amount", "column": "amount", "path": []},
+                    {
+                        "name": "payment_date",
+                        "column": "payment_date",
+                        "path": [],
+                    },
+                    {
+                        "name": "film_title",
+                        "column": "title",
+                        "path": [
+                            "payment.rental_id->rental",
+                            "rental.inventory_id->inventory",
+                            "inventory.film_id->film",
+                        ],
+                    },
+                ],
+            },
+        )
+        assert listed["ok"] is True
+        data = listed["data"]
+        assert isinstance(data, dict)
+        assert data["returned"] == 5
+        assert data["items"] == [
+            {
+                "amount": "3.99",
+                "payment_date": "2022-07-13T04:08:47.090772+00:00",
+                "film_title": "ENTRAPMENT SATISFACTION",
+            },
+            {
+                "amount": "2.99",
+                "payment_date": "2022-07-12T08:18:13.441249+00:00",
+                "film_title": "SIERRA DIVIDE",
+            },
+            {
+                "amount": "2.99",
+                "payment_date": "2022-07-05T12:02:16.908779+00:00",
+                "film_title": "SAMURAI LION",
+            },
+            {
+                "amount": "7.99",
+                "payment_date": "2022-07-03T20:50:57.546298+00:00",
+                "film_title": "COMMAND DARLING",
+            },
+            {
+                "amount": "3.99",
+                "payment_date": "2022-06-24T09:54:08.027069+00:00",
+                "film_title": "BILL OTHERS",
+            },
+        ]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_v2_composite_pk_chain_against_pagila_film_actor():
     # Regression for iter21's observed failure: actor -> film_actor -> film
     # must keep working when an intermediate resource has a composite PK.
@@ -938,6 +1070,32 @@ async def test_v2_composite_pk_chain_against_pagila_film_actor():
             assert isinstance(row_id, list)
             assert len(row_id) == 2
             assert row_id[0] == 87
+
+        aligned_films = await _invoke(
+            tools["list_records"],
+            {
+                "record_set_id": filtered_resource["id"],
+                "limit": 3,
+                "offset": 0,
+                "fields": [
+                    {"name": "last_update", "column": "last_update", "path": []},
+                    {
+                        "name": "film_title",
+                        "column": "title",
+                        "path": ["film_actor.film_id->film"],
+                    },
+                ],
+            },
+        )
+        aligned_data = aligned_films["data"]
+        assert isinstance(aligned_data, dict)
+        aligned_items = aligned_data["items"]
+        assert isinstance(aligned_items, list)
+        assert len(aligned_items) == 3
+        for item in aligned_items:
+            assert isinstance(item, dict)
+            assert "last_update" in item
+            assert isinstance(item["film_title"], str)
 
         film_set = await _invoke(
             tools["follow_relation"],

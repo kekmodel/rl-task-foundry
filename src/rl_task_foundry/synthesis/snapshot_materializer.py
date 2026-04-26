@@ -20,7 +20,7 @@ from pathlib import Path
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.tooling.common import SchemaSnapshot, snapshot_to_dict
 
-TOOLING_VERSION = "atomic-resource-api-v4"
+TOOLING_VERSION = "atomic-resource-api-v5"
 
 _COMPOSER_TOOLS: tuple[str, ...] = (
     "schema_map",
@@ -39,6 +39,7 @@ _ATOMIC_PRIMITIVES: tuple[str, ...] = (
     "intersect_record_sets",
     "sort_record_set",
     "list_record_refs",
+    "list_records",
     "count_records",
     "aggregate_records",
     "get_record",

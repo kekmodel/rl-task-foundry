@@ -293,7 +293,7 @@ Solver에게 system prompt는 없지만, rendered user prompt에는 `<entity>` J
 
 심각도: P2
 
-구현은 현재 `TOOLING_VERSION = "atomic-resource-api-v4"`를 쓴다. v4에서는 scalar/list/pattern/null 필터를 endpoint처럼 분리해서 실제 solver tool surface가 12개다. 파일명 `atomic-resource-api-v2.md` 같은 역사적 명칭은 남아 있으므로, 이후 문서 rename 또는 version note 정리가 필요하다.
+구현은 현재 `TOOLING_VERSION = "atomic-resource-api-v5"`를 쓴다. v5에서는 scalar/list/pattern/null 필터 분리와 source-aligned `list_records` projection을 포함해 실제 solver tool surface가 13개다. 파일명 `atomic-resource-api-v2.md` 같은 역사적 명칭은 남아 있으므로, 이후 문서 rename 또는 version note 정리가 필요하다.
 
 영향:
 
@@ -302,9 +302,9 @@ Solver에게 system prompt는 없지만, rendered user prompt에는 `<entity>` J
 
 권장:
 
-- 문서를 v3로 rename 또는 제목/status를 v3로 갱신한다.
-- solver-facing tool 12개를 정확히 적는다.
-- trace version 예시도 v3로 맞춘다.
+- 문서를 v5로 rename 또는 제목/status를 v5로 갱신한다.
+- solver-facing tool 13개를 정확히 적는다.
+- trace version 예시도 v5로 맞춘다.
 
 ### F9. Per-DB examples pack은 선택 기능이어야 한다
 

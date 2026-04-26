@@ -202,7 +202,7 @@ async def test_solver_orchestrator_attaches_atomic_trace_metadata(
         await orchestrator.close()
 
     assert result.termination_metadata["atomic_trace_version"] == (
-        "atomic-resource-api-v4.trace.v1"
+        "atomic-resource-api-v5.trace.v1"
     )
     events = result.termination_metadata["atomic_trace_events"]
     assert isinstance(events, list)

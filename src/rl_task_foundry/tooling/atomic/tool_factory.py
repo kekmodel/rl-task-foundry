@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import asyncpg
@@ -41,7 +42,7 @@ from rl_task_foundry.tooling.atomic.sql_compile import (
     _AGGREGATE_FNS,
     AggregateFn,
 )
-from rl_task_foundry.tooling.common.edges import available_edges
+from rl_task_foundry.tooling.common.edges import available_edges, resolve_edge
 from rl_task_foundry.tooling.common.payload import (
     JsonObject,
 )
@@ -58,7 +59,12 @@ from rl_task_foundry.tooling.common.payload import (
     require_str_list as _require_str_list,
 )
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
-from rl_task_foundry.tooling.common.sql import coerce_scalar
+from rl_task_foundry.tooling.common.sql import (
+    coerce_scalar,
+    quote_ident,
+    quote_table,
+    readonly_select,
+)
 from rl_task_foundry.tooling.common.tool_runtime import (
     Handler,
     Invoker,
@@ -69,6 +75,14 @@ from rl_task_foundry.tooling.common.tool_runtime import (
 
 if TYPE_CHECKING:
     from agents import FunctionTool
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectionField:
+    name: str
+    path: tuple[str, ...]
+    column: str
+    final_table: str
 
 
 def _all_table_names(snapshot: SchemaSnapshot) -> list[str]:
@@ -175,6 +189,151 @@ def _normalise_row_id(value: object) -> object:
 
 def _data_payload(data: JsonObject) -> JsonObject:
     return {"ok": True, "data": data}
+
+
+def _parse_projection_fields(
+    session: AtomicSession,
+    *,
+    source_table: str,
+    raw_fields: object,
+) -> list[_ProjectionField]:
+    if not isinstance(raw_fields, list) or not raw_fields:
+        raise TypeError("'fields' must be a non-empty array")
+    seen_names: set[str] = set()
+    parsed: list[_ProjectionField] = []
+    for raw_field in raw_fields:
+        if not isinstance(raw_field, dict):
+            raise TypeError("each field must be an object")
+        name = raw_field.get("name")
+        column = raw_field.get("column")
+        if not isinstance(name, str) or not name:
+            raise TypeError("field.name must be a non-empty string")
+        if name in seen_names:
+            raise ValueError("field names must be unique")
+        seen_names.add(name)
+        if not isinstance(column, str) or not column:
+            raise TypeError("field.column must be a non-empty string")
+        raw_path = raw_field.get("path", [])
+        if raw_path is None:
+            raw_path = []
+        if not isinstance(raw_path, list) or any(
+            not isinstance(label, str) or not label for label in raw_path
+        ):
+            raise TypeError("field.path must be an array of relation labels")
+        path = tuple(cast(list[str], raw_path))
+        current_table = source_table
+        for edge_label in path:
+            edge = resolve_edge(session.snapshot, current_table, edge_label)
+            current_table = edge.destination_table
+        session.snapshot.table(current_table).exposed_column(column)
+        parsed.append(
+            _ProjectionField(
+                name=name,
+                path=path,
+                column=column,
+                final_table=current_table,
+            )
+        )
+    return parsed
+
+
+def _row_id_cache_key(table: str, row_id: object) -> tuple[str, str]:
+    return (
+        table,
+        json.dumps(
+            _normalise_row_id(row_id),
+            default=str,
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    )
+
+
+def _pk_from_record(table_primary_key: tuple[str, ...], row: object) -> object:
+    values = [row[f"pk_{index}"] for index, _ in enumerate(table_primary_key)]  # type: ignore[index]
+    if len(values) == 1:
+        return values[0]
+    return values
+
+
+async def _find_single_record_by_columns(
+    session: AtomicSession,
+    *,
+    table_name: str,
+    columns: tuple[str, ...],
+    values: tuple[object, ...],
+) -> object | None:
+    table = session.snapshot.table(table_name)
+    if len(columns) != len(values):
+        raise ValueError("columns and values must have the same length")
+    if not table.primary_key:
+        raise ValueError(
+            f"table {table.qualified_name!r} has no primary key; related "
+            "field materialization requires primary keys"
+        )
+    selected = ", ".join(
+        f"dst.{quote_ident(pk_column)} AS pk_{index}"
+        for index, pk_column in enumerate(table.primary_key)
+    )
+    predicates = []
+    coerced_values: list[object] = []
+    for index, (column_name, value) in enumerate(zip(columns, values, strict=True)):
+        column_spec = table.column(column_name)
+        predicates.append(f"dst.{quote_ident(column_name)} = ${index + 1}")
+        coerced_values.append(coerce_scalar(value, column_spec.data_type))
+    order_by_pk = ", ".join(
+        f"dst.{quote_ident(pk_column)} ASC" for pk_column in table.primary_key
+    )
+    sql = readonly_select(
+        f"SELECT {selected} "
+        f"FROM {quote_table(table.schema, table.name)} AS dst "
+        f"WHERE {' AND '.join(predicates)} "
+        f"ORDER BY {order_by_pk} "
+        "LIMIT 2"
+    )
+    rows = await session.connection.fetch(sql, *coerced_values)
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise ValueError(
+            "list_records related fields require each path step to return "
+            "at most one destination record per source record"
+        )
+    return _pk_from_record(table.primary_key, rows[0])
+
+
+async def _resolve_related_record_id(
+    session: AtomicSession,
+    *,
+    source_table: str,
+    source_row_id: object,
+    path: tuple[str, ...],
+) -> tuple[str, object | None]:
+    current_table = source_table
+    current_row_id: object | None = source_row_id
+    for edge_label in path:
+        edge = resolve_edge(session.snapshot, current_table, edge_label)
+        if current_row_id is None:
+            current_table = edge.destination_table
+            continue
+        origin_values = await read(
+            session,
+            table=current_table,
+            row_id=current_row_id,
+            columns=list(edge.origin_columns),
+        )
+        values = tuple(origin_values[column] for column in edge.origin_columns)
+        current_table = edge.destination_table
+        if any(value is None for value in values):
+            current_row_id = None
+            continue
+        current_row_id = await _find_single_record_by_columns(
+            session,
+            table_name=current_table,
+            columns=edge.destination_columns,
+            values=values,
+        )
+    return current_table, current_row_id
 
 
 def _record_success_trace(
@@ -925,6 +1084,186 @@ def build_list_record_refs_tool(session: AtomicSession) -> "FunctionTool":
     )
 
 
+def build_list_records_tool(session: AtomicSession) -> "FunctionTool":
+    field_schema: JsonObject = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name", "column", "path"],
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": (
+                    "Output key to use for this field in each returned item."
+                ),
+            },
+            "column": {
+                "type": "string",
+                "description": (
+                    "Column to read from the source table, or from the table "
+                    "reached after path."
+                ),
+            },
+            "path": {
+                "type": "array",
+                "default": [],
+                "description": (
+                    "Relation labels to follow from each source record before "
+                    "reading column. Use [] for a source-table field. Each "
+                    "step must produce at most one related record for each "
+                    "source record."
+                ),
+                "items": {
+                    "type": "string",
+                    "description": (
+                        "Relation label copied from a record_set resource's "
+                        "relations list."
+                    ),
+                },
+            },
+        },
+    }
+    schema: JsonObject = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["record_set_id", "limit", "offset", "fields"],
+        "properties": {
+            "record_set_id": {
+                "type": "string",
+                "description": "ID of the record_set resource to list from.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": session.max_fetch_limit,
+                "description": "Maximum number of records to return.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "Number of records to skip. Use 0 for the first page.",
+            },
+            "fields": {
+                "type": "array",
+                "minItems": 1,
+                "description": (
+                    "Fields to return for each source record. Direct fields "
+                    "read source-table columns; related fields preserve source "
+                    "record order while following single-record relation paths."
+                ),
+                "items": field_schema,
+            },
+        },
+    }
+
+    async def handler(payload: JsonObject) -> JsonObject:
+        record_set_id = _require_str(payload, "record_set_id")
+        limit = _require_int(payload, "limit")
+        offset = _optional_int(payload, "offset")
+        cursor_id = _resolve_record_set(session, record_set_id)
+        source_resource = _record_set_trace_resource(session, cursor_id)
+        source_table = session.store.resolve(cursor_id).target_table
+        fields = _parse_projection_fields(
+            session,
+            source_table=source_table,
+            raw_fields=payload.get("fields"),
+        )
+        offset_value = offset if offset is not None else 0
+        row_ids = await take(
+            session,
+            cursor=cursor_id,
+            n=limit,
+            offset=offset_value,
+        )
+        direct_columns = list(
+            dict.fromkeys(field.column for field in fields if not field.path)
+        )
+        related_id_cache: dict[tuple[str, str, tuple[str, ...]], object | None] = {}
+        items: list[JsonObject] = []
+        for row_id in row_ids:
+            direct_values = (
+                await read(
+                    session,
+                    table=source_table,
+                    row_id=row_id,
+                    columns=direct_columns,
+                )
+                if direct_columns
+                else {}
+            )
+            item: JsonObject = {}
+            for field in fields:
+                if not field.path:
+                    item[field.name] = direct_values[field.column]
+                    continue
+                cache_key = (
+                    *_row_id_cache_key(source_table, row_id),
+                    field.path,
+                )
+                related_id = related_id_cache.get(cache_key)
+                if cache_key not in related_id_cache:
+                    resolved_table, related_id = await _resolve_related_record_id(
+                        session,
+                        source_table=source_table,
+                        source_row_id=row_id,
+                        path=field.path,
+                    )
+                    if resolved_table != field.final_table:
+                        raise RuntimeError("resolved relation path changed tables")
+                    related_id_cache[cache_key] = related_id
+                if related_id is None:
+                    item[field.name] = None
+                    continue
+                related_values = await read(
+                    session,
+                    table=field.final_table,
+                    row_id=related_id,
+                    columns=[field.column],
+                )
+                item[field.name] = related_values[field.column]
+            items.append(item)
+        _record_success_trace(
+            session,
+            action="materialize_resource",
+            operation="list_records",
+            input_resource=source_resource,
+            fields=[
+                {
+                    "name": field.name,
+                    "path": list(field.path),
+                    "column": field.column,
+                }
+                for field in fields
+            ],
+            pagination={"limit": limit, "offset": offset_value},
+            result_shape={
+                "kind": "record_list",
+                "table": source_table,
+                "returned": len(items),
+            },
+        )
+        return _data_payload(
+            {
+                "items": items,
+                "limit": limit,
+                "offset": offset_value,
+                "returned": len(items),
+            }
+        )
+
+    return _make_tool(
+        session,
+        name="list_records",
+        description=(
+            "Return selected field values for records in a record_set, preserving "
+            "the record_set order. Fields may read source columns or columns on "
+            "single-record relation paths."
+        ),
+        schema=schema,
+        handler=handler,
+    )
+
+
 def build_count_records_tool(session: AtomicSession) -> "FunctionTool":
     schema: JsonObject = {
         "type": "object",
@@ -1141,6 +1480,7 @@ def build_atomic_tools(session: AtomicSession) -> list["FunctionTool"]:
         build_intersect_record_sets_tool(session),
         build_sort_record_set_tool(session),
         build_list_record_refs_tool(session),
+        build_list_records_tool(session),
         build_count_records_tool(session),
         build_aggregate_records_tool(session),
         build_get_record_tool(session),
@@ -1160,5 +1500,6 @@ __all__ = [
     "build_get_record_tool",
     "build_intersect_record_sets_tool",
     "build_list_record_refs_tool",
+    "build_list_records_tool",
     "build_sort_record_set_tool",
 ]
