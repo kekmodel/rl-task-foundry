@@ -301,6 +301,19 @@ These count in the denominator:
 - unknown SDK `UserError`
 - model/tool protocol failures that returned a solver result
 
+Failed trial summaries should still expose the already-computed aggregate
+rollout counters from the final attempted draft: pass rate, CI bounds,
+matched/planned/completed/evaluable/infra-failed solver counts, feedback-event
+count, and last feedback error codes. This is observability only. It must not
+trigger additional LLM judging, trace parsing, or retry work for a draft that
+will be discarded.
+
+If the orchestrator cannot reach the target evaluable denominator because too
+many calls are excluded infrastructure failures, the summary must make that
+visible through `solver_completed_runs`, `solver_evaluable_runs`, and
+`solver_failed_runs`. That is an environment/provider health signal, not a
+solver ability signal.
+
 ## Stage 6: Quality Gate
 
 Reward is binary exact match after schema canonicalization. The quality gate

@@ -115,6 +115,11 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
                             "solver_pass_rate": 0.5,
                             "solver_ci_low": 0.1,
                             "solver_ci_high": 0.9,
+                            "solver_matched_runs": 10,
+                            "solver_planned_runs": 20,
+                            "solver_completed_runs": 20,
+                            "solver_evaluable_runs": 20,
+                            "solver_failed_runs": 0,
                         }
                     ),
                 }
@@ -156,6 +161,11 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert exporter.calls == [(output_root / "bundle", accepted_draft.task_bundle.task_id)]
     assert not (output_root / "trial_summary.json").exists()
     assert summary.task_id == "task_real_trial"
+    assert summary.solver_matched_runs == 10
+    assert summary.solver_planned_runs == 20
+    assert summary.solver_completed_runs == 20
+    assert summary.solver_evaluable_runs == 20
+    assert summary.solver_failed_runs == 0
     assert summary.phase_monitor_log_path == output_root / "debug" / "phase_monitors.jsonl"
     assert registry.closed is False  # injected registry stays open; caller owns lifecycle
 
@@ -174,10 +184,20 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
                 artifact_diagnostics=SynthesisArtifactDiagnostics(
                     error_codes=["reject_too_easy"],
                 ),
+                solver_pass_rate=0.95,
+                solver_ci_low=0.8,
+                solver_ci_high=1.0,
+                solver_matched_runs=19,
+                solver_planned_runs=20,
+                solver_completed_runs=20,
+                solver_evaluable_runs=20,
+                solver_failed_runs=0,
             )
         ],
         last_artifact_diagnostics=SynthesisArtifactDiagnostics(
             error_codes=["reject_too_easy"],
+            feedback_events=2,
+            last_feedback_error_codes=["answer_contract_evidence_mismatch"],
         ),
     )
     runner = RealDbTrialRunner(
@@ -208,4 +228,14 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
     assert summary.synthesis_error_type == "SynthesisArtifactGenerationError"
     assert summary.attempt_outcomes == ("artifact_invalid",)
     assert summary.error_codes == ("reject_too_easy",)
+    assert summary.solver_pass_rate == 0.95
+    assert summary.solver_ci_low == 0.8
+    assert summary.solver_ci_high == 1.0
+    assert summary.solver_matched_runs == 19
+    assert summary.solver_planned_runs == 20
+    assert summary.solver_completed_runs == 20
+    assert summary.solver_evaluable_runs == 20
+    assert summary.solver_failed_runs == 0
+    assert summary.feedback_events == 2
+    assert summary.last_feedback_error_codes == ("answer_contract_evidence_mismatch",)
     assert runner.registry.closed is False  # injected registry stays open

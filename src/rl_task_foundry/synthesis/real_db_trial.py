@@ -24,6 +24,7 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
     SynthesisBackendFailure,
+    SynthesisGenerationAttempt,
     SynthesisPhaseExecutionError,
     SynthesisProviderUnavailableError,
     SynthesisRuntimeError,
@@ -67,6 +68,13 @@ class RealDbTrialSummary:
     solver_pass_rate: float | None = None
     solver_ci_low: float | None = None
     solver_ci_high: float | None = None
+    solver_matched_runs: int | None = None
+    solver_planned_runs: int | None = None
+    solver_completed_runs: int | None = None
+    solver_evaluable_runs: int | None = None
+    solver_failed_runs: int | None = None
+    feedback_events: int = 0
+    last_feedback_error_codes: tuple[str, ...] = ()
     registry_status: TaskRegistryCommitStatus | None = None
     registry_task_id: str | None = None
     bundle_root: Path | None = None
@@ -95,6 +103,13 @@ class RealDbTrialSummary:
         solver_pass_rate: float | None = None,
         solver_ci_low: float | None = None,
         solver_ci_high: float | None = None,
+        solver_matched_runs: int | None = None,
+        solver_planned_runs: int | None = None,
+        solver_completed_runs: int | None = None,
+        solver_evaluable_runs: int | None = None,
+        solver_failed_runs: int | None = None,
+        feedback_events: int = 0,
+        last_feedback_error_codes: tuple[str, ...] = (),
         registry_status: TaskRegistryCommitStatus | None = None,
         registry_task_id: str | None = None,
         bundle_root: Path | None = None,
@@ -124,9 +139,35 @@ class RealDbTrialSummary:
         object.__setattr__(self, "solver_pass_rate", solver_pass_rate)
         object.__setattr__(self, "solver_ci_low", solver_ci_low)
         object.__setattr__(self, "solver_ci_high", solver_ci_high)
+        object.__setattr__(self, "solver_matched_runs", solver_matched_runs)
+        object.__setattr__(self, "solver_planned_runs", solver_planned_runs)
+        object.__setattr__(self, "solver_completed_runs", solver_completed_runs)
+        object.__setattr__(self, "solver_evaluable_runs", solver_evaluable_runs)
+        object.__setattr__(self, "solver_failed_runs", solver_failed_runs)
+        object.__setattr__(self, "feedback_events", feedback_events)
+        object.__setattr__(
+            self, "last_feedback_error_codes", last_feedback_error_codes
+        )
         object.__setattr__(self, "registry_status", registry_status)
         object.__setattr__(self, "registry_task_id", registry_task_id)
         object.__setattr__(self, "bundle_root", bundle_root)
+
+
+def _solver_summary_from_attempt(
+    attempt: SynthesisGenerationAttempt | None,
+) -> dict[str, object]:
+    if attempt is None:
+        return {}
+    return {
+        "solver_pass_rate": attempt.solver_pass_rate,
+        "solver_ci_low": attempt.solver_ci_low,
+        "solver_ci_high": attempt.solver_ci_high,
+        "solver_matched_runs": attempt.solver_matched_runs,
+        "solver_planned_runs": attempt.solver_planned_runs,
+        "solver_completed_runs": attempt.solver_completed_runs,
+        "solver_evaluable_runs": attempt.solver_evaluable_runs,
+        "solver_failed_runs": attempt.solver_failed_runs,
+    }
 
 
 @dataclass(slots=True)
@@ -234,6 +275,14 @@ class RealDbTrialRunner:
                 requested_topic=topic,
             )
         except SynthesisArtifactGenerationError as exc:
+            last_attempt = exc.attempts[-1] if exc.attempts else None
+            diagnostics = exc.last_artifact_diagnostics
+            error_codes = tuple(diagnostics.error_codes if diagnostics else ())
+            last_feedback_error_codes = tuple(
+                diagnostics.last_feedback_error_codes if diagnostics else ()
+            )
+            feedback_events = diagnostics.feedback_events if diagnostics else 0
+            solver_summary = _solver_summary_from_attempt(last_attempt)
             phase_monitor.emit(
                 phase="synthesis",
                 status="failed",
@@ -244,11 +293,10 @@ class RealDbTrialRunner:
                     "error_type": type(exc).__name__,
                     "error_message": str(exc),
                     "attempt_outcomes": [attempt.outcome.value for attempt in exc.attempts],
-                    "error_codes": list(
-                        exc.last_artifact_diagnostics.error_codes
-                        if exc.last_artifact_diagnostics is not None
-                        else ()
-                    ),
+                    "error_codes": list(error_codes),
+                    "feedback_events": feedback_events,
+                    "last_feedback_error_codes": list(last_feedback_error_codes),
+                    **solver_summary,
                 },
             )
             summary = RealDbTrialSummary(
@@ -264,11 +312,10 @@ class RealDbTrialRunner:
                 synthesis_error_type=type(exc).__name__,
                 synthesis_error_message=str(exc),
                 attempt_outcomes=tuple(attempt.outcome.value for attempt in exc.attempts),
-                error_codes=tuple(
-                    exc.last_artifact_diagnostics.error_codes
-                    if exc.last_artifact_diagnostics is not None
-                    else ()
-                ),
+                error_codes=error_codes,
+                feedback_events=feedback_events,
+                last_feedback_error_codes=last_feedback_error_codes,
+                **solver_summary,
             )
             phase_monitor.close()
             event_logger.close()
@@ -414,6 +461,11 @@ class RealDbTrialRunner:
             solver_pass_rate=draft.task_bundle.quality_metrics.solver_pass_rate,
             solver_ci_low=draft.task_bundle.quality_metrics.solver_ci_low,
             solver_ci_high=draft.task_bundle.quality_metrics.solver_ci_high,
+            solver_matched_runs=draft.task_bundle.quality_metrics.solver_matched_runs,
+            solver_planned_runs=draft.task_bundle.quality_metrics.solver_planned_runs,
+            solver_completed_runs=draft.task_bundle.quality_metrics.solver_completed_runs,
+            solver_evaluable_runs=draft.task_bundle.quality_metrics.solver_evaluable_runs,
+            solver_failed_runs=draft.task_bundle.quality_metrics.solver_failed_runs,
             registry_status=commit_result.status,
             registry_task_id=commit_result.task_id,
             bundle_root=bundle_root,

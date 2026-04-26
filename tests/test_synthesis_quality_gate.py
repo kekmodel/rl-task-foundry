@@ -33,6 +33,7 @@ def test_accepted_draft_with_quality_metrics_persists_solver_metrics() -> None:
     assert accepted.task_bundle.quality_metrics.solver_pass_rate == 0.5
     assert accepted.task_bundle.quality_metrics.solver_ci_low == 0.1
     assert accepted.task_bundle.quality_metrics.solver_ci_high == 0.9
+    assert accepted.task_bundle.quality_metrics.solver_matched_runs == 1
     assert accepted.task_bundle.quality_metrics.solver_planned_runs == 3
     assert accepted.task_bundle.quality_metrics.solver_completed_runs == 2
     assert accepted.task_bundle.quality_metrics.solver_evaluable_runs == 2

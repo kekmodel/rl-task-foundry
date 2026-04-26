@@ -235,6 +235,8 @@ class SynthesisGenerationOutcome(StrEnum):
 class SynthesisArtifactDiagnostics(StrictModel):
     error_codes: list[str] = Field(default_factory=list)
     payload_repair_codes: list[str] = Field(default_factory=list)
+    feedback_events: int = Field(default=0, ge=0)
+    last_feedback_error_codes: list[str] = Field(default_factory=list)
 
 
 class SynthesisGenerationAttempt(StrictModel):
@@ -245,6 +247,14 @@ class SynthesisGenerationAttempt(StrictModel):
     memory_summary: str
     error_message: str | None = None
     artifact_diagnostics: SynthesisArtifactDiagnostics | None = None
+    solver_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_ci_low: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_ci_high: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_matched_runs: int | None = Field(default=None, ge=0)
+    solver_planned_runs: int | None = Field(default=None, ge=0)
+    solver_completed_runs: int | None = Field(default=None, ge=0)
+    solver_evaluable_runs: int | None = Field(default=None, ge=0)
+    solver_failed_runs: int | None = Field(default=None, ge=0)
 
 
 class SynthesisArtifactGenerationError(SynthesisRuntimeError):
@@ -570,6 +580,8 @@ class SynthesisAgentRuntime:
                 error_codes=list(last_attempt.artifact_diagnostics.error_codes)
                 if last_attempt is not None and last_attempt.artifact_diagnostics is not None
                 else [],
+                feedback_events=controller.feedback_events,
+                last_feedback_error_codes=list(controller.last_feedback_error_codes),
             )
             if requested_topic is not None:
                 await self._record_category_discard(
@@ -933,6 +945,14 @@ class SynthesisAgentRuntime:
                         if error_codes
                         else None
                     ),
+                    solver_pass_rate=record.pass_rate,
+                    solver_ci_low=record.ci_lower,
+                    solver_ci_high=record.ci_upper,
+                    solver_matched_runs=record.matched_solver_runs,
+                    solver_planned_runs=record.planned_solver_runs,
+                    solver_completed_runs=record.total_solver_runs,
+                    solver_evaluable_runs=record.evaluable_solver_runs,
+                    solver_failed_runs=record.failed_solver_runs,
                 )
             )
         return attempts

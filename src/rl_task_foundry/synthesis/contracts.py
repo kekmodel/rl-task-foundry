@@ -215,6 +215,7 @@ class TaskQualityMetrics(StrictModel):
     solver_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_low: float | None = Field(default=None, ge=0.0, le=1.0)
     solver_ci_high: float | None = Field(default=None, ge=0.0, le=1.0)
+    solver_matched_runs: int | None = Field(default=None, ge=0)
     solver_planned_runs: int | None = Field(default=None, ge=0)
     solver_completed_runs: int | None = Field(default=None, ge=0)
     solver_evaluable_runs: int | None = Field(default=None, ge=0)

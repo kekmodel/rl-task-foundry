@@ -428,6 +428,8 @@ class SubmitDraftAttemptRecord:
     message: str
     error_codes: tuple[str, ...] = ()
     pass_rate: float | None = None
+    ci_lower: float | None = None
+    ci_upper: float | None = None
     matched_solver_runs: int | None = None
     planned_solver_runs: int | None = None
     total_solver_runs: int | None = None
@@ -947,6 +949,7 @@ class SubmitDraftController:
     _last_answer_contract: AnswerContract | None = field(default=None, init=False)
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
+    _last_feedback_error_codes: tuple[str, ...] = field(default=(), init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
     _observed_response_strings: set[str] = field(default_factory=set, init=False)
     _terminated_too_hard: bool = field(default=False, init=False)
@@ -956,6 +959,14 @@ class SubmitDraftController:
         if self._terminated_too_hard:
             return 0
         return max(0, self.max_submissions - (len(self.attempts) + self._feedback_events))
+
+    @property
+    def feedback_events(self) -> int:
+        return self._feedback_events
+
+    @property
+    def last_feedback_error_codes(self) -> tuple[str, ...]:
+        return self._last_feedback_error_codes
 
     def record_atomic_tool_call(
         self,
@@ -1283,6 +1294,8 @@ class SubmitDraftController:
                     outcome="accepted",
                     message="accepted",
                     pass_rate=quality_gate_summary.pass_rate,
+                    ci_lower=quality_gate_summary.ci_lower,
+                    ci_upper=quality_gate_summary.ci_upper,
                     matched_solver_runs=quality_gate_summary.matched_solver_runs,
                     planned_solver_runs=quality_gate_summary.planned_solver_runs,
                     total_solver_runs=quality_gate_summary.total_solver_runs,
@@ -1334,6 +1347,8 @@ class SubmitDraftController:
                 ),
                 error_codes=[SubmitDraftErrorCode.REJECT_TOO_EASY],
                 pass_rate=quality_gate_summary.pass_rate,
+                ci_lower=quality_gate_summary.ci_lower,
+                ci_upper=quality_gate_summary.ci_upper,
                 matched_solver_runs=quality_gate_summary.matched_solver_runs,
                 planned_solver_runs=quality_gate_summary.planned_solver_runs,
                 total_solver_runs=quality_gate_summary.total_solver_runs,
@@ -1371,6 +1386,8 @@ class SubmitDraftController:
                     ),
                     error_codes=[SubmitDraftErrorCode.CALIBRATION_INCONCLUSIVE],
                     pass_rate=quality_gate_summary.pass_rate,
+                    ci_lower=quality_gate_summary.ci_lower,
+                    ci_upper=quality_gate_summary.ci_upper,
                     matched_solver_runs=quality_gate_summary.matched_solver_runs,
                     planned_solver_runs=quality_gate_summary.planned_solver_runs,
                     total_solver_runs=quality_gate_summary.total_solver_runs,
@@ -1396,6 +1413,8 @@ class SubmitDraftController:
                 ),
                 error_codes=[SubmitDraftErrorCode.CALIBRATION_INCONCLUSIVE],
                 pass_rate=quality_gate_summary.pass_rate,
+                ci_lower=quality_gate_summary.ci_lower,
+                ci_upper=quality_gate_summary.ci_upper,
                 matched_solver_runs=quality_gate_summary.matched_solver_runs,
                 planned_solver_runs=quality_gate_summary.planned_solver_runs,
                 total_solver_runs=quality_gate_summary.total_solver_runs,
@@ -1425,6 +1444,8 @@ class SubmitDraftController:
             ),
             error_codes=[SubmitDraftErrorCode.REJECT_TOO_HARD],
             pass_rate=quality_gate_summary.pass_rate,
+            ci_lower=quality_gate_summary.ci_lower,
+            ci_upper=quality_gate_summary.ci_upper,
             matched_solver_runs=quality_gate_summary.matched_solver_runs,
             planned_solver_runs=quality_gate_summary.planned_solver_runs,
             total_solver_runs=quality_gate_summary.total_solver_runs,
@@ -1576,6 +1597,7 @@ class SubmitDraftController:
         diagnostics: dict[str, object] | None = None,
     ) -> str:
         self._feedback_events += 1
+        self._last_feedback_error_codes = tuple(_error_code_values(error_codes))
         attempts_left_after = self.submissions_left()
         self._emit_monitor(
             status="budget_exhausted" if attempts_left_after <= 0 else "feedback",
@@ -1601,6 +1623,8 @@ class SubmitDraftController:
         error_codes: list[SubmitDraftErrorCode],
         payload: SubmitDraftPayload | dict[str, object] | None = None,
         pass_rate: float | None = None,
+        ci_lower: float | None = None,
+        ci_upper: float | None = None,
         matched_solver_runs: int | None = None,
         planned_solver_runs: int | None = None,
         total_solver_runs: int | None = None,
@@ -1617,6 +1641,8 @@ class SubmitDraftController:
                 message=message,
                 error_codes=tuple(_error_code_values(error_codes)),
                 pass_rate=pass_rate,
+                ci_lower=ci_lower,
+                ci_upper=ci_upper,
                 matched_solver_runs=matched_solver_runs,
                 planned_solver_runs=planned_solver_runs,
                 total_solver_runs=total_solver_runs,

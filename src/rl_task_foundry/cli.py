@@ -300,6 +300,22 @@ def run_proof_task_cli(
             console.print(f"solver_ci_low={summary.solver_ci_low}")
         if summary.solver_ci_high is not None:
             console.print(f"solver_ci_high={summary.solver_ci_high}")
+        if summary.solver_matched_runs is not None:
+            console.print(f"solver_matched_runs={summary.solver_matched_runs}")
+        if summary.solver_planned_runs is not None:
+            console.print(f"solver_planned_runs={summary.solver_planned_runs}")
+        if summary.solver_completed_runs is not None:
+            console.print(f"solver_completed_runs={summary.solver_completed_runs}")
+        if summary.solver_evaluable_runs is not None:
+            console.print(f"solver_evaluable_runs={summary.solver_evaluable_runs}")
+        if summary.solver_failed_runs is not None:
+            console.print(f"solver_failed_runs={summary.solver_failed_runs}")
+        if summary.feedback_events:
+            console.print(f"feedback_events={summary.feedback_events}")
+        if summary.last_feedback_error_codes:
+            console.print(
+                f"last_feedback_error_codes={list(summary.last_feedback_error_codes)}"
+            )
         if summary.registry_status is not None:
             console.print(f"registry_status={summary.registry_status}")
         if summary.registry_task_id is not None:
@@ -377,6 +393,22 @@ def run_real_db_trial(
             console.print(f"solver_ci_low={summary.solver_ci_low}")
         if summary.solver_ci_high is not None:
             console.print(f"solver_ci_high={summary.solver_ci_high}")
+        if summary.solver_matched_runs is not None:
+            console.print(f"solver_matched_runs={summary.solver_matched_runs}")
+        if summary.solver_planned_runs is not None:
+            console.print(f"solver_planned_runs={summary.solver_planned_runs}")
+        if summary.solver_completed_runs is not None:
+            console.print(f"solver_completed_runs={summary.solver_completed_runs}")
+        if summary.solver_evaluable_runs is not None:
+            console.print(f"solver_evaluable_runs={summary.solver_evaluable_runs}")
+        if summary.solver_failed_runs is not None:
+            console.print(f"solver_failed_runs={summary.solver_failed_runs}")
+        if summary.feedback_events:
+            console.print(f"feedback_events={summary.feedback_events}")
+        if summary.last_feedback_error_codes:
+            console.print(
+                f"last_feedback_error_codes={list(summary.last_feedback_error_codes)}"
+            )
         if summary.registry_status is not None:
             console.print(f"registry_status={summary.registry_status}")
         if summary.registry_task_id is not None:

@@ -225,6 +225,13 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 solver_pass_rate=0.5,
                 solver_ci_low=0.2,
                 solver_ci_high=0.8,
+                solver_matched_runs=10,
+                solver_planned_runs=20,
+                solver_completed_runs=21,
+                solver_evaluable_runs=20,
+                solver_failed_runs=1,
+                feedback_events=2,
+                last_feedback_error_codes=("answer_contract_query_mismatch",),
                 registry_status=TaskRegistryCommitStatus.COMMITTED,
                 registry_task_id="task_real_trial",
                 bundle_root=output_dir / "bundle",
@@ -264,6 +271,13 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "flow_id=flow_trial_test" in result.stdout
     assert "task_id=task_real_trial" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
+    assert "solver_matched_runs=10" in result.stdout
+    assert "solver_planned_runs=20" in result.stdout
+    assert "solver_completed_runs=21" in result.stdout
+    assert "solver_evaluable_runs=20" in result.stdout
+    assert "solver_failed_runs=1" in result.stdout
+    assert "feedback_events=2" in result.stdout
+    assert "last_feedback_error_codes=['answer_contract_query_mismatch']" in result.stdout
     assert captured["output_dir"] == output_dir
     assert captured["db_id"] == "sakila"
     assert captured["closed"] is True
