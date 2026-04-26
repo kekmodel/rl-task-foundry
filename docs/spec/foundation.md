@@ -201,6 +201,13 @@ spec areas.
     trial observations into system prompts. Do not use user prompts to override
     role isolation, validation precision, no-token-heuristic rules, or tool
     schema contracts.
+17. Pipeline state transitions are part of the correctness contract. Before
+    changing synthesis feedback, submit validation, solver rollout, trial retry,
+    harvest behavior, or registry acceptance, consult
+    [Pipeline Lifecycle And State Boundaries](./pipeline-lifecycle.md). In
+    particular, feedback-only `submit_draft` repair and terminal trial discard
+    are different states. A rule being detectable is not enough reason to make
+    it same-conversation feedback.
 
 ## Validation And Guidance Boundary
 

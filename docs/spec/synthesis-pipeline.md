@@ -382,6 +382,11 @@ schemas before trial changes are trusted. Current invariants:
 
 Generation retries are allowed, but retries are not the source of truth.
 
+- See [Pipeline Lifecycle And State Boundaries](./pipeline-lifecycle.md) for
+  the authoritative state-transition map. In particular, feedback-only
+  `submit_draft` repair and terminal trial discard are different states; do not
+  add retry feedback for failures that should discard the trial and let harvest
+  start fresh.
 - the label remains authoritative
 - `submit_draft` feedback can request a harder retry
 - retries must change latent task semantics, not just wording

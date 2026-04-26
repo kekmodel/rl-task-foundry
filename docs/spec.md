@@ -10,9 +10,10 @@ This file is the entrypoint to the RL Task Foundry specification. Normative cont
 4. [Atomic Tools](./spec/atomic-tools.md)
    and [Atomic Resource API v2](./spec/atomic-resource-api-v2.md)
 5. [Synthesis Pipeline](./spec/synthesis-pipeline.md)
-6. [Reward and Task Runtime](./spec/reward-and-environment-runtime.md)
-7. [Bundle Format, Contracts, and Registration](./spec/bundle-contracts-and-registration.md)
-8. [Registry and Operations](./spec/registry-and-operations.md)
+6. [Pipeline Lifecycle and State Boundaries](./spec/pipeline-lifecycle.md)
+7. [Reward and Task Runtime](./spec/reward-and-environment-runtime.md)
+8. [Bundle Format, Contracts, and Registration](./spec/bundle-contracts-and-registration.md)
+9. [Registry and Operations](./spec/registry-and-operations.md)
 
 ## Quick Map
 
@@ -22,6 +23,7 @@ This file is the entrypoint to the RL Task Foundry specification. Normative cont
 - [Atomic Tools](./spec/atomic-tools.md): current tool families, compression, SQL contract, completeness boundary
 - [Atomic Resource API v2](./spec/atomic-resource-api-v2.md): implemented resource-oriented solver surface and hidden trace AST for long-trace RL actor training
 - [Synthesis Pipeline](./spec/synthesis-pipeline.md): label-first phases, prompt constraints, retry behavior
+- [Pipeline Lifecycle and State Boundaries](./spec/pipeline-lifecycle.md): end-to-end runtime state transitions, feedback vs terminal discard boundaries, and change checklist
 - [Reward and Task Runtime](./spec/reward-and-environment-runtime.md): canonicalization, reward, environment server, episode semantics
 - [Bundle Format, Contracts, and Registration](./spec/bundle-contracts-and-registration.md): bundle filesystem, schemas, static registration policy
 - [Registry and Operations](./spec/registry-and-operations.md): quality gate, scheduler, registry, review, proof environment, success criteria
