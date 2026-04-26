@@ -44,6 +44,53 @@ flowchart TD
   HARVEST -- "new trial, new controller, new conversation" --> RT
 ```
 
+## Trial Sequence
+
+This sequence is the concrete runtime path. The important boundary is that
+`SynthesisAgentRuntime` does not start a second composer conversation after a
+terminal draft failure. It raises a failed trial result upward; `HarvestRunner`
+is the layer that starts a new trial.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant H as HarvestRunner
+  participant T as RealDbTrialRunner
+  participant R as SynthesisAgentRuntime
+  participant C as Composer agent
+  participant SD as SubmitDraftController
+  participant SO as SolverOrchestrator
+  participant REG as Registry/export
+
+  H->>T: run one trial
+  T->>R: synthesize_environment_draft(db_id)
+  R->>C: run one composer conversation
+  C->>SD: data-tool telemetry is recorded
+  C->>SD: submit_draft(payload)
+  alt schema/evidence contract feedback
+    SD-->>C: feedback-only rejection
+    C->>SD: more tools, then resubmit
+  else contract-valid draft
+    SD->>R: build SynthesisTaskDraft
+    SD->>SO: run solver rollout
+    SO-->>SD: quality gate summary
+  end
+  alt accepted
+    SD-->>R: accepted draft stored
+    R-->>T: accepted SynthesisTaskDraft
+    T->>REG: commit and export bundle
+    T-->>H: accepted or duplicate summary
+  else too_easy or high inconclusive
+    SD-->>C: same-conversation strengthening feedback
+  else terminal low-pass quality
+    SD-->>C: terminal rejection, stop submit_draft
+    C-->>R: final output
+    R-->>T: SynthesisArtifactGenerationError
+    T-->>H: synthesis_failed summary
+    H->>T: start a fresh independent trial if target not reached
+  end
+```
+
 ## Code Ownership Map
 
 - `src/rl_task_foundry/synthesis/synthesis_db.py`
@@ -149,6 +196,44 @@ The name `reject_too_hard` is a quality-gate bucket, not a proof of the cause.
 It can mean overconstrained, actor-unreachable, tool-trace-unfriendly,
 ambiguous/non-unique for exact match, or otherwise low-quality. That is
 acceptable: all of those are reasons to discard the trial.
+
+### submit_draft State Diagram
+
+This is the diagram to check before adding a validator or feedback branch.
+
+```mermaid
+flowchart TD
+  START["Composer calls submit_draft"]
+  SHAPE["Pydantic/tool schema parse"]
+  EXACT["Exact contract checks\nlatest query, grounded values, visibility, phrases"]
+  FEEDBACK["Feedback-only repair\nsame conversation continues"]
+  REJECT["Non-feedback rejection\nattempt consumed"]
+  DRAFT["Build draft"]
+  ROLLOUT["Run solver rollout"]
+  ACCEPT["Accepted\nstore draft"]
+  EASY["Too easy or high inconclusive\nsame target, strengthen label"]
+  HARD["Too hard or low inconclusive\nterminal discard"]
+  BUDGET["Budget exhausted\ntrial fails"]
+
+  START --> SHAPE
+  SHAPE -- "feedback-only schema error" --> FEEDBACK
+  SHAPE -- "hard payload/build error" --> REJECT
+  SHAPE -- "valid payload shape" --> EXACT
+  EXACT -- "feedback-only exact violation" --> FEEDBACK
+  EXACT -- "non-feedback violation" --> REJECT
+  EXACT -- "contract valid" --> DRAFT
+  FEEDBACK --> START
+  REJECT -- "attempts left" --> START
+  REJECT -- "no attempts left" --> BUDGET
+  DRAFT --> ROLLOUT
+  ROLLOUT -- "accept" --> ACCEPT
+  ROLLOUT -- "reject_too_easy" --> EASY
+  ROLLOUT -- "calibration_inconclusive and pass_rate above band" --> EASY
+  ROLLOUT -- "reject_too_hard" --> HARD
+  ROLLOUT -- "calibration_inconclusive and pass_rate not above band" --> HARD
+  EASY --> START
+  HARD --> BUDGET
+```
 
 ## Stage 4: Draft Materialization
 
@@ -257,6 +342,35 @@ does not cross trial boundaries.
 
 Failures such as `too_hard`, validation exhaustion, provider errors, or
 duplicates are discarded attempts. Harvest simply starts another trial.
+
+## Failure Routing Diagram
+
+Use this smaller decision chart when deciding where a new failure signal should
+live.
+
+```mermaid
+flowchart TD
+  X["Observed problem"]
+  A{"Can JSON Schema express it?"}
+  B{"Can runtime prove it with 100% precision?"}
+  C{"Should same composer fix it now?"}
+  D{"Is it a solver/actor population signal?"}
+  SCHEMA["Tool schema or parameter description"]
+  FEED["submit_draft feedback-only repair"]
+  TERM["Terminal trial discard\nharvest retries fresh"]
+  STAT["Solver pass-rate and trace review"]
+  PROMPT["Prompt, example, or tool-description tuning"]
+
+  X --> A
+  A -- "yes" --> SCHEMA
+  A -- "no" --> B
+  B -- "yes" --> C
+  B -- "no" --> D
+  C -- "yes" --> FEED
+  C -- "no" --> TERM
+  D -- "yes" --> STAT
+  D -- "no" --> PROMPT
+```
 
 ## Change Checklist
 
