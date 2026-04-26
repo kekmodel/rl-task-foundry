@@ -197,6 +197,19 @@ It can mean overconstrained, actor-unreachable, tool-trace-unfriendly,
 ambiguous/non-unique for exact match, or otherwise low-quality. That is
 acceptable: all of those are reasons to discard the trial.
 
+The terminal-discard policy is intentional. Earlier designs allowed the
+composer to weaken a too-hard draft in the same conversation, but in practice
+the composer often failed to simplify cleanly. It tended to spend extra turns in
+back-and-forth repair, drift away from the original grounded label, or produce a
+different low-quality candidate. Starting a fresh trial is usually cheaper and
+cleaner than asking the same context to unwind a failed hard draft.
+
+This is asymmetric with too-easy. Making a too-easy draft more specific can be
+done by preserving the same answer kind and target while adding one grounded
+constraint. Making a too-hard draft easier often requires changing the task
+shape, anchor, path, or label semantics, so it is treated as a disposable trial
+rather than a repairable draft.
+
 ### submit_draft State Diagram
 
 This is the diagram to check before adding a validator or feedback branch.

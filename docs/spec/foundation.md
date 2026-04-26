@@ -208,6 +208,12 @@ spec areas.
     particular, feedback-only `submit_draft` repair and terminal trial discard
     are different states. A rule being detectable is not enough reason to make
     it same-conversation feedback.
+18. Too-hard quality failures are terminal by design. Empirically, asking the
+    same composer conversation to weaken a hard or low-quality draft tends to
+    burn turns, drift semantics, and produce another weak candidate. Too-easy
+    drafts may be strengthened in place because the same answer target can
+    usually be narrowed with one grounded constraint; too-hard drafts should be
+    discarded so harvest can start from a fresh conversation and anchor context.
 
 ## Validation And Guidance Boundary
 
