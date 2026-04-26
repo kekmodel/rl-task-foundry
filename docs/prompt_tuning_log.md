@@ -2697,3 +2697,34 @@ Solver 30/30 완료 결과:
   -> 47 passed.
   `uv run pytest -q` -> 415 passed. `uv run ruff check .` and
   `git diff --check` passed.
+
+## Iteration 66 — malformed submit_draft inputs stay inside synthesis
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_kimi_list_records_01`, pagila,
+  composer `openrouter/moonshotai/kimi-k2.5`, solver
+  `openrouter/openai/gpt-5.4-nano`.
+- **Result**:
+  The trial did not reach solver evaluation. Kimi explored a valid customer
+  path and query, then submitted malformed `submit_draft` arguments twice:
+  invalid `label_json`, invalid scalar `entity_json`, and finally tool input
+  with extra JSON data. The second malformed call surfaced as provider
+  `UserError`, aborting synthesis instead of consuming the remaining draft
+  attempts through normal rejection feedback.
+- **Fix**:
+  `submit_draft` now catches malformed top-level tool input JSON and non-object
+  tool input before pydantic validation, records a structured
+  `submit_payload_invalid` rejection, and returns normal `RejectedError`
+  feedback. This keeps bad composer calls inside the synthesis loop rather
+  than classifying them as environment/provider failures.
+- **Why this follows the principles**:
+  This is pure schema/protocol robustness. It does not add semantic validation
+  or heuristic quality filtering; it only ensures invalid callable shape is
+  handled by the tool contract.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_tool_rejects_malformed_tool_input_without_crashing -q`
+  -> 1 passed.
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_tooling_atomic_tool_factory.py tests/test_synthesis_prompts.py tests/test_pipeline_solver_orchestrator.py tests/test_synthesis_bundle_exporter.py -q`
+  -> 86 passed.
+  `uv run pytest -q` -> 416 passed. `uv run ruff check .` and
+  `git diff --check` passed.

@@ -1007,6 +1007,36 @@ class SubmitDraftController:
             diagnostics={"validation_errors": _validation_error_diagnostics(error)},
         )
 
+    def reject_malformed_tool_input(
+        self,
+        *,
+        parsed: dict[str, object],
+        validation_errors: list[dict[str, object]],
+    ) -> str:
+        if self.accepted_draft is not None:
+            return _render_structured_message(
+                kind="Accepted",
+                result="Draft already stored.",
+            )
+        if self.submissions_left() <= 0:
+            return "BudgetExhaustedError: No more attempts."
+
+        search_cost_observations = (
+            len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
+        )
+        diagnostics = {"validation_errors": validation_errors}
+        return self._record_rejection(
+            submission_index=len(self.attempts) + 1,
+            message=self._invalid_submission_message(
+                [SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID],
+                diagnostics=diagnostics,
+            ),
+            error_codes=[SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID],
+            payload=parsed,
+            search_cost_observations=search_cost_observations,
+            diagnostics=diagnostics,
+        )
+
     async def submit(self, payload: SubmitDraftPayload) -> str:
         if self.accepted_draft is not None:
             return _render_structured_message(
@@ -1696,7 +1726,42 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     )
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
-        parsed = json.loads(input_json) if input_json else {}
+        try:
+            parsed_raw: object = json.loads(input_json) if input_json else {}
+        except json.JSONDecodeError as exc:
+            return controller.reject_malformed_tool_input(
+                parsed={
+                    "tool_input_preview": _preview_runtime_payload(
+                        input_json,
+                        config=controller.config,
+                    )
+                },
+                validation_errors=[
+                    {
+                        "loc": ["tool_input"],
+                        "type": "json_decode_error",
+                        "message": str(exc),
+                    }
+                ],
+            )
+        if not isinstance(parsed_raw, dict):
+            return controller.reject_malformed_tool_input(
+                parsed={
+                    "tool_input_type": type(parsed_raw).__name__,
+                    "tool_input_preview": _preview_runtime_payload(
+                        parsed_raw,
+                        config=controller.config,
+                    ),
+                },
+                validation_errors=[
+                    {
+                        "loc": ["tool_input"],
+                        "type": "object_type",
+                        "message": "submit_draft input must be a JSON object",
+                    }
+                ],
+            )
+        parsed = {str(key): value for key, value in parsed_raw.items()}
         raw_question = parsed.pop("question", None)
         if isinstance(raw_question, str) and "user_request" not in parsed:
             parsed_anchor_entity, question_body, prompt_error = (

@@ -913,6 +913,34 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     for leaked in ("solver", "actor", "RLVR", "pass_rate", "training"):
         assert leaked not in schema_surface
 
+
+@pytest.mark.asyncio
+async def test_submit_draft_tool_rejects_malformed_tool_input_without_crashing(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    tool = build_submit_draft_sdk_tool(controller)
+
+    result = await tool.on_invoke_tool(  # pyright: ignore[reportArgumentType]
+        None,
+        '{"topic": "assignment"} trailing',
+    )
+
+    assert "RejectedError" in result
+    assert "submit_draft arguments did not match" in result
+    assert len(controller.attempts) == 1
+    assert controller.attempts[0].error_codes == ("submit_payload_invalid",)
+
+
 @pytest.mark.asyncio
 async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path) -> None:
     controller = SubmitDraftController(
