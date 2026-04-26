@@ -2589,3 +2589,24 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
   -> 57 passed. Targeted ruff passed.
+
+## Iteration 62 — composer no-tool-call diagnostics
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_kimi_request_binding_01`, pagila,
+  composer `openrouter/moonshotai/kimi-k2.5`, solver configured as
+  `openrouter/openai/gpt-5.4-nano`.
+- **Result**:
+  Kimi again failed before any solver rollout. The event log showed one model
+  request, empty final output, and `tool_calls=[]`; there were no
+  `submit_draft` attempts and no feedback events.
+- **Fix**:
+  Added exact diagnostics for composer tool-protocol failures. When a synthesis
+  conversation ends with no accepted draft and no submit attempts, runtime now
+  records `composer_no_tool_calls` if the model made zero tool calls, or
+  `composer_submit_draft_missing` if it used data tools but never submitted.
+  This is observability only; it does not judge semantic quality and does not
+  add a heuristic validator.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_runtime.py -q` -> 36 passed. Targeted
+  ruff passed.

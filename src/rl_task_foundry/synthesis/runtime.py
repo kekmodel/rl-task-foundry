@@ -239,6 +239,10 @@ class SynthesisArtifactDiagnostics(StrictModel):
     last_feedback_error_codes: list[str] = Field(default_factory=list)
 
 
+COMPOSER_NO_TOOL_CALLS_ERROR = "composer_no_tool_calls"
+COMPOSER_SUBMIT_DRAFT_MISSING_ERROR = "composer_submit_draft_missing"
+
+
 class SynthesisGenerationAttempt(StrictModel):
     attempt_index: int
     outcome: SynthesisGenerationOutcome
@@ -576,10 +580,22 @@ class SynthesisAgentRuntime:
                 model=conversation_result.model,
             )
             last_attempt = attempts[-1] if attempts else None
+            conversation_error_codes: list[str] = []
+            if not attempts:
+                if not conversation_result.tool_calls:
+                    conversation_error_codes.append(COMPOSER_NO_TOOL_CALLS_ERROR)
+                elif "submit_draft" not in conversation_result.tool_calls:
+                    conversation_error_codes.append(COMPOSER_SUBMIT_DRAFT_MISSING_ERROR)
             diagnostics = SynthesisArtifactDiagnostics(
-                error_codes=list(last_attempt.artifact_diagnostics.error_codes)
-                if last_attempt is not None and last_attempt.artifact_diagnostics is not None
-                else [],
+                error_codes=[
+                    *(
+                        list(last_attempt.artifact_diagnostics.error_codes)
+                        if last_attempt is not None
+                        and last_attempt.artifact_diagnostics is not None
+                        else []
+                    ),
+                    *conversation_error_codes,
+                ],
                 feedback_events=controller.feedback_events,
                 last_feedback_error_codes=list(controller.last_feedback_error_codes),
             )

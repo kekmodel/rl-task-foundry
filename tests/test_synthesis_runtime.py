@@ -435,6 +435,60 @@ class _FakeBackend:
             },
         )()
 
+
+@dataclass(slots=True)
+class _FakeNoToolBackend:
+    provider_name: str = "openrouter"
+    model_name: str = "moonshotai/kimi-k2.5"
+    tool_calls: tuple[str, ...] = ()
+    seen_conversations: list[object] = field(default_factory=list)
+
+    async def run_synthesis(
+        self,
+        *,
+        conversation,
+        db_id: str,
+        requested_topic: str,
+        domain_name: str,
+        task_language: str,
+        scenario_description: str,
+        schema_summary: dict[str, object],
+        tool_surface_summary: dict[str, object],
+        max_turns: int,
+        anchor_hint: dict[str, object] | None = None,
+        data_profile: object | None = None,
+        examples_pack: object | None = None,
+        affordance_map: dict[str, object] | None = None,
+    ):
+        del (
+            db_id,
+            requested_topic,
+            domain_name,
+            task_language,
+            scenario_description,
+            schema_summary,
+            tool_surface_summary,
+            max_turns,
+            anchor_hint,
+            data_profile,
+            examples_pack,
+            affordance_map,
+        )
+        self.seen_conversations.append(conversation)
+        return type(
+            "ConversationResult",
+            (),
+            {
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "final_output_text": "",
+                "turn_count": 1,
+                "token_usage": {"requests": 1},
+                "tool_calls": self.tool_calls,
+            },
+        )()
+
+
 def _accepted_payload() -> SubmitDraftPayload:
     anchor_entity = {"customer_id": 1}
     return SubmitDraftPayload.model_validate(
@@ -1804,6 +1858,75 @@ async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: 
             )
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_runtime_diagnoses_composer_no_tool_calls(tmp_path: Path) -> None:
+    backend = _FakeNoToolBackend()
+    config = _config_with_synthesis_output(tmp_path)
+    synthesis_db = SynthesisDb(db_id="sakila", config=config)
+    synthesis_db._graph_cache = _sample_graph()
+    synthesis_db._data_profile_cache = DataProfile()
+    runtime = SynthesisAgentRuntime(
+        config,
+        synthesis_backends=[backend],
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        synthesis_db=synthesis_db,
+    )
+
+    try:
+        with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
+            await runtime.synthesize_environment_draft(
+                db_id="sakila",
+                requested_topic="assignment",
+                graph=_sample_graph(),
+            )
+    finally:
+        await runtime.close()
+
+    assert exc_info.value.attempts == []
+    diagnostics = exc_info.value.last_artifact_diagnostics
+    assert diagnostics is not None
+    assert diagnostics.error_codes == ["composer_no_tool_calls"]
+    assert diagnostics.feedback_events == 0
+
+
+@pytest.mark.asyncio
+async def test_synthesis_runtime_diagnoses_composer_missing_submit_draft(
+    tmp_path: Path,
+) -> None:
+    backend = _FakeNoToolBackend(tool_calls=("schema_map", "query"))
+    config = _config_with_synthesis_output(tmp_path)
+    synthesis_db = SynthesisDb(db_id="sakila", config=config)
+    synthesis_db._graph_cache = _sample_graph()
+    synthesis_db._data_profile_cache = DataProfile()
+    runtime = SynthesisAgentRuntime(
+        config,
+        synthesis_backends=[backend],
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        synthesis_db=synthesis_db,
+    )
+
+    try:
+        with pytest.raises(SynthesisArtifactGenerationError) as exc_info:
+            await runtime.synthesize_environment_draft(
+                db_id="sakila",
+                requested_topic="assignment",
+                graph=_sample_graph(),
+            )
+    finally:
+        await runtime.close()
+
+    diagnostics = exc_info.value.last_artifact_diagnostics
+    assert diagnostics is not None
+    assert diagnostics.error_codes == ["composer_submit_draft_missing"]
+
 
 @pytest.mark.asyncio
 async def test_synthesis_runtime_close_clears_owned_synthesis_db(tmp_path: Path) -> None:
