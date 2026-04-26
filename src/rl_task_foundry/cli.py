@@ -15,8 +15,8 @@ from rl_task_foundry.infra.storage import summarize_run
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
-from rl_task_foundry.synthesis.proof_environment import run_proof_task
 from rl_task_foundry.synthesis.harvest import HarvestOutcome, HarvestRunner
+from rl_task_foundry.synthesis.proof_environment import run_proof_task
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
@@ -318,11 +318,21 @@ def run_real_db_trial(
     output_dir: Path,
     topic: str | None = None,
     config_path: Path = Path("rl_task_foundry.yaml"),
+    composer_provider: str | None = None,
+    composer_model: str | None = None,
+    solver_provider: str | None = None,
+    solver_model: str | None = None,
 ) -> None:
     """Run a real-database single-task trial."""
 
     async def _run() -> None:
-        config = load_config(config_path)
+        config = load_config(
+            config_path,
+            composer_provider=composer_provider,
+            composer_model=composer_model,
+            solver_provider=solver_provider,
+            solver_model=solver_model,
+        )
         resolved_topic = (
             normalize_topic(topic) if topic else None
         )

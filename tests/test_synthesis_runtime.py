@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,16 +14,28 @@ from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
 from rl_task_foundry.schema.graph import ColumnProfile, SchemaGraph, TableProfile
 from rl_task_foundry.schema.profiler import DataProfile
+from rl_task_foundry.synthesis.contracts import (
+    OutputFieldContract,
+    OutputFieldType,
+    OutputSchemaContract,
+    RolloutConstraintsContract,
+    TaskBundleContract,
+    TaskContract,
+)
 from rl_task_foundry.synthesis.runtime import (
     SynthesisAgentRuntime,
     SynthesisArtifactGenerationError,
+    SynthesisTaskDraft,
 )
-from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
+    SubmitDraftErrorCode,
     SubmitDraftPayload,
+    build_submit_draft_sdk_tool,
 )
 from rl_task_foundry.synthesis.submit_draft_validators import _ungrounded_answer_strings
+from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
+
 
 def _wrap_user_prompt(anchor_entity: dict[str, object], body: str) -> str:
     return (
@@ -30,6 +44,193 @@ def _wrap_user_prompt(anchor_entity: dict[str, object], body: str) -> str:
         "</entity>\n\n"
         f"{body}"
     )
+
+def _scalar_answer_contract(
+    *,
+    phrase: str,
+    table: str = "customer",
+    fn: str = "count",
+    column: str | None = "customer_id",
+    predicates: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "kind": "scalar",
+        "operation": {
+            "fn": fn,
+            "table": table,
+            "column": column,
+            "phrase": phrase,
+        },
+        "predicates": predicates or [],
+        "order_by": [],
+        "limit": None,
+        "limit_phrase": None,
+        "evidence": "latest_query",
+    }
+
+def _list_answer_contract(
+    *,
+    phrase: str,
+    table: str = "payment",
+    column: str | None = None,
+    predicates: list[dict[str, object]] | None = None,
+    order_by: list[dict[str, object]] | None = None,
+    limit: int | None = 3,
+    limit_phrase: str | None = "3건",
+) -> dict[str, object]:
+    return {
+        "kind": "list",
+        "operation": {
+            "fn": "select",
+            "table": table,
+            "column": column,
+            "phrase": phrase,
+        },
+        "predicates": predicates or [],
+        "order_by": order_by or [],
+        "limit": limit,
+        "limit_phrase": limit_phrase,
+        "evidence": "latest_query",
+    }
+
+def _record_query_evidence(
+    controller: SubmitDraftController,
+    label: object,
+    *,
+    answer_contract: object | None = None,
+    column_sources: list[dict[str, object]] | None = None,
+    referenced_columns: list[dict[str, object]] | None = None,
+    query_params: dict[str, object] | None = None,
+) -> None:
+    rows = [label] if isinstance(label, dict) else label
+    columns: list[str] = []
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        columns = list(rows[0].keys())
+    if column_sources is None:
+        column_sources = [
+            {
+                "output": column,
+                "kind": "select",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "value_exposes_source": True,
+            }
+            for column in columns
+        ]
+    if referenced_columns is None and answer_contract is not None:
+        referenced_columns = []
+        for predicate in getattr(answer_contract, "predicates", []):
+            referenced_columns.append(
+                {
+                    "usage": "where",
+                    "table": predicate.table,
+                    "column": predicate.column,
+                    "visibility": "user_visible",
+                    "is_handle": False,
+                    "op": predicate.op,
+                    "value": predicate.value,
+                }
+            )
+        for order in getattr(answer_contract, "order_by", []):
+            referenced_columns.append(
+                {
+                    "usage": "order_by",
+                    "table": order.table,
+                    "column": order.column,
+                    "visibility": "user_visible",
+                    "is_handle": False,
+                    "direction": order.direction,
+                }
+            )
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params=query_params or {"spec": {"test_evidence": True, "where": [{"value": 1}]}},
+        result={
+            "columns": columns,
+            "column_sources": column_sources,
+            "referenced_columns": referenced_columns or [],
+            "rows": rows,
+            "row_count": len(rows) if isinstance(rows, list) else 0,
+        },
+    )
+
+
+def _draft_with_task_bundle(payload: SubmitDraftPayload):
+    task = TaskContract(
+        question=payload.user_request,
+        topic=payload.topic,
+        output_schema=OutputSchemaContract(
+            root=OutputFieldContract(
+                name="answer",
+                type=OutputFieldType.OBJECT,
+                fields=[
+                    OutputFieldContract(
+                        name="value",
+                        type=OutputFieldType.STRING,
+                    )
+                ],
+            )
+        ),
+    )
+    task_bundle = TaskBundleContract(
+        task_id="task-1",
+        db_id="pagila",
+        domain="test",
+        topic=payload.topic,
+        atomic_tool_set_ref="test",
+        created_at=datetime.now(UTC),
+        generator_version="test",
+        tool_signature="test",
+        task_signature="test",
+        rollout_constraints=RolloutConstraintsContract(
+            max_turns=16,
+            max_episode_duration_ms=1000,
+        ),
+        task=task,
+    )
+    return SynthesisTaskDraft(
+        created_at=datetime.now(UTC),
+        db_id="pagila",
+        requested_topic=payload.topic,
+        selected_topic=payload.topic,
+        task_bundle=task_bundle,
+        rendered_user_prompt=payload.user_request,
+        anchor_entity=payload.entity,
+        canonical_answer_json=json.dumps(payload.label, ensure_ascii=False, sort_keys=True),
+        label_signature="test-label",
+    )
+
+
+def test_submit_draft_feedback_examples_are_database_agnostic(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+
+    message = controller._invalid_submission_message(
+        [
+            SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED,
+            SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
+        ],
+        feedback_only=True,
+    )
+
+    assert '{"<pk_column>": 123}' in message
+    assert '{"<pk_part_1>": 7, "<pk_part_2>": 1}' in message
+    for db_specific in (
+        "customer_id",
+        "order_id",
+        "line_no",
+        "staff member",
+        "order 17",
+    ):
+        assert db_specific not in message
 
 def _config_with_synthesis_output(tmp_path: Path):
     config = load_config("rl_task_foundry.yaml")
@@ -135,6 +336,35 @@ class _FakeSolverOrchestrator:
             },
         )()
 
+
+@dataclass(slots=True)
+class _FakeDatabasePools:
+    control_acquires: int = 0
+    solver_acquires: int = 0
+    control_connection_value: object = field(default_factory=object)
+
+    @asynccontextmanager
+    async def control_connection(self):
+        self.control_acquires += 1
+        yield self.control_connection_value
+
+    @asynccontextmanager
+    async def solver_connection(self):
+        self.solver_acquires += 1
+        yield object()
+
+
+@dataclass(slots=True)
+class _FakeAnchorConnection:
+    async def fetchrow(self, sql: str, *params: object):
+        del sql, params
+        return {"customer_id": 284}
+
+    async def fetchval(self, sql: str, *params: object):
+        del sql, params
+        return 0
+
+
 @dataclass(slots=True)
 class _FakeBackend:
     accept_payload: SubmitDraftPayload | None = None
@@ -143,6 +373,7 @@ class _FakeBackend:
     model_name: str = "gpt-5.4-mini"
     seen_conversations: list[object] = field(default_factory=list)
     seen_max_turns: list[int] = field(default_factory=list)
+    seen_anchor_hints: list[dict[str, object] | None] = field(default_factory=list)
 
     async def run_synthesis(
         self,
@@ -158,6 +389,8 @@ class _FakeBackend:
         max_turns: int,
         anchor_hint: dict[str, object] | None = None,
         data_profile: object | None = None,
+        examples_pack: object | None = None,
+        affordance_map: dict[str, object] | None = None,
     ):
         del (
             db_id,
@@ -167,8 +400,11 @@ class _FakeBackend:
             scenario_description,
             schema_summary,
             tool_surface_summary,
+            examples_pack,
+            affordance_map,
         )
         self.seen_max_turns.append(max_turns)
+        self.seen_anchor_hints.append(anchor_hint)
         self.seen_conversations.append(conversation)
         controller = conversation.controller
         controller.record_atomic_tool_call(
@@ -202,8 +438,10 @@ class _FakeBackend:
             result={"payment_id": 11},
         )
         if self.reject_payload is not None:
+            _record_query_evidence(controller, self.reject_payload.label)
             await controller.submit(self.reject_payload)
         if self.accept_payload is not None:
+            _record_query_evidence(controller, self.accept_payload.label)
             await controller.submit(self.accept_payload)
         return type(
             "ConversationResult",
@@ -229,12 +467,13 @@ def _accepted_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "내가 배정된 매장과 전체 고객 수를 알려 주세요.",
             ),
+            "answer_contract": _scalar_answer_contract(phrase="전체 고객 수"),
         }
     )
 
 def _feedback_payload() -> SubmitDraftPayload:
     payload = _accepted_payload().model_dump(mode="json")
-    payload["question"] = "내가 배정된 매장을 알려 주세요."
+    payload["user_request"] = "이 <entity> 기준으로 내가 배정된 매장을 알려 주세요."
     return SubmitDraftPayload.model_validate(payload)
 
 def _too_easy_readable_payload() -> SubmitDraftPayload:
@@ -256,6 +495,48 @@ def _too_easy_readable_payload() -> SubmitDraftPayload:
                 "내 계정 기준으로 담당 직원 이름과 이메일을 알려주고,"
                 " 제가 지금까지 빌린 건수도 함께 알려주세요.",
             ),
+            "answer_contract": _scalar_answer_contract(
+                phrase="빌린 건수",
+                table="rental",
+                column="rental_id",
+            ),
+        }
+    )
+
+def _too_easy_list_payload() -> SubmitDraftPayload:
+    anchor_entity = {"customer_id": 1}
+    return SubmitDraftPayload.model_validate(
+        {
+            "topic": "recent_payments",
+            "label": [
+                {"amount": "7.99", "payment_date": "2007-02-14 15:16:03"},
+                {"amount": "5.99", "payment_date": "2007-02-13 10:11:12"},
+                {"amount": "4.99", "payment_date": "2007-02-12 09:08:07"},
+            ],
+            "entity": anchor_entity,
+            "user_request": "제 결제 중 5달러 이상인 최근 3건을 결제일 내림차순으로 알려 주세요.",
+            "answer_contract": _list_answer_contract(
+                phrase="알려 주세요",
+                predicates=[
+                    {
+                        "table": "payment",
+                        "column": "amount",
+                        "op": "gte",
+                        "value": 5,
+                        "phrase": "5달러 이상",
+                    }
+                ],
+                order_by=[
+                    {
+                        "table": "payment",
+                        "column": "payment_date",
+                        "direction": "desc",
+                        "phrase": "결제일 내림차순",
+                    }
+                ],
+                limit=3,
+                limit_phrase="3건",
+            ),
         }
     )
 
@@ -270,6 +551,7 @@ def _count_without_count_evidence_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제 기록을 기준으로 고객 수와 제 이름을 알려 주세요.",
             ),
+            "answer_contract": _scalar_answer_contract(phrase="고객 수"),
         }
     )
 
@@ -283,6 +565,12 @@ def _ungrounded_text_payload(*, customer_id: int = 1) -> SubmitDraftPayload:
             "question": _wrap_user_prompt(
                 anchor_entity,
                 "내 기록과 관련된 영화 제목을 알려 주세요.",
+            ),
+            "answer_contract": _scalar_answer_contract(
+                phrase="영화 제목",
+                table="film",
+                fn="max",
+                column="title",
             ),
         }
     )
@@ -304,6 +592,12 @@ def _partially_rewritten_string_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제가 최근에 대여한 기록의 처리 직원 이름과 대여 시각을 알려주세요.",
             ),
+            "answer_contract": _scalar_answer_contract(
+                phrase="대여 시각",
+                table="rental",
+                fn="max",
+                column="rental_date",
+            ),
         }
     )
 
@@ -318,6 +612,7 @@ def _global_count_payload() -> SubmitDraftPayload:
                 anchor_entity,
                 "제 기록을 기준으로 제 이름과 관련 고객 수를 알려 주세요.",
             ),
+            "answer_contract": _scalar_answer_contract(phrase="고객 수"),
         }
     )
 
@@ -331,6 +626,11 @@ def _id_chain_payload() -> SubmitDraftPayload:
             "question": _wrap_user_prompt(
                 anchor_entity,
                 "제 계정과 연결된 대여와 결제 한 건을 알려 주세요.",
+            ),
+            "answer_contract": _scalar_answer_contract(
+                phrase="한 건",
+                table="rental",
+                column="rental_id",
             ),
         }
     )
@@ -394,9 +694,129 @@ def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
         SubmitDraftPayload.model_validate(payload)
 
 def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> None:
-    required_fields = set(SubmitDraftPayload.model_json_schema().get("required", []))
+    schema = SubmitDraftPayload.model_json_schema()
+    required_fields = set(schema.get("required", []))
+    scalar_contract_required = set(schema["$defs"]["ScalarAnswerContract"]["required"])
+    list_contract_required = set(schema["$defs"]["ListAnswerContract"]["required"])
+    answer_contract_schema = schema["properties"]["answer_contract"]
 
     assert "constraint_summary" not in required_fields
+    assert "user_request" in required_fields
+    assert "answer_contract" in required_fields
+    assert "question" not in required_fields
+    assert answer_contract_schema["discriminator"]["propertyName"] == "kind"
+    assert len(answer_contract_schema["oneOf"]) == 2
+    assert {
+        "kind",
+        "operation",
+        "predicates",
+        "order_by",
+        "limit",
+        "limit_phrase",
+        "evidence",
+    } <= scalar_contract_required
+    assert scalar_contract_required == list_contract_required
+    assert schema["$defs"]["ScalarAnswerOperation"]["properties"]["fn"]["enum"] == [
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+    ]
+    assert schema["$defs"]["ListAnswerOperation"]["properties"]["fn"]["const"] == "select"
+
+def test_submit_draft_payload_entity_schema_is_object() -> None:
+    schema = SubmitDraftPayload.model_json_schema()
+    entity_schema = schema["properties"]["entity"]
+    label_schema = schema["properties"]["label"]
+
+    assert entity_schema["type"] == "object"
+    assert "JSON string" not in entity_schema["description"]
+    entity_value_types = {
+        branch.get("type")
+        for branch in entity_schema["additionalProperties"]["anyOf"]
+    }
+    assert entity_value_types == {"string", "integer", "number", "boolean"}
+    label_object_value_types = {
+        branch.get("type")
+        for branch in label_schema["anyOf"][0]["additionalProperties"]["anyOf"]
+    }
+    label_array_item_schema = label_schema["anyOf"][1]["items"]
+    assert label_array_item_schema["type"] == "object"
+    assert label_object_value_types == {
+        "string",
+        "integer",
+        "number",
+        "boolean",
+        "null",
+    }
+    assert "scoped to that entity" in label_schema["description"]
+    assert "Use 'my'/'own' wording only" in schema["properties"]["user_request"]["description"]
+    assert "Include the entity scope" in schema["properties"]["answer_contract"]["description"]
+    assert SubmitDraftPayload.model_validate(
+        {
+            **_accepted_payload().model_dump(mode="json"),
+            "entity": '{"customer_id": 1}',
+        }
+    ).parsed_entity == {"customer_id": 1}
+    assert _loose_json_schema_paths(schema) == []
+
+
+def _loose_json_schema_paths(value: object, *, path: str = "$") -> list[str]:
+    loose: list[str] = []
+    if isinstance(value, dict):
+        if value.get("items") == {}:
+            loose.append(f"{path}.items")
+        if value.get("additionalProperties") is True:
+            loose.append(f"{path}.additionalProperties")
+        for key in ("properties", "$defs"):
+            child_map = value.get(key)
+            if isinstance(child_map, dict):
+                for name, child in child_map.items():
+                    loose.extend(_loose_json_schema_paths(child, path=f"{path}.{name}"))
+        if "items" in value:
+            loose.extend(_loose_json_schema_paths(value["items"], path=f"{path}[]"))
+        for combiner in ("anyOf", "oneOf", "allOf"):
+            branches = value.get(combiner)
+            if isinstance(branches, list):
+                for index, child in enumerate(branches):
+                    loose.extend(
+                        _loose_json_schema_paths(
+                            child,
+                            path=f"{path}.{combiner}[{index}]",
+                        )
+                    )
+    return loose
+
+def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    tool = build_submit_draft_sdk_tool(controller)
+    schema_surface = json.dumps(tool.params_json_schema, sort_keys=True)
+
+    assert "Submit one grounded task draft" in tool.description
+    assert "successful query produced the exact label values" in tool.description
+    assert "Scalar answer shape: exactly one aggregate value" in schema_surface
+    assert "List answer shape: selected rows or lookup fields" in schema_surface
+    assert "Select operation for kind=list" in schema_surface
+    assert "Aggregate function for kind=scalar" in schema_surface
+    assert "Hidden grounding handle as an object" in schema_surface
+    assert "raw hidden values must not appear in user_request" in schema_surface
+    assert "Bad: '<entity type> 38'" not in schema_surface
+    assert "Good: 'my account'" not in schema_surface
+    assert "hidden structural handles" in schema_surface
+    assert "visible value only when it appeared in tool evidence" in schema_surface
+    assert "copied exactly from the latest successful query result" in schema_surface
+    for leaked in ("solver", "actor", "RLVR", "pass_rate", "training"):
+        assert leaked not in schema_surface
 
 @pytest.mark.asyncio
 async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path) -> None:
@@ -484,7 +904,7 @@ async def test_submit_draft_requires_exact_observed_string_values(
 
     assert "copy them exactly as they appeared there" in message
     assert "Do not shorten names" in message
-    assert "exact raw value from the chosen tool response row" in message
+    assert "exact raw value from the chosen tool response row" not in message
     assert "Ungrounded values included" in message
 
 @pytest.mark.asyncio
@@ -555,22 +975,750 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
         params={"op": "eq", "value": 1, "sort_by": "customer_id", "direction": "asc", "limit": 3},
         result=[{"customer_id": 1}, {"customer_id": 2}],
     )
+    _record_query_evidence(controller, _too_easy_readable_payload().label)
 
     message = await controller.submit(_too_easy_readable_payload())
 
-    assert "Too easy" in message
-    assert "ADD exactly one new structural dimension" in message
+    assert "needs more specificity" in message
+    assert "choose a feasible structural strengthening" in message
     assert "Replacing a field on the same path is not an escalation" in message
-    for axis in ("Width", "Filter", "Cardinality", "Cross-item", "Composite"):
-        assert axis in message
+    assert "new grounded predicate" in message
+    assert "feasible visible dimension" in message
+    assert "do not switch to a list, Cardinality, or Cross-item rule" in message
+    assert "return a list of N records" not in message
+    assert "solver" not in message.lower()
+    assert "pass rate" not in message.lower()
+    assert "Width" not in message
     # no DB-specific field names in feedback
     assert "staff_name" not in message
+
+@pytest.mark.asyncio
+async def test_submit_draft_too_easy_feedback_is_list_aware(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=5,
+            total_solver_runs=6,
+        ),
+        build_draft=lambda payload: type(
+            "Draft",
+            (),
+            {"task_bundle": type("TaskBundle", (), {"task_id": "task-1", "db_id": "sakila"})()},
+        )(),
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = _too_easy_list_payload()
+    _record_query_evidence(
+        controller,
+        payload.label,
+        answer_contract=payload.answer_contract,
+    )
+
+    message = await controller.submit(payload)
+
+    assert "needs more specificity" in message
+    assert "This is a list answer" in message
+    assert "operation.fn=select" in message
+    assert "supported by the current DB evidence" in message
+    for axis in ("Filter", "Composite", "Cardinality", "Item-complexity", "Order"):
+        assert axis in message
+    assert "passive display-only fields" in message
+    assert "Width" not in message
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = _accepted_payload()
+    payload = SubmitDraftPayload.model_validate(
+        {
+            **payload.model_dump(mode="json"),
+            "answer_contract": _scalar_answer_contract(phrase="대여 횟수"),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        answer_contract=payload.answer_contract,
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Every answer_contract phrase" in message
+    assert controller.accepted_draft is None
+
+
+def test_submit_draft_reports_malformed_answer_contract_as_feedback(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    payload = _accepted_payload().model_dump(mode="json")
+    payload["answer_contract"] = (
+        '{"kind": "list", "operation": {"fn": "select"}, '
+        '"order_by": [{"table": "actor", "column": "actor_id"}'
+    )
+    with pytest.raises(ValidationError) as exc_info:
+        SubmitDraftPayload.model_validate(payload)
+
+    message = controller.reject_invalid_payload(
+        parsed=payload,
+        error=exc_info.value,
+    )
+
+    assert "answer_contract must be a valid JSON object" in message
+    assert "malformed JSON string" in message
+    assert controller.attempts == []
+    assert controller.submissions_left() == 2
+
+
+def test_submit_draft_schema_feedback_reports_entity_and_evidence_fixes(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    payload = _accepted_payload().model_dump(mode="json")
+    payload.pop("entity")
+    payload["answer_contract"]["evidence"] = '{"rows": [{"count": 1}]}'
+    with pytest.raises(ValidationError) as exc_info:
+        SubmitDraftPayload.model_validate(payload)
+
+    message = controller.reject_invalid_payload(
+        parsed=payload,
+        error=exc_info.value,
+    )
+
+    assert "entity must contain at least one primary-key value" in message
+    assert "Set evidence exactly to the string 'latest_query'" in message
+    assert controller.attempts == []
+    assert controller.submissions_left() == 2
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_label_that_does_not_match_latest_query(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = _accepted_payload()
+    _record_query_evidence(
+        controller,
+        {"store_id": 1, "customer_count": 6},
+    )
+
+    message = await controller.submit(payload)
+
+    assert "label must exactly match the latest successful query result" in message
+    assert "For kind='list', copy the query rows array" in message
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_answer_contract_predicate_missing_from_latest_query(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "family_films",
+            "label": {"family_high_rental_count": 2},
+            "entity": {"actor_id": 112},
+            "user_request": (
+                "2015년 이후에 출시된 가족(Family) 영화면서 대여료가 "
+                "2.99달러보다 높은 영화는 몇 개인가요?"
+            ),
+            "answer_contract": _scalar_answer_contract(
+                phrase="몇 개인가요",
+                table="film",
+                column="film_id",
+                predicates=[
+                    {
+                        "table": "film",
+                        "column": "rental_rate",
+                        "op": "gt",
+                        "value": 2.99,
+                        "phrase": "2.99달러보다 높은",
+                    },
+                    {
+                        "table": "film",
+                        "column": "release_year",
+                        "op": "gte",
+                        "value": 2015,
+                        "phrase": "2015년 이후에 출시된",
+                    },
+                    {
+                        "table": "category",
+                        "column": "name",
+                        "op": "eq",
+                        "value": "Family",
+                        "phrase": "가족(Family) 영화",
+                    },
+                ],
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "film",
+                "column": "rental_rate",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "op": "gt",
+                "value": 2.99,
+            },
+            {
+                "usage": "where",
+                "table": "film",
+                "column": "release_year",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "op": "gte",
+                "value": 2015,
+            },
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "answer_contract predicates/order_by must be present" in message
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_treats_list_limit_one_as_rows_array(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=5,
+            total_solver_runs=6,
+        ),
+        build_draft=lambda payload: type(
+            "Draft",
+            (),
+            {"task_bundle": type("TaskBundle", (), {"task_id": "task-1", "db_id": "pagila"})()},
+        )(),
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "recent_rental",
+            "label": [
+                {
+                    "대여일": "2022-08-22 23:56:01+00:00",
+                    "반납예정일": "2022-08-24 00:00:01+00:00",
+                }
+            ],
+            "entity": {"film_id": 245},
+            "user_request": "가장 최근 1건의 대여 일자와 반납 예정일을 알려 주세요.",
+            "answer_contract": _list_answer_contract(
+                phrase="대여 일자와 반납 예정일",
+                table="rental",
+                order_by=[
+                    {
+                        "table": "rental",
+                        "column": "rental_date",
+                        "direction": "desc",
+                        "phrase": "가장 최근",
+                    }
+                ],
+                limit=1,
+                limit_phrase="가장 최근 1건",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        answer_contract=payload.answer_contract,
+        query_params={"spec": {"test_evidence": True, "where": [{"value": 245}]}},
+    )
+
+    message = await controller.submit(payload)
+
+    assert "needs more specificity" in message
+    assert "label must exactly match the latest successful query result" not in message
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"staff_email": "agent@example.test"},
+            "entity": {"customer_id": 1},
+            "user_request": "내 담당 직원의 이메일을 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="이메일",
+                table="staff",
+                fn="max",
+                column="email",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        column_sources=[
+            {
+                "output": "staff_email",
+                "kind": "select",
+                "table": "staff",
+                "column": "email",
+                "visibility": "internal",
+                "is_handle": False,
+                "value_exposes_source": True,
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "explicitly marked internal or blocked" in message
+    assert "is_handle: true" not in message
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_allows_handle_label_when_visibility_policy_allows_it(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"assigned_location_reference": 117},
+            "entity": {"account_reference": 1},
+            "user_request": "연결된 지점 참조 값을 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="지점 참조 값",
+                table="location",
+                fn="max",
+                column="location_id",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        column_sources=[
+            {
+                "output": "assigned_location_reference",
+                "kind": "select",
+                "table": "location",
+                "column": "location_id",
+                "visibility": "user_visible",
+                "is_handle": True,
+                "value_exposes_source": True,
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_query_without_visibility_metadata(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = _accepted_payload()
+    rows = [payload.label]
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {"legacy_result": True}},
+        result={
+            "columns": list(payload.label.keys()),
+            "rows": rows,
+            "row_count": len(rows),
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "field visibility evidence" in message
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_allows_non_user_visible_query_predicate(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"matching_customer_count": 3},
+            "entity": {"customer_id": 1},
+            "user_request": "이메일이 있는 관련 고객 수를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="고객 수",
+                table="customer",
+                column="customer_id",
+                predicates=[
+                    {
+                        "table": "customer",
+                        "column": "email",
+                        "op": "is_not_null",
+                        "value": None,
+                        "phrase": "이메일이 있는",
+                    }
+                ],
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        column_sources=[
+            {
+                "output": "matching_customer_count",
+                "kind": "aggregate",
+                "fn": "count",
+                "visibility": "derived",
+                "value_exposes_source": False,
+            }
+        ],
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "customer",
+                "column": "email",
+                "visibility": "internal",
+                "is_handle": False,
+                "op": "is_not_null",
+                "value": None,
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": [{"first_name": "JULIA"}],
+            "entity": {"film_reference": 830},
+            "user_request": "배우 이름을 첫 1명만 알려 주세요.",
+            "answer_contract": _list_answer_contract(
+                phrase="배우 이름",
+                table="actor",
+                column=None,
+                order_by=[
+                    {
+                        "table": "actor",
+                        "column": "actor_id",
+                        "direction": "asc",
+                        "phrase": "첫 1명",
+                    }
+                ],
+                limit=1,
+                limit_phrase="첫 1명",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        column_sources=[
+            {
+                "output": "first_name",
+                "kind": "select",
+                "table": "actor",
+                "column": "first_name",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "value_exposes_source": True,
+            }
+        ],
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "actor",
+                "column": "actor_id",
+                "visibility": "user_visible",
+                "is_handle": True,
+                "direction": "asc",
+            }
+        ],
+        query_params={"spec": {"test_evidence": True, "where": [{"value": 830}]}},
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_too_easy_requires_incremental_answer_contract(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=5,
+            total_solver_runs=6,
+        ),
+        build_draft=lambda payload: type(
+            "Draft",
+            (),
+            {"task_bundle": type("TaskBundle", (), {"task_id": "task-1", "db_id": "sakila"})()},
+        )(),
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    first_payload = _accepted_payload()
+    _record_query_evidence(controller, first_payload.label)
+
+    first_message = await controller.submit(first_payload)
+
+    assert "needs more specificity" in first_message
+    second_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"store_id": 1, "payment_count": 7},
+            "entity": {"customer_id": 1},
+            "user_request": "내가 배정된 매장과 전체 결제 수를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="전체 결제 수",
+                table="payment",
+                column="payment_id",
+            ),
+        }
+    )
+    _record_query_evidence(controller, second_payload.label)
+
+    second_message = await controller.submit(second_payload)
+
+    assert "keep the same answer kind and target operation" in second_message
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_too_easy_rejects_renamed_same_scalar_value(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="rental_status",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=5,
+            total_solver_runs=6,
+        ),
+        build_draft=lambda payload: type(
+            "Draft",
+            (),
+            {"task_bundle": type("TaskBundle", (), {"task_id": "task-1", "db_id": "sakila"})()},
+        )(),
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    first_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "rental_status",
+            "label": {"unreturned_count": 2},
+            "entity": {"customer_id": 1},
+            "user_request": "이 고객의 미반납 대여 건수를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="미반납 대여 건수",
+                table="rental",
+                column="rental_id",
+                predicates=[
+                    {
+                        "table": "rental",
+                        "column": "return_date",
+                        "op": "is_null",
+                        "phrase": "미반납",
+                    }
+                ],
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        first_payload.label,
+        answer_contract=first_payload.answer_contract,
+    )
+
+    first_message = await controller.submit(first_payload)
+
+    assert "needs more specificity" in first_message
+    second_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "rental_status",
+            "label": {"unreturned_since_february": 2},
+            "entity": {"customer_id": 1},
+            "user_request": "이 고객의 2022년 2월 이후 미반납 대여 건수를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="미반납 대여 건수",
+                table="rental",
+                column="rental_id",
+                predicates=[
+                    {
+                        "table": "rental",
+                        "column": "return_date",
+                        "op": "is_null",
+                        "phrase": "미반납",
+                    },
+                    {
+                        "table": "rental",
+                        "column": "rental_date",
+                        "op": "gte",
+                        "value": "2022-02-01",
+                        "phrase": "2022년 2월 이후",
+                    },
+                ],
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        second_payload.label,
+        answer_contract=second_payload.answer_contract,
+    )
+
+    second_message = await controller.submit(second_payload)
+
+    assert "same single-field answer value" in second_message
+    assert "submitted value changes" in second_message
+    assert controller.accepted_draft is None
+
 
 @pytest.mark.asyncio
 async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> None:
     backend = _FakeBackend(accept_payload=_accepted_payload())
     config = _config_with_synthesis_output(tmp_path)
-    synthesis_db = SynthesisDb(db_id="sakila", config=config)
+    database_pools = _FakeDatabasePools()
+    synthesis_db = SynthesisDb(
+        db_id="sakila",
+        config=config,
+        database_pools=database_pools,  # type: ignore[arg-type]
+    )
     synthesis_db._graph_cache = _sample_graph()
     synthesis_db._data_profile_cache = DataProfile()
     runtime = SynthesisAgentRuntime(
@@ -593,10 +1741,67 @@ async def test_synthesis_runtime_returns_accepted_task_draft(tmp_path: Path) -> 
         await runtime.close()
 
     assert draft.task_bundle.topic == "assignment"
+    assert database_pools.control_acquires == 1
+    assert database_pools.solver_acquires == 0
     assert draft.task_bundle.status.value == "accepted"
     assert draft.task_bundle.quality_metrics.solver_pass_rate == 0.5
     assert draft.rendered_user_prompt.startswith("<entity>")
     assert backend.seen_max_turns == [20]
+    assert backend.seen_anchor_hints == [None]
+
+
+@pytest.mark.asyncio
+async def test_synthesis_runtime_passes_candidate_anchor_hint_when_enabled(
+    tmp_path: Path,
+) -> None:
+    backend = _FakeBackend(accept_payload=_accepted_payload())
+    config = _config_with_synthesis_output(tmp_path)
+    runtime_config = config.synthesis.runtime.model_copy(
+        update={
+            "anchor_candidates_enabled": True,
+            "anchor_candidate_limit": 1,
+        }
+    )
+    synthesis_config = config.synthesis.model_copy(
+        update={"runtime": runtime_config}
+    )
+    config = config.model_copy(update={"synthesis": synthesis_config})
+    database_pools = _FakeDatabasePools(
+        control_connection_value=_FakeAnchorConnection()
+    )
+    synthesis_db = SynthesisDb(
+        db_id="sakila",
+        config=config,
+        database_pools=database_pools,  # type: ignore[arg-type]
+    )
+    synthesis_db._graph_cache = _sample_graph()
+    synthesis_db._data_profile_cache = DataProfile()
+    runtime = SynthesisAgentRuntime(
+        config,
+        synthesis_backends=[backend],
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        synthesis_db=synthesis_db,
+    )
+
+    try:
+        await runtime.synthesize_environment_draft(
+            db_id="sakila",
+            requested_topic="assignment",
+            graph=_sample_graph(),
+        )
+    finally:
+        await runtime.close()
+
+    assert database_pools.control_acquires == 2
+    anchor_hint = backend.seen_anchor_hints[0]
+    assert anchor_hint is not None
+    candidates = anchor_hint["candidate_entities"]
+    assert isinstance(candidates, list)
+    assert candidates[0]["row_id"] == 284
+    assert candidates[0]["entity"] == {"customer_id": 284}
 
 @pytest.mark.asyncio
 async def test_synthesis_runtime_raises_after_invalid_only_submission(tmp_path: Path) -> None:
@@ -659,16 +1864,15 @@ async def test_synthesis_runtime_close_disposes_owned_synthesis_db(tmp_path: Pat
 
 def test_submit_draft_payload_rejects_blank_text() -> None:
     payload = _accepted_payload().model_dump(mode="json")
-    payload["question"] = "   "
+    payload["user_request"] = "   "
 
     with pytest.raises(ValidationError):
         SubmitDraftPayload.model_validate(payload)
 
-@pytest.mark.asyncio
-async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
+def test_submit_draft_diagnoses_values_from_disconnected_tool_chain(
     tmp_path: Path,
 ) -> None:
-    """Values observed only in global/unanchored calls must not appear in the label."""
+    """Disconnected label evidence is useful diagnostic context, not a hard reject."""
     controller = SubmitDraftController(
         config=_config_with_synthesis_output(tmp_path),
         requested_topic="itinerary",
@@ -697,19 +1901,6 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
             {"film_id": 2, "title": "ACE GOLDFINGER"},
         ],
     )
-    # submit label using value from disconnected call
-    payload = SubmitDraftPayload(
-        topic="itinerary",
-        entity={"customer_id": 1},
-        label='{"film_title":"ACADEMY DINOSAUR","rental_date":"2005-05-25T11:30:37"}',
-        question=(
-            "<entity>\n{\"customer_id\":1}\n</entity>\n\n"
-            "이 고객의 첫 대여 영화 제목과 대여 시각을 알려주세요."
-        ),
-    )
-    # Disconnected check is diagnostic-only (not blocking) due to
-    # integer ID collision false positives. Verify the detection works
-    # by checking _rebuild_anchor_connected_strings directly.
     from rl_task_foundry.synthesis.submit_draft_validators import (
         _disconnected_answer_strings,
         _rebuild_anchor_connected_strings,
@@ -717,12 +1908,36 @@ async def test_submit_draft_rejects_values_from_disconnected_tool_chain(
 
     anchor_strings = _rebuild_anchor_connected_strings(
         controller._raw_atomic_tool_calls,
-        anchor_entity=payload.parsed_entity,
+        anchor_entity={"customer_id": 1},
     )
     disconnected = _disconnected_answer_strings(
         {"film_title": "ACADEMY DINOSAUR", "rental_date": "2005-05-25T11:30:37"},
         observed_strings=controller._observed_response_strings,
         anchor_connected_strings=anchor_strings,
     )
-    assert "academy dinosaur" in disconnected
 
+    assert disconnected == ["academy dinosaur"]
+
+
+def test_anchor_connected_replay_follows_nested_query_params() -> None:
+    from rl_task_foundry.synthesis.submit_draft_validators import (
+        _rebuild_anchor_connected_strings,
+    )
+
+    anchor_strings = _rebuild_anchor_connected_strings(
+        [
+            {
+                "tool_name": "query",
+                "params": {
+                    "spec": {
+                        "from": {"table": "rental"},
+                        "where": [{"ref": {"column": "customer_id"}, "op": "eq", "value": 545}],
+                    }
+                },
+                "result": {"rows": [{"total_amount": "38.91"}]},
+            }
+        ],
+        anchor_entity={"customer_id": 545},
+    )
+
+    assert "38.91" in anchor_strings

@@ -16,6 +16,7 @@ Exceptions caught intentionally include `NotImplementedError`:
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from collections.abc import Awaitable, Callable
 
@@ -23,14 +24,19 @@ import asyncpg
 
 from rl_task_foundry.tooling.common.payload import JsonObject
 
-
 Handler = Callable[[JsonObject], Awaitable[JsonObject]]
 Invoker = Callable[[object, str], Awaitable[str]]
 
 
 def json_dumps_tool(payload: object) -> str:
     """Serialize a tool result / error envelope for the agents SDK."""
-    return json.dumps(payload, default=str, ensure_ascii=False)
+    return json.dumps(payload, default=_json_default, ensure_ascii=False)
+
+
+def _json_default(value: object) -> str:
+    if isinstance(value, _dt.datetime | _dt.date | _dt.time):
+        return value.isoformat()
+    return str(value)
 
 
 _CAUGHT_EXCEPTIONS: tuple[type[BaseException], ...] = (

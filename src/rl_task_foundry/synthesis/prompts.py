@@ -6,7 +6,6 @@ import json as _json
 
 from rl_task_foundry.config.models import ExamplePack, SynthesisRuntimeConfig
 from rl_task_foundry.schema.profiler import DataProfile
-from rl_task_foundry.synthesis.contracts import topic_phrase
 from rl_task_foundry.synthesis.turn_budget import build_tool_call_budget_instruction
 
 LANGUAGE_NAMES = {
@@ -17,17 +16,54 @@ LANGUAGE_NAMES = {
 }
 
 
+def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
+    candidate_entities = anchor_hint.get("candidate_entities")
+    if isinstance(candidate_entities, list):
+        rendered = _json.dumps(anchor_hint, ensure_ascii=False)
+        return (
+            f"Candidate starting points: {rendered}\n"
+            "These are optional random observed rows for initial orientation, "
+            "not answer hints or required topics. Use one if it helps avoid "
+            "restarting from the first or smallest id; ignore them and inspect "
+            "the DB if none fit.\n"
+            "If you choose one, first call `neighborhood` with that "
+            "candidate's `table` and `row_id`, then use data tools and a final "
+            "`query(spec)` to produce the exact label. Copy only the chosen "
+            "candidate's `entity` object into `submit_draft.entity`.\n"
+            "`preview` and `relationship_summary` are orientation context, not "
+            "final label evidence. The customer request may use visible "
+            "preview values when natural, but must never expose raw primary-key "
+            "or row_id values."
+        )
+    rendered = _json.dumps(anchor_hint, ensure_ascii=False)
+    table = anchor_hint.get("table")
+    pk_column = anchor_hint.get("pk_column")
+    row_id = anchor_hint.get("row_id")
+    if not isinstance(table, str) or not isinstance(pk_column, str):
+        return f"Anchor: {rendered}"
+    entity = anchor_hint.get("entity")
+    if not isinstance(entity, dict):
+        entity = {pk_column: row_id}
+    row_id_json = _json.dumps(row_id, ensure_ascii=False)
+    entity_json = _json.dumps(entity, ensure_ascii=False)
+    return (
+        f"Anchor: {rendered}\n"
+        f"Anchor table: {table}\n"
+        f"Anchor primary key: {pk_column} = {row_id_json}\n"
+        f"submit_draft.entity object: {entity_json}\n"
+        f"When calling `neighborhood`, use `table` = {table!r} and "
+        f"`row_id` = {row_id_json}; never pass `row_id: null`."
+    )
+
+
 def _topic_semantics_instruction(
     requested_topic: str,
 ) -> str | None:
     normalized = requested_topic.strip()
     if not normalized:
         return None
-    hinted_phrase = topic_phrase(normalized)
-    if not hinted_phrase:
-        return None
     return (
-        f"Coverage hint: {hinted_phrase}. "
+        f"Coverage hint: {normalized}. "
         "Treat as a soft hint. Start from a grounded "
         "label first; if the hint leads to a trivial or "
         "id-only label, ignore it and choose a better "
@@ -39,384 +75,118 @@ def build_synthesis_agent_instructions(
     runtime_config: SynthesisRuntimeConfig,
 ) -> str:
     return "\n\n".join([
-        # ── Identity ──
-        "You are a task-synthesis agent. Each tool call either "
-        "inspects the database via one of the composer tools or "
-        "commits a candidate task via submit_draft. Multiple "
-        "independent solvers later attempt your task using a "
-        "separate 9-primitive atomic calculus; their exact-match "
-        "agreement rate decides acceptance.",
+        "You prepare grounded customer-facing task drafts from the current "
+        "database. Use data tools to inspect the DB, then submit one candidate "
+        "draft through `submit_draft`. Keep the draft small, deterministic, and "
+        "reachable from tool evidence.",
 
-        # ── Commit Rule ──
         build_tool_call_budget_instruction(
             max_tool_calls=runtime_config.max_turns,
         ),
 
-        # ── Never ──
-        "# Never\n"
-        "- Never write SQL. Use the composer DSL (`query`) instead.\n"
-        "- Never weaken a label on rejection. Rejection is always "
-        "caused by the request, not the label.\n"
-        "- Never concatenate or reformat observed strings.\n"
-        "- Never use internal identifiers (*_id) as answer fields.\n"
-        "- Never apply more than one escalation per submit.",
+        "# Tools\n"
+        "Use only the provided data tools. Why: the task must be reproducible "
+        "from the same tool surface that later answers it.\n"
+        "- `schema_map(root_table?, depth?)`: orient on tables, columns, and "
+        "relationship paths.\n"
+        "- `sample(target)`: observe real rows before "
+        "choosing an entity or value.\n"
+        "- `profile(target)`: inspect counts, ranges, and "
+        "value distributions before choosing filters.\n"
+        "- `neighborhood(table, row_id, max_per_edge?)`: inspect one observed "
+        "entity's attributes and nearby relationships.\n"
+        "- `query(spec)`: produce the exact canonical label. Use alias-qualified "
+        "references like `{as, column}`; do not write SQL.",
 
-        # ── Composer Tools ──
-        "# Composer Tools\n"
-        "You have five high-bandwidth tools. Each returns JSON you "
-        "can keep reading directly.\n"
-        "\n"
-        "- `schema_map(root_table?, depth?)` — tables, columns, "
-        "FK edges, plus hub/bridge tags. One call to orient.\n"
-        "- `neighborhood(table, row_id, max_per_edge?)` — the "
-        "anchor row's attributes plus per-edge sample IDs and "
-        "counts. Use right after sampling an anchor.\n"
-        "- `profile(table, column?, predicate?)` — row_count plus "
-        "distinct/null counts; with `column` set, adds min/max and "
-        "a top-k frequency list. Drives filter calibration.\n"
-        "- `sample(table, n, seed?, predicate?)` — up to `n` "
-        "representative rows. Seed makes the draw reproducible.\n"
-        "- `query(spec)` — JSON DSL over filter + FK join chain + "
-        "select or group_by+aggregate, plus sort/limit. One call "
-        "computes any canonical answer an atomic chain could "
-        "derive. Use it to produce the label.",
-
-        # ── Solver Context ──
-        "# Solver Context\n"
-        "Solvers re-derive your canonical answer through nine "
-        "atomic primitives on a schema-parameterized calculus:\n"
-        "\n"
-        "- Set-producing: `rows_where(table, column, op, value)` "
-        "(ops: eq/in/lt/gt/lte/gte/like; no `any`), "
-        "`rows_via(cursor, edge_label)`, "
-        "`intersect(left, right)`.\n"
-        "- Set-annotating: `order_by(cursor, column, direction)`.\n"
-        "- Set-materializing: `take(cursor, n)` with `2 ≤ n ≤ 5`, "
-        "`count(cursor)`, `aggregate(cursor, fn, column)` "
-        "(sum/avg/min/max), `group_top(cursor, group_column, fn, "
-        "n)` with `2 ≤ n ≤ 5`.\n"
-        "- Row-reading: `read(table, row_id, columns)`.\n"
-        "\n"
-        "Design labels that force chaining. A grounded answer "
-        "reachable by one primitive (e.g. a single `read` or a "
-        "bare `take` on a base table) is solver-trivial and will "
-        "lock pass_rate at 1.0. Aim for at least three primitives "
-        "of required composition.",
-
-        # ── Workflow ──
         "# Workflow\n"
-        "Your ONLY immediate target is the minimum viable draft. "
-        "Ignore later escalations until you receive a rejection.\n"
-        "\n"
-        "1. Call `schema_map` once if you are not already oriented; "
-        "then `neighborhood(table, anchor_row_id)` to see the "
-        "anchor's FK fan-out.\n"
-        "2. Author the canonical answer with a single "
-        "`query(spec)` call. Pick ONE of two task types — Type B "
-        "and Type A are equal-weight options, not a default plus "
-        "a fallback.\n"
-        "\n"
-        "**Selection hint.** Look at the anchor and ask what the "
-        "most natural customer phrasing would be. If it is \"how "
-        "many X do I have / does this have\", \"what was my "
-        "earliest/latest Y\", or \"what is the largest/smallest "
-        "Z\" — pick **Type B**. If it is \"show me my first 3 X\", "
-        "\"list the records of Y\", \"give me the top-N by Z\" — "
-        "pick **Type A**. Hub-like anchors (customer, film, "
-        "category, country, staff) afford both phrasings; do not "
-        "default to list every time. Across a batch of anchors, "
-        "aim for roughly half Type B and half Type A.\n"
-        "\n"
-        "**Type B — single scalar over an FK-joined set.** One "
-        "aggregate value computed from the anchor's child set. "
-        "The label is a one-key dict holding that value; the "
-        "question asks for the single number (or date) directly. "
-        "Use `query(spec)` with `aggregate` and no `group_by` to "
-        "produce a scalar row. Prefer `count`, `min`, `max` — "
-        "they exact-match on integers and dates without float "
-        "risk. `sum`/`avg` are valid but only on monetary or "
-        "duration columns where both sides see the same Postgres "
-        "numeric. **Aggregate-fn variety** — Type B skews heavily "
-        "toward `count`. Mix it up: pick `min`/`max`/`sum` when the "
-        "natural customer phrasing favors them. Examples (mixed by "
-        "fn):\n"
-        "  - **max(amount)** — anchor=customer → largest single "
-        "payment: `{max_payment: 11.99}` (via `customer → payment`) "
-        "— '제가 지금까지 결제한 것 중 가장 큰 금액은 얼마인가요?'.\n"
-        "  - **min(payment_date)** — anchor=staff → earliest "
-        "payment processed: `{first_payment_date: '2005-05-24'}` "
-        "(via `staff → payment`) — '해당 직원이 처음 처리한 결제 "
-        "날짜는?'.\n"
-        "  - **sum(amount)** — anchor=customer → total spent: "
-        "`{total_spent: 114.67}` (via `customer → payment`, "
-        "`sum(amount)`) — '제가 지금까지 결제한 총 금액은 얼마인가요?'.\n"
-        "  - **max(rental_date)** — anchor=film → latest rental "
-        "of that film: `{last_rental_date: '2005-08-22 23:45'}` "
-        "(via `film → inventory → rental`, `max(rental_date)`) — "
-        "'이 영화가 마지막으로 대여된 날은?'.\n"
-        "  - count — anchor=customer → rental count: "
-        "`{rental_count: 27}` (via `customer → rental`).\n"
-        "  - count — anchor=category → film count: "
-        "`{film_count: 64}` (via `category → film_category → "
-        "film`).\n"
-        "  - count — anchor=country → customer count: "
-        "`{customer_count: 5}` (via `country → city → address → "
-        "customer`, `count(*)`).\n"
-        "  - count — anchor=address → rental count at that "
-        "address: `{rental_count: 12}` (via `address → customer "
-        "→ rental`).\n"
-        "Type B forces the solver to chain `rows_where` → "
-        "`rows_via` → `count`/`aggregate` (three primitives), and "
-        "adding a child-side filter (`rows_where` on the joined "
-        "set) gives four. It is NOT weaker than Type A — it is a "
-        "different task type at step 2, not an escalation. The "
-        "Escalation Axes below still apply to Type B if rejected "
-        "as too_easy (add a Filter on the joined set, or a "
-        "Composite pair of filters).\n"
-        "**Type B aggregate is fully locked across submits** — "
-        "both the target table AND the aggregate function. The "
-        "`(fn, table, column)` triple fixed on submit 1 cannot "
-        "change. `count(rental)` → `count(payment)` is a target "
-        "switch; `max(amount)` → `sum(amount)` is a function "
-        "switch; both are flagged `difficulty_crank_invalid`. "
-        "Valid Type B escalations are ONLY: (a) add a filter on "
-        "the joined child set (`max(amount) where payment_date "
-        ">= X`), or (b) add a composite pair of filters on that "
-        "set. Do NOT change count→sum, max→min, or the target "
-        "table.\n"
-        "\n"
-        "**Type A — list of N child records (N ∈ {3, 5, 10, or "
-        "'all records matching <filter>'}).** A homogeneous list "
-        "from a single destination table, reached by the shortest "
-        "FK chain from the anchor (single hop for leaf anchors "
-        "like customer/rental/film; the natural chain for hub "
-        "anchors like city/category). Every record's 1-2 keys "
-        "must all live on that ONE destination table — never mix "
-        "columns from two tables inside one record. Sort by one "
-        "observed field on that same destination table in a fixed "
-        "direction. Pick keys that match the destination's "
-        "natural readable surface. Do NOT default to `{rental_"
-        "date, return_date}` regardless of anchor; that is just "
-        "one shape out of many. **N is a draft parameter — vary "
-        "it**: N=3 is a common starting point but anchors with "
-        "many children (customer→rental, film→actor, city→"
-        "customer) often land in-band only at N=5, N=10, or '모든 "
-        "…' (all matching, unbounded). Do not always default to "
-        "N=3 — pick N based on the anchor's child cardinality and "
-        "the natural phrasing. Examples:\n"
-        "  - anchor=customer → rental destination, **N=10 + "
-        "filter on rental_date**: `[{rental_date, return_date}, "
-        "…]` × 10 (first 10 rentals between 2005-06-01 and "
-        "2005-07-31 by rental_date) — '제 대여 기록 중 2005-06~07 "
-        "사이 가장 빠른 10건'.\n"
-        "  - anchor=film → rental destination (via inventory → "
-        "rental), **N=5 + filter on rental_date**: `[{rental_"
-        "date, return_date}, …]` × 5 for rentals of that film's "
-        "inventory copies in 2005-07 — '이 영화 소장본이 2005년 "
-        "7월에 대여된 상위 5건'. **Avoid the direct film → actor "
-        "(via film_actor) path**: film_actor is an M:M bridge "
-        "with typically small N (5-10 actors per film), which "
-        "makes escalation impossible — solver solves any filter "
-        "trivially. Prefer film → inventory → rental (many-to-"
-        "many through real transactions) or film → inventory → "
-        "rental → payment chains for meaningful Type A tasks on "
-        "a film anchor.\n"
-        "  - anchor=city → customer destination (via address), "
-        "**N=all matching + filter on store_id**: `[{first_"
-        "name, last_name}, …]` for customers in that city "
-        "registered at store 2 — '해당 도시의 2호점 등록 모든 "
-        "고객'.\n"
-        "  - anchor=category → film destination (via film_"
-        "category), **N=5 + filter on rating**: `[{title, "
-        "release_year}, …]` × 5 — rating='PG-13'인 영화 5편 "
-        "(release_year desc) — '이 카테고리의 PG-13 영화 중 "
-        "가장 최근 5편'.\n"
-        "  - anchor=staff → payment destination, **N=3 + "
-        "filter on amount**: `[{amount, payment_date}, …]` × "
-        "3 — amount > 5.00인 가장 최근 결제 3건 — '해당 직원이 "
-        "처리한 5달러 초과 최근 결제 3건'.\n"
-        "**Every Type A draft must include ≥1 explicit filter "
-        "on a column of the destination table or an intermediate "
-        "join table.** Baseline 'first N children of the anchor "
-        "with no other constraint' is below quality threshold: "
-        "it exercises 1-2 solver tool calls and doesn't give the "
-        "solver multi-hop reasoning work. If your anchor's "
-        "direct children suffice, add a second filter axis from "
-        "the start — do not wait for too_easy to introduce "
-        "difficulty.\n"
-        "**Before committing to a filter value, call "
-        "`profile(table=<join_table>, column=<filter_col>)` to "
-        "see its distinct count, null count, and value "
-        "distribution.** Use that to pick a threshold that "
-        "retains roughly 25-75% of the relevant rows. Overly "
-        "selective filters (e.g. `amount > 50` when most rows "
-        "are < 10) collapse the answer to 0 rows — the solver "
-        "has no chance, submit 1 lands at pass=0.0 too_hard, "
-        "and there is no escalation path from zero. A filter "
-        "that is *too generous* is recoverable via too_easy "
-        "escalation; a filter that is *too restrictive* is "
-        "not. When in doubt, err toward generous.\n"
-        "**Before calling submit_draft, inspect the row count of "
-        "your canonical `query(spec)` result.** The `query` "
-        "response includes the actual rows — count them. If the "
-        "result has 0 or 1 rows, the filter set is too selective "
-        "and submit will land at pass=0.0 too_hard with no "
-        "recovery path. Relax (broaden the filter, remove one "
-        "constraint, lower the threshold) and re-query until "
-        "the canonical has at least: (a) **≥ 2 rows for Type B "
-        "scalars that depend on a filter**, so the answer isn't "
-        "trivially 0/1, or (b) **≥ N+2 rows for Type A with "
-        "take-N**, so the sort has real choices beyond the edge "
-        "case. This pre-submit check is mandatory and comes "
-        "after profile-based threshold selection — profile "
-        "estimates distribution but only the canonical query "
-        "reveals the actual post-join row count.\n"
-        "Cross-table record shapes like `[{rental_date, film_"
-        "title}, …]` — rental_date on rental and film_title on "
-        "film in the same record — are NOT a valid Type A draft; "
-        "the solver would have to join two tables per answer row "
-        "and overshoot.\n"
-        "3. On too_easy, add exactly ONE dimension from the "
-        "escalation axes below and resubmit within 2 composer "
-        "calls. **The task type picked on your first submit is "
-        "locked for the whole anchor.** If attempt 1 was Type B "
-        "scalar `{customer_count: 5}`, attempt 2 must still be a "
-        "Type B scalar — add a filter on the joined set (e.g. "
-        "`count` of customers in a specific city subset) or a "
-        "Composite pair, never replace the scalar with a Type A "
-        "list. If attempt 1 was Type A, stay Type A. Switching "
-        "types is a weakening and will be rejected as "
-        "crank_invalid.\n"
-        "4. On too_hard, relax one clause (not the label) and "
-        "resubmit. Never weaken the label itself. The same "
-        "task-type lock applies.\n"
-        "5. On accept, stop.\n"
-        "\n"
-        "Rewrite the user-facing request in the CUSTOMER'S OWN "
-        "VOICE — first-person ask ('제 대여 기록을…') or a "
-        "second-person request addressed to the organization "
-        "('고객 54의 … 알려주세요'). The customer is seeking "
-        "information; the solver is the organization answering. "
-        "NEVER write the question from the organization's/staff's "
-        "perspective — no '고객님', '귀하의', '확인해 드리겠습니다', "
-        "'도와드리겠습니다', or any phrase where the speaker is "
-        "serving the customer. The question is the ASK, not the "
-        "response. Do not refer to the anchor row as '이 대여 "
-        "기록' or similar schema-internal language; translate the "
-        "anchor into a customer-natural reference (e.g. a date or "
-        "the customer's own id said in their voice). "
-        "**Numeric-ID filter values** (e.g. staff_id=1, film_id=473, "
-        "category_id=6) must be resolved to the referent table's "
-        "natural name or title via a lookup tool call (sample/read "
-        "on that table) BEFORE phrasing the filter in the user "
-        "voice — writing '직원 1 번', 'film 473번', '카테고리 6번' is "
-        "schema-ese and fails voice check; write 'Mike Hillyer "
-        "직원', 'Blade Runner', '액션 영화' instead. Every label "
-        "constraint — count, sort, filter threshold — surfaces as "
-        "a natural preference in the ask itself.",
+        "1. Start with `schema_map`, then choose a plausible root table from "
+        "the current DB. Why: the DB decides the domain; no task shape is "
+        "hard-coded.\n"
+        "2. Use `sample`, `profile`, or `query` to observe a real entity and "
+        "candidate values. Do not invent ids or choose a row only because its "
+        "id is small/easy. Why: hidden entity values must be grounded.\n"
+        "3. If the entity/path looks usable, inspect it with `neighborhood`; "
+        "otherwise choose another observed entity/path. Why: some rows have no "
+        "customer-facing task surface.\n"
+        "4. Run one final `query(spec)` for the exact answer, then submit. Why: "
+        "the label must be copied from the latest query evidence.\n"
+        "5. On a specificity rejection, preserve the answer kind and target; "
+        "add exactly one grounded filter, deterministic order/limit, repeated "
+        "item, or item requirement, then resubmit quickly. Why: rejection asks "
+        "for a narrower or richer version of the same task, not a new task.\n"
+        "6. Stop on accept or overconstrained/terminal feedback.",
 
-        "# Escalation Axes\n"
-        "On each too_easy rejection, add ONE axis the current "
-        "label does not yet have. Never remove prior structure; "
-        "only add. Each axis has a different effect on the answer "
-        "shape — shape-changing axes drop pass_rate faster. "
-        "**Prefer row-set-narrowing axes (Composite, Filter) over "
-        "size-changing axes (Cardinality) on too_easy.** Row-set "
-        "narrowing forces solver multi-hop reasoning (more joins "
-        "+ conditions); pure N change doesn't — increasing N from "
-        "3 to 5 leaves join depth unchanged.\n"
-        "\n"
-        "- **Composite** — two filters on different dimensions "
-        "(categorical AND threshold). Narrows the row set; adds "
-        "a reasoning step on the joined table. **Highest priority** "
-        "when the current draft already has one filter.\n"
-        "- **Filter** — a single categorical exclusion or "
-        "threshold on a currently-unfiltered field. Narrows the "
-        "row set; forces solver to join one more table. "
-        "**Second priority** on too_easy.\n"
-        "- **Cardinality** — change N (e.g. 3 → 5, or 5 → '모든 "
-        "matching records') or switch from fixed-N to \"all "
-        "records matching the filter\". Changes answer size only. "
-        "Pick this only when Composite and Filter are already "
-        "saturated or structurally unavailable (e.g. destination "
-        "table has no more filterable columns).\n"
-        "- **Cross-item rule** — replace the sort key with a "
-        "uniqueness, ordering, or conditional rule that relates "
-        "list items. Basic ordering (sort by date ASC, take N) "
-        "is already part of the default Type A shape and does "
-        "not count as Cross-item escalation — pick a true inter-"
-        "item rule (uniqueness constraint, conditional between "
-        "items).\n"
-        "- **Width** — disallowed as an escalation. Adding more "
-        "fields per record does not change the row set and does "
-        "not drop pass_rate on this dataset. Never select Width "
-        "after a too_easy rejection.\n"
-        "\n"
-        "Axes are structural. Pick the concrete field, category, "
-        "or threshold from the current DB's schema and observed "
-        "data distributions, never from a fixed template.",
+        "# User Request\n"
+        "Write only the customer's request body in the configured target "
+        "language. The request is the ask, not the organization's answer. Why: "
+        "the final task should look like a real user asking an agent for "
+        "information.\n"
+        "- Use the customer's own voice: first-person (`my records`) or a direct "
+        "request to the organization. Avoid service-side phrasing such as "
+        "'we will help you'.\n"
+        "- The customer does not know DB tables, rows, primary keys, foreign "
+        "keys, or internal ids. Hidden ids may appear in `entity` and query "
+        "filters, but not as raw user-facing wording.\n"
+        "- If a filter/entity value has only a hidden structural handle and no "
+        "observed customer-visible surface, do not expose that handle; choose "
+        "a different entity, path, or constraint.\n"
+        "- Use first-person or directly observed visible values only when the "
+        "latest query evidence is scoped to them.",
+        "- If the same answer concept can be reached through multiple "
+        "relationship roles, make the role explicit in customer language or "
+        "choose a different target. Why: ambiguous paths create multiple "
+        "reasonable answers and weak RL signal.",
 
-        # ── After Rejection ──
-        "# After Rejection\n"
-        "A rejection is not a signal to explore more. Within 2 "
-        "composer calls of rejection feedback, call submit_draft "
-        "again. The anchor stays locked; only the label and the "
-        "question change.",
+        "# Label And Contract\n"
+        "The label is the structured result that answers `user_request`. It is "
+        "not final prose. Why: exact structured labels make the task verifiable.\n"
+        "- Use `kind='scalar'` only for aggregate answers "
+        "(`count/sum/avg/min/max`). Use `kind='list'` with `fn='select'` for "
+        "selected rows or lookup fields. Why: scalar contracts describe one "
+        "aggregate result, while selected fields are row/list results.\n"
+        "- Copy label values from the latest successful `query(spec)` result. "
+        "Do not reformat strings, timestamps, casing, numbers, or types.\n"
+        "- Use stable API-style field names. Prefer user-visible non-handle "
+        "values for selected label outputs; do not expose hidden primary-key "
+        "or foreign-key handles as answer values. A handle-like value is only "
+        "appropriate when current query evidence marks it user-visible and the "
+        "request naturally asks for that reference, not for a raw DB id.\n"
+        "- Counts or aggregates over hidden handles are allowed because they do "
+        "not expose handle values.\n"
+        "- Every predicate, order, limit, and output in `answer_contract` must "
+        "be present in the latest query evidence. Each `phrase` must be an "
+        "exact substring of `user_request`. Why: the contract is how the draft "
+        "meaning is checked without guessing.\n"
+        "- The request must have exactly one correct structured result. For "
+        "lists, fix membership, order, limit, and tie-breaks. For timestamps, "
+        "ask for the exact timestamp when the label contains a timestamp; if "
+        "the request asks only for a date, use a date-valued label.",
 
-        # ── Label Rules ──
-        "# Label Rules\n"
-        "- Copy strings verbatim from tool results. The runtime "
-        "rejects unmatched strings.\n"
-        "- One field per observed value. Keep first_name and "
-        "last_name as separate slots.\n"
-        "- Preserve types. Integers stay integers; do not "
-        "stringify.\n"
-        "- Use user-facing values, never internal IDs.\n"
-        "- Every value referenced by the label — including filter "
-        "thresholds, categorical filters, and cardinality targets "
-        "— must already appear in a prior tool response. "
-        "Ungrounded values are rejected as "
-        "`no_new_grounded_observation`.",
-
-        # ── Deterministic Answers ──
-        "# Deterministic Answers\n"
-        "The label must be the only correct answer. For Type A, "
-        "state the exact record count and the sort clause in the "
-        "question so the list is unique (e.g. \"the first 3 "
-        "rentals ordered by rental_date ascending\"); never leave "
-        "the count or order implicit. For Type B, state the "
-        "aggregate operation and the full filter window in the "
-        "question so the single scalar is unambiguous (e.g. "
-        "\"the total number of rentals I've made\", \"the date "
-        "of my earliest payment\"); never leave which aggregate "
-        "or which subset implicit. Solvers cannot `take` fewer "
-        "than 2 or more than 5 rows in a single primitive call, "
-        "so Type A fixed-N targets within `[2, 5]` are directly "
-        "reachable; anything outside forces `count`/`aggregate`, "
-        "which is also how every Type B answer resolves.",
-
-        # ── submit_draft ──
-        "# submit_draft\n"
-        "```\n"
-        "submit_draft(\n"
-        '  topic = "short task description",\n'
-        '  entity = \'{"pk_column": value}\',\n'
-        "  label = {field: value, ...} or [{...}, {...}],\n"
-        "  question = \"<entity>\\n{anchor}\\n</entity>\\n\\n"
-        "<user-facing customer request>\"\n"
-        ")\n"
-        "```",
+        "# Task Shape\n"
+        "Prefer real data-service tasks: history lookup, shortlist, status "
+        "summary, usage/billing summary, schedule, eligibility check, or a "
+        "small plan-like list when the schema supports it. Why: the same code "
+        "must adapt to arbitrary good DBs.\n"
+        "- Scalar tasks: one aggregate such as count, min, max, sum, or avg over "
+        "an FK-joined set. Include a natural filter when the unfiltered set is "
+        "large, and avoid trivial 0/1 results.\n"
+        "- List tasks: a homogeneous ordered list from one destination table, "
+        "with visible fields, explicit filters, deterministic ordering, and a "
+        "fixed small limit.\n"
+        "- Open-ended recommendations are allowed only after you make them "
+        "deterministic with visible filters, thresholds, ordering, limit, and "
+        "tie-breaks. Submit the candidate through `submit_draft` and follow "
+        "that tool's schema exactly.",
     ])
 
-
-def _render_composer_tool_lines(
+def _render_data_tool_lines(
     tool_surface_summary: dict[str, object],
     hint_limit: int,
 ) -> list[str]:
     lines: list[str] = []
     tool_count = tool_surface_summary.get("tool_count")
     if isinstance(tool_count, int):
-        lines.append(f"- Composer tools: {tool_count}")
+        lines.append(f"- Data tools: {tool_count}")
     tools = tool_surface_summary.get("tools")
     if isinstance(tools, list):
         for tool in tools[:hint_limit]:
@@ -433,30 +203,6 @@ def _render_composer_tool_lines(
     return lines
 
 
-def _render_solver_primitive_lines(
-    tool_surface_summary: dict[str, object],
-) -> list[str]:
-    primitives = tool_surface_summary.get("solver_primitives")
-    if not isinstance(primitives, dict):
-        return []
-    labels = {
-        "set_producing": "set-producing",
-        "set_annotating": "set-annotating",
-        "set_materializing": "set-materializing",
-        "row_reading": "row-reading",
-    }
-    lines: list[str] = []
-    for key, label in labels.items():
-        names = primitives.get(key)
-        if not isinstance(names, list):
-            continue
-        filtered = [str(name) for name in names if isinstance(name, str)]
-        if not filtered:
-            continue
-        lines.append(f"- {label}: {', '.join(filtered)}")
-    return lines
-
-
 def _render_examples_pack(pack: ExamplePack) -> str | None:
     has_examples = pack.type_a_examples or pack.type_b_examples or pack.pitfalls
     if not has_examples:
@@ -465,10 +211,10 @@ def _render_examples_pack(pack: ExamplePack) -> str | None:
         f"# Local Examples — {pack.label}",
         (
             "These examples reflect the current DB's structure and observed "
-            "cardinality. Use them as the primary template; the worked "
-            "examples in the system instruction are reference patterns from "
-            "a different DB and may not match this DB's tables, fanout, or "
-            "natural names. When the two conflict, prefer these local examples."
+            "cardinality. Use them as local templates only when they are "
+            "consistent with system instructions, tool schemas, and tool "
+            "descriptions. Generic structural patterns above are placeholders "
+            "and may not match this DB's tables, fanout, or natural names."
         ),
     ]
     if pack.type_a_examples:
@@ -483,6 +229,46 @@ def _render_examples_pack(pack: ExamplePack) -> str | None:
     return "\n".join(lines)
 
 
+def _render_affordance_map(affordance_map: dict[str, object]) -> str | None:
+    lines = [
+        "# DB Affordance Map",
+        (
+            "Complete rule-based navigation map. Use it to choose what to "
+            "inspect, then verify with live tools and canonical query."
+        ),
+    ]
+    table_cards = affordance_map.get("table_affordances")
+    if isinstance(table_cards, list) and table_cards:
+        lines.append("## Complete table index")
+        for card in table_cards:
+            if not isinstance(card, dict):
+                continue
+            lines.append(
+                "- "
+                f"{card.get('table')}: structure={card.get('structure')}, "
+                f"affordances={card.get('affordances') or []}, "
+                f"readable={card.get('readable') or []}, "
+                f"filters={card.get('categorical_filters') or []}, "
+                f"metrics={card.get('numeric_metrics') or []}, "
+                f"time={card.get('time_columns') or []}"
+            )
+    path_cards = affordance_map.get("path_affordances")
+    if isinstance(path_cards, list) and path_cards:
+        lines.append("## Complete relationship index")
+        for card in path_cards:
+            if not isinstance(card, dict):
+                continue
+            lines.append(
+                "- "
+                f"{card.get('path')}: fanout={card.get('fanout')}, "
+                f"supports={card.get('supports') or []}, "
+                f"readable={card.get('readable') or []}, "
+                f"filters={card.get('filters') or []}, "
+                f"metrics={card.get('metrics') or []}"
+            )
+    return "\n".join(lines) if len(lines) > 2 else None
+
+
 def build_synthesis_input(
     *,
     domain_name: str,
@@ -495,14 +281,20 @@ def build_synthesis_input(
     anchor_hint: dict[str, object] | None = None,
     data_profile: DataProfile | None = None,
     examples_pack: ExamplePack | None = None,
+    affordance_map: dict[str, object] | None = None,
 ) -> str:
     sections: list[str] = []
 
     # ── Anchor (top for salience) ──
     if anchor_hint is not None:
+        anchor_title = (
+            "Candidate Starting Points"
+            if isinstance(anchor_hint.get("candidate_entities"), list)
+            else "Starting Entity"
+        )
         sections.append(
-            "# Starting Entity\n"
-            f"Anchor: {_json.dumps(anchor_hint, ensure_ascii=False)}"
+            f"# {anchor_title}\n"
+            f"{_render_anchor_hint(anchor_hint)}"
         )
 
     # ── Session Context ──
@@ -541,8 +333,9 @@ def build_synthesis_input(
     if isinstance(edge_count, int):
         environment_lines.append(f"- FK edge count: {edge_count}")
     tables = schema_summary.get("tables")
+    has_affordance_map = affordance_map is not None
     max_tables = runtime_config.prompt_schema_orientation_max_tables
-    if isinstance(tables, list):
+    if not has_affordance_map and isinstance(tables, list):
         max_cols = runtime_config.prompt_schema_orientation_max_columns
         for table in tables[:max_tables]:
             if not isinstance(table, dict):
@@ -554,30 +347,31 @@ def build_synthesis_input(
             environment_lines.append(
                 f"- {qualified_name}: columns={list(columns)[:max_cols]}"
             )
-    environment_lines.append(
-        "- Schema orientation is for navigation only. "
-        "Verify readability in actual tool results before "
-        "using a field in the label."
-    )
+    if has_affordance_map:
+        environment_lines.append(
+            "- Complete table and relationship indexes are provided "
+            "below. Verify readability in actual tool results before "
+            "using a field in the label."
+        )
+    else:
+        environment_lines.append(
+            "- Schema orientation is for navigation only. Verify "
+            "readability in actual tool results before using a field "
+            "in the label."
+        )
     sections.append(
         "# Environment\n" + "\n".join(environment_lines)
     )
 
     # ── Tools Available ──
     hint_limit = runtime_config.prompt_tool_surface_hint_limit
-    composer_lines = _render_composer_tool_lines(
+    data_tool_lines = _render_data_tool_lines(
         tool_surface_summary, hint_limit
     )
-    solver_lines = _render_solver_primitive_lines(tool_surface_summary)
     tool_section_lines: list[str] = []
-    if composer_lines:
-        tool_section_lines.append("## Composer toolset (for authoring)")
-        tool_section_lines.extend(composer_lines)
-    if solver_lines:
-        tool_section_lines.append(
-            "\n## Solver atomic calculus (what re-derives your answer)"
-        )
-        tool_section_lines.extend(solver_lines)
+    if data_tool_lines:
+        tool_section_lines.append("## Callable data tools")
+        tool_section_lines.extend(data_tool_lines)
     if tool_section_lines:
         sections.append(
             "# Tools Available\n" + "\n".join(tool_section_lines)
@@ -636,14 +430,22 @@ def build_synthesis_input(
                             )
         if fanout_hints:
             topology_lines.append(
-                "- High-fanout: "
+                "- Fanout relationships: "
                 + ", ".join(fanout_hints[:6])
             )
-    if topology_lines:
+    if topology_lines and not has_affordance_map:
         sections.append(
             "# Schema Topology\n"
+            + "Use this as a neutral relationship map; verify "
+            "candidates with live tools before using them.\n"
             + "\n".join(topology_lines)
         )
+
+    # ── DB Affordance Map ──
+    if affordance_map is not None:
+        rendered_affordance_map = _render_affordance_map(affordance_map)
+        if rendered_affordance_map is not None:
+            sections.append(rendered_affordance_map)
 
     # ── Local Examples (per-DB pack) ──
     if examples_pack is not None:
@@ -658,7 +460,7 @@ def build_synthesis_input(
             sections.append(
                 "# Data Distributions\n"
                 "Use these to design realistic constraints "
-                "(budget thresholds, quality filters, etc.).\n"
+                "(budget thresholds, status filters, etc.).\n"
                 + rendered
             )
 

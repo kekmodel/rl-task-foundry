@@ -1,8 +1,8 @@
 """Tests for tooling.atomic.tool_factory.
 
-Unit tests exercise schema baking and the on_invoke_tool error path with
-a stub connection. Integration tests run a full rows_where → order_by →
-take → read chain through the FunctionTool handlers against sakila.
+Unit tests exercise v2 schema baking and API-envelope behavior with a
+stub connection. Integration tests cover the solver-facing v2 resource
+tools against pagila.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import pytest
 if TYPE_CHECKING:
     from agents import FunctionTool
 
+import rl_task_foundry.tooling.atomic as atomic_public
 from rl_task_foundry.config import load_config
 from rl_task_foundry.infra.db import (
     _apply_session_settings,
@@ -32,16 +33,7 @@ from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.tooling.atomic import (
     AtomicSession,
     CursorStore,
-    build_aggregate_tool,
     build_atomic_tools,
-    build_count_tool,
-    build_group_top_tool,
-    build_intersect_tool,
-    build_order_by_tool,
-    build_read_tool,
-    build_rows_via_tool,
-    build_rows_where_tool,
-    build_take_tool,
 )
 from rl_task_foundry.tooling.common import snapshot_from_graph
 
@@ -54,22 +46,32 @@ class _StubConnection:
         raise AssertionError("connection must not be used in plan-only tests")
 
 
+class _MaterializingStubConnection:
+    async def fetch(self, *args, **kwargs):
+        return [{"id": 123}]
+
+    async def fetchrow(self, *args, **kwargs):
+        return {"cnt": 9, "agg": 42, "store_id": 1}
+
+
 def _column(
     table: str,
     name: str,
     data_type: str = "integer",
     *,
+    schema: str = "public",
     is_primary_key: bool = False,
     is_foreign_key: bool = False,
+    visibility: str = "user_visible",
 ) -> ColumnProfile:
     return ColumnProfile(
-        schema_name="public",
+        schema_name=schema,
         table_name=table,
         column_name=name,
         data_type=data_type,
         ordinal_position=1,
         is_nullable=False,
-        visibility="user_visible",
+        visibility=visibility,  # type: ignore[arg-type]
         is_primary_key=is_primary_key,
         is_foreign_key=is_foreign_key,
     )
@@ -83,6 +85,8 @@ def _snapshot():
             _column("customer", "customer_id", is_primary_key=True),
             _column("customer", "store_id"),
             _column("customer", "active"),
+            _column("customer", "first_name", data_type="text"),
+            _column("customer", "api_token", data_type="text", visibility="blocked"),
         ],
         primary_key=("customer_id",),
     )
@@ -93,6 +97,7 @@ def _snapshot():
             _column("rental", "rental_id", is_primary_key=True),
             _column("rental", "customer_id", is_foreign_key=True),
             _column("rental", "rental_date", data_type="timestamp"),
+            _column("rental", "api_token", data_type="text", visibility="blocked"),
         ],
         primary_key=("rental_id",),
     )
@@ -107,6 +112,65 @@ def _snapshot():
     )
     return snapshot_from_graph(
         SchemaGraph(tables=[customer, rental], edges=[edge])
+    )
+
+
+def _duplicate_name_snapshot():
+    public_customer = TableProfile(
+        schema_name="public",
+        table_name="customer",
+        columns=[
+            _column("customer", "id", schema="public", is_primary_key=True),
+        ],
+        primary_key=("id",),
+    )
+    crm_customer = TableProfile(
+        schema_name="crm",
+        table_name="customer",
+        columns=[
+            _column("customer", "id", schema="crm", is_primary_key=True),
+            _column(
+                "customer",
+                "public_customer_id",
+                schema="crm",
+                is_foreign_key=True,
+            ),
+        ],
+        primary_key=("id",),
+    )
+    booking = TableProfile(
+        schema_name="public",
+        table_name="booking",
+        columns=[
+            _column("booking", "id", is_primary_key=True),
+            _column("booking", "customer_id", is_foreign_key=True),
+        ],
+        primary_key=("id",),
+    )
+    return snapshot_from_graph(
+        SchemaGraph(
+            tables=[public_customer, crm_customer, booking],
+            edges=[
+                ForeignKeyEdge(
+                    constraint_name="crm_customer_public_customer_fk",
+                    source_schema="crm",
+                    source_table="customer",
+                    source_columns=("public_customer_id",),
+                    target_schema="public",
+                    target_table="customer",
+                    target_columns=("id",),
+                ),
+                ForeignKeyEdge(
+                    constraint_name="booking_crm_customer_fk",
+                    source_schema="public",
+                    source_table="booking",
+                    source_columns=("customer_id",),
+                    target_schema="crm",
+                    target_table="customer",
+                    target_columns=("id",),
+                ),
+            ],
+        )
     )
 
 
@@ -127,165 +191,583 @@ async def _invoke(
     return {str(key): value for key, value in parsed.items()}
 
 
-# ---------- schema baking ----------
+# ---------- v2 schema baking ----------
 
 
-def test_rows_where_schema_enumerates_tables_columns_and_ops():
-    tool = build_rows_where_tool(_stub_session())
-    schema = tool.params_json_schema
-    assert tool.name == "rows_where"
-    assert set(schema["properties"]["table"]["enum"]) == {"customer", "rental"}
-    assert "customer_id" in schema["properties"]["column"]["enum"]
-    assert "rental_date" in schema["properties"]["column"]["enum"]
-    assert set(schema["properties"]["op"]["enum"]) == {
+def test_build_atomic_tools_returns_tools_in_calculus_order():
+    tools = build_atomic_tools(_stub_session())
+    assert [tool.name for tool in tools] == [
+        "create_record_set",
+        "filter_record_set",
+        "filter_record_set_by_values",
+        "filter_record_set_by_pattern",
+        "filter_record_set_by_null",
+        "follow_relation",
+        "intersect_record_sets",
+        "sort_record_set",
+        "list_record_refs",
+        "count_records",
+        "aggregate_records",
+        "get_record",
+    ]
+
+
+def test_package_public_surface_is_v2_only():
+    assert hasattr(atomic_public, "build_atomic_tools")
+    for endpoint_builder in (
+        "build_filter_record_set_tool",
+        "build_filter_record_set_by_values_tool",
+        "build_filter_record_set_by_pattern_tool",
+        "build_filter_record_set_by_null_tool",
+        "build_sort_record_set_tool",
+        "build_list_record_refs_tool",
+        "build_get_record_tool",
+    ):
+        assert hasattr(atomic_public, endpoint_builder)
+    for legacy_name in (
+        "build_rows_where_tool",
+        "build_rows_via_tool",
+        "build_take_tool",
+        "build_group_top_tool",
+        "build_filter_rows_tool",
+        "build_sort_rows_tool",
+        "build_fetch_rows_tool",
+        "build_read_row_tool",
+        "rows_where",
+        "take",
+        "group_top",
+    ):
+        assert not hasattr(atomic_public, legacy_name)
+
+
+def test_v2_create_and_filter_schemas_are_resource_oriented():
+    tools = {tool.name: tool for tool in build_atomic_tools(_stub_session())}
+    create_schema = tools["create_record_set"].params_json_schema
+    assert create_schema["required"] == ["table"]
+    assert set(create_schema["properties"]["table"]["enum"]) == {
+        "customer",
+        "rental",
+    }
+
+    filter_schema = tools["filter_record_set"].params_json_schema
+    assert filter_schema["required"] == [
+        "record_set_id",
+        "column",
+        "op",
+        "value",
+    ]
+    assert set(filter_schema["properties"]["op"]["enum"]) == {
         "eq",
-        "in",
         "gt",
         "gte",
         "lt",
         "lte",
-        "like",
+        "neq",
     }
-    assert schema["additionalProperties"] is False
+    assert "is_null" not in filter_schema["properties"]["op"]["enum"]
+    assert "in" not in filter_schema["properties"]["op"]["enum"]
+    assert "like" not in filter_schema["properties"]["op"]["enum"]
+    assert {"type": "null"} not in filter_schema["properties"]["value"]["anyOf"]
+    assert all(
+        branch.get("type") != "array"
+        for branch in filter_schema["properties"]["value"]["anyOf"]
+    )
+    assert "cursor" not in filter_schema["properties"]
+    assert "record_set_id" in filter_schema["properties"]
+    assert "enum" not in filter_schema["properties"]["column"]
 
-
-def test_rows_via_schema_enumerates_forward_and_reverse_edges():
-    tool = build_rows_via_tool(_stub_session())
-    labels = set(tool.params_json_schema["properties"]["edge_label"]["enum"])
-    assert "rental.customer_id->customer" in labels
-    assert "customer<-rental.customer_id" in labels
-
-
-def test_order_by_schema_restricts_direction_to_asc_desc():
-    tool = build_order_by_tool(_stub_session())
-    schema = tool.params_json_schema
-    assert schema["properties"]["direction"]["enum"] == ["asc", "desc"]
-
-
-def test_take_schema_enforces_n_between_two_and_five():
-    tool = build_take_tool(_stub_session())
-    schema = tool.params_json_schema
-    assert schema["properties"]["n"]["minimum"] == 2
-    assert schema["properties"]["n"]["maximum"] == 5
-
-
-def test_group_top_schema_lists_five_fns_including_count():
-    tool = build_group_top_tool(_stub_session())
-    fns = set(tool.params_json_schema["properties"]["fn"]["enum"])
-    assert fns == {"count", "sum", "avg", "min", "max"}
-
-
-def test_aggregate_schema_lists_four_fns():
-    tool = build_aggregate_tool(_stub_session())
-    fns = set(tool.params_json_schema["properties"]["fn"]["enum"])
-    assert fns == {"sum", "avg", "min", "max"}
-
-
-def test_build_atomic_tools_returns_nine_tools_in_calculus_order():
-    tools = build_atomic_tools(_stub_session())
-    assert [tool.name for tool in tools] == [
-        "rows_where",
-        "rows_via",
-        "intersect",
-        "order_by",
-        "take",
-        "count",
-        "aggregate",
-        "group_top",
-        "read",
+    values_filter_schema = tools["filter_record_set_by_values"].params_json_schema
+    assert values_filter_schema["required"] == [
+        "record_set_id",
+        "column",
+        "values",
     ]
+    assert values_filter_schema["properties"]["values"]["type"] == "array"
+    assert values_filter_schema["properties"]["values"]["minItems"] == 1
+
+    pattern_filter_schema = tools["filter_record_set_by_pattern"].params_json_schema
+    assert pattern_filter_schema["required"] == [
+        "record_set_id",
+        "column",
+        "pattern",
+    ]
+    assert pattern_filter_schema["properties"]["pattern"]["type"] == "string"
+
+    null_filter_schema = tools["filter_record_set_by_null"].params_json_schema
+    assert null_filter_schema["required"] == ["record_set_id", "column", "op"]
+    assert set(null_filter_schema["properties"]["op"]["enum"]) == {
+        "is_null",
+        "is_not_null",
+    }
+
+    follow_schema = tools["follow_relation"].params_json_schema
+    assert "enum" not in follow_schema["properties"]["edge_label"]
+
+    sort_schema = tools["sort_record_set"].params_json_schema
+    assert "enum" not in sort_schema["properties"]["column"]
+
+    aggregate_schema = tools["aggregate_records"].params_json_schema
+    assert "enum" not in aggregate_schema["properties"]["column"]
+
+    read_schema = tools["get_record"].params_json_schema
+    assert "enum" not in read_schema["properties"]["columns"]["items"]
+    assert {"type": "null"} not in read_schema["properties"]["record_id"]["anyOf"]
+
+
+def test_v2_tools_are_strict_schemas():
+    tools = build_atomic_tools(_stub_session())
+
+    assert all(tool.strict_json_schema is True for tool in tools)
+
+
+@pytest.mark.asyncio
+async def test_v2_tool_surface_uses_schema_handles_for_duplicate_table_names():
+    session = AtomicSession(
+        snapshot=_duplicate_name_snapshot(),
+        connection=_StubConnection(),
+        store=CursorStore(),
+    )
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    create_schema = tools["create_record_set"].params_json_schema
+    assert set(create_schema["properties"]["table"]["enum"]) == {
+        "booking",
+        "crm.customer",
+        "public.customer",
+    }
+
+    created = await _invoke(
+        tools["create_record_set"], {"table": "crm.customer"}
+    )
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+    assert resource["table"] == "crm.customer"
+    assert resource["relations"] == [
+        "crm%2Ecustomer.public_customer_id->public%2Ecustomer",
+        "crm%2Ecustomer<-booking.customer_id",
+    ]
+
+
+def _schema_descriptions(value: object) -> list[str]:
+    descriptions: list[str] = []
+    if isinstance(value, dict):
+        description = value.get("description")
+        if isinstance(description, str):
+            descriptions.append(description)
+        for child in value.values():
+            descriptions.extend(_schema_descriptions(child))
+    elif isinstance(value, list):
+        for child in value:
+            descriptions.extend(_schema_descriptions(child))
+    return descriptions
+
+
+def _loose_schema_paths(value: object, *, path: str = "$") -> list[str]:
+    loose: list[str] = []
+    if isinstance(value, dict):
+        if value.get("items") == {}:
+            loose.append(f"{path}.items")
+        if value.get("additionalProperties") is True:
+            loose.append(f"{path}.additionalProperties")
+        for key in ("properties", "$defs"):
+            child_map = value.get(key)
+            if isinstance(child_map, dict):
+                for name, child in child_map.items():
+                    loose.extend(_loose_schema_paths(child, path=f"{path}.{name}"))
+        if "items" in value:
+            loose.extend(_loose_schema_paths(value["items"], path=f"{path}[]"))
+        for combiner in ("anyOf", "oneOf", "allOf"):
+            branches = value.get(combiner)
+            if isinstance(branches, list):
+                for index, child in enumerate(branches):
+                    loose.extend(
+                        _loose_schema_paths(child, path=f"{path}.{combiner}[{index}]")
+                    )
+    return loose
+
+
+def test_v2_tool_descriptions_are_endpoint_facing():
+    tools = build_atomic_tools(_stub_session())
+    banned_fragments = (
+        "filter_rows",
+        "sort_rows",
+        "fetch_rows",
+        "read_row",
+        "atomic",
+        "cursor",
+        "SQL",
+        "trace",
+        "solver",
+        "composer",
+        "canonical",
+        "row_set",
+        "row_ref",
+        "get_row",
+        "list_row_refs",
+        " row ",
+        " rows ",
+    )
+    for tool in tools:
+        text = " ".join(
+            [
+                tool.description,
+                *_schema_descriptions(tool.params_json_schema),
+            ]
+        )
+        for banned in banned_fragments:
+            assert banned not in text
+
+
+def test_v2_tool_schemas_do_not_use_empty_or_unbounded_subschemas():
+    tools = build_atomic_tools(_stub_session())
+
+    assert {
+        tool.name: _loose_schema_paths(tool.params_json_schema)
+        for tool in tools
+    } == {tool.name: [] for tool in tools}
+
+
+def test_v2_list_record_refs_allows_limit_one_and_uses_api_cap():
+    session = _stub_session()
+    session.max_fetch_limit = 17
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    limit_schema = tools["list_record_refs"].params_json_schema["properties"]["limit"]
+    assert limit_schema["minimum"] == 1
+    assert limit_schema["maximum"] == 17
 
 
 # ---------- invoke handlers (plan-only) ----------
 
 
 @pytest.mark.asyncio
-async def test_rows_where_invoke_returns_cursor_payload():
+async def test_v2_create_filter_and_follow_relation_return_resource_payloads():
     session = _stub_session()
-    tool = build_rows_where_tool(session)
-    response = await _invoke(
-        tool,
-        {"table": "customer", "column": "store_id", "op": "eq", "value": 1},
-    )
-    assert response["target_table"] == "customer"
-    cursor_id = response["cursor_id"]
-    assert isinstance(cursor_id, str)
-    assert cursor_id.startswith("c_")
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    created = await _invoke(tools["create_record_set"], {"table": "rental"})
+    assert created["ok"] is True
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+    assert resource["id"] == "record_set_1"
+    assert resource["type"] == "record_set"
+    assert resource["table"] == "rental"
+    assert resource["columns"] == ["rental_id", "customer_id", "rental_date"]
+    assert resource["column_types"]["rental_date"] == "timestamp"
+    assert resource["column_visibility"]["rental_date"] == "user_visible"
+    assert "api_token" not in resource["columns"]
+    assert resource["primary_key"] == ["rental_id"]
+    assert resource["relations"] == ["rental.customer_id->customer"]
 
-
-@pytest.mark.asyncio
-async def test_rows_where_invoke_surfaces_unknown_column_as_error():
-    tool = build_rows_where_tool(_stub_session())
-    response = await _invoke(
-        tool,
+    filtered = await _invoke(
+        tools["filter_record_set"],
         {
-            "table": "rental",
-            "column": "does_not_exist",
-            "op": "eq",
-            "value": 1,
-        },
-    )
-    assert response["error_type"] == "KeyError"
-
-
-@pytest.mark.asyncio
-async def test_rows_via_invoke_threads_cursor_through_edge():
-    session = _stub_session()
-    where_tool = build_rows_where_tool(session)
-    via_tool = build_rows_via_tool(session)
-    origin = await _invoke(
-        where_tool,
-        {
-            "table": "rental",
+            "record_set_id": resource["id"],
             "column": "customer_id",
             "op": "eq",
             "value": 45,
         },
     )
-    projected = await _invoke(
-        via_tool,
+    filtered_resource = filtered["resource"]
+    assert isinstance(filtered_resource, dict)
+    assert filtered_resource["id"] == "record_set_2"
+    assert filtered_resource["table"] == "rental"
+
+    followed = await _invoke(
+        tools["follow_relation"],
         {
-            "cursor": origin["cursor_id"],
+            "source_record_set_id": filtered_resource["id"],
             "edge_label": "rental.customer_id->customer",
         },
     )
-    assert projected["target_table"] == "customer"
+    followed_resource = followed["resource"]
+    assert isinstance(followed_resource, dict)
+    assert followed_resource["id"] == "record_set_3"
+    assert followed_resource["table"] == "customer"
+
+    events = session.trace_events
+    assert [event["operation"] for event in events] == [
+        "create_record_set",
+        "filter_record_set",
+        "follow_relation",
+    ]
+    trace_resource = {
+        "id": "record_set_1",
+        "type": "record_set",
+        "table": "rental",
+    }
+    filtered_trace_resource = {
+        "id": "record_set_2",
+        "type": "record_set",
+        "table": "rental",
+    }
+    followed_trace_resource = {
+        "id": "record_set_3",
+        "type": "record_set",
+        "table": "customer",
+    }
+    assert events[0]["action"] == "create_resource"
+    assert events[0]["output_resource"] == trace_resource
+    assert "columns" not in events[0]["output_resource"]
+    assert "relations" not in events[0]["output_resource"]
+    assert events[1]["input_resource"] == trace_resource
+    assert events[1]["predicate"] == {
+        "column": "customer_id",
+        "op": "eq",
+        "value": 45,
+    }
+    assert events[1]["output_resource"] == filtered_trace_resource
+    assert events[2]["relation"] == {
+        "edge_label": "rental.customer_id->customer"
+    }
+    assert events[2]["output_resource"] == followed_trace_resource
 
 
 @pytest.mark.asyncio
-async def test_intersect_invoke_rejects_mismatched_tables():
-    session = _stub_session()
-    where_tool = build_rows_where_tool(session)
-    intersect_tool = build_intersect_tool(session)
-    customers = await _invoke(
-        where_tool,
-        {"table": "customer", "column": "store_id", "op": "eq", "value": 1},
+async def test_v2_materializing_tools_record_hidden_trace_events():
+    session = AtomicSession(
+        snapshot=_snapshot(),
+        connection=_MaterializingStubConnection(),
+        store=CursorStore(),
     )
-    rentals = await _invoke(
-        where_tool,
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+
+    base = await _invoke(tools["create_record_set"], {"table": "customer"})
+    base_resource = base["resource"]
+    assert isinstance(base_resource, dict)
+
+    fetched = await _invoke(
+        tools["list_record_refs"],
+        {"record_set_id": base_resource["id"], "limit": 1},
+    )
+    assert fetched["ok"] is True
+    counted = await _invoke(
+        tools["count_records"],
+        {"record_set_id": base_resource["id"]},
+    )
+    assert counted["data"] == {"count": 9}
+    aggregated = await _invoke(
+        tools["aggregate_records"],
+        {"record_set_id": base_resource["id"], "fn": "sum", "column": "store_id"},
+    )
+    assert aggregated["data"] == {"value": 42}
+    detail = await _invoke(
+        tools["get_record"],
+        {"table": "customer", "record_id": 123, "columns": ["store_id"]},
+    )
+    assert detail["data"] == {"record": {"store_id": 1}}
+
+    events = session.trace_events
+    assert [event["operation"] for event in events] == [
+        "create_record_set",
+        "list_record_refs",
+        "count_records",
+        "aggregate_records",
+        "get_record",
+    ]
+    base_trace_resource = {
+        "id": base_resource["id"],
+        "type": "record_set",
+        "table": "customer",
+    }
+    assert events[0]["output_resource"] == base_trace_resource
+    assert "columns" not in events[0]["output_resource"]
+    assert "relations" not in events[0]["output_resource"]
+    assert events[1]["input_resource"] == base_trace_resource
+    assert events[1]["pagination"] == {"limit": 1, "offset": 0}
+    assert events[1]["result_shape"] == {
+        "kind": "record_ref_list",
+        "table": "customer",
+        "returned": 1,
+    }
+    assert events[2]["result_shape"] == {"kind": "scalar", "field": "count"}
+    assert events[3]["aggregate"] == {"fn": "sum", "column": "store_id"}
+    assert events[4]["record_ref"] == {
+        "type": "record_ref",
+        "table": "customer",
+        "id": 123,
+    }
+
+
+@pytest.mark.asyncio
+async def test_v2_errors_use_api_envelope_without_repair_hints():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    response = await _invoke(
+        tools["filter_record_set"],
         {
-            "table": "rental",
+            "record_set_id": "record_set_missing",
             "column": "customer_id",
             "op": "eq",
             "value": 45,
         },
     )
-    response = await _invoke(
-        intersect_tool,
-        {"left": customers["cursor_id"], "right": rentals["cursor_id"]},
-    )
-    assert response["error_type"] == "ValueError"
+    assert response == {
+        "ok": False,
+        "error": {"type": "action_error", "code": "not_found"},
+    }
+    assert session.trace_events == [
+        {
+            "action": "tool_error",
+            "operation": "filter_record_set",
+            "visible_ok": False,
+            "error": {"type": "action_error", "code": "not_found"},
+            "request": {
+                "record_set_id": "record_set_missing",
+                "column": "customer_id",
+                "op": "eq",
+                "value": 45,
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_invalid_json_input_is_surfaced_as_error():
-    tool = build_rows_where_tool(_stub_session())
+async def test_v2_get_record_rejects_null_record_id_as_request_error():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    response = await _invoke(
+        tools["get_record"],
+        {"table": "customer", "record_id": None, "columns": ["store_id"]},
+    )
+    assert response["ok"] is False
+    assert response["error"]["type"] == "request_error"
+    assert response["error"]["code"] == "invalid_request"
+    assert "record_id" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_v2_tools_reject_blocked_non_handle_columns():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    created = await _invoke(tools["create_record_set"], {"table": "customer"})
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+    assert "api_token" not in resource["columns"]
+
+    filtered = await _invoke(
+        tools["filter_record_set"],
+        {
+            "record_set_id": resource["id"],
+            "column": "api_token",
+            "op": "eq",
+            "value": "secret",
+        },
+    )
+    assert filtered["ok"] is False
+    assert filtered["error"] == {"type": "action_error", "code": "not_found"}
+
+    detail = await _invoke(
+        tools["get_record"],
+        {"table": "customer", "record_id": 123, "columns": ["api_token"]},
+    )
+    assert detail["ok"] is False
+    assert detail["error"] == {"type": "action_error", "code": "not_found"}
+
+
+@pytest.mark.asyncio
+async def test_v2_filter_rejects_null_value_for_binary_ops_as_request_error():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    created = await _invoke(tools["create_record_set"], {"table": "customer"})
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+
+    response = await _invoke(
+        tools["filter_record_set"],
+        {
+            "record_set_id": resource["id"],
+            "column": "store_id",
+            "op": "eq",
+            "value": None,
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["type"] == "request_error"
+    assert response["error"]["code"] == "invalid_request"
+    assert "cannot be null" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_v2_filter_allows_nullary_null_predicates_without_value():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    created = await _invoke(tools["create_record_set"], {"table": "customer"})
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+
+    filtered = await _invoke(
+        tools["filter_record_set_by_null"],
+        {
+            "record_set_id": resource["id"],
+            "column": "store_id",
+            "op": "is_not_null",
+        },
+    )
+
+    assert filtered["ok"] is True
+    assert filtered["resource"]["id"] == "record_set_2"
+    assert session.trace_events[-1]["predicate"] == {
+        "column": "store_id",
+        "op": "is_not_null",
+    }
+
+
+@pytest.mark.asyncio
+async def test_v2_filter_shape_specific_endpoints_return_resources():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    created = await _invoke(tools["create_record_set"], {"table": "customer"})
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+
+    by_values = await _invoke(
+        tools["filter_record_set_by_values"],
+        {
+            "record_set_id": resource["id"],
+            "column": "store_id",
+            "values": [1, 2],
+        },
+    )
+    assert by_values["ok"] is True
+    assert by_values["resource"]["id"] == "record_set_2"
+    assert session.trace_events[-1]["operation"] == "filter_record_set_by_values"
+    assert session.trace_events[-1]["predicate"] == {
+        "column": "store_id",
+        "op": "in",
+        "value": [1, 2],
+    }
+
+    by_pattern = await _invoke(
+        tools["filter_record_set_by_pattern"],
+        {
+            "record_set_id": resource["id"],
+            "column": "first_name",
+            "pattern": "%ma%",
+        },
+    )
+    assert by_pattern["ok"] is True
+    assert by_pattern["resource"]["id"] == "record_set_3"
+    assert session.trace_events[-1]["operation"] == "filter_record_set_by_pattern"
+    assert session.trace_events[-1]["predicate"] == {
+        "column": "first_name",
+        "op": "like",
+        "value": "%ma%",
+    }
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_input_is_surfaced_as_api_error():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+    tool = tools["create_record_set"]
     result = await tool.on_invoke_tool(None, "{not-json")  # pyright: ignore[reportArgumentType]
     parsed = json.loads(result)
-    assert parsed["error_type"] == "JSONDecodeError"
+    assert parsed == {
+        "ok": False,
+        "error": {"type": "request_error", "code": "invalid_request"},
+    }
 
 
-# ---------- integration against live sakila ----------
+# ---------- integration against live pagila ----------
 
 
 async def _live_session():
@@ -306,177 +788,158 @@ async def _live_session():
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_tool_chain_against_sakila():
+async def test_v2_resource_tool_chain_against_pagila():
     session, conn = await _live_session()
     try:
-        rows_where = build_rows_where_tool(session)
-        order_by = build_order_by_tool(session)
-        take = build_take_tool(session)
-        read = build_read_tool(session)
+        tools = {tool.name: tool for tool in build_atomic_tools(session)}
 
-        cursor = await _invoke(
-            rows_where,
+        base = await _invoke(tools["create_record_set"], {"table": "rental"})
+        base_resource = base["resource"]
+        assert isinstance(base_resource, dict)
+
+        filtered = await _invoke(
+            tools["filter_record_set"],
             {
-                "table": "rental",
+                "record_set_id": base_resource["id"],
                 "column": "customer_id",
                 "op": "eq",
                 "value": 45,
             },
         )
-        ordered = await _invoke(
-            order_by,
+        filtered_resource = filtered["resource"]
+        assert isinstance(filtered_resource, dict)
+
+        sorted_rows = await _invoke(
+            tools["sort_record_set"],
             {
-                "cursor": cursor["cursor_id"],
+                "record_set_id": filtered_resource["id"],
                 "column": "rental_date",
                 "direction": "asc",
             },
         )
-        taken = await _invoke(
-            take, {"cursor": ordered["cursor_id"], "n": 3}
-        )
-        row_ids = taken["row_ids"]
-        assert isinstance(row_ids, list)
-        assert len(row_ids) == 3
+        sorted_resource = sorted_rows["resource"]
+        assert isinstance(sorted_resource, dict)
 
-        first = await _invoke(
-            read,
+        fetched = await _invoke(
+            tools["list_record_refs"],
+            {"record_set_id": sorted_resource["id"], "limit": 1},
+        )
+        assert fetched["ok"] is True
+        data = fetched["data"]
+        assert isinstance(data, dict)
+        assert data["returned"] == 1
+        items = data["items"]
+        assert isinstance(items, list)
+        record_ref = items[0]
+        assert isinstance(record_ref, dict)
+        assert record_ref["type"] == "record_ref"
+        assert record_ref["table"] == "rental"
+
+        detail = await _invoke(
+            tools["get_record"],
             {
                 "table": "rental",
-                "row_id": row_ids[0],
+                "record_id": record_ref["id"],
                 "columns": ["rental_id", "customer_id"],
             },
         )
-        row = first["row"]
-        assert isinstance(row, dict)
-        assert row["customer_id"] == 45
-
-        # Regression: LLM payloads sometimes stringify integer PKs. The
-        # read tool must coerce via the PK column's data_type before binding.
-        stringified = await _invoke(
-            read,
-            {
-                "table": "rental",
-                "row_id": str(row_ids[0]),
-                "columns": ["rental_id", "customer_id"],
-            },
-        )
-        string_row = stringified["row"]
-        assert isinstance(string_row, dict)
-        assert string_row["customer_id"] == 45
+        detail_data = detail["data"]
+        assert isinstance(detail_data, dict)
+        record = detail_data["record"]
+        assert isinstance(record, dict)
+        assert record["customer_id"] == 45
     finally:
         await conn.close()
 
 
 @pytest.mark.asyncio
-async def test_composite_pk_chain_against_sakila_film_actor():
-    # Regression for iter21's observed failure: actor → film_actor → film
-    # chain ran into 'table film_actor has a composite primary key'
-    # because atomic calculus single-column guards short-circuited every
-    # rows_via / take / count that touched film_actor. Sakila's
-    # film_actor has PK (actor_id, film_id); this test exercises the
-    # full chain (take on a film_actor cursor, via to film, sorted take,
-    # composite-row read) to confirm the guards are gone and the
-    # pk_expression emits composite ROW ids correctly.
+async def test_v2_composite_pk_chain_against_pagila_film_actor():
+    # Regression for iter21's observed failure: actor -> film_actor -> film
+    # must keep working when an intermediate resource has a composite PK.
     session, conn = await _live_session()
     try:
-        rows_where = build_rows_where_tool(session)
-        rows_via = build_rows_via_tool(session)
-        order_by = build_order_by_tool(session)
-        take = build_take_tool(session)
-        read = build_read_tool(session)
+        tools = {tool.name: tool for tool in build_atomic_tools(session)}
 
-        actor_cursor = await _invoke(
-            rows_where,
-            {"table": "film_actor", "column": "actor_id", "op": "eq", "value": 87},
+        base = await _invoke(tools["create_record_set"], {"table": "film_actor"})
+        base_resource = base["resource"]
+        assert isinstance(base_resource, dict)
+
+        filtered = await _invoke(
+            tools["filter_record_set"],
+            {
+                "record_set_id": base_resource["id"],
+                "column": "actor_id",
+                "op": "eq",
+                "value": 87,
+            },
         )
-        composite_ids = await _invoke(
-            take, {"cursor": actor_cursor["cursor_id"], "n": 3}
+        filtered_resource = filtered["resource"]
+        assert isinstance(filtered_resource, dict)
+
+        composite_refs = await _invoke(
+            tools["list_record_refs"],
+            {"record_set_id": filtered_resource["id"], "limit": 3},
         )
-        row_ids = composite_ids["row_ids"]
-        assert isinstance(row_ids, list)
-        assert len(row_ids) == 3
-        # Each row_id is a 2-element [actor_id, film_id] sequence.
-        for row_id in row_ids:
+        composite_data = composite_refs["data"]
+        assert isinstance(composite_data, dict)
+        composite_items = composite_data["items"]
+        assert isinstance(composite_items, list)
+        assert len(composite_items) == 3
+        for record_ref in composite_items:
+            assert isinstance(record_ref, dict)
+            row_id = record_ref["id"]
             assert isinstance(row_id, list)
             assert len(row_id) == 2
             assert row_id[0] == 87
 
-        # rows_via across the film_actor → film edge should now work even
-        # though the origin table (film_actor) has a composite PK. The
-        # target (film) has a single PK so the emitted id is scalar.
-        film_cursor = await _invoke(
-            rows_via,
+        film_set = await _invoke(
+            tools["follow_relation"],
             {
-                "cursor": actor_cursor["cursor_id"],
+                "source_record_set_id": filtered_resource["id"],
                 "edge_label": "film_actor.film_id->film",
             },
         )
-        sorted_cursor = await _invoke(
-            order_by,
+        film_resource = film_set["resource"]
+        assert isinstance(film_resource, dict)
+
+        sorted_films = await _invoke(
+            tools["sort_record_set"],
             {
-                "cursor": film_cursor["cursor_id"],
+                "record_set_id": film_resource["id"],
                 "column": "title",
                 "direction": "asc",
             },
         )
-        film_ids = await _invoke(take, {"cursor": sorted_cursor["cursor_id"], "n": 3})
-        film_row_ids = film_ids["row_ids"]
-        assert isinstance(film_row_ids, list)
-        assert len(film_row_ids) == 3
-        for film_id in film_row_ids:
-            assert isinstance(film_id, int)
+        sorted_resource = sorted_films["resource"]
+        assert isinstance(sorted_resource, dict)
 
-        # read on a composite-PK table should accept a list row_id in
-        # PK-column order and return the non-PK columns of that single row.
-        composite_row_id = row_ids[0]
+        film_refs = await _invoke(
+            tools["list_record_refs"],
+            {"record_set_id": sorted_resource["id"], "limit": 3},
+        )
+        film_data = film_refs["data"]
+        assert isinstance(film_data, dict)
+        film_items = film_data["items"]
+        assert isinstance(film_items, list)
+        assert len(film_items) == 3
+        for record_ref in film_items:
+            assert isinstance(record_ref, dict)
+            assert isinstance(record_ref["id"], int)
+
+        first_composite_ref = composite_items[0]
+        assert isinstance(first_composite_ref, dict)
         details = await _invoke(
-            read,
+            tools["get_record"],
             {
                 "table": "film_actor",
-                "row_id": composite_row_id,
+                "record_id": first_composite_ref["id"],
                 "columns": ["last_update"],
             },
         )
-        row = details["row"]
+        detail_data = details["data"]
+        assert isinstance(detail_data, dict)
+        row = detail_data["record"]
         assert isinstance(row, dict)
         assert "last_update" in row
-    finally:
-        await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_group_top_count_tool_returns_descending_counts():
-    from datetime import datetime
-
-    session, conn = await _live_session()
-    try:
-        rows_where = build_rows_where_tool(session)
-        group_top = build_group_top_tool(session)
-        cursor = await _invoke(
-            rows_where,
-            {
-                "table": "rental",
-                "column": "rental_date",
-                "op": "gt",
-                "value": datetime(2005, 1, 1).isoformat(),
-            },
-        )
-        tops = await _invoke(
-            group_top,
-            {
-                "cursor": cursor["cursor_id"],
-                "group_column": "customer_id",
-                "fn": "count",
-                "n": 3,
-            },
-        )
-        tops_list = tops["tops"]
-        assert isinstance(tops_list, list)
-        counts: list[object] = []
-        for entry in tops_list:
-            assert isinstance(entry, dict)
-            counts.append(entry["agg_value"])
-        assert len(counts) == 3
-        assert counts == sorted(counts, reverse=True)  # type: ignore[type-var]
     finally:
         await conn.close()

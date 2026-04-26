@@ -14,23 +14,25 @@ settings enforced by the caller (see `infra.db.solver_session_settings`).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 from rl_task_foundry.tooling.atomic.cursor import (
+    _FILTER_OPS,
     CursorId,
     CursorStore,
+    FilterNode,
     FilterOp,
     IntersectNode,
+    TableNode,
     ViaNode,
     WhereNode,
-    _FILTER_OPS,
 )
 from rl_task_foundry.tooling.atomic.sql_compile import (
-    AggregateFn,
-    GroupAggregateFn,
     _AGGREGATE_FNS,
     _GROUP_AGGREGATE_FNS,
+    AggregateFn,
+    GroupAggregateFn,
     compile_aggregate,
     compile_count,
     compile_group_top,
@@ -39,7 +41,7 @@ from rl_task_foundry.tooling.atomic.sql_compile import (
 )
 from rl_task_foundry.tooling.common.edges import resolve_edge
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
-from rl_task_foundry.tooling.common.sql import coerce_param
+from rl_task_foundry.tooling.common.sql import coerce_param, coerce_scalar
 
 
 class _Row(Protocol):
@@ -63,13 +65,31 @@ class AtomicSession:
     snapshot: SchemaSnapshot
     connection: _ConnectionLike
     store: CursorStore
+    max_fetch_limit: int = 100
+    trace_events: list[dict[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not isinstance(self.store, CursorStore):
             raise TypeError("store must be a CursorStore")
+        if not isinstance(self.max_fetch_limit, int) or self.max_fetch_limit < 1:
+            raise ValueError("max_fetch_limit must be a positive integer")
 
 
 # ---------- set-producing primitives ----------
+
+
+def create_row_set(
+    session: AtomicSession,
+    *,
+    table: str,
+) -> CursorId:
+    """Build an unfiltered cursor over `table`.
+
+    No SQL runs here; the plan is deferred until materialization.
+    """
+    table_spec = session.snapshot.table(table)
+    plan = TableNode(table=table_spec.handle)
+    return session.store.intern(plan)
 
 
 def rows_where(
@@ -86,13 +106,39 @@ def rows_where(
     aggregation materializes it.
     """
     table_spec = session.snapshot.table(table)
-    table_spec.column(column)
+    column_spec = table_spec.column(column)
     if op not in _FILTER_OPS:
         raise ValueError(
             f"op must be one of {sorted(_FILTER_OPS)}; got {op!r}"
         )
-    coerced = coerce_param(value)
-    plan = WhereNode(table=table, column=column, op=op, value=coerced)
+    coerced = coerce_param(coerce_scalar(value, column_spec.data_type))
+    plan = WhereNode(
+        table=table_spec.handle,
+        column=column,
+        op=op,
+        value=coerced,
+    )
+    return session.store.intern(plan)
+
+
+def filter_rows(
+    session: AtomicSession,
+    *,
+    cursor: CursorId,
+    column: str,
+    op: FilterOp,
+    value: object,
+) -> CursorId:
+    """Apply one predicate to an existing cursor's target table."""
+    source_plan = session.store.resolve(cursor)
+    table_spec = session.snapshot.table(source_plan.target_table)
+    column_spec = table_spec.column(column)
+    if op not in _FILTER_OPS:
+        raise ValueError(
+            f"op must be one of {sorted(_FILTER_OPS)}; got {op!r}"
+        )
+    coerced = coerce_param(coerce_scalar(value, column_spec.data_type))
+    plan = FilterNode(source=source_plan, column=column, op=op, value=coerced)
     return session.store.intern(plan)
 
 
@@ -106,7 +152,7 @@ def rows_via(
 
     `edge_label` is resolved against the source cursor's target table, so
     the agent never crosses an edge that doesn't originate where the
-    cursor currently points. Multiplicity is preserved (bag semantics).
+    cursor currently points. Destination records are unique by primary key.
     """
     source_plan = session.store.resolve(cursor)
     origin_table = source_plan.target_table
@@ -146,18 +192,26 @@ async def take(
     *,
     cursor: CursorId,
     n: int,
+    offset: int = 0,
 ) -> list[object]:
     """Materialize up to `n` primary-key values from the cursor,
     honouring any `order_by` annotations and adding a primary-key
-    tiebreak for determinism. `n` must be in [2, 5] to prevent
-    sort+limit=1 shortcuts.
+    tiebreak for determinism.
     """
     if not isinstance(n, int) or isinstance(n, bool):
         raise TypeError("n must be an integer")
-    if n < 2 or n > 5:
-        raise ValueError("n must be in [2, 5]")
+    if not isinstance(offset, int) or isinstance(offset, bool):
+        raise TypeError("offset must be an integer")
+    if n < 1:
+        raise ValueError("n must be at least 1")
+    if n > session.max_fetch_limit:
+        raise ValueError(
+            f"n must be <= max_fetch_limit ({session.max_fetch_limit})"
+        )
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
     plan = session.store.resolve(cursor)
-    compiled = compile_take(session.snapshot, plan, n)
+    compiled = compile_take(session.snapshot, plan, n, offset)
     rows = await session.connection.fetch(compiled.sql, *compiled.params)
     return [row["id"] for row in rows]
 
@@ -167,7 +221,7 @@ async def count(
     *,
     cursor: CursorId,
 ) -> int:
-    """Return the bag count of the cursor (multiplicity preserved)."""
+    """Return the count of unique records in the cursor."""
     plan = session.store.resolve(cursor)
     compiled = compile_count(session.snapshot, plan)
     row = await session.connection.fetchrow(compiled.sql, *compiled.params)
@@ -186,7 +240,7 @@ async def aggregate(
     """Scalar aggregate over a column of the cursor's target table.
 
     fn ∈ {sum, avg, min, max}. The column is looked up on the target
-    table of the plan; multiplicity is preserved.
+    table of the plan; each target record contributes once.
     """
     if fn not in _AGGREGATE_FNS:
         raise ValueError(
@@ -263,6 +317,8 @@ __all__ = [
     "AtomicSession",
     "aggregate",
     "count",
+    "create_row_set",
+    "filter_rows",
     "group_top",
     "intersect",
     "read",

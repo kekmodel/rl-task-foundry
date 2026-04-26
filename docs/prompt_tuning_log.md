@@ -1621,6 +1621,114 @@ Solver 30/30 완료 결과:
 2. **iter47 본 실험 (위 3가지 적용 후)**: 1-sample smoke로 fix v2 + reduced solver count 동작 확인. 그 후 3-trial 배치.
 3. **provider 결정**: OpenRouter를 본 트랙으로 채택. opencode_zen은 quota 회복 시 비교 trial 1회만 (cleanness 검증용).
 
+---
+
+### Iteration 47 — 2026-04-25 (answer_contract strict validation, minimax-m2.5 smoke)
+
+**Plan drift note.** iter46_c의 예정 iter47은 OpenRouter + solver failure 분모 fix(v2)였지만, 사용자 논의 후 우선순위가 "RL trace 품질을 위한 tool/API contract 재설계"로 바뀌었다. 따라서 아래 Iteration 47은 그 피벗 이후의 실제 다음 실험 기록이다.
+
+**Hypothesis.** Composer가 canonical answer를 저작할 때 숨은 의미/힌트 휴리스틱으로 품질을 보정하면 RL trace 품질을 오염시킨다. 대신 `submit_draft`에 명시적 `answer_contract`를 요구하고, 검증은 정밀도 100%인 형식/증거 계약만 수행한다: (a) user_request에 contract phrase가 실제 포함됨, (b) 직전 successful `query` 결과와 label이 canonical-equal, (c) `too_easy` 이후에는 같은 operation을 유지한 채 predicate/order/limit만 단조 확장한다. 의미적으로 "좋은 문제인지"는 solver pass-rate가 통계적으로 판정한다.
+
+**Change.**
+- `SubmitDraftPayload`에 `answer_contract` 필드 추가. contract는 `kind`, `operation`, `predicates`, `order_by`, `limit`, `evidence`를 담는다.
+- `submit_draft` 검증을 strict contract 기반으로 확장: phrase exact substring, latest-query evidence equality, too_easy 이후 incremental contract check.
+- 처음에는 JSON object만 허용했으나 minimax가 JSON string으로 제출하는 패턴을 보여서, stringified JSON은 parse 후 동일 모델로 검증하도록 수정.
+- 날짜 경계/자연어 의미 추론 같은 semantic heuristic은 제거. 사용자 결정: solver pass-rate가 잡지 못하는 의미 문제를 휴리스틱으로 보정하지 않는다.
+- prompt와 rejection feedback을 contract 중심으로 갱신: Type B는 `kind/operation` lock, `too_easy` 후에는 operation 변경 금지, filter/cardinality/order/limit 확장만 허용.
+
+**Trial.** `artifacts/opencode_smoke_answer_contract_9`, pagila, composer/solver 모두 `opencode_zen/minimax-m2.5`, 3 solver, solver max_turns 30, max_generation_attempts 5.
+
+| trial | 결과 | 핵심 관찰 |
+|---|---|---|
+| trial_0001 | `synthesis_failed` / `submit_payload_invalid` | minimax가 `answer_contract`와 `entity`를 JSON string으로 제출. Pydantic `model_type` 에러가 5회 반복되어 solver phase 미진입. 이 후 stringified JSON parser 추가. |
+| trial_0002 | `synthesis_failed` / `reject_too_easy` | contract evidence mismatch가 첫 제출을 정확히 잡음: label은 customer rental count 28인데 latest query는 unrelated staff count 8040. 이후 correct query 재호출. baseline count 28 → date filter count 20 → staff+date count 10 모두 3/3 matched. 마지막 list 전환은 `answer_contract_not_incremental`로 차단. |
+| trial_0003 | `synthesis_failed` / `reject_too_easy` | stale/latest-query mismatch를 두 번 잡음. 최종 sum(amount) 151.65 → amount>=3 sum 127.79 → amount>=3 + payment_date>=2022-06-01 sum 30.94까지 모두 3/3 matched. contract는 동작했지만 difficulty gate는 계속 too_easy. |
+
+**Findings.**
+
+1. **Strict evidence contract는 성공.** false semantic heuristic 없이도 stale label, wrong latest query, non-incremental type switch를 모두 기계적으로 검출했다.
+2. **문제는 이제 validation이 아니라 composer difficulty policy.** trial_0002/0003 모두 contract-valid한 후보가 solver 3/3에게 풀렸다. 현재 failure mode는 "정답 생성 실패"가 아니라 "minimax solver에게 너무 쉬운 scalar aggregate/count를 계속 냄"이다.
+3. **Type B lock은 의도대로 작동.** too_easy 후 scalar count에서 list로 도망가는 시도를 `kind_changed`, `operation_changed`, `predicate_removed`로 잡았다. 이건 RL trace 일관성 측면에서 좋다.
+4. **minimax는 object schema를 stringified JSON으로 우회하는 경향이 있다.** 이건 모델 품질 문제라기보다 API/tool-call serialization 관성. parser 허용 후에는 contract 검증이 정상 작동.
+5. **정밀도 100% 원칙 유지가 맞다.** date phrase가 자연스러운지, "고객님" voice가 완벽한지 같은 판단은 이번 gate에 넣지 않았다. 과하게 잡으면 solver pass-rate의 통계적 역할을 뺏고 false reject를 만든다.
+
+**Next direction.**
+
+1. Composer difficulty policy를 contract 위에 얇게 올린다. 단, 의미 휴리스틱이 아니라 구조적으로 안전한 제약만: repeated too_easy scalar는 operation lock 유지하되 predicate 수/alias 다양성/order/limit 등 contract-detectable 축으로만 확장.
+2. Trial 전 `submit_draft` schema example에 object form을 더 강하게 보이되, runtime은 stringified JSON도 계속 받는다. weak/cheap model과 API endpoint style 호환을 동시에 가져가는 편이 낫다.
+3. Accepted sample 확보가 목표라면 다음 smoke는 Type A/list-first 또는 cross-table filtered list를 우선 유도하는 prompt 실험으로 분리한다. 이건 "validation 9점" 트랙이 아니라 "difficulty policy" 트랙이다.
+
+---
+
+### Iteration 48 — 2026-04-25 (contract-aware too_easy feedback + user-facing timestamp/answer surface)
+
+**Hypothesis.** Iter47의 마지막 실패에서 composer가 scalar Type B too_easy 이후 list로 도망가려 했던 원인은 tool feedback이 `answer_contract.kind`를 모르고 `Cardinality/list` 옵션까지 던진 데 있다. `too_easy` feedback을 contract-aware로 바꾸면 invalid crank trace를 줄일 수 있다. 별도 smoke에서 timestamp scalar가 날짜로 truncation되는 false too_hard도 관측됐으므로, 이건 validation normalize가 아니라 authoring prompt에서 "timestamp answer는 정확한 시각/타임스탬프를 물어라"로 보강한다.
+
+**Change.**
+- `_too_easy_retry_guidance(answer_kind=...)`로 분기.
+  - scalar: kind/operation 유지, list/Cardinality/Cross-item 금지, 새 predicate 1개만 추가. 첫 predicate는 Filter, 이미 predicate가 있으면 Composite.
+  - list: `operation.fn=select` 유지, Filter/Composite/Cardinality increase/secondary Order만 허용.
+- `SubmitDraftController`가 too_easy 및 label-not-strengthened feedback에 현재/직전 `answer_contract.kind`를 전달.
+- prompt의 Type B timestamp guidance 수정: `timestamp/timestamptz` aggregate는 날짜/일이 아니라 정확한 시각/타임스탬프를 user_request에 명시. 내부 `solver` 명칭은 노출하지 않고 `evaluation rollouts`로 표현.
+- user-facing data rule 보강: 고객은 DB/table/row/PK/store slot/inventory copy를 모른다. `user_request`에는 고객이 말할 수 있는 이름/제목/금액/시각/상태/장소/자기 계정 reference만 쓰고, readable surface 없는 ID filter는 다른 task/filter로 바꾸도록 지시. 기존 예시의 `소장본`, `2호점/store_id` phrasing 제거.
+- trial_0003 사후 리뷰 후 추가 보강(후속 정정됨): 당시에는 canonical
+  `label`의 필드명도 고객-facing이어야 한다고 판단했지만, 이후
+  `submit_result`가 agent-visible verifier boundary라는 점을 반영해 이
+  해석은 폐기했다. 현재 기준에서 `query(spec).select.as`와 `aggregate.as`
+  는 final-answer prose가 아니라 안정적인 `submit_result` key다.
+- 사용자 목표를 spec에 명시한 뒤 한 번 더 정정: 공통 prompt/feedback은 임의 DB에 적용되어야 하므로, 공통 system prompt 안의 pagila식 worked examples(`customer→rental`, `film`, `payment`, `staff_id`, `rental_date`)를 제거했다. 남은 예시는 `<timestamp_column>`, `<child_table>`, `matching_item_count` 같은 구조적 placeholder뿐이고, 구체 도메인 예시는 runtime의 schema/live rows/local example pack에서만 들어온다.
+- 테스트 추가/수정: scalar feedback은 list 전환을 옵션으로 주지 않음, list feedback은 list-safe axis만 안내, prompt에 exact timestamp guard 및 user-facing data rule 포함.
+
+**Verification.**
+- `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py` 통과.
+- `uv run pytest` → **331 passed**.
+- user-facing output alias prompt 보강 후 `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py` → **29 passed**; `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py` 통과.
+- generic prompt/spec 보강 후 `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py` → **29 passed**; `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py` 통과. `rg` 기준 공통 prompt에는 금지한 pagila-specific strings가 남지 않음.
+
+**Trial.** `artifacts/opencode_smoke_contract_feedback_48`.
+
+| trial | 결과 | 핵심 관찰 |
+|---|---|---|
+| trial_0001 | `synthesis_failed` / `AuthenticationError` | 현재 shell에 `OPENCODE_API_KEY`가 없어서 실패. `.env`에는 key 존재 확인. |
+| trial_0002 | `synthesis_failed` / `reject_too_hard` | `.env` source 후 실행. anchor=`inventory_id=1819`. 첫 submit은 timestamp를 `T` 포함 ISO 형태로 바꿔 `label_values_not_grounded + answer_contract_evidence_mismatch`; feedback 후 raw query timestamp로 고쳤다. solver 3명 모두 날짜만 `{last_rental_date: "2022-08-17"}`로 제출해 canonical full timestamp와 mismatch, pass_rate 0/3. |
+| trial_0003 | **accepted** / `solver_pass_rate=0.5` | user-facing rule 적용 후 재시도. anchor=`country_id=106` (`Virgin Islands, U.S.`). 요청: "버진 아일랜드 미국 지역의 2022년 8월 대여 기록 중 가장 최근 5건의 대여일과 반납일..." 첫 submit은 최신 query 결과에 `rental_id`가 포함되어 evidence mismatch; composer가 query를 `rental_date/return_date`만 반환하도록 재호출 후 accepted (`1/2`). registry committed + bundle exported. |
+
+**Findings.**
+
+1. **Contract-aware too_easy branch는 아직 실측 미검증.** 이번 smoke는 too_easy로 가지 않고 timestamp scalar가 too_hard로 끝났다. 단위/통합 테스트는 통과.
+2. **Strict timestamp evidence는 잘 작동.** composer의 `T` reformat을 feedback으로 잡고, composer가 raw query value로 수정했다.
+3. **새 병목은 answer granularity phrasing.** user_request가 "대여일"이라고 물으면 actor는 날짜만 답하는 것이 자연스럽다. exact reward에서 full timestamptz를 요구하려면 composer가 처음부터 "정확한 대여 시각/타임스탬프"를 물어야 한다. normalize로 맞추면 RL trace 품질 목표를 해친다.
+4. **User-facing data miss.** smoke의 `"2번 점소"`, `"영화 소장본"`은 고객이 DB를 모른다는 전제에 맞지 않았다. 이건 validator로 막기보다 authoring rule과 예시에서 바로잡는 쪽이 덜 과하다.
+5. **trial_0003은 user-facing request가 개선됐고 accept까지 갔다.** 내부 ID/점소/소장본 누수는 사라졌고, 지역/월/최근 N건은 고객 또는 비기술 업무 사용자가 말할 수 있는 표면이다. 단 `"대여 기록"`은 DB 레코드와 겹치는 표현이라 `대여 내역`이 더 안전하다.
+6. **후속 정정: canonical label key는 customer-facing final answer가 아니다.** trial_0003 당시에는 label keys가 `rental_date`, `return_date`로 raw DB column에 가깝다는 점을 문제로 봤지만, 현재 설계에서는 label이 actor가 제출하는 agent-visible `submit_result`이므로 key는 안정적인 API-style result schema면 충분하다. 고객-facing 제약은 `user_request`와 downstream final answer에 적용된다.
+7. **이벤트 로그 preview 착시 확인.** `trial_events.jsonl`의 `params_preview`는 list를 3개 item으로 자르기 때문에 query join chain에서 `customer<-rental.customer_id as r`가 빠져 보였다. raw conversation `ToolCallItem.arguments_preview`에는 해당 join이 존재했다. composer query alias validation 버그가 아니라 preview truncation에 따른 관측 착시다.
+8. **프롬프트 유출 가드 유지.** timestamp prompt 보강 중 `solver`라는 내부 단어가 테스트에 걸렸고, `evaluation rollouts`로 교체했다.
+9. **중요한 자기비판: user-facing 보강 직후에도 공통 prompt가 pagila 예시를 품고 있었다.** 이는 "DB만 갈아끼우면 적응형 고객-agent RLVR 데이터셋을 합성"한다는 목표와 충돌한다. 이번 정정으로 공통 prompt는 구조적 규칙만 말하고, 도메인 구체성은 현재 DB의 introspection 결과와 local examples에서 오도록 분리했다.
+
+**Next direction.**
+
+1. generic prompt 보강 후 smoke를 다시 돌려 공통 prompt가 특정 sample DB로 끌고 가지 않는지 확인한다. 특히 `label` keys가 raw DB column에서 answer-facing key로 바뀌는지도 함께 본다.
+2. 다음 smoke도 timestamp scalar로 흐르면 Type B timestamp aggregate를 더 강하게 회피하거나 exact-time phrasing을 예시 전반에 더 앞쪽으로 올린다.
+3. contract-aware too_easy feedback은 아직 runtime smoke에서 직접 타지 않았으므로, too_easy가 나오는 anchor에서 재현 확인이 필요하다.
+
+### Iteration 49 — 2026-04-26 (role isolation: composer authoring only, solver pure prompt surface)
+
+**Correction.** 사용자 지적이 맞다. Composer에게 "너는 synthetic dataset composer다", "actor/solver/pass-rate/RLVR" 같은 메타 목표를 알려주는 것은 역할 분리 위반이다. Composer는 현재 DB 증거를 보고 고객-facing draft를 쓰는 개별 저작자일 뿐이고, solver는 system prompt 없이 그 draft가 만든 문제만 푸는 순수한 풀이 주체다. 데이터셋/품질측정/registry는 runtime의 일이지 agent prompt의 일이 아니다.
+
+**Change.**
+- Spec에 database-swappable customer-agent RLVR 목표와 role isolation을 명시했다. 특히 solver는 `Agent.instructions=None`이 invariant이고, 입력은 rendered customer problem + hidden entity block + generated data tools뿐이다. 이후 submit shape는 rendered prompt가 아니라 task-specific `submit_result` tool schema로 옮겼다.
+- Composer system prompt에서 `synthetic`, `dataset`, `RLVR`, `actor`, `solver`, `pass_rate`, `quality gate`, `evaluation`, `registry`, `training` 계열 메타 설명을 제거했다.
+- Composer-visible tool section을 `Composer Tools`/`composer DSL`에서 `Data Tools`/`query(spec)`로 바꿨다.
+- Composer-visible 문구에서 `evaluator`, `runtime`, `difficulty_crank_invalid`, `crank_invalid`, `quality threshold`, `system instruction` 같은 내부 파이프라인 단어를 제거했다.
+- `submit_draft` feedback은 accepted/rejected 이유를 draft surface 관점으로만 말한다. too-easy는 "needs more specificity", too-hard는 "overconstrained / terminal"로 표현하고 solver/pass-rate는 노출하지 않는다.
+
+**Verification.**
+- `rg` 기준 `prompts.py`/`submit_draft_messages.py`의 prompt/feedback 표면에는 위 금지 메타가 남지 않았다. 남은 `_too_easy_retry_guidance` 같은 이름은 내부 함수명이다.
+- `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_synthesis_backend_openai_agents.py tests/test_solver_backend_openai_agents.py` 통과.
+- `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_synthesis_backend_openai_agents.py tests/test_solver_backend_openai_agents.py tests/test_turn_budget_prompt.py` → **46 passed**.
+- `uv run pytest` → **331 passed**.
+- `trial_0004`는 이 정정 전 prompt로 시작된 smoke라 중단했고, 이번 iteration의 신호로 보지 않는다.
+
 ### 행동 변화 요약
 
 | Iter | Submits | 3번째 attempt | 주요 증상 |
@@ -1687,6 +1795,509 @@ Solver 30/30 완료 결과:
 ---
 
 ## Metrics Template (per iteration)
+
+### Maintenance Note — DB-Agnostic Exposed Surface Guardrail
+
+- **Date**: 2026-04-26
+- **Change**: removed remaining sample-DB examples from exposed composer/tool
+  documentation and `submit_draft` rejection feedback. Examples now use
+  structural placeholders such as `<anchor_table>` and `<pk_column>` instead of
+  Pagila/Sakila-shaped names.
+- **Reason**: the project target is database-swappable customer-agent RLVR data
+  synthesis. Common prompts, feedback, and tool descriptions must not teach the
+  composer a particular demo database's nouns or relationship patterns.
+- **Verification**: targeted `rg` over exposed prompt/feedback/tool-description
+  files found no `pagila`/`sakila`/`postgres_air` or Pagila-style identifiers;
+  focused ruff and prompt/runtime/composer-query tests passed.
+
+### Maintenance Note — Visibility/Handle Feedback After Smoke Trial
+
+- **Date**: 2026-04-26
+- **Trial**: `artifacts/opencode_smoke_after_db_agnostic`
+- **Status**: `synthesis_failed`
+- **Observed failure**: composer repeatedly attempted to expose non-user-facing
+  selected fields and handle-like identifier values instead of converting the
+  same grounded set into a scalar aggregate. The then-current validator rejected
+  these drafts, but the feedback did not clearly steer the model toward visible
+  non-handle outputs or derived aggregates.
+- **Change**: tightened prompt and rejection feedback to say that a selected
+  label output is allowed only when query metadata reports
+  `visibility == 'user_visible'` and `is_handle` is false. Feedback now points
+  models toward aggregate counts over hidden/handle-only row sets instead of
+  retrying the same exposed identifiers.
+- **Scope**: generic metadata semantics only; no database-specific nouns,
+  table names, or relationship patterns were added.
+- **Follow-up trial**: `artifacts/opencode_smoke_after_visibility_feedback`
+  still failed, but with a different failure mode: malformed
+  `answer_contract` JSON strings and a list ordered by a handle column. This
+  confirmed the visibility/handle loop was no longer the only active issue.
+- **Follow-up change**: malformed `answer_contract` payloads now get
+  recoverable feedback instead of terminal `submit_payload_invalid`, and
+  handle-shaped ordering was discouraged as a non-user-facing dependency.
+  Hidden handles remain valid for joins and anchor filters.
+- **Second follow-up trial**: `artifacts/opencode_smoke_after_order_guard`
+  reached solver rollout, so the payload-invalid path was fixed. It failed as
+  `reject_too_easy`: the first valid scalar was solved by all solvers, and the
+  composer then changed the locked scalar operation from `sum` to `count`.
+- **Classifier correction**: composite primary keys may include user-facing
+  partition/natural-key values such as timestamps. `is_handle` now treats
+  foreign keys, non-user-visible primary-key columns, and identifier-named
+  primary-key columns as handles; a user-visible timestamp primary-key
+  component remains orderable/readable.
+- **Third follow-up trial**: `artifacts/opencode_smoke_after_handle_classifier`
+  accepted and committed
+  `task_city rental count after date filter_04cf06b3f31f4422` with
+  `solver_pass_rate=0.6666666666666666`. The accepted contract used hidden
+  `city_id` only for grounding and a visible `rental_date >= 2022-06-01`
+  predicate; query evidence reported `rental_date.is_handle=false`, confirming
+  the classifier correction in runtime.
+- **Correction**: the accepted output key `rental_count_after_june` is not a
+  qualitative issue by itself. The label is an agent-visible `submit_result`
+  object, similar to an API response assembled from tool outputs, not the final
+  natural-language answer shown to the customer. Customer-facing constraints
+  apply to `user_request` and the downstream final answer; label field names
+  should be stable result keys that match the rendered submit schema.
+- **Prompt-surface correction**: composer-facing text should not mention
+  downstream `submit_result`; it only needs to know that `label` is the exact
+  structured result answering `user_request`. The prompt now says stable result
+  field names, and explicitly states that `user_request` must make the label the
+  only correct structured result.
+- **Validation precision correction**: later review found that treating
+  `is_handle: true`, predicate references, or order-by references as automatic
+  hard-reject causes is not 100%-precision for arbitrary DBs. Some PK/FK-shaped
+  values can be legitimate customer-facing codes under an explicit visibility
+  policy. The hard gate now rejects only direct label exposure of source fields
+  explicitly marked `internal` or `blocked`, plus missing provenance. Handle
+  avoidance remains prompt/tool-schema guidance and diagnostic context, not a
+  hard validation rule.
+- **Uniqueness correction**: multi-answer requests are poor RL signals because
+  exact-match scoring becomes underdetermined. Composer-facing rules now reject
+  drafts where the request admits multiple valid result objects, alternative
+  tie-breaks, or partial answers; the task must be narrowed until one structured
+  result is correct.
+- **List-valued label clarification**: a label may be a list when the list as a
+  whole is the unique canonical result. The authoring contract is not
+  "single row only"; it is fixed membership, ordering, limit, and tie-breaks so
+  the verifier sees exactly one valid structured result object.
+- **External task-shape calibration**: a similar synthesized task format uses a
+  customer-facing multi-constraint request, endpoint-like domain tools, and a
+  structured submit payload such as a fixed-length list. This is useful only as
+  shape guidance, not as a domain template. For this project, arbitrary DBs must
+  still be handled by common DB-agnostic code, and open-ended recommendation
+  language must be narrowed until one canonical structured result object remains.
+- **Composer prompt refinement**: the prompt now names that shape directly as
+  real end-user data-service tasks: history lookups, shortlists, summaries,
+  schedules, eligibility checks, or plan-like lists when the current schema
+  supports them. It still forbids domain hard-coding and vague recommendation
+  asks unless filters, thresholds, ordering, limits, and tie-breaks make the
+  result deterministic. The prompt also removed the remaining downstream
+  "agent submits after composing tool/API responses" wording from the composer
+  surface.
+- **Ordered list reward correction**: inferred output schemas now preserve list
+  order by default. This aligns list-valued labels with the uniqueness contract:
+  a solver that finds the same members but submits them in a different order no
+  longer receives exact-match credit unless a future explicit unordered contract
+  is introduced.
+- **Curriculum escalation calibration**: similar external tasks often start as
+  one repeated unit and become harder only after a too-easy signal by growing to
+  two units, then three. The composer prompt and retry feedback now treat list
+  cardinality as a curriculum parameter (`1 -> 2 -> 3 -> 5 -> 10`) instead of
+  jumping directly to a large payload. The prompt also fixes the old row-count
+  ambiguity for take-N lists: count/profile the unbounded candidate pool, then
+  run the final limited query for the canonical label.
+- **Item-complexity correction**: repeated payloads can become harder either by
+  increasing the item count or by making each item harder. The prompt and retry
+  feedback now distinguish Item-complexity from passive Width: a harder item
+  needs an added grounded condition, relationship, visible related field,
+  predicate, or deterministic tie-break that changes what must be found for
+  every item.
+- **Experience-bound actor principle**: curriculum, specificity feedback,
+  Cardinality, Item-complexity, pass-rate, quality-gate, and training-purpose
+  language are composer/runtime concepts only. The actor/solver prompt remains
+  the customer request, hidden entity, submit schema, and tools; strategy should
+  be learned through trajectories and reward, not leaked as prompt guidance.
+- **Autonomous strengthening correction**: difficulty directions are DB-specific
+  and may be impossible in some schemas. Prompt and retry feedback now present
+  filters, composite constraints, cardinality, item-complexity, and cross-item
+  rules as a feasible-options menu, not a fixed priority ladder. The project
+  provides tools and context for composer judgment; it does not hard-code the
+  next crank direction.
+- **Schema-map role clarification**: `schema_map` is the composer's DB-native
+  exploration map. It helps choose topics, relationship paths, and feasible
+  strengthening directions, but it is only a map: `profile`, `sample`,
+  `neighborhood`, and final `query` calls still decide whether a candidate is
+  grounded, readable, nontrivial, and uniquely labelable.
+- **DB Affordance Map MVP**: added a rule-based context artifact derived from
+  `SchemaGraph` and `DataProfile`. It renders table cards, path cards, and topic
+  affordance cards into the composer prompt as context only. The map highlights
+  readable surfaces, filters, metrics, time columns, fanout, and likely task
+  families, but composer still must verify candidates with live tools and a
+  canonical query.
+- **DB-adaptivity cross-check**: ran the same introspect -> profile ->
+  affordance-map path on pagila and postgres_air. Initial output was not good
+  enough: maintenance timestamps dominated event/timeline cards, duplicate
+  table-pair edges lost relation identity, and pagila partition children
+  occupied top table slots. Fixed these generically at the time: hide partition
+  children when a parent is visible, include join-column relation labels on path
+  cards, and profile unknown row-estimate parent tables while skipping advisory
+  profiling on PostgreSQL permission errors. Later correction: the
+  maintenance-timestamp and identifier/status numeric exclusions were
+  name-token heuristics and were removed from the scoring/context algorithm.
+  Final cross-check before that correction: pagila top context centers on
+  customer/rental/payment/film, postgres_air centers on aircraft/flight,
+  airport/flight, account/passenger, and account/booking; top table/path overlap
+  is zero, duplicate path labels are zero, and maintenance timestamps are absent.
+- **Record-set semantics trial**: `artifacts/trial_complete_map_pagila_minimax_01`
+  accepted a pagila task but exposed a solver/tool mismatch. One solver followed
+  rental -> inventory -> rental and counted 51 instead of the canonical 12
+  because relation traversal preserved hidden join multiplicity. The actor-facing
+  API should behave like ordinary endpoint resources, so `record_set` traversal
+  now deduplicates destination records by primary key. Regression tests cover the
+  exact round trip, and the full suite passed after the fix.
+- **Exact scalar strengthening guard**:
+  `artifacts/trial_record_set_semantics_pagila_minimax_01` accepted with
+  pass_rate 2/3, but the harder request added a date predicate while the scalar
+  answer stayed 2. The lower pass rate came from one solver submitting the schema
+  object, not from harder DB reasoning. This is not a good RLVR signal because an
+  actor can ignore the new predicate and still hit the exact label. The
+  `submit_draft` gate now stores a single-field scalar value signature after
+  too-easy rejection and rejects a retry whose submitted value is unchanged under
+  the same answer operation, even if the field name changes. This is a
+  100%-precision check: it only fires when the reward-visible answer value is
+  exactly unchanged.
+- **Actor submit surface correction**:
+  `artifacts/trial_scalar_guard_pagila_minimax_01` accepted with pass_rate 2/3,
+  but the unmatched solver had computed the correct count and then submitted the
+  JSON Schema object shown under `# Submit Result Format` instead of the answer
+  object. This is an interface bug, not task difficulty. The actor prompt no
+  longer includes a submit-format schema block. Runtime now exposes the required
+  answer shape through a task-specific `submit_result` tool schema, matching the
+  endpoint-contract design: object answers are submitted as direct tool
+  arguments, and list/non-object answers use an `answer` wrapper.
+- **Solver rollout denominator correction**:
+  `artifacts/trial_tool_schema_submit_pagila_minimax_01` exposed a misleading
+  quality-gate summary. Three solvers were launched, but two returned
+  `status=failed`, `termination_reason=UserError` after using tools, and the
+  monitor reported only `total_solver_runs=1`, `matched_solver_runs=1`,
+  `pass_rate=1.0`. That made a 1/3 observed rollout look like a 1/1 too-easy
+  result. The rollout summary now separates planned, completed, evaluable,
+  failed, and matched solver counts. Only high-confidence provider/runtime
+  infrastructure failures are excluded from the pass-rate denominator. Unknown
+  `UserError` failures count as evaluable actor/runtime failures, so the same
+  pattern is scored as 1/3 rather than 1/1. Solver event logs also include
+  `excluded_from_pass_rate`, `failure_class`, and `failure_detail`.
+- **Denominator fix trial**:
+  `artifacts/trial_solver_denominator_fix_pagila_minimax_01` accepted. Anchor
+  `film_id=866` (`SUNSET RACER`). Attempt 3 was too easy with
+  `planned=3, completed=3, evaluable=3, failed=0, matched=3, pass_rate=1.0`.
+  Attempt 4 added a limit: "first 2 actors after sorting by last name" and
+  accepted with `planned=3, completed=3, evaluable=3, failed=0, matched=2,
+  pass_rate=0.667`. No `UserError` occurred. The logging fix is verified, but
+  the accepted signal is not fully clean: the unmatched solver found the correct
+  two actors and then changed DB-uppercase values (`ANGELINA ASTAIRE`,
+  `GROUCHO DUNST`) to Title Case in `submit_result`. This is a value-copy
+  fidelity failure rather than a DB-search failure, so future trial review
+  should flag casing/format-only misses separately from genuine reasoning misses.
+- **Submit exact-value contract**:
+  To reduce value-copy fidelity failures without adding a separate prompt block,
+  the task-specific `submit_result` tool schema now states the endpoint
+  contract directly: copy values exactly from data-tool outputs and do not
+  change capitalization, spelling, punctuation, whitespace, numeric precision,
+  or date/time formatting unless the user explicitly asked for that
+  transformation. This keeps the actor interface API-like while making exact
+  reward semantics visible where the answer payload is submitted.
+- **Submit-desc trial and typed `IN` repair**:
+  `artifacts/trial_submit_desc_exact_values_pagila_minimax_01` failed before
+  acceptance. The only solver-evaluated draft was a direct store staff count:
+  `planned=3, completed=3, evaluable=3, failed=0, matched=3, pass_rate=1.0`,
+  so the gate correctly rejected it as too easy. The trial did verify the new
+  `submit_result` schema path for object answers: all three solvers submitted
+  `{"staff_count": 3}` directly. It did not meaningfully test exact string
+  copying because the answer was numeric.
+- **PostgreSQL udt-name array casts**:
+  The same trial exposed composer query failures when filtering `int4` columns
+  with `op='in'`: PostgreSQL saw `integer = text` because array casts covered
+  `integer/bigint/smallint` names but not introspected `udt_name` values such
+  as `int4`. Composer and atomic SQL compilation now cast arrays for common
+  PostgreSQL udt names (`int2/int4/int8`, bool, numeric, timestamps, etc.) and
+  fall back to the quoted type name for DB-specific enum/domain types. Composer
+  `sample` filters also coerce list items through the column type before
+  binding.
+- **Typed `IN` repair trial**:
+  `artifacts/trial_int4_array_cast_pagila_minimax_01` re-ran pagila/minimax
+  after the cast fix. The previous `integer = text` failure disappeared
+  (`0` occurrences), and the same live `staff_id IN (...)` pattern returned
+  rows successfully. The synthesis still failed before acceptance:
+  the solver-evaluated draft was again a direct store staff count with
+  `planned=3, completed=3, evaluable=3, failed=0, matched=3, pass_rate=1.0`.
+  Later retries did not preserve a valid incremental scalar-count
+  strengthening: `max(staff_id)` was rejected as a non-user-visible source and
+  non-incremental, `active=true` kept the scalar value unchanged, and
+  `max(last_update)` was non-incremental. Remaining bottleneck: composer
+  difficulty escalation for sparse/low-fanout store anchors, not solver
+  denominator or `submit_result`.
+- **Fixed-denominator solver batch policy**:
+  Wrong solver answers, invalid submits, `UserError`, and max-turn failures are
+  actor/runtime outcomes and always count in the pass-rate denominator.
+  Provider/environment failures remain excluded, but they no longer shrink the
+  denominator: the solver orchestrator schedules replacement attempts from the
+  configured solver pool until the planned number of evaluable runs is reached.
+  `planned_solver_runs` is now the target evaluable denominator, while
+  `total_solver_runs` is the actual number of attempts, including excluded
+  infra failures. Quality-gate evaluation refuses to silently score a rollout
+  that exhausts the finite infra retry budget before reaching the target
+  denominator. Safe early termination is also deferred until the target
+  evaluable denominator has been filled.
+- **Fixed-denominator trial**:
+  `artifacts/trial_fixed_denominator_pagila_minimax_01` accepted and committed
+  `task_최근 대여일 조회_c9e380db055126b7`. The first submission was rejected by
+  strict query/evidence checks; the second submission asked for the latest
+  rental date for the anchored Cianjur customer. Final rollout metrics were
+  `planned=3, total=3, evaluable=3, failed=0, matched=2,
+  pass_rate=0.667`. The unmatched solver submitted
+  `2022-08-23 11:55:51+00:00` instead of canonical
+  `2022-08-23 17:43:11+00:00`, and was correctly counted as an evaluable
+  solver failure (`excluded_from_pass_rate=false`). No `integer = text` errors
+  occurred. Residual quality concern: the accepted user request still says
+  `rental` rather than a cleaner customer-facing Korean phrase such as
+  `대여`; this is phrasing polish, not a verifier failure.
+
+- **GPT-5.4 Nano language cross-check**:
+  Direct OpenAI `gpt-5.4-nano` could not run because the provider returned
+  `RateLimitError`, so the same composer model was routed through OpenRouter as
+  `openai/gpt-5.4-nano` without using Codex OAuth. The trial
+  `artifacts/trial_gpt54_nano_openrouter_composer_pagila_01` accepted
+  `task_스토어의 대여 건수 집계_86f356558a265aca` with
+  `planned=3, total=3, evaluable=3, failed=0, matched=2, pass_rate=0.667`.
+  The generated request used Korean `대여` instead of English `rental`, so the
+  earlier `rental` wording is more likely weak-model instruction following than
+  a hard prompt-language bug. However, a separate customer-facing naturalness
+  issue remains: the accepted request still exposes a DB-like anchor
+  (`스토어 481`) and asks about a zero-count sparse store. That suggests the next
+  prompt/context work should focus on user-natural entity handles and avoiding
+  vacuous sparse anchors, not on adding DB-specific translation rules.
+
+- **No-anchor experiment**:
+  Runtime-provided `anchor_hint` was disabled so the composer starts from
+  `schema_map` and chooses its own observed entity via data tools. Focused
+  tests confirmed the synthesis backend now receives `anchor_hint=None`.
+  Two pagila trials were run:
+  `artifacts/trial_no_anchor_pagila_minimax_01` with minimax composer and
+  `artifacts/trial_no_anchor_pagila_gpt54_nano_01` with OpenRouter
+  `openai/gpt-5.4-nano` composer. Both logs had no `Starting Entity` text and no
+  `integer = text` errors. The minimax composer chose `customer_id=1` from
+  `sample(customer)` and phrased the request as first-person
+  `내가 빌린 Animation 장르 영화...`; it failed as too hard because solvers
+  submitted counts `7/7/6` against canonical `8`. The Nano composer chose
+  `customer_id=38`, but still surfaced the hidden handle as
+  `고객 번호가 38번인 고객...` and used schema-ish `amount` wording. It failed as
+  too easy first, then exhausted feedback attempts while trying to strengthen
+  the sum task. Conclusion: removing forced anchors helps with the specific
+  `스토어 481` forced-anchor failure, but it is not sufficient. The remaining
+  issue is composer self-selected hidden-entity phrasing; this should be handled
+  by prompt/context shaping toward "my account/my records" or readable entity
+  surfaces, not by a broad PK/FK-value reject rule.
+- **User-facing ID examples**:
+  After the no-anchor trials, the common composer prompt now includes explicit
+  bad/good patterns for request wording. Bad examples are raw DB identifiers
+  such as `<entity type> 38`, `id 38`, `<table>_id=38`, `record 38`, `row 38`,
+  and `number 38 <entity>`; good examples are `my account`, `my records`, `my recent
+  activity`, `the visible named item`, `the selected date range`, or a real
+  observed name/title/code/reference. This is intentionally prompt guidance,
+  not a broad reject rule, because PK/FK physical shape alone cannot prove that
+  a value is not a public customer reference.
+- **Prompt language correction**:
+  The common composer prompt surface should stay English by default. The target
+  output language remains configured separately by `domain.language` (e.g.,
+  Korean user requests when `language: ko`). The Korean service-voice and ID
+  examples in the shared prompt were replaced with English pattern descriptions,
+  and prompt tests now assert that the shared system instructions contain no
+  Korean text.
+- **Minimal general prompt rewrite**:
+  The shared composer system prompt was compressed from roughly 23k characters
+  to roughly 6k characters and reorganized around role, tools, workflow,
+  user-request rules, label/contract rules, task shape, and `submit_draft`.
+  Each major instruction now carries a short "Why:" rationale so the model gets
+  the principle without being overloaded by pipeline metadata. The prompt stays
+  English-only, DB-agnostic, and free of solver/RL/pass-rate language; generated
+  `user_request` language remains controlled by the runtime domain language.
+  Focused verification passed:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  -> 50 passed, plus ruff and `git diff --check`.
+- **Composer schema-description audit**:
+  After the minimal prompt rewrite, the same principles were moved into the
+  composer-visible tool schemas so bad calls are prevented before feedback
+  consumes a submit turn. The audit covered all composer tool descriptions,
+  nested parameter descriptions, and `submit_draft`. Key changes: `entity` is
+  now exposed as a scalar-valued object instead of a JSON string, `label` is
+  exposed as a flat object or flat object list, and `answer_contract` is a
+  `kind`-discriminated union: scalar contracts only allow aggregate functions
+  and null limits, while list contracts only allow `select`. The full contract
+  fields (`kind`, `operation`, `predicates`, `order_by`, `limit`,
+  `limit_phrase`, `evidence`) are required. Query/schema/sample/profile
+  descriptions explain their evidence role, and `submit_draft` descriptions
+  state the scalar-vs-list contract and raw-id/user-facing pattern guidance.
+  Terminology was clarified: common prompts and feedback are
+  database-neutral, while composer behavior is database-aware through the
+  current schema, generated tool schemas, and live observations.
+- **All visible tool-schema audit**:
+  The schema audit was expanded from composer-only to all visible tool schemas:
+  five composer tools, ten actor/solver atomic resource tools, and
+  `submit_draft` (16 surfaces total). The audit script found no role/pipeline
+  leaks after the rewrite and exposed remaining loose schemas:
+  `items: {}` in composer/atomic filter values and missing descriptions on
+  atomic `get_record.table`/`columns`. These were tightened: array filter
+  values now require scalar items, `get_record` fields are described, and tests
+  now fail on empty item schemas or `additionalProperties: true` across the
+  visible composer, atomic, and `submit_draft` schemas. Verification:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py tests/test_tooling_atomic_tool_factory.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py`
+  -> 70 passed; ruff and `git diff --check` passed.
+- **DB-agnostic random anchor candidate sampler**:
+  Reframed anchors as environment randomization for stateless composer
+  restarts, not task hints. The sampler now builds a rule-based eligible table
+  pool without the previous `row_estimate >= 100` or single-column PK gates,
+  scores tables from readable surfaces, FK reachability, structural classes, and
+  task-surface affordances, samples actual rows, and emits optional candidate
+  entities with qualified table handles, PK metadata, visible previews, and
+  lightweight relationship counts. This is meant to reduce `id=1`/first-row
+  collapse while preserving composer autonomy. Runtime wiring is controlled by
+  `synthesis.runtime.anchor_candidates_enabled` and `anchor_candidate_limit`,
+  defaulting off for controlled no-anchor experiments. Verification:
+  `uv run pytest tests/test_config_load.py tests/test_synthesis_anchor_sampler.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  -> 44 passed; targeted ruff passed.
+- **Anchor sampler metrics and quality-diversity algorithm**:
+  Added candidate-level RLVR-start metrics (`rlvr_start_score`,
+  anti-degeneracy, visible surface, relationship surface, dead-anchor and
+  id-one indicators) and pool-level metrics (mean/p10 score, preferred-rate,
+  preview-rate, positive-relation-rate, dead-anchor-rate, id-one-rate, table
+  coverage, table entropy, `rlvr_start_pool_score`). These metrics are for
+  sampler evaluation, not task rejection. A first attempt incorrectly used the
+  metric as a preferred-candidate filter; this was replaced with a single
+  quality-diversity sampling algorithm:
+  `table_quality_score * structure_novelty_bonus * repeated_table_penalty`, plus
+  two random row samples per selected table with the higher-scoring row kept.
+  Sampler-only evaluation, no composer calls, 8 episodes × 10 candidates:
+  pagila pool score `0.8627`, postgres_air `0.8920`, MIMIC-IV demo `0.9023`;
+  all had `dead_anchor_rate=0` and `id_one_like_rate=0`. Verification:
+  `uv run pytest tests/test_synthesis_anchor_sampler.py tests/test_synthesis_runtime.py`
+  -> 37 passed; targeted ruff passed.
+- **Candidate anchor prompt rendering**:
+  The anchor pool is now rendered as `# Candidate Starting Points` instead of
+  `# Starting Entity`. Prompt wording says candidates are optional orientation
+  context, not answer hints or required topics; if one is used, call
+  `neighborhood` first and still use data tools plus a final `query(spec)` for
+  the exact label. `preview` and `relationship_summary` are explicitly not final
+  label evidence, and raw primary-key / `row_id` values must not appear in the
+  customer request. Verification:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  -> 38 passed; targeted ruff passed.
+- **Anchor-candidate trial and validation-principle correction**:
+  Ran pagila smoke with anchor candidates enabled, composer
+  `openrouter/openai/gpt-5.4-nano`, and 3× `opencode_zen/minimax-m2.5`.
+  First run (`artifacts/trial_anchor_candidates_pagila_gpt54nano_minimax_01`)
+  failed too-hard: composer submitted an all-rentals aggregate while the hidden
+  entity made solvers scope the request to one customer. A too-aggressive
+  follow-up hard validator briefly rejected labels whose values were not
+  inferred as anchor-connected. This was reverted: anchor connectivity is value
+  flow inference, not 100%-precision validation, so it remains diagnostic-only.
+  The schema-first fix is in `submit_draft` field descriptions: `label`,
+  `user_request`, and `answer_contract` now state that "my/own/entity" wording
+  must match the final query scope.
+  Clean rerun (`artifacts/trial_anchor_candidates_pagila_gpt54nano_minimax_03`)
+  failed too-easy: first submission was a global max payment amount,
+  `pass_rate=1.0` with all 3 solvers matched. Subsequent retries added filters
+  but the scalar answer stayed `11.99`; exact label-change validation correctly
+  returned `label_not_strengthened` until submit budget exhaustion. Quality
+  notes: candidate anchor broke `id=1` collapse, but the selected anchor was a
+  low-context `payment_id`; the user request still used schema-ish wording
+  (`Amount`). Verification after correction:
+  `uv run pytest tests/test_config_load.py tests/test_synthesis_anchor_sampler.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  -> 48 passed; targeted ruff and `git diff --check` passed.
+- **Name-token heuristic correction**:
+  User review correctly rejected name-based topic/anchor shaping as artificial.
+  The affordance map and anchor sampler now use structural/measured signals only:
+  PK/FK flags, FK graph degree, visibility labels, DB type metadata,
+  row/profile statistics, sampled preview non-emptiness, and relationship
+  counts. Removed semantic table roles, role bonuses, column-name token filters
+  for "identifier/status/maintenance" columns, and handle classification based
+  on column-name suffixes. Primary keys and foreign keys are now handles by
+  structure. DB type-name checks remain only as schema type metadata, not
+  business semantic inference.
+- **Global token-heuristic ban, with dedup boundary correction**:
+  Tightened the correction beyond context generation. Privacy/sensitivity no
+  longer infers visibility from column/table-name tokens; it only applies
+  explicit overrides and the configured default. `submit_draft` no longer hard
+  rejects user requests by raw-identifier token patterns or literal placeholder
+  token checks. Ungrounded-value feedback no longer branches on name-like or
+  datetime-like string patterns. Correction: semantic near-duplicate MinHash is
+  intentionally string/token based because deduplication is string-surface
+  similarity, not DB semantic inference. Therefore MinHash shingling and its
+  `semantic_shingle_size` config remain valid.
+- **Schema-first composer/solver tool contract cleanup**:
+  Moved more machine-checkable behavior from prompt/runtime feedback into tool
+  schemas and parameter descriptions. The composer system prompt no longer
+  duplicates the full `submit_draft(...)` callable shape; that contract belongs
+  to the tool schema. Local examples are explicitly guidance only when
+  consistent with system/tool contracts. Composer `sample` and `profile`
+  now expose table-scoped schema variants instead of global column enums, and
+  `query` descriptions use the corrected handle guidance: prefer
+  user-visible non-handle values, but allow handle-like values when evidence
+  marks them user-visible and the request naturally asks for that reference.
+  Solver atomic tools are strict schemas. `filter_record_set` is split into
+  scalar, value-list, pattern, and null endpoints so value shape is explicit.
+  `get_record` now describes the `record_ref.table` / `record_ref.id` handoff,
+  and `submit_result` list schemas include exact canonical cardinality when
+  known. Targeted verification:
+  `uv run pytest -q tests/test_tooling_atomic_tool_factory.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_synthesis_schema_inference.py tests/test_synthesis_canonicalize.py tests/test_solver_backend_openai_agents.py tests/test_pipeline_solver_orchestrator.py`
+  -> 111 passed.
+
+## Iteration 50 — schema-contract trial cleanup, numeric/timestamp parity
+
+- **Pagila trial `_03` uncovered numeric coercion drift**:
+  `artifacts/trial_schema_contract_pagila_gpt54nano_minimax_03` failed
+  `reject_too_hard`. Composer profiled `payment.amount = 4.99`, but asyncpg
+  bound JSON floats against `numeric` as floats, yielding zero rows/null sums.
+  Shared SQL coercion now maps numeric/decimal/money JSON numbers and strings to
+  `Decimal`, and both composer and atomic paths use the same parameter rules.
+  Direct verification showed the query/tool result changed from zero/null to the
+  expected count/sum.
+- **Pagila trial `_04` exposed relationship-path ambiguity**:
+  `artifacts/trial_schema_contract_pagila_gpt54nano_minimax_04` failed
+  `reject_too_hard` after solvers picked a different reasonable `store` path
+  than composer. Composer `query` now supports branch joins via explicit
+  `join[].from`, and the prompt instructs authors to make the customer-language
+  role explicit when multiple relationship roles can answer the same concept.
+  `submit_draft` feedback for one-row scalar vs one-row list labels was also
+  corrected.
+- **Pagila trial `_05` found atomic timestamp semantics drift**:
+  `artifacts/trial_schema_contract_pagila_gpt54nano_minimax_05` reached solver
+  evaluation but failed `reject_too_hard`: composer summed July-rental payments
+  as `28510.56`, while all solvers derived `27447.12`. Root cause was not model
+  reasoning: atomic filters converted date-only strings for `timestamptz`
+  columns into naive datetimes, and asyncpg interpreted them differently from
+  composer’s UTC-aware canonical query. `timestamptz` string coercion now
+  attaches UTC when no timezone is supplied, and direct atomic calculus
+  `rows_where` / `filter_rows` also coerce values by column type.
+- **Provider override and accepted minimax trial**:
+  CLI config still defaulted to `opencode_zen/qwen3.5-plus`, so `_06`
+  (`artifacts/trial_schema_contract_pagila_gpt54nano_minimax_06`) failed fast
+  with a Qwen rate limit. A runtime override was used for `_07` with
+  composer/solvers all on `opencode_zen/minimax-m2.5`.
+  `artifacts/trial_schema_contract_pagila_minimax_07` accepted and committed:
+  task `task_내 최근 결제 내역 조회_fa237f54a2bc3227`, pass rate
+  `12/30 = 0.4`, CI `[0.2495, 0.5661]`, bundle exported. Failed and invalid
+  solver submissions were evaluable and remained in the denominator.
+  `run-real-db-trial` now accepts the same runtime model override flags as
+  `validate-config`, so this can be reproduced without a one-off Python runner.
+- **API-like temporal output cleanup**:
+  `_07` also showed a non-terminal schema-contract nuisance: tool output
+  serialized datetimes with `str(datetime)` (`YYYY-MM-DD HH:MM...`) while the
+  composer first rewrote them to ISO `T` strings and received precise feedback.
+  Tool JSON serialization now emits `datetime/date/time.isoformat()` so
+  composer and solver see stable API-like temporal strings.
+- **Verification**:
+  `uv run pytest -q tests/test_cli_commands.py::test_cli_run_real_db_trial_reports_summary tests/test_tooling_common.py::test_tool_json_serializes_temporal_values_as_iso_strings tests/test_tooling_atomic_integration.py::test_timestamptz_date_strings_match_utc_canonical_query`
+  -> 3 passed. Targeted ruff over changed CLI/tooling/test files passed.
 
 - **Attempts observed**: N / max_generation_attempts
 - **Submissions**: M / N (how many attempts actually reached submit_draft)

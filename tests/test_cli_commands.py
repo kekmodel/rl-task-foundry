@@ -199,6 +199,9 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     class _DummyTrialRunner:
         _config: object
 
+        def __post_init__(self) -> None:
+            captured["config"] = self._config
+
         async def run(
             self,
             output_dir: Path,
@@ -235,7 +238,21 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     output_dir = tmp_path / "real_trial_output"
     result = CliRunner().invoke(
         app,
-        ["run-real-db-trial", "sakila", str(output_dir), "--topic", "assignment"],
+        [
+            "run-real-db-trial",
+            "sakila",
+            str(output_dir),
+            "--topic",
+            "assignment",
+            "--composer-provider",
+            "opencode_zen",
+            "--composer-model",
+            "minimax-m2.5",
+            "--solver-provider",
+            "opencode_zen",
+            "--solver-model",
+            "minimax-m2.5",
+        ],
     )
 
     assert result.exit_code == 0
@@ -250,6 +267,10 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert captured["output_dir"] == output_dir
     assert captured["db_id"] == "sakila"
     assert captured["closed"] is True
+    config = captured["config"]
+    assert config.models.composer.provider == "opencode_zen"
+    assert config.models.composer.model == "minimax-m2.5"
+    assert {solver.model for solver in config.models.solvers} == {"minimax-m2.5"}
 
 
 def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:

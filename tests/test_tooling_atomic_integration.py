@@ -1,4 +1,4 @@
-"""Integration tests for the atomic calculus against the live sakila DB.
+"""Integration tests for the atomic calculus against the live pagila DB.
 
 Each test builds a fresh AtomicSession, exercises a primitive or chain,
 and tears the connection down in a finally block. Tests are skipped
@@ -20,19 +20,20 @@ from rl_task_foundry.infra.db import (
     solver_session_settings,
 )
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
-from rl_task_foundry.tooling.atomic import (
-    AtomicSession,
-    CursorStore,
+from rl_task_foundry.tooling.atomic import AtomicSession, CursorStore
+from rl_task_foundry.tooling.atomic.calculus import (
     aggregate,
     count,
+    create_row_set,
+    filter_rows,
     group_top,
     intersect,
-    order_by,
     read,
     rows_via,
     rows_where,
     take,
 )
+from rl_task_foundry.tooling.atomic.cursor import order_by
 from rl_task_foundry.tooling.common import snapshot_from_graph
 
 
@@ -57,7 +58,7 @@ async def _build_session():
 
 
 @pytest.mark.asyncio
-async def test_vertical_slice_over_sakila():
+async def test_vertical_slice_over_pagila():
     session, conn = await _build_session()
     try:
         rentals_of_customer_45 = rows_where(
@@ -93,16 +94,18 @@ async def test_vertical_slice_over_sakila():
 
 
 @pytest.mark.asyncio
-async def test_take_rejects_n_below_two_and_above_five():
+async def test_take_allows_limit_one_and_rejects_invalid_api_limits():
     session, conn = await _build_session()
     try:
         cursor = rows_where(
             session, table="rental", column="customer_id", op="eq", value=45
         )
+        one = await take(session, cursor=cursor, n=1)
+        assert len(one) == 1
         with pytest.raises(ValueError):
-            await take(session, cursor=cursor, n=1)
+            await take(session, cursor=cursor, n=0)
         with pytest.raises(ValueError):
-            await take(session, cursor=cursor, n=6)
+            await take(session, cursor=cursor, n=session.max_fetch_limit + 1)
     finally:
         await conn.close()
 
@@ -170,6 +173,81 @@ async def test_rows_via_reverse_projects_customer_to_rentals():
         )
         ids = await take(session, cursor=ordered, n=3)
         assert len(ids) == 3
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_relation_round_trip_keeps_record_set_semantics():
+    session, conn = await _build_session()
+    try:
+        rentals = create_row_set(session, table="rental")
+        inventories_from_rentals = rows_via(
+            session,
+            cursor=rentals,
+            edge_label="rental.inventory_id->inventory",
+        )
+        matching_inventory = filter_rows(
+            session,
+            cursor=inventories_from_rentals,
+            column="film_id",
+            op="eq",
+            value=308,
+        )
+        matching_rentals = rows_via(
+            session,
+            cursor=matching_inventory,
+            edge_label="inventory<-rental.inventory_id",
+        )
+        h2_matching_rentals = filter_rows(
+            session,
+            cursor=matching_rentals,
+            column="rental_date",
+            op="gte",
+            value=datetime(2022, 7, 1),
+        )
+        bounded_h2_matching_rentals = filter_rows(
+            session,
+            cursor=h2_matching_rentals,
+            column="rental_date",
+            op="lt",
+            value=datetime(2023, 1, 1),
+        )
+
+        assert await count(session, cursor=h2_matching_rentals) == 12
+        assert await count(session, cursor=bounded_h2_matching_rentals) == 12
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_timestamptz_date_strings_match_utc_canonical_query():
+    session, conn = await _build_session()
+    try:
+        rentals = create_row_set(session, table="rental")
+        july_or_later = filter_rows(
+            session,
+            cursor=rentals,
+            column="rental_date",
+            op="gte",
+            value="2022-07-01",
+        )
+        july = filter_rows(
+            session,
+            cursor=july_or_later,
+            column="rental_date",
+            op="lt",
+            value="2022-08-01",
+        )
+        payments = rows_via(
+            session,
+            cursor=july,
+            edge_label="rental<-payment.rental_id",
+        )
+
+        total = await aggregate(session, cursor=payments, fn="sum", column="amount")
+
+        assert str(total) == "28510.56"
     finally:
         await conn.close()
 

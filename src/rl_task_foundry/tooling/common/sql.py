@@ -9,6 +9,7 @@ the schema snapshot before quoting.
 from __future__ import annotations
 
 import datetime as _dt
+from decimal import Decimal
 
 
 def quote_ident(identifier: str) -> str:
@@ -26,7 +27,17 @@ def readonly_select(sql: str) -> str:
     return " ".join(sql.split())
 
 
-_ALLOWED_SCALAR_TYPES = (int, float, str, bool, bytes, _dt.datetime, _dt.date, _dt.time)
+_ALLOWED_SCALAR_TYPES = (
+    int,
+    float,
+    str,
+    bool,
+    bytes,
+    Decimal,
+    _dt.datetime,
+    _dt.date,
+    _dt.time,
+)
 
 
 _INTEGER_TYPES = frozenset(
@@ -53,6 +64,10 @@ _TIMESTAMP_TYPES = frozenset(
         "timestamptz",
     }
 )
+_TIMESTAMPTZ_TYPES = frozenset({"timestamp with time zone", "timestamptz"})
+_TIMESTAMP_NO_TZ_TYPES = frozenset(
+    {"timestamp", "timestamp without time zone"}
+)
 _DATE_TYPES = frozenset({"date"})
 _TIME_TYPES = frozenset({"time", "time without time zone", "time with time zone"})
 
@@ -68,6 +83,10 @@ def coerce_scalar(value: object, data_type: str) -> object:
 
     if isinstance(value, list):
         return [coerce_scalar(item, data_type) for item in value]
+    if data_type in _DECIMAL_TYPES and isinstance(value, int | float):
+        if isinstance(value, bool):
+            return value
+        return Decimal(str(value))
     if not isinstance(value, str):
         return value
     stripped = value.strip()
@@ -79,8 +98,16 @@ def coerce_scalar(value: object, data_type: str) -> object:
         return _decimal_from_str(stripped)
     if data_type in _BOOLEAN_TYPES:
         return _bool_from_str(stripped)
-    if data_type in _TIMESTAMP_TYPES:
-        return _dt.datetime.fromisoformat(stripped)
+    if data_type in _TIMESTAMPTZ_TYPES:
+        parsed = _dt.datetime.fromisoformat(stripped)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=_dt.UTC)
+        return parsed
+    if data_type in _TIMESTAMP_NO_TZ_TYPES:
+        parsed = _dt.datetime.fromisoformat(stripped)
+        if parsed.tzinfo is None:
+            return parsed
+        return parsed.astimezone(_dt.UTC).replace(tzinfo=None)
     if data_type in _DATE_TYPES:
         return _dt.date.fromisoformat(stripped)
     if data_type in _TIME_TYPES:
@@ -89,8 +116,6 @@ def coerce_scalar(value: object, data_type: str) -> object:
 
 
 def _decimal_from_str(source: str) -> object:
-    from decimal import Decimal
-
     return Decimal(source)
 
 

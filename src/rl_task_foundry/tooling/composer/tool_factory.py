@@ -19,19 +19,19 @@ from typing import TYPE_CHECKING
 from rl_task_foundry.tooling.common.edges import available_edges
 from rl_task_foundry.tooling.common.payload import (
     JsonObject,
+)
+from rl_task_foundry.tooling.common.payload import (
     optional_int as _optional_int,
+)
+from rl_task_foundry.tooling.common.payload import (
     optional_str as _optional_str,
-    require_int as _require_int,
+)
+from rl_task_foundry.tooling.common.payload import (
     require_str as _require_str,
 )
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
 from rl_task_foundry.tooling.common.sql import coerce_scalar
-from rl_task_foundry.tooling.common.tool_runtime import (
-    Handler,
-    Invoker,
-    json_dumps_tool as _json_dumps,
-    wrap_tool_handler as _with_error_handling,
-)
+from rl_task_foundry.tooling.common.tool_runtime import wrap_tool_handler as _with_error_handling
 from rl_task_foundry.tooling.composer._session import ComposerSession
 from rl_task_foundry.tooling.composer._sql import FILTER_OPS
 from rl_task_foundry.tooling.composer.neighborhood import neighborhood
@@ -51,18 +51,15 @@ def _all_table_names(snapshot: SchemaSnapshot) -> list[str]:
     return sorted(snapshot.table_names())
 
 
-def _all_column_names(snapshot: SchemaSnapshot) -> list[str]:
-    names: set[str] = set()
-    for table in snapshot.tables:
-        for column in table.columns:
-            names.add(column.name)
-    return sorted(names)
+def _table_column_names(snapshot: SchemaSnapshot, table_name: str) -> list[str]:
+    table = snapshot.table(table_name)
+    return sorted(column.name for column in table.exposed_columns)
 
 
 def _all_edge_labels(snapshot: SchemaSnapshot) -> list[str]:
     labels: set[str] = set()
     for table in snapshot.tables:
-        for edge in available_edges(snapshot, table.name):
+        for edge in available_edges(snapshot, table.handle):
             labels.add(edge.label)
     return sorted(labels)
 
@@ -100,74 +97,151 @@ def _coerce_predicate(
             raise TypeError(
                 f"predicate[{index}].op must be a string"
             )
-        column_spec = table_spec.column(column)
-        value = coerce_scalar(entry.get("value"), column_spec.data_type)
+        if op not in FILTER_OPS:
+            raise ValueError(
+                f"predicate[{index}].op must be one of {sorted(FILTER_OPS)}"
+            )
+        column_spec = table_spec.exposed_column(column)
+        if op in {"is_null", "is_not_null"}:
+            if "value" in entry and entry.get("value") is not None:
+                raise TypeError(
+                    f"predicate[{index}].value must be omitted or null "
+                    "for is_null/is_not_null"
+                )
+            value = None
+        else:
+            if "value" not in entry or entry.get("value") is None:
+                raise TypeError(
+                    f"predicate[{index}].value is required and cannot "
+                    "be null for this operator"
+                )
+            value = coerce_scalar(entry.get("value"), column_spec.data_type)
         out.append({"column": column, "op": op, "value": value})
     return out
 
 
-def _coerce_query_spec(
-    snapshot: SchemaSnapshot,
-    spec: JsonObject,
-) -> JsonObject:
-    """Coerce the query spec's filter values to each column's data type.
-
-    LLM-supplied filter values arrive as JSON scalars, so integer PKs can be
-    strings and temporals arrive as ISO text. query.py re-parses the spec so
-    we only need to normalize ``value`` entries against ``table_spec.column(…)``.
-    """
-    from_table = spec.get("from")
-    if not isinstance(from_table, str):
-        return spec
-    if from_table not in snapshot.table_names():
-        return spec
-    table_spec = snapshot.table(from_table)
-    raw_filter = spec.get("filter")
-    if raw_filter is None or not isinstance(raw_filter, list):
-        return spec
-    rebuilt: list[object] = []
-    for entry in raw_filter:
-        if not isinstance(entry, dict):
-            rebuilt.append(entry)
-            continue
-        column = entry.get("column")
-        if not isinstance(column, str):
-            rebuilt.append(entry)
-            continue
-        try:
-            column_spec = table_spec.column(column)
-        except KeyError:
-            rebuilt.append(entry)
-            continue
-        rewritten = dict(entry)
-        rewritten["value"] = coerce_scalar(
-            entry.get("value"), column_spec.data_type
-        )
-        rebuilt.append(rewritten)
-    return {**spec, "filter": rebuilt}
-
-
-_VALUE_ANY_OF = [
+_VALUE_SCALAR_ANY_OF = [
     {"type": "string"},
     {"type": "number"},
     {"type": "integer"},
     {"type": "boolean"},
+]
+
+_VALUE_ANY_OF = [
+    *_VALUE_SCALAR_ANY_OF,
     {"type": "null"},
-    {"type": "array", "items": {}},
+    {
+        "type": "array",
+        "items": {"anyOf": _VALUE_SCALAR_ANY_OF},
+        "minItems": 1,
+    },
+]
+
+_ROW_ID_ANY_OF = [
+    {"type": "string"},
+    {"type": "integer"},
+    {
+        "type": "array",
+        "description": (
+            "For composite primary keys — one entry per PK column, "
+            "in the order declared by the table."
+        ),
+        "items": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        "minItems": 1,
+    },
 ]
 
 
 def _predicate_schema(columns: list[str]) -> JsonObject:
     return {
         "type": "array",
+        "description": (
+            "Optional filters on this table. Each column is scoped to the "
+            "selected table; use observed values from sample/profile/query."
+        ),
         "items": {
             "type": "object",
             "required": ["column", "op"],
             "additionalProperties": False,
             "properties": {
-                "column": {"type": "string", "enum": columns},
-                "op": {"type": "string", "enum": _filter_op_enum()},
-                "value": {"anyOf": _VALUE_ANY_OF},
+                "column": {
+                    "type": "string",
+                    "enum": columns,
+                    "description": "Filter column on the selected table.",
+                },
+                "op": {
+                    "type": "string",
+                    "enum": _filter_op_enum(),
+                    "description": "Filter operator.",
+                },
+                "value": {
+                    "anyOf": _VALUE_ANY_OF,
+                    "description": (
+                        "Filter value copied from observed data; omit/null "
+                        "only for is_null or is_not_null."
+                    ),
+                },
+            },
+        },
+    }
+
+
+def _sample_table_variant(table: str, columns: list[str]) -> JsonObject:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["table"],
+        "properties": {
+            "table": {
+                "type": "string",
+                "enum": [table],
+                "description": "Table handle to sample.",
+            },
+            "n": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 5,
+                "description": "Maximum number of real rows to return.",
+            },
+            "seed": {
+                "anyOf": [{"type": "integer"}, {"type": "null"}],
+                "description": (
+                    "Integer seed for deterministic sampling. Null sorts by "
+                    "primary key ascending."
+                ),
+            },
+            "predicate": _predicate_schema(columns),
+        },
+    }
+
+
+def _profile_table_variant(table: str, columns: list[str]) -> JsonObject:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["table"],
+        "properties": {
+            "table": {
+                "type": "string",
+                "enum": [table],
+                "description": "Table handle to profile.",
+            },
+            "column": {
+                "anyOf": [
+                    {"type": "string", "enum": columns},
+                    {"type": "null"},
+                ],
+                "description": (
+                    "Optional column on this table. Null returns per-column "
+                    "distinct/null counts for the table."
+                ),
+            },
+            "predicate": _predicate_schema(columns),
+            "top_k": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 5,
+                "description": "Number of frequent values to return for one column.",
             },
         },
     }
@@ -190,8 +264,8 @@ def build_schema_map_tool(session: ComposerSession) -> "FunctionTool":
                     {"type": "null"},
                 ],
                 "description": (
-                    "Anchor for a depth-limited BFS slice. Omit / null "
-                    "returns the whole schema."
+                    "Optional table handle to center a depth-limited schema "
+                    "map. Null returns the whole schema."
                 ),
             },
             "depth": {
@@ -199,6 +273,10 @@ def build_schema_map_tool(session: ComposerSession) -> "FunctionTool":
                 "minimum": 0,
                 "maximum": 4,
                 "default": 2,
+                "description": (
+                    "Relationship depth from root_table. Larger values show "
+                    "more paths but are only a map, not label evidence."
+                ),
             },
         },
     }
@@ -216,8 +294,9 @@ def build_schema_map_tool(session: ComposerSession) -> "FunctionTool":
     return FunctionTool(
         name="schema_map",
         description=(
-            "Return a JSON-ready slice of the schema graph for the "
-            "composer to orient inside the database."
+            "Inspect the current DB schema: table handles, columns, "
+            "relationship labels, and hub/bridge hints. Use first to choose "
+            "grounded paths; live rows still provide label evidence."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler),
@@ -229,46 +308,60 @@ def build_sample_tool(session: ComposerSession) -> "FunctionTool":
     from agents import FunctionTool
 
     tables = _all_table_names(session.snapshot)
-    columns = _all_column_names(session.snapshot)
     schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["table"],
+        "required": ["target"],
+        "description": "Sample one selected table with table-scoped predicates.",
         "properties": {
-            "table": {"type": "string", "enum": tables},
-            "n": {"type": "integer", "minimum": 1, "default": 5},
-            "seed": {
-                "anyOf": [{"type": "integer"}, {"type": "null"}],
+            "target": {
                 "description": (
-                    "Integer seed for deterministic md5-based ordering; "
-                    "null sorts by primary key ASC."
+                    "Table-scoped sample request. Choose the branch whose table "
+                    "matches the table being sampled."
                 ),
+                "oneOf": [
+                    _sample_table_variant(
+                        table,
+                        _table_column_names(session.snapshot, table),
+                    )
+                    for table in tables
+                ],
             },
-            "predicate": _predicate_schema(columns),
         },
     }
 
     async def handler(payload: JsonObject) -> JsonObject:
-        table = _require_str(payload, "table")
-        n = _optional_int(payload, "n")
-        seed = _optional_int(payload, "seed")
+        target = payload.get("target")
+        if not isinstance(target, dict):
+            raise TypeError("'target' must be an object")
+        target_payload: JsonObject = {str(key): value for key, value in target.items()}
+        table = _require_str(target_payload, "table")
+        table_spec = session.snapshot.table(table)
+        table_handle = table_spec.handle
+        n = _optional_int(target_payload, "n")
+        seed = _optional_int(target_payload, "seed")
         predicate = _coerce_predicate(
-            session.snapshot, table, payload.get("predicate")
+            session.snapshot, table_handle, target_payload.get("predicate")
         )
         rows = await sample(
             session,
-            table=table,
+            table=table_handle,
             n=n if n is not None else 5,
             seed=seed,
             predicate=predicate,
         )
-        return {"table": table, "rows": rows, "row_count": len(rows)}
+        return {
+            "table": table_handle,
+            "rows": rows,
+            "row_count": len(rows),
+        }
 
     return FunctionTool(
         name="sample",
         description=(
-            "Return up to n representative rows from a table with "
-            "optional filter + deterministic seed."
+            "Return real rows from one table. Use before choosing entities, "
+            "visible wording, or filter values so the draft is grounded. "
+            "Returns rows and row_count."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler),
@@ -280,38 +373,44 @@ def build_profile_tool(session: ComposerSession) -> "FunctionTool":
     from agents import FunctionTool
 
     tables = _all_table_names(session.snapshot)
-    columns = _all_column_names(session.snapshot)
     schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["table"],
+        "required": ["target"],
+        "description": "Profile one selected table with table-scoped columns.",
         "properties": {
-            "table": {"type": "string", "enum": tables},
-            "column": {
-                "anyOf": [
-                    {"type": "string", "enum": columns},
-                    {"type": "null"},
-                ],
+            "target": {
                 "description": (
-                    "Single column for a detail profile; null returns "
-                    "per-column distinct/null counts for the whole table."
+                    "Table-scoped profile request. Choose the branch whose table "
+                    "matches the table being profiled."
                 ),
+                "oneOf": [
+                    _profile_table_variant(
+                        table,
+                        _table_column_names(session.snapshot, table),
+                    )
+                    for table in tables
+                ],
             },
-            "predicate": _predicate_schema(columns),
-            "top_k": {"type": "integer", "minimum": 1, "default": 5},
         },
     }
 
     async def handler(payload: JsonObject) -> JsonObject:
-        table = _require_str(payload, "table")
-        column = _optional_str(payload, "column")
-        top_k = _optional_int(payload, "top_k")
+        target = payload.get("target")
+        if not isinstance(target, dict):
+            raise TypeError("'target' must be an object")
+        target_payload: JsonObject = {str(key): value for key, value in target.items()}
+        table = _require_str(target_payload, "table")
+        table_spec = session.snapshot.table(table)
+        table_handle = table_spec.handle
+        column = _optional_str(target_payload, "column")
+        top_k = _optional_int(target_payload, "top_k")
         predicate = _coerce_predicate(
-            session.snapshot, table, payload.get("predicate")
+            session.snapshot, table_handle, target_payload.get("predicate")
         )
         result = await profile(
             session,
-            table=table,
+            table=table_handle,
             column=column,
             predicate=predicate,
             top_k=top_k if top_k is not None else 5,
@@ -321,9 +420,9 @@ def build_profile_tool(session: ComposerSession) -> "FunctionTool":
     return FunctionTool(
         name="profile",
         description=(
-            "Return a distribution snapshot: row_count plus per-column "
-            "distinct/null counts, or (with column set) min/max + top-k "
-            "frequency for one column."
+            "Summarize table or column distributions. Use to choose "
+            "nontrivial filters, thresholds, and date ranges before querying. "
+            "Returns row_count and distribution statistics."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler),
@@ -340,39 +439,80 @@ def build_neighborhood_tool(session: ComposerSession) -> "FunctionTool":
         "additionalProperties": False,
         "required": ["table", "row_id"],
         "properties": {
-            "table": {"type": "string", "enum": tables},
+            "table": {
+                "type": "string",
+                "enum": tables,
+                "description": "Table handle for the observed row.",
+            },
             "row_id": {
-                "description": "Primary-key value of the anchor row.",
-                "anyOf": _VALUE_ANY_OF,
+                "description": (
+                    "Primary-key value of the observed row to inspect. Never "
+                    "null; copy a value returned by sample/query or another "
+                    "data tool."
+                ),
+                "anyOf": _ROW_ID_ANY_OF,
             },
             "depth": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 1,
                 "default": 1,
-                "description": "depth=1 only for now.",
+                "description": "Immediate relationships only.",
             },
             "max_per_edge": {
                 "type": "integer",
                 "minimum": 1,
                 "default": 5,
+                "description": (
+                    "Maximum connected row ids to return per relationship edge."
+                ),
             },
         },
     }
 
     async def handler(payload: JsonObject) -> JsonObject:
         table = _require_str(payload, "table")
+        raw_row_id = payload.get("row_id")
+        if raw_row_id is None:
+            raise TypeError(
+                "'row_id' is required and cannot be null; use a primary-key "
+                "value returned by sample/query or another data tool"
+            )
+        if isinstance(raw_row_id, bool | float | dict):
+            raise TypeError(
+                "'row_id' must be a primary-key string/integer scalar or array"
+            )
         table_spec = session.snapshot.table(table)
+        table_handle = table_spec.handle
         if len(table_spec.primary_key) == 1:
+            if isinstance(raw_row_id, list):
+                raise TypeError(
+                    "'row_id' must be a scalar for a single-column primary key"
+                )
             pk_column_spec = table_spec.column(table_spec.primary_key[0])
-            row_id = coerce_scalar(payload.get("row_id"), pk_column_spec.data_type)
+            row_id = coerce_scalar(raw_row_id, pk_column_spec.data_type)
         else:
-            row_id = payload.get("row_id")
+            if not isinstance(raw_row_id, list):
+                raise TypeError(
+                    "'row_id' must be an array for a composite primary key"
+                )
+            if len(raw_row_id) != len(table_spec.primary_key):
+                raise ValueError(
+                    f"'row_id' must have {len(table_spec.primary_key)} values"
+                )
+            row_id = [
+                coerce_scalar(value, table_spec.column(pk_column).data_type)
+                for value, pk_column in zip(
+                    raw_row_id,
+                    table_spec.primary_key,
+                    strict=True,
+                )
+            ]
         depth = _optional_int(payload, "depth")
         max_per_edge = _optional_int(payload, "max_per_edge")
         result = await neighborhood(
             session,
-            table=table,
+            table=table_handle,
             row_id=row_id,
             depth=depth if depth is not None else 1,
             max_per_edge=max_per_edge if max_per_edge is not None else 5,
@@ -382,9 +522,9 @@ def build_neighborhood_tool(session: ComposerSession) -> "FunctionTool":
     return FunctionTool(
         name="neighborhood",
         description=(
-            "Return the anchor row's attributes plus, for each outbound "
-            "FK edge, a bounded sample of connected row IDs and the "
-            "total edge count."
+            "Inspect one observed row and its immediate relationship counts "
+            "and sample ids. Use after choosing an entity to find reachable "
+            "task paths."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler),
@@ -396,60 +536,204 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
     from agents import FunctionTool
 
     tables = _all_table_names(session.snapshot)
-    columns = _all_column_names(session.snapshot)
     edges = _all_edge_labels(session.snapshot)
+    ref_schema: JsonObject = {
+        "type": "object",
+        "description": "Alias-qualified column reference.",
+        "required": ["as", "column"],
+        "additionalProperties": False,
+        "properties": {
+            "as": {
+                "type": "string",
+                "description": "Alias declared in spec.from or spec.join.",
+            },
+            "column": {
+                "type": "string",
+                "description": "Column on that alias's table.",
+            },
+        },
+    }
     spec_schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
         "required": ["from"],
         "properties": {
-            "from": {"type": "string", "enum": tables},
-            "filter": _predicate_schema(columns),
+            "from": {
+                "type": "object",
+                "description": "Root table and alias for the query path.",
+                "required": ["table", "as"],
+                "additionalProperties": False,
+                "properties": {
+                    "table": {
+                        "type": "string",
+                        "enum": tables,
+                        "description": "Root table handle.",
+                    },
+                    "as": {
+                        "type": "string",
+                        "description": "Short query-local alias for the root table.",
+                    },
+                },
+            },
             "join": {
                 "type": "array",
+                "description": (
+                    "FK relationship steps from a previously declared alias. "
+                    "Each step declares the source alias, relationship label, "
+                    "and a new alias for the destination table."
+                ),
                 "items": {
                     "type": "object",
-                    "required": ["via_edge"],
+                    "required": ["from", "via_edge", "as"],
                     "additionalProperties": False,
                     "properties": {
-                        "via_edge": {"type": "string", "enum": edges},
+                        "from": {
+                            "type": "string",
+                            "description": (
+                                "Alias declared in spec.from or an earlier "
+                                "join. The relationship must originate from "
+                                "this alias's table."
+                            ),
+                        },
+                        "via_edge": {
+                            "type": "string",
+                            "enum": edges,
+                            "description": "Relationship label from schema_map.",
+                        },
+                        "as": {
+                            "type": "string",
+                            "description": (
+                                "Query-local alias for the destination table."
+                            ),
+                        },
+                    },
+                },
+            },
+            "where": {
+                "type": "array",
+                "description": (
+                    "Filters over from/join aliases. Use observed values; "
+                    "joined-table filters are allowed."
+                ),
+                "items": {
+                    "type": "object",
+                    "required": ["ref", "op"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "ref": ref_schema,
+                        "op": {
+                            "type": "string",
+                            "enum": _filter_op_enum(),
+                            "description": "Filter operator.",
+                        },
+                        "value": {
+                            "anyOf": _VALUE_ANY_OF,
+                            "description": (
+                                "Filter value copied from observed data; "
+                                "omit/null only for null checks."
+                            ),
+                        },
                     },
                 },
             },
             "select": {
                 "type": "array",
-                "items": {"type": "string", "enum": columns},
-            },
-            "sort": {
-                "type": "array",
+                "description": (
+                    "Selected row fields. Use for list/lookup labels. Prefer "
+                    "user-visible non-handle values; expose handle-like values "
+                    "only when evidence marks them user-visible and the request "
+                    "asks for that reference."
+                ),
                 "items": {
                     "type": "object",
-                    "required": ["column"],
+                    "required": ["ref", "as"],
                     "additionalProperties": False,
                     "properties": {
-                        "column": {"type": "string"},
-                        "direction": {
+                        "ref": ref_schema,
+                        "as": {
                             "type": "string",
-                            "enum": ["asc", "desc"],
+                            "description": "Stable output field name.",
                         },
                     },
                 },
             },
-            "limit": {"type": "integer", "minimum": 1},
+            "order_by": {
+                "type": "array",
+                "description": (
+                    "Deterministic ordering. If user_request states top/latest/"
+                    "earliest, mirror it here and in answer_contract."
+                ),
+                "items": {
+                    "type": "object",
+                    "required": ["direction"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "ref": ref_schema,
+                        "output": {
+                            "type": "string",
+                            "description": (
+                                "Name declared by select.as, group_by.as, "
+                                "or aggregate.as. Mutually exclusive with ref."
+                            ),
+                        },
+                        "direction": {
+                            "type": "string",
+                            "enum": ["asc", "desc"],
+                            "description": "Sort direction.",
+                        },
+                    },
+                },
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Fixed row cap. If the task asks for N items, use the "
+                    "same N in answer_contract.limit."
+                ),
+            },
             "group_by": {
                 "type": "array",
-                "items": {"type": "string", "enum": columns},
+                "description": (
+                    "Group keys for aggregate lists. Prefer user-visible "
+                    "non-handle values for copied label keys; expose "
+                    "handle-like values only when evidence marks them "
+                    "user-visible and the request asks for that reference."
+                ),
+                "items": {
+                    "type": "object",
+                    "required": ["ref", "as"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "ref": ref_schema,
+                        "as": {
+                            "type": "string",
+                            "description": "Stable output field name for this group key.",
+                        },
+                    },
+                },
             },
             "aggregate": {
                 "type": "array",
+                "description": (
+                    "Aggregate outputs. For scalar submit_draft labels, use "
+                    "an aggregate query without group_by so it returns one row."
+                ),
                 "items": {
                     "type": "object",
-                    "required": ["fn", "alias"],
+                    "required": ["fn", "as"],
                     "additionalProperties": False,
                     "properties": {
-                        "fn": {"type": "string", "enum": list(_AGGREGATE_FNS)},
-                        "column": {"type": "string", "enum": columns},
-                        "alias": {"type": "string"},
+                        "fn": {
+                            "type": "string",
+                            "enum": list(_AGGREGATE_FNS),
+                            "description": "Aggregate function.",
+                        },
+                        "ref": ref_schema,
+                        "as": {
+                            "type": "string",
+                            "description": "Stable output field name for the aggregate.",
+                        },
                     },
                 },
             },
@@ -459,7 +743,15 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
         "type": "object",
         "additionalProperties": False,
         "required": ["spec"],
-        "properties": {"spec": spec_schema},
+        "properties": {
+            "spec": {
+                **spec_schema,
+                "description": (
+                    "Structured read-only query spec. Use immediately before "
+                    "submit_draft; returned rows are canonical label evidence."
+                ),
+            }
+        },
     }
 
     async def handler(payload: JsonObject) -> JsonObject:
@@ -469,17 +761,15 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
         spec_dict: JsonObject = {
             str(key): value for key, value in raw_spec.items()
         }
-        coerced = _coerce_query_spec(session.snapshot, spec_dict)
-        result = await query(session, spec=coerced)
+        result = await query(session, spec=spec_dict)
         return result
 
     return FunctionTool(
         name="query",
         description=(
-            "Execute the composer query DSL: filter + FK join chain + "
-            "select or group_by+aggregate, plus sort and limit. Returns "
-            "{columns, rows, row_count}. Single call authors canonical "
-            "answers without scripting an atomic chain."
+            "Run a structured read-only query over aliases and FK joins. Use "
+            "to produce the exact rows that will be copied into the label. "
+            "Returns columns, rows, and row_count."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler),

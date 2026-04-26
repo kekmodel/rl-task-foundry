@@ -2,7 +2,7 @@
 
 Unit tests exercise JSON schema enum baking and the on_invoke_tool
 error path with a stub connection. Integration tests run against live
-sakila — end-to-end schema_map, sample, and query through the SDK
+pagila — end-to-end schema_map, sample, and query through the SDK
 handler.
 """
 
@@ -134,18 +134,44 @@ def test_schema_map_tool_bakes_table_enum():
 
 def test_sample_tool_bakes_filter_predicate_schema():
     tool = build_sample_tool(_stub_session())
-    columns = tool.params_json_schema["properties"]["predicate"]["items"]["properties"]["column"]["enum"]
-    assert "customer_id" in columns
-    assert "rental_date" in columns
+    variants = tool.params_json_schema["properties"]["target"]["oneOf"]
+    by_table = {
+        variant["properties"]["table"]["enum"][0]: variant
+        for variant in variants
+    }
+    customer_columns = by_table["customer"]["properties"]["predicate"][
+        "items"
+    ]["properties"]["column"]["enum"]
+    rental_columns = by_table["rental"]["properties"]["predicate"]["items"][
+        "properties"
+    ]["column"]["enum"]
+    assert "customer_id" in customer_columns
+    assert "rental_date" not in customer_columns
+    assert "rental_date" in rental_columns
+    assert "store_id" not in rental_columns
 
 
 def test_query_tool_bakes_edge_enum_and_aggregate_fns():
     tool = build_query_tool(_stub_session())
+    assert "atomic" not in tool.description.lower()
     spec = tool.params_json_schema["properties"]["spec"]
-    join_edge_enum = spec["properties"]["join"]["items"]["properties"]["via_edge"]["enum"]
+    assert "filter" not in spec["properties"]
+    assert "sort" not in spec["properties"]
+    from_schema = spec["properties"]["from"]
+    assert from_schema["required"] == ["table", "as"]
+    join_item = spec["properties"]["join"]["items"]
+    assert join_item["required"] == ["from", "via_edge", "as"]
+    assert "previously declared alias" in spec["properties"]["join"]["description"]
+    join_edge_enum = join_item["properties"]["via_edge"]["enum"]
     assert "rental.customer_id->customer" in join_edge_enum
+    where_ref = spec["properties"]["where"]["items"]["properties"]["ref"]
+    assert where_ref["required"] == ["as", "column"]
+    assert spec["properties"]["where"]["items"]["required"] == ["ref", "op"]
+    where_ops = spec["properties"]["where"]["items"]["properties"]["op"]["enum"]
+    assert {"neq", "is_null", "is_not_null"}.issubset(set(where_ops))
     agg_fns = spec["properties"]["aggregate"]["items"]["properties"]["fn"]["enum"]
     assert set(agg_fns) == {"avg", "count", "max", "min", "sum"}
+    assert spec["properties"]["aggregate"]["items"]["required"] == ["fn", "as"]
 
 
 def test_build_composer_tools_returns_five_tools_in_fixed_order():
@@ -157,6 +183,131 @@ def test_build_composer_tools_returns_five_tools_in_fixed_order():
         "neighborhood",
         "query",
     ]
+
+
+def test_neighborhood_tool_row_id_schema_disallows_null():
+    tool = build_neighborhood_tool(_stub_session())
+    row_id_schema = tool.params_json_schema["properties"]["row_id"]
+    assert {"type": "null"} not in row_id_schema["anyOf"]
+    assert {"type": "string"} in row_id_schema["anyOf"]
+    assert {"type": "integer"} in row_id_schema["anyOf"]
+    assert any(
+        branch.get("type") == "array" for branch in row_id_schema["anyOf"]
+    )
+
+
+def test_composer_tool_surface_is_db_native_without_internal_framing():
+    tools = build_composer_tools(_stub_session())
+    surface = json.dumps(
+        [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "schema": tool.params_json_schema,
+            }
+            for tool in tools
+        ],
+        sort_keys=True,
+    ).lower()
+    for leaked in ("atomic", "solver", "rlvr", "record_set", "cursor"):
+        assert leaked not in surface
+    assert "row_id" in surface
+    assert "row_count" in surface
+
+
+def _description_map(schema: object, *, path: str = "$") -> dict[str, str]:
+    descriptions: dict[str, str] = {}
+    if isinstance(schema, dict):
+        description = schema.get("description")
+        if isinstance(description, str):
+            descriptions[path] = description
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for name, child in properties.items():
+                descriptions.update(
+                    _description_map(child, path=f"{path}.{name}")
+                )
+        items = schema.get("items")
+        if items is not None:
+            descriptions.update(_description_map(items, path=f"{path}[]"))
+        for combiner in ("anyOf", "oneOf", "allOf"):
+            branches = schema.get(combiner)
+            if isinstance(branches, list):
+                for index, child in enumerate(branches):
+                    descriptions.update(
+                        _description_map(child, path=f"{path}.{combiner}[{index}]")
+                    )
+    return descriptions
+
+
+def _loose_schema_paths(schema: object, *, path: str = "$") -> list[str]:
+    loose: list[str] = []
+    if isinstance(schema, dict):
+        if schema.get("items") == {}:
+            loose.append(f"{path}.items")
+        if schema.get("additionalProperties") is True:
+            loose.append(f"{path}.additionalProperties")
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for name, child in properties.items():
+                loose.extend(_loose_schema_paths(child, path=f"{path}.{name}"))
+        items = schema.get("items")
+        if items is not None:
+            loose.extend(_loose_schema_paths(items, path=f"{path}[]"))
+        for combiner in ("anyOf", "oneOf", "allOf"):
+            branches = schema.get(combiner)
+            if isinstance(branches, list):
+                for index, child in enumerate(branches):
+                    loose.extend(
+                        _loose_schema_paths(child, path=f"{path}.{combiner}[{index}]")
+                    )
+    return loose
+
+
+def test_composer_tool_schema_descriptions_are_prompt_aligned():
+    tools = {tool.name: tool for tool in build_composer_tools(_stub_session())}
+    descriptions = {
+        name: _description_map(tool.params_json_schema)
+        for name, tool in tools.items()
+    }
+
+    for tool in tools.values():
+        assert tool.description
+        tool_surface = json.dumps(
+            {
+                "description": tool.description,
+                "schema": tool.params_json_schema,
+            },
+            sort_keys=True,
+        ).lower()
+        for leaked in ("solver", "actor", "rlvr", "pass_rate", "training"):
+            assert leaked not in tool_surface
+
+    assert "live rows still provide label evidence" in tools["schema_map"].description
+    assert "the draft is grounded" in tools["sample"].description
+    assert "nontrivial filters" in tools["profile"].description
+    assert "reachable task paths" in tools["neighborhood"].description
+    assert "exact rows that will be copied into the label" in tools["query"].description
+
+    assert any(
+        "Each column is scoped to the selected table" in description
+        for description in descriptions["sample"].values()
+    )
+    assert any(
+        "Each column is scoped to the selected table" in description
+        for description in descriptions["profile"].values()
+    )
+    assert "joined-table filters are allowed" in descriptions["query"]["$.spec.where"]
+    assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
+    assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
+    assert "same N in answer_contract.limit" in descriptions["query"]["$.spec.limit"]
+    assert "without group_by so it returns one row" in descriptions["query"][
+        "$.spec.aggregate"
+    ]
+    assert {
+        tool.name: _loose_schema_paths(tool.params_json_schema)
+        for tool in tools.values()
+    } == {tool.name: [] for tool in tools.values()}
 
 
 # ---------- invoke handlers ----------
@@ -184,7 +335,7 @@ async def test_schema_map_tool_surfaces_unknown_root_as_error():
 async def test_sample_tool_surfaces_validation_errors():
     tool = build_sample_tool(_stub_session())
     response = await _invoke(
-        tool, {"table": "customer", "n": 0}
+        tool, {"target": {"table": "customer", "n": 0}}
     )
     assert response["error_type"] == "ValueError"
 
@@ -199,6 +350,14 @@ async def test_neighborhood_tool_surfaces_not_implemented_for_depth_two():
 
 
 @pytest.mark.asyncio
+async def test_neighborhood_tool_rejects_null_row_id_before_querying():
+    tool = build_neighborhood_tool(_stub_session())
+    response = await _invoke(tool, {"table": "customer", "row_id": None})
+    assert response["error_type"] == "TypeError"
+    assert "cannot be null" in response["error"]
+
+
+@pytest.mark.asyncio
 async def test_query_tool_requires_spec_object():
     tool = build_query_tool(_stub_session())
     response = await _invoke(tool, {})
@@ -209,12 +368,12 @@ async def test_query_tool_requires_spec_object():
 async def test_profile_tool_surfaces_unknown_column_as_error():
     tool = build_profile_tool(_stub_session())
     response = await _invoke(
-        tool, {"table": "customer", "column": "nope"}
+        tool, {"target": {"table": "customer", "column": "nope"}}
     )
     assert response["error_type"] == "KeyError"
 
 
-# ---------- integration against live sakila ----------
+# ---------- integration against live pagila ----------
 
 
 async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
@@ -232,11 +391,14 @@ async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
 
 
 @pytest.mark.asyncio
-async def test_sample_tool_against_sakila_returns_rows():
+async def test_sample_tool_against_pagila_returns_rows():
     session, conn = await _live_session()
     try:
         tool = build_sample_tool(session)
-        response = await _invoke(tool, {"table": "customer", "n": 3})
+        response = await _invoke(
+            tool,
+            {"target": {"table": "customer", "n": 3}},
+        )
         assert response["row_count"] == 3
         rows = response["rows"]
         assert isinstance(rows, list) and len(rows) == 3
@@ -245,7 +407,7 @@ async def test_sample_tool_against_sakila_returns_rows():
 
 
 @pytest.mark.asyncio
-async def test_neighborhood_tool_accepts_string_row_id_for_integer_pk_against_sakila():
+async def test_neighborhood_tool_accepts_string_row_id_for_integer_pk_against_pagila():
     # Regression for a smoke-trial failure where the composer LLM passed
     # ``row_id="5"`` as a JSON string against ``customer.customer_id`` (integer).
     # asyncpg's binary protocol rejected the bound str, surfacing as UserError.
@@ -264,27 +426,27 @@ async def test_neighborhood_tool_accepts_string_row_id_for_integer_pk_against_sa
 
 
 @pytest.mark.asyncio
-async def test_query_tool_coerces_iso_timestamp_against_sakila():
+async def test_query_tool_coerces_iso_timestamp_against_pagila():
     session, conn = await _live_session()
     try:
         tool = build_query_tool(session)
         response = await _invoke(
             tool,
-            {
-                "spec": {
-                    "from": "rental",
-                    "filter": [
-                        {
-                            "column": "rental_date",
-                            "op": "gt",
-                            "value": "2005-01-01T00:00:00",
-                        }
-                    ],
-                    "aggregate": [
-                        {"fn": "count", "alias": "total"},
-                    ],
-                }
-            },
+                {
+                    "spec": {
+                        "from": {"table": "rental", "as": "r"},
+                        "where": [
+                            {
+                                "ref": {"as": "r", "column": "rental_date"},
+                                "op": "gt",
+                                "value": "2005-01-01T00:00:00",
+                            }
+                        ],
+                        "aggregate": [
+                            {"fn": "count", "as": "total"},
+                        ],
+                    }
+                },
         )
         rows = response["rows"]
         assert isinstance(rows, list)
