@@ -239,6 +239,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "the DB decides the domain" in instructions
     assert "hidden entity values must be grounded" in instructions
     assert "the label must be copied from the latest query evidence" in instructions
+    assert "must not be a global answer with a decorative entity attached" in instructions
     assert "specificity rejection" in instructions
     assert "overconstrained/terminal feedback" in instructions
 
@@ -251,6 +252,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "'<table>_id=38'" not in instructions
     assert "'number 38 <entity>'" not in instructions
     assert "hidden structural handle" in instructions
+    assert "hidden current subject/context" in instructions
+    assert "Do not attach `entity` to a global report" in instructions
     assert "latest query evidence is scoped" in instructions
     assert "do not expose that handle" in instructions
     assert "multiple relationship roles" in instructions
@@ -264,6 +267,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Use `kind='list'` with `fn='select'`" in instructions
     assert "Copy label values from the latest successful `query(spec)` result" in instructions
     assert "Do not reformat" in instructions
+    assert "unrelated global answer is invalid" in instructions
     assert "Prefer user-visible non-handle values" in instructions
     assert "current query evidence marks it user-visible" in instructions
     assert "Each `phrase` must be an exact substring of `user_request`" in instructions
@@ -364,6 +368,8 @@ def test_synthesis_input_can_include_candidate_anchor_pool() -> None:
     assert "Candidate starting points:" in prompt
     assert '"row_id": 284' in prompt
     assert "not answer hints or required topics" in prompt
+    assert "hidden current subject/context" in prompt
+    assert "do not attach a candidate to an otherwise global task" in prompt
     assert "smallest id" in prompt
     assert "first call `neighborhood`" in prompt
     assert "`preview` and `relationship_summary` are orientation context" in prompt

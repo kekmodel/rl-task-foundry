@@ -815,7 +815,11 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "List answer shape: selected rows or lookup fields" in schema_surface
     assert "Select operation for kind=list" in schema_surface
     assert "Aggregate function for kind=scalar" in schema_surface
-    assert "Hidden grounding handle as an object" in schema_surface
+    assert "Hidden current-context grounding handle as an object" in schema_surface
+    assert "decorative anchor" in schema_surface
+    assert "observed values derived from it" in schema_surface
+    assert "global answer that can be produced without the hidden entity" in schema_surface
+    assert "not valid customer-context tasks" in schema_surface
     assert "raw hidden values must not appear in user_request" in schema_surface
     assert "Bad: '<entity type> 38'" not in schema_surface
     assert "Good: 'my account'" not in schema_surface

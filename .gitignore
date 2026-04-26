@@ -23,6 +23,7 @@ output/
 review_packs/
 artifacts/sample_dbs/
 artifacts/opencode_smoke_*/
+artifacts/eval_*/
 artifacts/trial_*/
 artifacts/tasks/
 artifacts/task_registry.db*

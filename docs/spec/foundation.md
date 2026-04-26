@@ -56,6 +56,14 @@ implementations.
     `submit_result` object, similar to an API response assembled from tool
     outputs; the final customer-facing natural-language answer is downstream of
     the exact-match verifier boundary.
+    The hidden entity is intentional actor context, not something to remove:
+    it represents the current customer/session/object that lets the agent look
+    up the user's information. It is also not a decorative anchor. Composer
+    should draft tasks whose label is scoped to that hidden entity or values
+    derived from it; unrelated global reports with a hidden entity attached are
+    invalid authoring targets. Because indirect scope can be legitimate, hard
+    validation must not reject entity-scope issues unless the violation is
+    provable with 100% precision.
 12. Ambiguous multi-answer tasks are bad training signals. A user request must
     identify one unique structured result; list-valued labels are fine when the
     whole list is canonical, including membership, order, limit, and tie-breaks.

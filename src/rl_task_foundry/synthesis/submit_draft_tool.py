@@ -291,14 +291,17 @@ class SubmitDraftPayload(StrictModel):
             "expose hidden PK/FK handle values as answer values. The label "
             "must answer the exact scope of user_request; if the request is "
             "about the hidden entity's own records, the latest query must be "
-            "scoped to that entity before you copy the result."
+            "scoped to that entity before you copy the result. Do not submit a "
+            "global answer that can be produced without the hidden entity."
         ),
     )
     entity: dict[str, JsonScalar] = Field(
         description=(
-            "Hidden grounding handle as an object, e.g. "
+            "Hidden current-context grounding handle as an object, e.g. "
             '{"<pk_name>": 123}. It may contain observed primary-key values; '
-            "those values should stay hidden from user_request."
+            "those values should stay hidden from user_request. This is not a "
+            "decorative anchor: the canonical label must be scoped to this "
+            "context, either directly or through observed values derived from it."
         ),
     )
     user_request: str = Field(
@@ -317,8 +320,9 @@ class SubmitDraftPayload(StrictModel):
         description=(
             "Machine-checkable meaning of the draft: answer target, every filter, "
             "ordering/cardinality, and the query evidence source. Include the "
-            "entity scope when user_request depends on it, using a phrase that "
-            "appears in user_request such as 'my' or 'this record'."
+            "entity scope using a phrase that appears in user_request such as "
+            "'my' or 'this record'. Drafts whose final query ignores entity are "
+            "not valid customer-context tasks."
         ),
     )
 

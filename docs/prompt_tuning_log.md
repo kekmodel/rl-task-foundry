@@ -2385,3 +2385,45 @@ Solver 30/30 완료 결과:
   Use `openrouter/moonshotai/kimi-k2.5` for higher-quality validation runs.
   Kimi is expected to be closer to the intended production composer class,
   while Nano is the cheap high-volume tuning model.
+
+## Iteration 55 — pagila nano harvest and entity-context clarification
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_nano_harvest_01`, pagila,
+  composer/solver `openrouter/openai/gpt-5.4-nano`, calibration
+  `[0.5, 0.9]`, `max_solver_runs=20`, `solver_batch_size=4`, target 2.
+- **Result**:
+  Harvest reached target after 9 attempts. Accepted tasks were
+  `task_활성 고객의 결제 1건 중 최대 금액_f48fcb91e50c0296`
+  (`16/20` matched, 2 failed-status solver runs) and
+  `task_프랑스어(French) 언어로 제공되는 영화 중 대여된(렌탈된) 적이 있는 영화 수_4624bede684cc0c3`
+  (`12/16` matched, no failed-status solver runs). Rejections were mostly
+  `reject_too_hard`, `calibration_inconclusive`, and schema/contract feedback
+  such as `anchor_entity_required`, `answer_contract_json_invalid`, and
+  `answer_contract_query_mismatch`.
+- **Quality observation**:
+  The gate is filtering, but both accepted drafts exposed a design tension:
+  the actor-visible hidden `<entity>` block is intentional current-context
+  input, yet the accepted labels were global-looking aggregates with an entity
+  attached (`payment_id` for global max payment amount, `language_id` for all
+  French-language rented movies). The issue is not that the solver receives an
+  entity; it should. The issue is that composer can treat the entity as a
+  decorative anchor rather than the current customer/session/object context.
+- **Decision**:
+  Do not enforce solver path equivalence. Solver reward remains exact
+  `submit_result` label match; multiple valid tool paths are allowed. Also do
+  not add a hard validator that requires the final query to contain the raw
+  entity value, because legitimate indirect scopes can resolve entity-derived
+  values first and then query by those values. Entity-context problems are not
+  100%-precision hard-validation material unless the violation is mechanically
+  provable.
+- **Fix**:
+  Strengthened composer system prompt and `submit_draft` schema descriptions:
+  hidden entity is current-context grounding, not a decorative anchor; labels
+  should be scoped to that context directly or through observed derived values;
+  unrelated global answers with hidden entities attached are invalid authoring
+  targets. Recorded the same boundary in `docs/spec/foundation.md`.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
+  -> 40 passed. Targeted `uv run ruff check ...` and `git diff --check`
+  passed.
