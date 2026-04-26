@@ -2610,3 +2610,21 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest tests/test_synthesis_runtime.py -q` -> 36 passed. Targeted
   ruff passed.
+
+## Iteration 63 — Kimi tool-choice compatibility
+
+- **Trigger**:
+  Iteration 62 showed Kimi ending with `tool_calls=[]` and empty final text
+  before any draft or solver rollout.
+- **Fix**:
+  Treat Kimi/Moonshot endpoints like the other OpenAI-compatible gateways that
+  cannot safely use SDK-enforced `tool_choice="required"`. The SDK helper now
+  emits `tool_choice="auto"` for Kimi/Moonshot while preserving `"required"`
+  for GPT/Claude-class endpoints that support strict per-turn tool use.
+- **Why this follows the principles**:
+  This is provider-protocol compatibility, not semantic validation. It does not
+  add heuristic feedback, does not change the composer role contract, and does
+  not expose solver/RL internals to the composer.
+- **Verification**:
+  `uv run pytest tests/test_tool_choice_for_model.py -q` -> 6 passed.
+  Targeted ruff passed.

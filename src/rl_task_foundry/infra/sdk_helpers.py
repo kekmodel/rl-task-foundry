@@ -34,26 +34,27 @@ def normalize_tool_result(value: Any) -> Any:
     return value
 
 
-_THINKING_MODE_MODEL_MARKERS: tuple[str, ...] = (
+_AUTO_TOOL_CHOICE_MODEL_MARKERS: tuple[str, ...] = (
     "qwen",
     "deepseek-r",
     "reasoning",
     "minimax",
+    "kimi",
+    "moonshot",
 )
 
 
 def tool_choice_for_model(model: str) -> str:
     """Return the correct `tool_choice` value for the target model.
 
-    Alibaba's qwen thinking-mode gateway rejects `tool_choice="required"` and
-    tool-object forms. Other reasoning-first providers (DeepSeek R-series) and
-    MiniMax's OpenCode-compatible endpoint have the same constraint. Relax to
-    `"auto"` for those; keep `"required"` for models where the endpoint supports
+    Some OpenAI-compatible gateways reject or mishandle
+    `tool_choice="required"` and tool-object forms. Relax to `"auto"` for
+    those; keep `"required"` for models where the endpoint supports
     SDK-enforced tool-use each turn.
     """
 
     lowered = model.lower()
-    for marker in _THINKING_MODE_MODEL_MARKERS:
+    for marker in _AUTO_TOOL_CHOICE_MODEL_MARKERS:
         if marker in lowered:
             return "auto"
     return "required"
