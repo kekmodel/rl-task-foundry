@@ -255,8 +255,8 @@ The composer prompt is scoped to draft authoring only. It should not mention
 synthetic datasets, RLVR, actors, solvers, pass rates, training, registry
 operations, or downstream evaluation internals. The composer only needs to know
 how to inspect the current database evidence, construct a canonical label,
-write a customer-facing request, express the answer contract, and call
-`submit_draft`.
+write a customer-facing request, express the request-binding answer contract,
+and call `submit_draft`.
 
 ### Absolute Composer System/User Boundary
 
@@ -316,6 +316,14 @@ They must work across arbitrary introspectable PostgreSQL databases. They may
 name structural operations (`query`, relationship traversal, filter, aggregate,
 order, limit, answer contract) but must not depend on domain-specific table names
 or business facts from pagila, postgres_air, or any other sample database.
+`answer_contract` itself should remain minimal: answer shape plus exact
+user-request phrases. Query table/column/operator evidence is derived from the
+latest successful `query` result rather than retyped by the composer.
+Composer query guidance must also preserve label meaning without hard-coding DB
+names: selected fields are submitted label fields, not helper context; and when
+one answer item combines facts from the same event or record, joins should
+follow that event/record path instead of independently joining sibling child
+sets from the same root.
 This does not make the composer DB-blind: during a run, the composer should be
 DB-aware through the current schema map, generated tool schemas, live samples,
 profiles, neighborhoods, and query results.
@@ -391,9 +399,9 @@ Generation retries are allowed, but retries are not the source of truth.
 - `submit_draft` feedback can request a harder retry
 - retries must change latent task semantics, not just wording
 - retry feedback must stay structural and database-neutral; it should point to
-  contract-visible axes such as preserving the answer kind, adding a predicate,
-  tightening a filter pair, changing a limit, or preserving order, not to
-  domain-specific fixes
+  evidence-visible axes such as preserving the answer kind and query output
+  target, adding a grounded filter, tightening a filter pair, changing list
+  cardinality, or preserving order, not to domain-specific fixes
 - retry feedback must not reveal how the draft is evaluated. It should say what
   to change in the draft surface and contract, not mention solvers, actors,
   pass rates, training, or dataset construction.

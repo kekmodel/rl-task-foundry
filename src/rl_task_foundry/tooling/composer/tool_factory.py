@@ -580,7 +580,10 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "description": (
                     "FK relationship steps from a previously declared alias. "
                     "Each step declares the source alias, relationship label, "
-                    "and a new alias for the destination table."
+                    "and a new alias for the destination table. When one "
+                    "answer item combines facts from the same event/record, "
+                    "continue joining from that event/record alias; avoid "
+                    "independent sibling joins that merely share the root."
                 ),
                 "items": {
                     "type": "object",
@@ -639,10 +642,15 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
             "select": {
                 "type": "array",
                 "description": (
-                    "Selected row fields. Use for list/lookup labels. Prefer "
-                    "user-visible non-handle values; expose handle-like values "
-                    "only when evidence marks them user-visible and the request "
-                    "asks for that reference."
+                    "Selected row fields. Every selected field becomes a "
+                    "canonical label field, so select only values the "
+                    "user_request asks to receive. Use where/order_by for "
+                    "context, filters, and sorting without selecting those "
+                    "helper fields. Do not select profile/scope fields merely "
+                    "to prove which entity the request is about. Prefer "
+                    "user-visible non-handle values; "
+                    "expose handle-like values only when evidence marks them "
+                    "user-visible and the request asks for that reference."
                 ),
                 "items": {
                     "type": "object",
@@ -661,7 +669,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "type": "array",
                 "description": (
                     "Deterministic ordering. If user_request states top/latest/"
-                    "earliest, mirror it here and in answer_contract."
+                    "earliest, mirror that wording in submit_draft phrases."
                 ),
                 "items": {
                     "type": "object",
@@ -689,7 +697,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "minimum": 1,
                 "description": (
                     "Fixed row cap. If the task asks for N items, use the "
-                    "same N in answer_contract.limit."
+                    "same N in user_request and "
+                    "submit_draft.answer_contract.limit_phrase."
                 ),
             },
             "group_by": {

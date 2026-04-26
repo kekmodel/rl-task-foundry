@@ -172,9 +172,13 @@ Feedback-only validation keeps the same composer conversation alive. Examples:
 - answer-contract phrase absent from the user request
 - no latest successful `query`
 - label not exactly equal to the latest query result
-- answer-contract predicates/order clauses absent from latest query evidence
 - label directly exposing fields explicitly marked `internal` or `blocked`
 - after too-easy feedback, no reward-visible label change
+
+`answer_contract` intentionally does not ask the composer to restate tables,
+columns, operators, or SQL clauses. It carries only answer shape and exact
+request phrases. Runtime derives query structure from the latest successful
+`query` result when it needs structural retry evidence.
 
 These are feedback-only because the same composer can make another tool call,
 repair the contract, and resubmit within the same authoring episode.

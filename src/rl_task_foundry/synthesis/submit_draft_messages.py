@@ -79,23 +79,22 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
         "strengthening; there is no fixed ladder. Preserve existing "
         "grounded structure unless it was overconstrained. Replacing "
         "a field on the same path is not an escalation and will be "
-        "rejected. Keep answer_contract.kind and "
-        "answer_contract.operation fixed. "
+        "rejected. Keep answer_contract.kind and the latest query output "
+        "target fixed. "
     )
     if answer_kind == "scalar":
         return (
             common
             + "This is a scalar answer, so do not switch to a list, "
             "Cardinality, or Cross-item rule. Add a new grounded "
-            "predicate to answer_contract.predicates when the DB "
-            "exposes a feasible visible dimension. Every added "
-            "predicate phrase must appear verbatim in user_request "
-            "and be represented in answer_contract."
+            "filter when the DB exposes a feasible visible dimension. "
+            "Every added constraint phrase must appear verbatim in "
+            "user_request and be represented in answer_contract."
         )
     if answer_kind == "list":
         return (
             common
-            + "This is a list answer, so keep operation.fn=select. "
+            + "This is a list answer, so keep a selected-row query target. "
             "Pick a valid list strengthening supported by the current "
             "DB evidence: "
             "(a) Filter — add a categorical exclusion or threshold "

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import (
     AliasChoices,
@@ -96,8 +96,6 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
 )
 
 JsonScalar = str | int | float | bool
-JsonLabelValue = str | int | float | bool | None
-JsonPredicateValue = JsonLabelValue | list[JsonLabelValue]
 
 
 def _error_code_values(
@@ -117,173 +115,54 @@ def _validation_error_diagnostics(error: ValidationError) -> list[dict[str, obje
     ]
 
 
-class AnswerOperationBase(StrictModel):
-    table: str = Field(
-        min_length=1,
-        description="Table that supplies the answer rows or aggregate target.",
-    )
-    column: str | None = Field(
-        default=None,
-        description="Target column, or null only for count(*) or row-list selection.",
-    )
-    phrase: str = Field(
-        min_length=1,
+class AnswerContract(StrictModel):
+    kind: Literal["scalar", "list"] = Field(
         description=(
-            "Exact user_request substring that states the answer being asked for."
+            "Answer shape copied from the latest query: scalar means one "
+            "aggregate row object; list means the query rows array, even when "
+            "one row is returned."
         ),
     )
-
-
-class ScalarAnswerOperation(AnswerOperationBase):
-    fn: Literal["count", "sum", "avg", "min", "max"] = Field(
-        description=(
-            "Aggregate function for kind=scalar. Why: scalar answers must be "
-            "one aggregate value from the latest query."
-        ),
-    )
-
-
-class ListAnswerOperation(AnswerOperationBase):
-    fn: Literal["select"] = Field(
-        description=(
-            "Select operation for kind=list. Why: selected rows or lookup "
-            "fields are list-shaped answers, even when one row is returned."
-        ),
-    )
-
-
-AnswerOperation = ScalarAnswerOperation | ListAnswerOperation
-
-
-class AnswerPredicate(StrictModel):
-    table: str = Field(min_length=1, description="Table containing the filter column.")
-    column: str = Field(min_length=1, description="Filter column used by latest query.")
-    op: Literal[
-        "eq",
-        "neq",
-        "in",
-        "lt",
-        "gt",
-        "lte",
-        "gte",
-        "like",
-        "is_null",
-        "is_not_null",
-    ] = Field(description="Predicate operator.")
-    value: JsonPredicateValue = Field(
-        default=None,
-        description=(
-            "Filter value copied from tool/query evidence. Omit or null only "
-            "for null-check operators. Hidden PK/FK values may be used here, "
-            "but raw hidden values must not appear in user_request."
-        ),
-    )
-    phrase: str = Field(
+    answer_phrase: str = Field(
         min_length=1,
         description=(
-            "Exact user_request substring that states this filter in customer "
-            "language. For hidden id filters, use wording like my account/my "
-            "records or a visible name, not the raw id value."
+            "Exact contiguous substring from user_request that states what the "
+            "user wants returned. Do not restate tables, columns, or SQL."
         ),
     )
-
-    @model_validator(mode="after")
-    def _validate_value_shape(self) -> AnswerPredicate:
-        if self.op in {"is_null", "is_not_null"}:
-            return self
-        if self.value is None:
-            raise ValueError(f"value is required for predicate op={self.op!r}")
-        return self
-
-
-class AnswerOrderBy(StrictModel):
-    table: str = Field(min_length=1, description="Table containing the sort column.")
-    column: str = Field(min_length=1, description="Sort column.")
-    direction: Literal["asc", "desc"] = Field(description="Sort direction.")
-    phrase: str = Field(
-        min_length=1,
+    constraint_phrases: list[str] = Field(
         description=(
-            "Exact user_request substring that states deterministic ordering."
+            "Exact contiguous user_request substrings for meaningful filters, "
+            "entity scope, ordering, or tie-breaks. Use [] only when the "
+            "request truly has no additional constraint beyond the answer "
+            "target. Structural evidence is derived from the latest query."
         ),
-    )
-
-
-class AnswerContractBase(StrictModel):
-    predicates: list[AnswerPredicate] = Field(
-        description=(
-            "All filters that define the answer subset and appear in the "
-            "latest query evidence."
-        ),
-    )
-    order_by: list[AnswerOrderBy] = Field(
-        description="Ordering clauses from the latest query that make lists deterministic.",
-    )
-    evidence: Literal["latest_query"] = Field(
-        description="Canonical label must be copied from the latest successful query call.",
-    )
-
-
-class ScalarAnswerContract(AnswerContractBase):
-    kind: Literal["scalar"] = Field(
-        description=(
-            "Scalar answer shape: exactly one aggregate value "
-            "(count/sum/avg/min/max)."
-        ),
-    )
-    operation: ScalarAnswerOperation = Field(
-        description=(
-            "Aggregate answer target that matches the latest query result. "
-            "Keep it fixed after a specificity rejection; strengthen with "
-            "filters instead."
-        )
-    )
-    limit: None = Field(
-        description="Must be null for scalar answers.",
-    )
-    limit_phrase: None = Field(
-        description="Must be null for scalar answers.",
-    )
-
-
-class ListAnswerContract(AnswerContractBase):
-    kind: Literal["list"] = Field(
-        description=(
-            "List answer shape: selected rows or lookup fields copied from "
-            "the latest query, even when one row is returned."
-        ),
-    )
-    operation: ListAnswerOperation = Field(
-        description=(
-            "Select answer target that matches the latest query result. Keep "
-            "it fixed after a specificity rejection; strengthen with filters, "
-            "ordering, or limits instead."
-        )
-    )
-    limit: int | None = Field(
-        ge=1,
-        description="Fixed list length, or null for all-matching list answers.",
     )
     limit_phrase: str | None = Field(
-        description="Exact user_request substring that states the fixed list length.",
+        description=(
+            "Exact user_request substring for a fixed requested list size, "
+            "such as '3 items', or null when there is no fixed size phrase."
+        ),
     )
 
-    @model_validator(mode="after")
-    def _validate_limit_phrase(self) -> ListAnswerContract:
-        if self.limit is not None and not self.limit_phrase:
-            raise ValueError("limit_phrase is required when limit is set")
-        return self
+    @field_validator("answer_phrase")
+    @classmethod
+    def _validate_answer_phrase(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("answer_phrase must not be blank")
+        return normalized
 
-
-AnswerContract = Annotated[
-    ScalarAnswerContract | ListAnswerContract,
-    Field(
-        discriminator="kind",
-        description=(
-            "Machine-checkable answer contract. The kind field selects the "
-            "valid schema: scalar requires aggregate fn; list requires select."
-        ),
-    ),
-]
+    @field_validator("constraint_phrases")
+    @classmethod
+    def _validate_constraint_phrases(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for phrase in value:
+            stripped = phrase.strip()
+            if not stripped:
+                raise ValueError("constraint_phrases must not contain blank strings")
+            normalized.append(stripped)
+        return normalized
 
 
 class SubmitDraftPayload(StrictModel):
@@ -307,7 +186,11 @@ class SubmitDraftPayload(StrictModel):
             "the request is about the hidden entity's own records, the latest "
             "query must be scoped to that entity before you copy the result. "
             "Do not submit a global answer that can be produced without the "
-            "hidden entity."
+            "hidden entity. Include only answer fields the user_request asks "
+            "to receive; if the latest query selected helper/context fields, "
+            "rerun query with only the fields intended for submit_result. Do "
+            "not include profile/scope fields merely to identify the current "
+            "entity unless the request asks for them."
         ),
     )
     entity_json: str = Field(
@@ -335,11 +218,11 @@ class SubmitDraftPayload(StrictModel):
     )
     answer_contract: AnswerContract = Field(
         description=(
-            "Machine-checkable meaning of the draft: answer target, every filter, "
-            "ordering/cardinality, and the query evidence source. Include the "
-            "entity scope using a phrase that appears in user_request such as "
-            "'my' or 'this record'. Drafts whose final query ignores entity are "
-            "not valid customer-context tasks."
+            "Minimal request-binding contract. Provide the answer shape and "
+            "exact user_request phrases for the answer target, entity scope, "
+            "filters, ordering, tie-breaks, or fixed list size. Do not restate "
+            "tables, columns, operators, or SQL; the latest successful query "
+            "supplies structural evidence."
         ),
     )
 
@@ -575,7 +458,7 @@ def _monitor_label_data(
         canonical_answer = payload.canonical_answer
     else:
         canonical_answer = None
-        raw_canonical = payload.get("label")
+        raw_canonical = payload.get("label_json", payload.get("label"))
         if isinstance(raw_canonical, (dict, list)):
             canonical_answer = raw_canonical
         elif isinstance(raw_canonical, str):
@@ -682,16 +565,12 @@ def _contract_component_phrase_errors(
 ) -> list[str]:
     missing_phrases: list[str] = []
     components: list[tuple[str, str | None]] = [
-        ("operation", contract.operation.phrase),
+        ("answer_phrase", contract.answer_phrase),
         ("limit", contract.limit_phrase),
     ]
     components.extend(
-        (f"predicate[{index}]", predicate.phrase)
-        for index, predicate in enumerate(contract.predicates)
-    )
-    components.extend(
-        (f"order_by[{index}]", order.phrase)
-        for index, order in enumerate(contract.order_by)
+        (f"constraint_phrases[{index}]", phrase)
+        for index, phrase in enumerate(contract.constraint_phrases)
     )
     for path, phrase in components:
         if phrase is not None and not _phrase_is_in_request(
@@ -700,33 +579,6 @@ def _contract_component_phrase_errors(
         ):
             missing_phrases.append(path)
     return missing_phrases
-
-
-def _operation_signature(operation: AnswerOperation) -> tuple[str, str, str | None]:
-    return (operation.fn, operation.table, operation.column)
-
-
-def _predicate_signature(predicate: AnswerPredicate) -> str:
-    return canonical_json(
-        {
-            "table": predicate.table,
-            "column": predicate.column,
-            "op": predicate.op,
-            "value": predicate.value,
-        },
-        default=str,
-    )
-
-
-def _order_signature(order: AnswerOrderBy) -> str:
-    return canonical_json(
-        {
-            "table": order.table,
-            "column": order.column,
-            "direction": order.direction,
-        },
-        default=str,
-    )
 
 
 def _referenced_predicate_signature(ref: dict[str, object]) -> str | None:
@@ -770,102 +622,104 @@ def _referenced_order_signature(ref: dict[str, object]) -> str | None:
     )
 
 
-def _query_contract_evidence_errors(
-    *,
-    contract: AnswerContract,
-    query_result: dict[str, object],
-) -> tuple[list[SubmitDraftErrorCode], dict[str, object]]:
-    referenced_columns = _as_object_list(query_result.get("referenced_columns"))
-    if referenced_columns is None:
-        return [], {}
+def _query_output_signature(source: dict[str, object]) -> str | None:
+    kind = source.get("kind")
+    if not isinstance(kind, str):
+        return None
+    payload: dict[str, object] = {"kind": kind}
+    for key in ("fn", "table", "column", "value_exposes_source"):
+        value = source.get(key)
+        if value is not None:
+            payload[key] = value
+    return canonical_json(payload, default=str)
 
-    query_predicates = {
-        signature
-        for ref in referenced_columns
-        if (signature := _referenced_predicate_signature(ref)) is not None
-    }
-    query_orders = {
-        signature
-        for ref in referenced_columns
-        if (signature := _referenced_order_signature(ref)) is not None
-    }
-    missing_predicates = [
-        {
-            "table": predicate.table,
-            "column": predicate.column,
-            "op": predicate.op,
-            "value": predicate.value,
-        }
-        for predicate in contract.predicates
-        if _predicate_signature(predicate) not in query_predicates
-    ]
-    missing_order_by = [
-        {
-            "table": order.table,
-            "column": order.column,
-            "direction": order.direction,
-        }
-        for order in contract.order_by
-        if _order_signature(order) not in query_orders
-    ]
-    if not missing_predicates and not missing_order_by:
-        return [], {}
-    return (
-        [SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH],
-        {
-            "missing_query_predicates": missing_predicates,
-            "missing_query_order_by": missing_order_by,
-        },
+
+@dataclass(frozen=True, slots=True)
+class QueryEvidenceSignature:
+    kind: str
+    output_sources: tuple[str, ...]
+    predicates: tuple[str, ...]
+    order_by: tuple[str, ...]
+    item_count: int | None
+
+
+def _query_evidence_signature(
+    query_result: dict[str, object],
+    *,
+    answer_kind: str,
+) -> QueryEvidenceSignature:
+    column_sources = _as_object_list(query_result.get("column_sources")) or []
+    referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
+    rows = query_result.get("rows")
+    item_count = len(rows) if answer_kind == "list" and isinstance(rows, list) else None
+    return QueryEvidenceSignature(
+        kind=answer_kind,
+        output_sources=tuple(
+            signature
+            for source in column_sources
+            if (signature := _query_output_signature(source)) is not None
+        ),
+        predicates=tuple(
+            sorted(
+                signature
+                for ref in referenced_columns
+                if (signature := _referenced_predicate_signature(ref)) is not None
+            )
+        ),
+        order_by=tuple(
+            sorted(
+                signature
+                for ref in referenced_columns
+                if (signature := _referenced_order_signature(ref)) is not None
+            )
+        ),
+        item_count=item_count,
     )
 
 
-def _answer_contract_incremental_errors(
+def _query_evidence_incremental_errors(
     *,
-    previous: AnswerContract,
-    current: AnswerContract,
+    previous: QueryEvidenceSignature,
+    current: QueryEvidenceSignature,
 ) -> list[str]:
     errors: list[str] = []
     if current.kind != previous.kind:
         errors.append("kind_changed")
-    if _operation_signature(current.operation) != _operation_signature(previous.operation):
+    if current.output_sources != previous.output_sources:
         errors.append("operation_changed")
 
-    previous_predicates = {
-        _predicate_signature(predicate) for predicate in previous.predicates
-    }
-    current_predicates = {
-        _predicate_signature(predicate) for predicate in current.predicates
-    }
+    previous_predicates = set(previous.predicates)
+    current_predicates = set(current.predicates)
     missing_predicates = sorted(previous_predicates - current_predicates)
     if missing_predicates:
         errors.append("predicate_removed")
 
-    previous_order = {_order_signature(order) for order in previous.order_by}
-    current_order = {_order_signature(order) for order in current.order_by}
+    previous_order = set(previous.order_by)
+    current_order = set(current.order_by)
     missing_order = sorted(previous_order - current_order)
     if missing_order:
         errors.append("order_removed")
 
     added_predicate = bool(current_predicates - previous_predicates)
     added_order = bool(current_order - previous_order)
-    strengthened_limit = False
+    strengthened_cardinality = False
     if current.kind == "list":
-        if previous.limit is None and current.limit is not None:
-            strengthened_limit = True
+        if previous.item_count is None and current.item_count is not None:
+            strengthened_cardinality = True
         elif (
-            previous.limit is not None
-            and current.limit is not None
-            and current.limit > previous.limit
+            previous.item_count is not None
+            and current.item_count is not None
+            and current.item_count > previous.item_count
         ):
-            strengthened_limit = True
+            strengthened_cardinality = True
         elif (
-            previous.limit is not None
-            and current.limit is not None
-            and current.limit < previous.limit
+            previous.item_count is not None
+            and current.item_count is not None
+            and current.item_count < previous.item_count
         ):
-            errors.append("limit_weakened")
+            errors.append("cardinality_weakened")
 
-    if not (added_predicate or added_order or strengthened_limit):
+    if not (added_predicate or added_order or strengthened_cardinality):
         errors.append("no_new_structural_constraint")
     return list(dict.fromkeys(errors))
 
@@ -1003,6 +857,10 @@ class SubmitDraftController:
     _last_label_scalar_value_signature: str | None = field(default=None, init=False)
     _last_label_slot_count: int | None = field(default=None, init=False)
     _last_answer_contract: AnswerContract | None = field(default=None, init=False)
+    _last_query_evidence_signature: QueryEvidenceSignature | None = field(
+        default=None,
+        init=False,
+    )
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
     _last_feedback_error_codes: tuple[str, ...] = field(default=(), init=False)
@@ -1222,9 +1080,14 @@ class SubmitDraftController:
             )
 
         latest_query_result = self._latest_successful_query_result_since_last_submission()
+        current_query_evidence_signature: QueryEvidenceSignature | None = None
         if latest_query_result is None:
             error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING)
         else:
+            current_query_evidence_signature = _query_evidence_signature(
+                latest_query_result,
+                answer_kind=payload.answer_contract.kind,
+            )
             if not _canonical_label_matches_query_result(
                 label=canonical_answer,
                 query_result=latest_query_result,
@@ -1242,12 +1105,6 @@ class SubmitDraftController:
                     canonical_answer,
                     config=self.config,
                 )
-            contract_error_codes, contract_diagnostics = _query_contract_evidence_errors(
-                contract=payload.answer_contract,
-                query_result=latest_query_result,
-            )
-            error_codes.extend(contract_error_codes)
-            invalid_diagnostics.update(contract_diagnostics)
             visibility_error_codes, visibility_diagnostics = _query_visibility_errors(
                 latest_query_result
             )
@@ -1267,19 +1124,23 @@ class SubmitDraftController:
             and self._last_label_scalar_value_signature is not None
             and label_scalar_value_signature is not None
             and label_scalar_value_signature == self._last_label_scalar_value_signature
-            and self._last_answer_contract is not None
-            and payload.answer_contract.kind == self._last_answer_contract.kind
-            and _operation_signature(payload.answer_contract.operation)
-            == _operation_signature(
-                self._last_answer_contract.operation
-            )
+            and self._last_query_evidence_signature is not None
+            and current_query_evidence_signature is not None
+            and current_query_evidence_signature.kind
+            == self._last_query_evidence_signature.kind
+            and current_query_evidence_signature.output_sources
+            == self._last_query_evidence_signature.output_sources
         ):
             error_codes.append(SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED)
             invalid_diagnostics["unchanged_scalar_label_value"] = True
-        if self._needs_label_change and self._last_answer_contract is not None:
-            incremental_errors = _answer_contract_incremental_errors(
-                previous=self._last_answer_contract,
-                current=payload.answer_contract,
+        if (
+            self._needs_label_change
+            and self._last_query_evidence_signature is not None
+            and current_query_evidence_signature is not None
+        ):
+            incremental_errors = _query_evidence_incremental_errors(
+                previous=self._last_query_evidence_signature,
+                current=current_query_evidence_signature,
             )
             if incremental_errors:
                 error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL)
@@ -1340,6 +1201,7 @@ class SubmitDraftController:
         self._last_label_signature = label_signature
         self._last_label_scalar_value_signature = label_scalar_value_signature
         self._last_label_slot_count = label_slot_count
+        self._last_query_evidence_signature = current_query_evidence_signature
         if quality_gate_summary.status is TaskQualityGateStatus.ACCEPT:
             accepted_draft = accepted_draft_with_quality_metrics(
                 draft,
@@ -1561,19 +1423,19 @@ class SubmitDraftController:
                 "Rejected. answer_contract is required."
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_JSON_INVALID: (
-                "Rejected. answer_contract must be a valid JSON object with kind, operation, predicates, order_by, limit, limit_phrase, and evidence. Set evidence exactly to the string 'latest_query'; do not paste query result JSON into evidence. Do not pass a malformed JSON string; pass a complete object whose brackets and list items are closed."  # noqa: E501
+                "Rejected. answer_contract must be a valid JSON object with kind, answer_phrase, constraint_phrases, and limit_phrase. Do not paste query result JSON or SQL structure into answer_contract. Do not pass a malformed JSON string; pass a complete object whose brackets and list items are closed."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING: (
-                "Rejected. Every answer_contract phrase must be an exact contiguous substring copied from user_request. Write the user_request wording first, then paste the exact same words into operation, predicate, order_by, and limit phrase fields."  # noqa: E501
+                "Rejected. Every answer_contract phrase must be an exact contiguous substring copied from user_request. Write the user_request wording first, then paste the exact same words into answer_phrase, constraint_phrases, and limit_phrase."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING: (
                 "Rejected. Call query immediately before submit_draft; the canonical label must be copied from the latest successful query result."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISMATCH: (
-                "Rejected. label must exactly match the latest successful query result. For kind='scalar', copy the one aggregate row as the label object. For kind='list', copy the query rows array as the label list, even when the query returned one row."  # noqa: E501
+                "Rejected. label must exactly match the latest successful query result. For kind='scalar', copy the one aggregate row as the label object. For kind='list', copy the query rows array as the label list, even when the query returned one row. If the latest query selected helper/context fields that the user did not ask to receive, rerun query with only the intended label fields instead of adding extras to label."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH: (
-                "Rejected. answer_contract predicates/order_by must be present in the latest successful query evidence with the same table, column, operator, value, and direction."  # noqa: E501
+                "Rejected. The latest successful query does not contain the required structural evidence for this answer."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
                 "Rejected. Call query again before submit_draft; the latest query result must include field visibility evidence."  # noqa: E501
@@ -1582,7 +1444,7 @@ class SubmitDraftController:
                 "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
-                "Rejected. After a specificity rejection, keep the same answer kind and target operation, preserve prior predicates/order, and add a new grounded structural constraint that the current database evidence supports."  # noqa: E501
+                "Rejected. After a specificity rejection, keep the same answer kind and query output target, preserve prior filters/order, and add a new grounded structural constraint that the current database evidence supports."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. submit_draft arguments did not match the required schema."

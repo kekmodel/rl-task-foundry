@@ -265,15 +265,22 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Label And Contract" in instructions
     assert "structured result" in instructions
     assert "not final prose" in instructions
-    assert "Use `kind='scalar'` only for aggregate answers" in instructions
-    assert "Use `kind='list'` with `fn='select'`" in instructions
+    assert "Use `answer_contract.kind='scalar'` only for aggregate answers" in instructions
+    assert "Use `answer_contract.kind='list'` for selected rows" in instructions
     assert "Copy label values from the latest successful `query(spec)` result" in instructions
     assert "Do not reformat" in instructions
     assert "unrelated global answer is invalid" in instructions
     assert "Prefer user-visible non-handle values" in instructions
+    assert "include only fields that should appear in the submitted label" in instructions
+    assert "every selected field becomes part of the exact submitted answer" in instructions
+    assert "combines facts from the same event or record" in instructions
+    assert "Avoid independent sibling joins" in instructions
     assert "Do not make a raw handle the main selected answer" in instructions
     assert "current query evidence marks it user-visible" in instructions
-    assert "Each `phrase` must be an exact substring of `user_request`" in instructions
+    assert "`answer_contract` is only a request-binding surface" in instructions
+    assert "Do not restate tables, columns, operators, or SQL" in instructions
+    assert "latest query result supplies structural evidence" in instructions
+    assert "Every contract phrase must be an exact substring of `user_request`" in instructions
     assert "exactly one correct structured result" in instructions
     assert "fix membership, order, limit, and tie-breaks" in instructions
     assert "exact timestamp" in instructions

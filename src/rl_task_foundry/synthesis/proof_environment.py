@@ -671,32 +671,12 @@ def build_proof_composer_script() -> ScriptedComposerScript:
             "question": build_proof_question(),
             "answer_contract": {
                 "kind": "list",
-                "operation": {
-                    "fn": "select",
-                    "table": "proof_cities",
-                    "column": None,
-                    "phrase": "일정표",
-                },
-                "predicates": [
-                    {
-                        "table": "proof_itinerary",
-                        "column": "total_cost",
-                        "op": "lte",
-                        "value": 250,
-                        "phrase": "total_cost는 250 이하여야",
-                    }
+                "answer_phrase": "일정표",
+                "constraint_phrases": [
+                    "total_cost는 250 이하여야",
+                    "사전순이 가장 앞서는",
                 ],
-                "order_by": [
-                    {
-                        "table": "proof_cities",
-                        "column": "city_name",
-                        "direction": "asc",
-                        "phrase": "사전순이 가장 앞서는",
-                    }
-                ],
-                "limit": 3,
                 "limit_phrase": "3일",
-                "evidence": "latest_query",
             },
         }
     )

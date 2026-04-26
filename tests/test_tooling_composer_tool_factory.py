@@ -297,10 +297,20 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "Each column is scoped to the selected table" in description
         for description in descriptions["profile"].values()
     )
+    assert "same event/record" in descriptions["query"]["$.spec.join"]
+    assert "independent sibling joins" in descriptions["query"]["$.spec.join"]
     assert "joined-table filters are allowed" in descriptions["query"]["$.spec.where"]
+    assert "Every selected field becomes a canonical label field" in descriptions[
+        "query"
+    ]["$.spec.select"]
+    assert "select only values the user_request asks to receive" in descriptions[
+        "query"
+    ]["$.spec.select"]
+    assert "Do not select profile/scope fields" in descriptions["query"]["$.spec.select"]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
-    assert "same N in answer_contract.limit" in descriptions["query"]["$.spec.limit"]
+    assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
+    assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"
     ]

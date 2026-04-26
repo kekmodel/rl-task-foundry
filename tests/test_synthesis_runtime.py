@@ -48,50 +48,46 @@ def _wrap_user_prompt(anchor_entity: dict[str, object], body: str) -> str:
 def _scalar_answer_contract(
     *,
     phrase: str,
-    table: str = "customer",
-    fn: str = "count",
-    column: str | None = "customer_id",
-    predicates: list[dict[str, object]] | None = None,
+    constraint_phrases: list[str] | None = None,
+    **legacy: object,
 ) -> dict[str, object]:
+    phrases = _legacy_constraint_phrases(constraint_phrases, legacy)
     return {
         "kind": "scalar",
-        "operation": {
-            "fn": fn,
-            "table": table,
-            "column": column,
-            "phrase": phrase,
-        },
-        "predicates": predicates or [],
-        "order_by": [],
-        "limit": None,
+        "answer_phrase": phrase,
+        "constraint_phrases": phrases,
         "limit_phrase": None,
-        "evidence": "latest_query",
     }
 
 def _list_answer_contract(
     *,
     phrase: str,
-    table: str = "payment",
-    column: str | None = None,
-    predicates: list[dict[str, object]] | None = None,
-    order_by: list[dict[str, object]] | None = None,
-    limit: int | None = 3,
+    constraint_phrases: list[str] | None = None,
     limit_phrase: str | None = "3건",
+    **legacy: object,
 ) -> dict[str, object]:
+    phrases = _legacy_constraint_phrases(constraint_phrases, legacy)
     return {
         "kind": "list",
-        "operation": {
-            "fn": "select",
-            "table": table,
-            "column": column,
-            "phrase": phrase,
-        },
-        "predicates": predicates or [],
-        "order_by": order_by or [],
-        "limit": limit,
+        "answer_phrase": phrase,
+        "constraint_phrases": phrases,
         "limit_phrase": limit_phrase,
-        "evidence": "latest_query",
     }
+
+
+def _legacy_constraint_phrases(
+    phrases: list[str] | None,
+    legacy: dict[str, object],
+) -> list[str]:
+    normalized = list(phrases or [])
+    for key in ("predicates", "order_by"):
+        raw_entries = legacy.get(key)
+        if not isinstance(raw_entries, list):
+            continue
+        for entry in raw_entries:
+            if isinstance(entry, dict) and isinstance(entry.get("phrase"), str):
+                normalized.append(entry["phrase"])
+    return normalized
 
 def _record_query_evidence(
     controller: SubmitDraftController,
@@ -102,6 +98,7 @@ def _record_query_evidence(
     referenced_columns: list[dict[str, object]] | None = None,
     query_params: dict[str, object] | None = None,
 ) -> None:
+    del answer_contract
     rows = [label] if isinstance(label, dict) else label
     columns: list[str] = []
     if isinstance(rows, list) and rows and isinstance(rows[0], dict):
@@ -117,31 +114,6 @@ def _record_query_evidence(
             }
             for column in columns
         ]
-    if referenced_columns is None and answer_contract is not None:
-        referenced_columns = []
-        for predicate in getattr(answer_contract, "predicates", []):
-            referenced_columns.append(
-                {
-                    "usage": "where",
-                    "table": predicate.table,
-                    "column": predicate.column,
-                    "visibility": "user_visible",
-                    "is_handle": False,
-                    "op": predicate.op,
-                    "value": predicate.value,
-                }
-            )
-        for order in getattr(answer_contract, "order_by", []):
-            referenced_columns.append(
-                {
-                    "usage": "order_by",
-                    "table": order.table,
-                    "column": order.column,
-                    "visibility": "user_visible",
-                    "is_handle": False,
-                    "direction": order.direction,
-                }
-            )
     controller.record_atomic_tool_call(
         tool_name="query",
         params=query_params or {"spec": {"test_evidence": True, "where": [{"value": 1}]}},
@@ -703,34 +675,25 @@ def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
 def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> None:
     schema = SubmitDraftPayload.model_json_schema()
     required_fields = set(schema.get("required", []))
-    scalar_contract_required = set(schema["$defs"]["ScalarAnswerContract"]["required"])
-    list_contract_required = set(schema["$defs"]["ListAnswerContract"]["required"])
+    contract_required = set(schema["$defs"]["AnswerContract"]["required"])
     answer_contract_schema = schema["properties"]["answer_contract"]
 
     assert "constraint_summary" not in required_fields
     assert "user_request" in required_fields
     assert "answer_contract" in required_fields
     assert "question" not in required_fields
-    assert answer_contract_schema["discriminator"]["propertyName"] == "kind"
-    assert len(answer_contract_schema["oneOf"]) == 2
     assert {
         "kind",
-        "operation",
-        "predicates",
-        "order_by",
-        "limit",
+        "answer_phrase",
+        "constraint_phrases",
         "limit_phrase",
-        "evidence",
-    } <= scalar_contract_required
-    assert scalar_contract_required == list_contract_required
-    assert schema["$defs"]["ScalarAnswerOperation"]["properties"]["fn"]["enum"] == [
-        "count",
-        "sum",
-        "avg",
-        "min",
-        "max",
+    } == contract_required
+    assert answer_contract_schema["$ref"] == "#/$defs/AnswerContract"
+    assert "Do not restate tables" in answer_contract_schema["description"]
+    assert schema["$defs"]["AnswerContract"]["properties"]["kind"]["enum"] == [
+        "scalar",
+        "list",
     ]
-    assert schema["$defs"]["ListAnswerOperation"]["properties"]["fn"]["const"] == "select"
 
 def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     schema = SubmitDraftPayload.model_json_schema()
@@ -746,7 +709,8 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     assert "hidden context naturally represents the requester" in (
         schema["properties"]["user_request"]["description"]
     )
-    assert "Include the entity scope" in schema["properties"]["answer_contract"]["description"]
+    assert "entity scope" in schema["properties"]["answer_contract"]["description"]
+    assert "Do not restate tables" in schema["properties"]["answer_contract"]["description"]
     assert SubmitDraftPayload.model_validate(
         {
             **_accepted_payload().model_dump(mode="json"),
@@ -805,18 +769,20 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
 
     assert "Submit one grounded task draft" in tool.description
     assert "successful query produced the exact label values" in tool.description
-    assert "Scalar answer shape: exactly one aggregate value" in schema_surface
-    assert "List answer shape: selected rows or lookup fields" in schema_surface
-    assert "Select operation for kind=list" in schema_surface
-    assert "Aggregate function for kind=scalar" in schema_surface
+    assert "Answer shape copied from the latest query" in schema_surface
+    assert "the query rows array" in schema_surface
+    assert "Do not restate tables, columns, operators, or SQL" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
     assert "JSON string for the canonical submit_result payload" in schema_surface
     assert "decorative anchor" in schema_surface
     assert "observed values derived from it" in schema_surface
     assert "global answer that can be produced without the hidden entity" in schema_surface
+    assert "Include only answer fields the user_request asks to receive" in schema_surface
+    assert "rerun query with only the fields intended for submit_result" in schema_surface
+    assert "Do not include profile/scope fields" in schema_surface
     assert "do not make a raw handle the main selected answer" in schema_surface
-    assert "not valid customer-context tasks" in schema_surface
-    assert "raw hidden values must not appear in user_request" in schema_surface
+    assert "latest successful query supplies structural evidence" in schema_surface
+    assert "those values should stay hidden from user_request" in schema_surface
     assert "Bad: '<entity type> 38'" not in schema_surface
     assert "Good: 'my account'" not in schema_surface
     assert "hidden structural handles" in schema_surface
@@ -989,7 +955,7 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "needs more specificity" in message
     assert "choose a feasible structural strengthening" in message
     assert "Replacing a field on the same path is not an escalation" in message
-    assert "new grounded predicate" in message
+    assert "new grounded filter" in message
     assert "feasible visible dimension" in message
     assert "do not switch to a list, Cardinality, or Cross-item rule" in message
     assert "return a list of N records" not in message
@@ -1029,7 +995,7 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
 
     assert "needs more specificity" in message
     assert "This is a list answer" in message
-    assert "operation.fn=select" in message
+    assert "selected-row query target" in message
     assert "supported by the current DB evidence" in message
     for axis in ("Filter", "Composite", "Cardinality", "Item-complexity", "Order"):
         assert axis in message
@@ -1127,7 +1093,7 @@ def test_submit_draft_schema_feedback_reports_entity_and_evidence_fixes(
     )
 
     assert "entity must contain at least one primary-key value" in message
-    assert "Set evidence exactly to the string 'latest_query'" in message
+    assert "Do not paste query result JSON or SQL structure" in message
     assert controller.attempts == []
     assert controller.submissions_left() == 2
 
@@ -1157,11 +1123,12 @@ async def test_submit_draft_rejects_label_that_does_not_match_latest_query(
 
     assert "label must exactly match the latest successful query result" in message
     assert "For kind='list', copy the query rows array" in message
+    assert "rerun query with only the intended label fields" in message
     assert controller.accepted_draft is None
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_rejects_answer_contract_predicate_missing_from_latest_query(
+async def test_submit_draft_does_not_require_contract_to_restate_query_predicates(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -1171,7 +1138,7 @@ async def test_submit_draft_rejects_answer_contract_predicate_missing_from_lates
             matched_solver_runs=1,
             total_solver_runs=2,
         ),
-        build_draft=lambda payload: payload,
+        build_draft=_draft_with_task_bundle,
         max_submissions=3,
     )
     _seed_min_initial_exploration(controller)
@@ -1241,8 +1208,9 @@ async def test_submit_draft_rejects_answer_contract_predicate_missing_from_lates
 
     message = await controller.submit(payload)
 
-    assert "answer_contract predicates/order_by must be present" in message
-    assert controller.accepted_draft is None
+    assert "Draft accepted" in message
+    assert "answer_contract predicates/order_by must be present" not in message
+    assert controller.accepted_draft is not None
 
 
 @pytest.mark.asyncio
@@ -1622,7 +1590,7 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
 
     second_message = await controller.submit(second_payload)
 
-    assert "keep the same answer kind and target operation" in second_message
+    assert "keep the same answer kind and query output target" in second_message
     assert controller.accepted_draft is None
 
 

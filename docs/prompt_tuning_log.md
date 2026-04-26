@@ -2537,3 +2537,55 @@ Solver 30/30 완료 결과:
   for "must eventually call submit_draft" under the strict schema surface. If
   Kimi continues ending without submit, the pipeline needs provider-specific
   handling or a different strong composer model for generation.
+
+## Iteration 60 — simplify answer_contract to request binding
+
+- **Trigger**:
+  Iteration 58 failures showed cheap composers spending turns on
+  `answer_contract_phrase_missing` and `answer_contract_query_mismatch` even
+  though table/column/operator evidence is already present in the latest
+  `query` result.
+- **Decision**:
+  `answer_contract` should not ask the composer to retype machine-derivable SQL
+  structure. The composer now submits only `kind`, `answer_phrase`,
+  `constraint_phrases`, and `limit_phrase`. Runtime still verifies exact label
+  equality against the latest successful query and derives structural retry
+  evidence from query metadata.
+- **Why this follows the principles**:
+  Solver/actor reward remains exact `submit_result` match only; no solver path
+  equivalence is introduced. Hard validation keeps only 100%-precision checks:
+  schema shape, exact phrase substrings, grounded values, latest-query label
+  equality, visibility metadata, and reward-visible strengthening after
+  too-easy feedback.
+- **Verification**:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
+  -> 57 passed. Targeted ruff and `git diff --check` passed.
+
+## Iteration 61 — query select fields are label fields
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_nano_request_binding_01`, pagila,
+  composer/solver `openrouter/openai/gpt-5.4-nano`.
+- **Result**:
+  `synthesis_failed / reject_too_hard` after one feedback event and first
+  solver batch (`0/4`). This was a useful negative smoke: the new minimal
+  `answer_contract` shape worked, but Nano selected customer identity/context
+  fields in `query.select` while the request asked only for recent payments.
+  The first submission correctly failed latest-query equality; the retry copied
+  the extra selected columns into the label, making an awkward exact answer.
+- **Fix**:
+  Strengthened schema/prompt/feedback rather than adding a heuristic validator:
+  `query.select` now says every selected field becomes a canonical label field,
+  and `label_json` / evidence-mismatch feedback tell the composer to rerun
+  `query` with only intended submit fields when helper/context fields were
+  selected. A second smoke still failed `0/4` after Nano kept selecting
+  profile/scope fields and joined two child sets independently from the same
+  customer root, so the schema/prompt guidance was extended with a DB-agnostic
+  relationship rule: when one answer item combines facts from the same
+  event/record, continue through that event/record path rather than using
+  independent sibling joins. A third Nano smoke still failed `0/4` with the
+  same profile-field selection pattern, which suggests the remaining issue is
+  cheap-composer instruction following rather than a new hard-validation target.
+- **Verification**:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
+  -> 57 passed. Targeted ruff passed.
