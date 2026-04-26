@@ -47,12 +47,13 @@ Calibration logs distinguish rollout volume from the pass-rate denominator.
 - `failed_solver_runs`: completed calls excluded because they are clearly infrastructural
 - `matched_solver_runs`: exact-match successes among evaluable calls
 
-Difficulty rejection and early termination are based on the exact
-Clopper-Pearson confidence interval over `matched_solver_runs /
-evaluable_solver_runs`. If the interval overlaps the configured band, the
-runtime must not claim a statistically decisive too-easy or too-hard result.
-An out-of-band point estimate with overlapping CI is reported as
-`calibration_inconclusive`.
+Difficulty rejection and early termination are based on exact one-sided
+Clopper-Pearson bounds over `matched_solver_runs / evaluable_solver_runs`; the
+default confidence level is 90% (`ci_alpha = 0.1`). The two-sided
+Clopper-Pearson interval is still recorded as a reporting metric. If the
+directional bound is not decisive, the runtime must not claim a statistically
+decisive too-easy or too-hard result. An out-of-band point estimate with
+overlapping CI is reported as `calibration_inconclusive`.
 
 Only high-confidence provider/runtime infrastructure failures, such as rate
 limits, API timeouts, connection errors, authentication failures, and malformed

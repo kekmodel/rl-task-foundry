@@ -1355,7 +1355,7 @@ class SubmitDraftController:
                     submission_index=submission_index,
                     message=_render_structured_message(
                         kind="RejectedError",
-                        result="Draft needs clearer specificity.",
+                        result="Draft needs more specificity.",
                         primary=(
                             "The current draft is still too direct to accept "
                             "confidently. Make one grounded specificity change to the "

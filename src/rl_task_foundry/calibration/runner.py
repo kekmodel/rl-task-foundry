@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from rl_task_foundry.calibration.banding import PassRateBand, clopper_pearson_interval
+from rl_task_foundry.calibration.banding import (
+    PassRateBand,
+    clopper_pearson_one_sided_bounds,
+)
 from rl_task_foundry.calibration.early_stop import EarlyStopDecision
 
 
@@ -39,7 +42,7 @@ def calibration_decision(
     band: PassRateBand,
     ci_alpha: float,
 ) -> EarlyStopDecision:
-    """Return a decision only when the exact binomial CI is decisive."""
+    """Return a decision only when exact binomial bounds are decisive."""
 
     completed_solver_runs = len(results)
     passes_so_far = sum(1 for result in results if _passed(result))
@@ -69,7 +72,7 @@ def calibration_decision_from_counts(
 
     if completed_solver_runs <= 0:
         return "continue"
-    interval = clopper_pearson_interval(
+    interval = clopper_pearson_one_sided_bounds(
         successes=passes_so_far,
         trials=completed_solver_runs,
         alpha=ci_alpha,

@@ -20,7 +20,7 @@ def _write_config_from_repo_default(
 
 def test_load_config_uses_solver_run_count_source_of_truth():
     config = load_config(Path("rl_task_foundry.yaml"))
-    assert config.models.total_solver_runs == 30
+    assert config.models.total_solver_runs == 20
     assert config.output.run_db_path.name == "run.db"
     assert config.database.dsn == "postgresql://pagila:pagila@127.0.0.1:5433/pagila"
     assert config.budget.max_gpu_hours is None
@@ -49,8 +49,11 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.synthesis.runtime.payload_preview_max_list_items == 3
     assert config.synthesis.runtime.payload_preview_max_dict_items == 6
     assert config.synthesis.coverage_planner.target_count_per_band == 3
-    assert config.calibration.solver_batch_size == 3
-    assert config.calibration.max_solver_runs == 30
+    assert config.calibration.lower_pass_rate == 0.5
+    assert config.calibration.upper_pass_rate == 0.9
+    assert config.calibration.ci_alpha == 0.1
+    assert config.calibration.solver_batch_size == 4
+    assert config.calibration.max_solver_runs == 20
     assert config.provider_resilience.minimum_request_count == 2
     assert config.task_registry.minhash_num_perm == 128
     assert config.task_registry.default_query_limit == 20

@@ -122,16 +122,6 @@ models:
     - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
     - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
     - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
-    - {provider: "openrouter", model: "qwen/qwen3.5-plus-02-15"}
 
 provider_resilience:
   circuit_breaker_window_s: 60
@@ -175,11 +165,11 @@ solver_runtime:
   sdk_sessions_enabled: true
 
 calibration:
-  lower_pass_rate: 0.25
-  upper_pass_rate: 0.75
+  lower_pass_rate: 0.5
+  upper_pass_rate: 0.9
   ci_alpha: 0.1
-  solver_batch_size: 3
-  max_solver_runs: 30
+  solver_batch_size: 4
+  max_solver_runs: 20
   safe_early_termination: true
 
 dedup:

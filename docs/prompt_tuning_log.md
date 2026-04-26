@@ -2333,3 +2333,21 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest -q tests/test_calibration.py tests/test_pipeline_solver_orchestrator.py tests/test_synthesis_runtime.py`
   -> 53 passed. Targeted `uv run ruff check src tests` passed.
+
+## Iteration 52 — 20-run pass-rate band retarget
+
+- **Decision**:
+  With `max_solver_runs=20`, the pass-rate target band is retargeted from
+  `[0.25, 0.75]` to `[0.5, 0.9]`. The old band was useful while debugging
+  small-N smoke runs, but at N=20 it accepts tasks that too many actors fail and
+  rejects near-0.8 tasks as too easy even though those are useful RLVR traces.
+- **Config change**:
+  Main, postgres_air, MIMIC-IV, and MIMIC-IV demo configs now use
+  20 solver slots, `lower_pass_rate: 0.5`, `upper_pass_rate: 0.9`,
+  `ci_alpha: 0.1`, `max_solver_runs: 20`, and `solver_batch_size: 4`.
+  Early termination now uses exact one-sided Clopper-Pearson bounds, while the
+  two-sided interval remains the reporting metric. With alpha=0.1, the first
+  batch can reject a clearly too-hard draft at `0/4`; later batch checkpoints
+  reject too-hard at `<=1/8`, `<=3/12`, `<=4/16`, and `<=6/20`. This setting
+  intentionally does not try to reject too-easy drafts in the first batch;
+  proving pass rate above `0.9` would require at least `22/22` all-pass samples.

@@ -281,14 +281,14 @@ def test_evaluate_rollout_summary_marks_out_of_band_ci_overlap_inconclusive(
         db_id="sakila",
         planned_solver_runs=30,
         total_solver_runs=30,
-        matched_solver_runs=24,
+        matched_solver_runs=29,
         runs=(),
     )
 
     gate = evaluate_rollout_summary(config, summary)
 
     assert gate.status is TaskQualityGateStatus.CALIBRATION_INCONCLUSIVE
-    assert gate.pass_rate == pytest.approx(0.8)
+    assert gate.pass_rate == pytest.approx(29 / 30)
     assert gate.ci_lower < config.calibration.upper_pass_rate < gate.ci_upper
 
 
@@ -459,8 +459,8 @@ async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
     config = _config(tmp_path)
     config.calibration = config.calibration.model_copy(
         update={
-            "solver_batch_size": 3,
-            "max_solver_runs": 30,
+            "solver_batch_size": 4,
+            "max_solver_runs": 20,
             "safe_early_termination": True,
         }
     )
@@ -470,11 +470,11 @@ async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
             provider="codex_oauth",
             model="gpt-5.4-mini",
         )
-        for i in range(30)
+        for i in range(20)
     ]
     runtimes = iter([
         _FakeRuntime('{"customer":"wrong","day":"2026-04-12"}', [])
-        for _ in range(30)
+        for _ in range(20)
     ])
     orchestrator = SolverOrchestrator(
         config,
@@ -487,11 +487,11 @@ async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
     finally:
         await orchestrator.close()
 
-    assert summary.planned_solver_runs == 30
-    # Exact Clopper-Pearson CI for 9/9 misses still has upper >= 0.25;
-    # 12/12 misses has upper < 0.25 at alpha=0.1.
-    assert summary.total_solver_runs == 12
-    assert summary.evaluable_solver_runs == 12
+    assert summary.planned_solver_runs == 20
+    # The one-sided exact upper bound for 0/4 is below 0.5 at alpha=0.1,
+    # so a clearly too-hard draft can be rejected after the first batch.
+    assert summary.total_solver_runs == 4
+    assert summary.evaluable_solver_runs == 4
     assert summary.matched_solver_runs == 0
     assert summary.early_stop_decision == "reject_too_hard"
 
@@ -504,8 +504,8 @@ async def test_solver_orchestrator_applies_exact_ci_before_full_denominator(
     config = _config(tmp_path)
     config.calibration = config.calibration.model_copy(
         update={
-            "solver_batch_size": 3,
-            "max_solver_runs": 30,
+            "solver_batch_size": 1,
+            "max_solver_runs": 40,
             "safe_early_termination": True,
         }
     )
@@ -515,7 +515,7 @@ async def test_solver_orchestrator_applies_exact_ci_before_full_denominator(
             provider="codex_oauth",
             model="gpt-5.4-mini",
         )
-        for i in range(30)
+        for i in range(40)
     ]
     orchestrator = SolverOrchestrator(
         config,
@@ -530,13 +530,56 @@ async def test_solver_orchestrator_applies_exact_ci_before_full_denominator(
     finally:
         await orchestrator.close()
 
-    assert summary.planned_solver_runs == 30
-    # Exact Clopper-Pearson CI for 9/9 still has lower <= 0.75; 12/12 has
-    # lower > 0.75 at alpha=0.1, so the task is confidently too easy here.
-    assert summary.total_solver_runs == 12
-    assert summary.evaluable_solver_runs == 12
-    assert summary.matched_solver_runs == 12
+    assert summary.planned_solver_runs == 40
+    # The one-sided exact lower bound first exceeds 0.9 at 22/22.
+    assert summary.total_solver_runs == 22
+    assert summary.evaluable_solver_runs == 22
+    assert summary.matched_solver_runs == 22
     assert summary.early_stop_decision == "reject_too_easy"
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_accepts_when_one_sided_bounds_enter_band(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(
+        update={
+            "solver_batch_size": 4,
+            "max_solver_runs": 20,
+            "safe_early_termination": True,
+        }
+    )
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{i}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for i in range(20)
+    ]
+    runtimes = iter(
+        [_FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', []) for _ in range(12)]
+        + [_FakeRuntime('{"customer":"wrong","day":"2026-04-12"}', []) for _ in range(8)]
+    )
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: next(runtimes),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.planned_solver_runs == 20
+    # At 12/16, both one-sided exact bounds are inside [0.5, 0.9].
+    assert summary.total_solver_runs == 16
+    assert summary.evaluable_solver_runs == 16
+    assert summary.matched_solver_runs == 12
+    assert summary.early_stop_decision == "accept"
 
 
 @pytest.mark.asyncio
@@ -578,7 +621,7 @@ async def test_solver_orchestrator_counts_user_error_as_evaluable_actor_failure(
     assert summary.failed_solver_runs == 0
     assert summary.pass_rate == pytest.approx(1 / 3)
     gate = evaluate_rollout_summary(config, summary)
-    assert gate.status is TaskQualityGateStatus.ACCEPT
+    assert gate.status is TaskQualityGateStatus.CALIBRATION_INCONCLUSIVE
     assert gate.total_solver_runs == 3
     assert gate.evaluable_solver_runs == 3
 

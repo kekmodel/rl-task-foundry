@@ -520,10 +520,10 @@ Rollback trigger:
 
 ```yaml
 calibration:
-  max_solver_runs: 30
-  solver_batch_size: 3
-  lower_pass_rate: 0.25
-  upper_pass_rate: 0.75
+  max_solver_runs: 20
+  solver_batch_size: 4
+  lower_pass_rate: 0.5
+  upper_pass_rate: 0.9
   ci_alpha: 0.1
   safe_early_termination: true
 synthesis:

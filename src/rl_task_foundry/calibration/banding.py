@@ -50,3 +50,29 @@ def clopper_pearson_interval(
     else:
         upper = float(beta.ppf(1 - alpha / 2, successes + 1, trials - successes))
     return BinomialConfidenceInterval(lower=lower, upper=upper)
+
+
+def clopper_pearson_one_sided_bounds(
+    *,
+    successes: int,
+    trials: int,
+    alpha: float,
+) -> BinomialConfidenceInterval:
+    """Return exact one-sided Clopper-Pearson bounds.
+
+    The lower and upper values are directional confidence bounds at
+    confidence ``1 - alpha``. They are used for sequential early-stop
+    decisions, while the two-sided interval remains the reporting metric.
+    """
+
+    if trials <= 0:
+        return BinomialConfidenceInterval(lower=0.0, upper=1.0)
+    if successes <= 0:
+        lower = 0.0
+    else:
+        lower = float(beta.ppf(alpha, successes, trials - successes + 1))
+    if successes >= trials:
+        upper = 1.0
+    else:
+        upper = float(beta.ppf(1 - alpha, successes + 1, trials - successes))
+    return BinomialConfidenceInterval(lower=lower, upper=upper)

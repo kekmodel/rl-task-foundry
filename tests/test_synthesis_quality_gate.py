@@ -19,8 +19,8 @@ def _quality_gate_summary() -> TaskQualityGateSummary:
         failed_solver_runs=1,
         ci_lower=0.1,
         ci_upper=0.9,
-        band_lower=0.25,
-        band_upper=0.75,
+        band_lower=0.5,
+        band_upper=0.9,
     )
 
 
