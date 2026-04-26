@@ -432,7 +432,7 @@ async def test_solver_orchestrator_counts_wrong_answers_as_evaluable_without_top
 
 
 @pytest.mark.asyncio
-async def test_solver_orchestrator_fills_evaluable_denominator_before_decision(
+async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
     tmp_path: Path,
 ) -> None:
     draft = _sample_draft()
@@ -464,10 +464,56 @@ async def test_solver_orchestrator_fills_evaluable_denominator_before_decision(
         await orchestrator.close()
 
     assert summary.planned_solver_runs == 5
-    assert summary.total_solver_runs == 5
-    assert summary.evaluable_solver_runs == 5
+    # After four misses, even a remaining success would end at 1/5 = 0.2,
+    # below the lower pass-rate bound. This is an exact deterministic bound,
+    # not a heuristic rejection.
+    assert summary.total_solver_runs == 4
+    assert summary.evaluable_solver_runs == 4
     assert summary.matched_solver_runs == 0
     assert summary.early_stop_decision == "reject_too_hard"
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_applies_exact_ci_before_full_denominator(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(
+        update={
+            "solver_batch_size": 3,
+            "max_solver_runs": 30,
+            "safe_early_termination": True,
+        }
+    )
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{i}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for i in range(30)
+    ]
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda *_args: _FakeRuntime(
+            '{"customer":"Alice","day":"2026-04-12"}', []
+        ),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.planned_solver_runs == 30
+    # Exact Clopper-Pearson CI for 9/9 still has lower <= 0.75; 12/12 has
+    # lower > 0.75 at alpha=0.1, so the task is confidently too easy here.
+    assert summary.total_solver_runs == 12
+    assert summary.evaluable_solver_runs == 12
+    assert summary.matched_solver_runs == 12
+    assert summary.early_stop_decision == "reject_too_easy"
 
 
 @pytest.mark.asyncio

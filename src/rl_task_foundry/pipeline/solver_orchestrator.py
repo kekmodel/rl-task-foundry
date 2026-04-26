@@ -497,7 +497,7 @@ class SolverOrchestrator:
             if not self.config.calibration.safe_early_termination:
                 continue
             evaluable_after_batch = _evaluable_runs(runs)
-            if len(evaluable_after_batch) < target_evaluable_runs:
+            if not evaluable_after_batch:
                 continue
             early_stop_decision = calibration_decision(
                 total_solver_runs=target_evaluable_runs,
