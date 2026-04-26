@@ -138,7 +138,7 @@ In the composer input, the pool is rendered as `Candidate Starting Points`, not
 - preview and relationship summaries are not final label evidence; final labels
   still come from data tools and a canonical `query(spec)`
 - hidden primary-key and `row_id` values may be used in tool calls and
-  `submit_draft.entity`, but must not appear in the customer-facing request
+  `submit_draft.entity_json`, but must not appear in the customer-facing request
 
 ## Topic Selection
 

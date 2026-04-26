@@ -31,7 +31,8 @@ def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
             "If you choose one, first call `neighborhood` with that "
             "candidate's `table` and `row_id`, then use data tools and a final "
             "`query(spec)` to produce the exact label. Copy only the chosen "
-            "candidate's `entity` object into `submit_draft.entity`.\n"
+            "candidate's `entity` object, encoded as JSON, into "
+            "`submit_draft.entity_json`.\n"
             "`preview` and `relationship_summary` are orientation context, not "
             "final label evidence. The customer request may use visible "
             "preview values when natural, but must never expose raw primary-key "
@@ -52,7 +53,7 @@ def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
         f"Anchor: {rendered}\n"
         f"Anchor table: {table}\n"
         f"Anchor primary key: {pk_column} = {row_id_json}\n"
-        f"submit_draft.entity object: {entity_json}\n"
+        f"submit_draft.entity_json: {entity_json}\n"
         f"When calling `neighborhood`, use `table` = {table!r} and "
         f"`row_id` = {row_id_json}; never pass `row_id: null`."
     )

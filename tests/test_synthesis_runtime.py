@@ -732,31 +732,15 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
     ]
     assert schema["$defs"]["ListAnswerOperation"]["properties"]["fn"]["const"] == "select"
 
-def test_submit_draft_payload_entity_schema_is_object() -> None:
+def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     schema = SubmitDraftPayload.model_json_schema()
-    entity_schema = schema["properties"]["entity"]
-    label_schema = schema["properties"]["label"]
+    entity_schema = schema["properties"]["entity_json"]
+    label_schema = schema["properties"]["label_json"]
 
-    assert entity_schema["type"] == "object"
-    assert "JSON string" not in entity_schema["description"]
-    entity_value_types = {
-        branch.get("type")
-        for branch in entity_schema["additionalProperties"]["anyOf"]
-    }
-    assert entity_value_types == {"string", "integer", "number", "boolean"}
-    label_object_value_types = {
-        branch.get("type")
-        for branch in label_schema["anyOf"][0]["additionalProperties"]["anyOf"]
-    }
-    label_array_item_schema = label_schema["anyOf"][1]["items"]
-    assert label_array_item_schema["type"] == "object"
-    assert label_object_value_types == {
-        "string",
-        "integer",
-        "number",
-        "boolean",
-        "null",
-    }
+    assert entity_schema["type"] == "string"
+    assert label_schema["type"] == "string"
+    assert "JSON string" in entity_schema["description"]
+    assert "JSON string" in label_schema["description"]
     assert "scoped to that entity" in label_schema["description"]
     assert "Use 'my'/'own' wording only" in schema["properties"]["user_request"]["description"]
     assert "Include the entity scope" in schema["properties"]["answer_contract"]["description"]
@@ -766,6 +750,13 @@ def test_submit_draft_payload_entity_schema_is_object() -> None:
             "entity": '{"customer_id": 1}',
         }
     ).parsed_entity == {"customer_id": 1}
+    legacy_label_payload = _accepted_payload().model_dump(mode="json")
+    legacy_label_payload.pop("label_json")
+    legacy_label_payload["label"] = '{"customer_count": 1}'
+    assert (
+        SubmitDraftPayload.model_validate(legacy_label_payload).canonical_answer
+        == {"customer_count": 1}
+    )
     assert _loose_json_schema_paths(schema) == []
 
 
@@ -815,7 +806,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "List answer shape: selected rows or lookup fields" in schema_surface
     assert "Select operation for kind=list" in schema_surface
     assert "Aggregate function for kind=scalar" in schema_surface
-    assert "Hidden current-context grounding handle as an object" in schema_surface
+    assert "JSON string for the hidden current-context grounding handle" in schema_surface
+    assert "JSON string for the canonical submit_result payload" in schema_surface
     assert "decorative anchor" in schema_surface
     assert "observed values derived from it" in schema_surface
     assert "global answer that can be produced without the hidden entity" in schema_surface
@@ -1120,7 +1112,7 @@ def test_submit_draft_schema_feedback_reports_entity_and_evidence_fixes(
         max_submissions=3,
     )
     payload = _accepted_payload().model_dump(mode="json")
-    payload.pop("entity")
+    payload.pop("entity_json")
     payload["answer_contract"]["evidence"] = '{"rows": [{"count": 1}]}'
     with pytest.raises(ValidationError) as exc_info:
         SubmitDraftPayload.model_validate(payload)

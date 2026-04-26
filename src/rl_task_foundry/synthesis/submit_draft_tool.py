@@ -7,7 +7,14 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
@@ -90,6 +97,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
 
 JsonScalar = str | int | float | bool
 JsonLabelValue = str | int | float | bool | None
+JsonPredicateValue = JsonLabelValue | list[JsonLabelValue]
 
 
 def _error_code_values(
@@ -162,7 +170,7 @@ class AnswerPredicate(StrictModel):
         "is_null",
         "is_not_null",
     ] = Field(description="Predicate operator.")
-    value: object | None = Field(
+    value: JsonPredicateValue = Field(
         default=None,
         description=(
             "Filter value copied from tool/query evidence. Omit or null only "
@@ -279,25 +287,31 @@ AnswerContract = Annotated[
 
 
 class SubmitDraftPayload(StrictModel):
+    _cached_canonical_answer: object | None = PrivateAttr(default=None)
+    _cached_parsed_entity: dict[str, JsonScalar] | None = PrivateAttr(default=None)
+
     topic: str = Field(
         min_length=1,
         description="Selected topic string derived from the grounded label and evidence.",
     )
-    label: dict[str, JsonLabelValue] | list[dict[str, JsonLabelValue]] = Field(
+    label_json: str = Field(
+        min_length=1,
         description=(
-            "Canonical submit_result payload copied exactly from the latest "
-            "successful query result. For scalar, submit one object with the "
-            "aggregate field. For list, submit an array of row objects. Do not "
-            "expose hidden PK/FK handle values as answer values. The label "
-            "must answer the exact scope of user_request; if the request is "
-            "about the hidden entity's own records, the latest query must be "
-            "scoped to that entity before you copy the result. Do not submit a "
-            "global answer that can be produced without the hidden entity."
+            "JSON string for the canonical submit_result payload, copied "
+            "exactly from the latest successful query result. For scalar, the "
+            "JSON must encode one object with the aggregate field. For list, "
+            "it must encode an array of row objects. Do not expose hidden "
+            "PK/FK handle values as answer values. The label must answer the "
+            "exact scope of user_request; if the request is about the hidden "
+            "entity's own records, the latest query must be scoped to that "
+            "entity before you copy the result. Do not submit a global answer "
+            "that can be produced without the hidden entity."
         ),
     )
-    entity: dict[str, JsonScalar] = Field(
+    entity_json: str = Field(
+        min_length=1,
         description=(
-            "Hidden current-context grounding handle as an object, e.g. "
+            "JSON string for the hidden current-context grounding handle, e.g. "
             '{"<pk_name>": 123}. It may contain observed primary-key values; '
             "those values should stay hidden from user_request. This is not a "
             "decorative anchor: the canonical label must be scoped to this "
@@ -326,26 +340,61 @@ class SubmitDraftPayload(StrictModel):
         ),
     )
 
-    @field_validator("label", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _validate_label(
-        cls,
-        value: object,
-    ) -> dict[str, JsonLabelValue] | list[dict[str, JsonLabelValue]]:
+    def _coerce_legacy_dynamic_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        copied = dict(value)
+        if "label" in copied:
+            legacy_label = copied.pop("label")
+            if "label_json" not in copied:
+                copied["label_json"] = legacy_label
+        if "entity" in copied:
+            legacy_entity = copied.pop("entity")
+            if "entity_json" not in copied:
+                copied["entity_json"] = legacy_entity
+        return copied
+
+    @field_validator("label_json", mode="before")
+    @classmethod
+    def _validate_label_json(cls, value: object) -> str:
         if isinstance(value, str):
             try:
-                value = json.loads(value)
+                parsed = json.loads(value)
             except json.JSONDecodeError as exc:
                 raise ValueError("label must be valid JSON") from exc
-        if not isinstance(value, (dict, list)):
-            raise ValueError("label must be an object or array")
-        if isinstance(value, dict) and not value:
+        else:
+            parsed = value
+            value = json.dumps(parsed, ensure_ascii=False)
+        if not isinstance(parsed, (dict, list)):
+            raise ValueError("label must encode an object or array")
+        if isinstance(parsed, dict) and not parsed:
             raise ValueError("label must not be empty")
-        if isinstance(value, list) and not value:
+        if isinstance(parsed, list) and not parsed:
             raise ValueError("label must not be empty")
-        if isinstance(value, list) and not all(isinstance(item, dict) for item in value):
+        if isinstance(parsed, list) and not all(isinstance(item, dict) for item in parsed):
             raise ValueError("label array items must be objects")
-        return value
+        return str(value).strip()
+
+    @field_validator("entity_json", mode="before")
+    @classmethod
+    def _validate_entity_json(cls, value: object) -> str:
+        if not isinstance(value, (dict, list)):
+            raw = str(value).strip() if not isinstance(value, str) else value.strip()
+            if not raw:
+                raise ValueError("entity must not be blank")
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise ValueError("entity must be a valid JSON object") from exc
+        else:
+            parsed = value
+            raw = json.dumps(parsed, ensure_ascii=False)
+        if not isinstance(parsed, dict):
+            raise ValueError("entity must encode a JSON object")
+        _normalize_anchor_entity_map(parsed)
+        return raw
 
     @field_validator("topic")
     @classmethod
@@ -380,29 +429,29 @@ class SubmitDraftPayload(StrictModel):
             return parsed
         return value
 
-    @field_validator("entity", mode="before")
-    @classmethod
-    def _validate_entity(cls, value: object) -> dict[str, JsonScalar]:
-        if isinstance(value, dict):
-            return _normalize_anchor_entity_map(value)
-        raw = str(value).strip() if not isinstance(value, str) else value.strip()
-        if not raw:
-            raise ValueError("entity must not be blank")
-        try:
-            parsed = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            raise ValueError("entity must be a valid JSON object")
-        if not isinstance(parsed, dict):
-            raise ValueError("entity must be a JSON object")
-        return _normalize_anchor_entity_map(parsed)
-
     @property
     def parsed_entity(self) -> dict[str, JsonScalar]:
-        return _normalize_anchor_entity_map(self.entity)
+        if self._cached_parsed_entity is not None:
+            return self._cached_parsed_entity
+        parsed = json.loads(self.entity_json)
+        if not isinstance(parsed, dict):
+            raise ValueError("entity must encode a JSON object")
+        self._cached_parsed_entity = _normalize_anchor_entity_map(parsed)
+        return self._cached_parsed_entity
 
     @property
     def canonical_answer(self) -> object:
-        return self.label
+        if self._cached_canonical_answer is None:
+            self._cached_canonical_answer = json.loads(self.label_json)
+        return self._cached_canonical_answer
+
+    @property
+    def entity(self) -> dict[str, JsonScalar]:
+        return self.parsed_entity
+
+    @property
+    def label(self) -> object:
+        return self.canonical_answer
 
     @property
     def question(self) -> str:
@@ -1037,8 +1086,10 @@ class SubmitDraftController:
                     required_code = SubmitDraftErrorCode.QUESTION_REQUIRED
                 elif location[0] == "answer_contract":
                     required_code = SubmitDraftErrorCode.ANSWER_CONTRACT_REQUIRED
-                elif location[0] == "entity":
+                elif location[0] in {"entity", "entity_json"}:
                     required_code = SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED
+                elif location[0] in {"label", "label_json"}:
+                    required_code = SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID
                 else:
                     required_code = getattr(
                         SubmitDraftErrorCode,
@@ -1046,9 +1097,9 @@ class SubmitDraftController:
                         SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID,
                     )
                 error_codes.append(required_code)
-            elif location == ("label",):
+            elif location in {("label",), ("label_json",)}:
                 error_codes.append(SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID)
-            elif location == ("entity",):
+            elif location in {("entity",), ("entity_json",)}:
                 if error_type in ("value_error", "dict_type"):
                     error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED)
                 else:
@@ -1765,8 +1816,11 @@ class SubmitDraftController:
 
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     from agents import FunctionTool
+    from agents.strict_schema import ensure_strict_json_schema
 
-    params_json_schema = SubmitDraftPayload.model_json_schema()
+    params_json_schema = ensure_strict_json_schema(
+        SubmitDraftPayload.model_json_schema()
+    )
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         parsed = json.loads(input_json) if input_json else {}
@@ -1797,5 +1851,5 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
-        strict_json_schema=False,
+        strict_json_schema=True,
     )

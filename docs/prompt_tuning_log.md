@@ -2427,3 +2427,37 @@ Solver 30/30 완료 결과:
   `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
   -> 40 passed. Targeted `uv run ruff check ...` and `git diff --check`
   passed.
+
+## Iteration 56 — strict submit_draft schema surface
+
+- **Follow-up smoke**:
+  `artifacts/eval_20260427_pagila_nano_entity_context_01`, pagila,
+  composer/solver `openrouter/openai/gpt-5.4-nano`, target 1, was interrupted
+  after enough signal. The run repeatedly produced either too-easy customer
+  payment aggregates (`20/20`, `40/40`) or too-hard/contract-invalid drafts.
+  No accepted task was kept from this smoke.
+- **Root cause found**:
+  `submit_draft` was still exposed with `strict_json_schema=False`. The
+  model-visible schema marked fields required, but weak/cheap composer calls
+  could still omit `entity`, put the answer value into
+  `answer_contract.evidence`, or otherwise rely on runtime feedback. This
+  conflicts with the schema-first principle.
+- **Design constraint**:
+  Direct strict schema for dynamic `label` and `entity` objects is not accepted
+  by the Agents strict-schema normalizer because strict object schemas cannot
+  use arbitrary `additionalProperties`. Keeping dynamic objects would force the
+  tool to remain non-strict.
+- **Fix**:
+  The composer-facing callable now uses strict top-level fields
+  `label_json` and `entity_json`, both JSON strings, while internal code still
+  parses them back into canonical label objects and hidden entity maps. The
+  `submit_draft` FunctionTool now runs through `ensure_strict_json_schema(...)`
+  and sets `strict_json_schema=True`. Prompt wording and specs now reference
+  `submit_draft.entity_json` where field-level precision matters.
+- **Principle preserved**:
+  This does not change solver reward or enforce solver path equivalence.
+  Solver still only needs to submit the exact label. The strict schema only
+  makes the composer authoring API harder to call in malformed ways.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
+  -> 40 passed. Targeted ruff and `git diff --check` passed.

@@ -333,7 +333,7 @@ def test_synthesis_input_can_include_tool_only_anchor_hint() -> None:
     assert '"film_id": 42' in prompt
     assert "Anchor table: film" in prompt
     assert "Anchor primary key: film_id = 42" in prompt
-    assert 'submit_draft.entity object: {"film_id": 42}' in prompt
+    assert 'submit_draft.entity_json: {"film_id": 42}' in prompt
     assert "never pass `row_id: null`" in prompt
     assert prompt.index("# Starting Entity") < prompt.index("# Session Context")
 
