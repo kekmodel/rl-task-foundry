@@ -292,7 +292,8 @@ def _with_atomic_error_handling(
             str(key): value for key, value in parsed_raw.items()
         }
         try:
-            result = await handler(parsed)
+            async with session.operation_lock:
+                result = await handler(parsed)
         except (
             KeyError,
             ValueError,

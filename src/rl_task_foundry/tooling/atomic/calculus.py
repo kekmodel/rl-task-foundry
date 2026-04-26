@@ -14,6 +14,7 @@ settings enforced by the caller (see `infra.db.solver_session_settings`).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 
@@ -67,6 +68,7 @@ class AtomicSession:
     store: CursorStore
     max_fetch_limit: int = 100
     trace_events: list[dict[str, object]] = field(default_factory=list)
+    operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def __post_init__(self) -> None:
         if not isinstance(self.store, CursorStore):

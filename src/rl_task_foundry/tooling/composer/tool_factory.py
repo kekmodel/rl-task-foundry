@@ -299,7 +299,7 @@ def build_schema_map_tool(session: ComposerSession) -> "FunctionTool":
             "grounded paths; live rows still provide label evidence."
         ),
         params_json_schema=schema,
-        on_invoke_tool=_with_error_handling(handler),
+        on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
         strict_json_schema=False,
     )
 
@@ -364,7 +364,7 @@ def build_sample_tool(session: ComposerSession) -> "FunctionTool":
             "Returns rows and row_count."
         ),
         params_json_schema=schema,
-        on_invoke_tool=_with_error_handling(handler),
+        on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
         strict_json_schema=False,
     )
 
@@ -425,7 +425,7 @@ def build_profile_tool(session: ComposerSession) -> "FunctionTool":
             "Returns row_count and distribution statistics."
         ),
         params_json_schema=schema,
-        on_invoke_tool=_with_error_handling(handler),
+        on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
         strict_json_schema=False,
     )
 
@@ -527,7 +527,7 @@ def build_neighborhood_tool(session: ComposerSession) -> "FunctionTool":
             "task paths."
         ),
         params_json_schema=schema,
-        on_invoke_tool=_with_error_handling(handler),
+        on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
         strict_json_schema=False,
     )
 
@@ -772,7 +772,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
             "Returns columns, rows, and row_count."
         ),
         params_json_schema=schema,
-        on_invoke_tool=_with_error_handling(handler),
+        on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
         strict_json_schema=False,
     )
 

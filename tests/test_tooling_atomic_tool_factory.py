@@ -7,6 +7,7 @@ tools against pagila.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -52,6 +53,26 @@ class _MaterializingStubConnection:
 
     async def fetchrow(self, *args, **kwargs):
         return {"cnt": 9, "agg": 42, "store_id": 1}
+
+
+class _ConcurrentGuardConnection:
+    def __init__(self) -> None:
+        self.active = False
+        self.calls = 0
+
+    async def fetch(self, *args, **kwargs):
+        raise AssertionError("fetch is not used by this test")
+
+    async def fetchrow(self, *args, **kwargs):
+        if self.active:
+            raise RuntimeError("concurrent connection use")
+        self.active = True
+        self.calls += 1
+        try:
+            await asyncio.sleep(0)
+            return {"store_id": self.calls}
+        finally:
+            self.active = False
 
 
 def _column(
@@ -631,6 +652,32 @@ async def test_v2_get_record_rejects_null_record_id_as_request_error():
     assert response["error"]["type"] == "request_error"
     assert response["error"]["code"] == "invalid_request"
     assert "record_id" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_v2_tools_serialize_parallel_connection_use():
+    conn = _ConcurrentGuardConnection()
+    session = AtomicSession(
+        snapshot=_snapshot(),
+        connection=conn,
+        store=CursorStore(),
+    )
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+
+    first, second = await asyncio.gather(
+        _invoke(
+            tools["get_record"],
+            {"table": "customer", "record_id": 123, "columns": ["store_id"]},
+        ),
+        _invoke(
+            tools["get_record"],
+            {"table": "customer", "record_id": 124, "columns": ["store_id"]},
+        ),
+    )
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert conn.calls == 2
 
 
 @pytest.mark.asyncio

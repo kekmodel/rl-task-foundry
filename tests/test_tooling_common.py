@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import pytest
 
 from rl_task_foundry.schema.graph import (
@@ -23,7 +26,10 @@ from rl_task_foundry.tooling.common import (
     snapshot_from_graph,
     snapshot_to_dict,
 )
-from rl_task_foundry.tooling.common.tool_runtime import json_dumps_tool
+from rl_task_foundry.tooling.common.tool_runtime import (
+    json_dumps_tool,
+    wrap_tool_handler,
+)
 
 
 def _column(
@@ -553,7 +559,6 @@ def test_coerce_scalar_leaves_unknown_types_and_non_strings_alone():
 
 def test_tool_json_serializes_temporal_values_as_iso_strings():
     import datetime as _dt
-    import json
     from decimal import Decimal
 
     payload = {
@@ -571,3 +576,30 @@ def test_tool_json_serializes_temporal_values_as_iso_strings():
         "created_time": "09:13:13",
         "amount": "4.99",
     }
+
+
+@pytest.mark.asyncio
+async def test_tool_runtime_lock_serializes_handler_calls():
+    lock = asyncio.Lock()
+    active = False
+
+    async def handler(payload):
+        nonlocal active
+        if active:
+            raise RuntimeError("concurrent handler use")
+        active = True
+        try:
+            await asyncio.sleep(0)
+            return {"ok": True, "value": payload["value"]}
+        finally:
+            active = False
+
+    invoke = wrap_tool_handler(handler, lock=lock)
+
+    first, second = await asyncio.gather(
+        invoke(None, '{"value": 1}'),
+        invoke(None, '{"value": 2}'),
+    )
+
+    assert json.loads(first) == {"ok": True, "value": 1}
+    assert json.loads(second) == {"ok": True, "value": 2}

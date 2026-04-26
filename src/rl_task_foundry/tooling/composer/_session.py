@@ -10,8 +10,9 @@ and must not import from each other).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot
@@ -37,6 +38,7 @@ class ComposerSession:
 
     snapshot: SchemaSnapshot
     connection: _ConnectionLike
+    operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 __all__ = ["ComposerSession"]

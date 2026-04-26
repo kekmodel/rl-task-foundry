@@ -16,6 +16,7 @@ Exceptions caught intentionally include `NotImplementedError`:
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 from collections.abc import Awaitable, Callable
@@ -50,7 +51,11 @@ _CAUGHT_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
-def wrap_tool_handler(handler: Handler) -> Invoker:
+def wrap_tool_handler(
+    handler: Handler,
+    *,
+    lock: asyncio.Lock | None = None,
+) -> Invoker:
     """Parse the agents-SDK input JSON, call handler, convert to envelope."""
 
     async def invoke(_tool_context: object, input_json: str) -> str:
@@ -74,7 +79,11 @@ def wrap_tool_handler(handler: Handler) -> Invoker:
             str(key): value for key, value in parsed_raw.items()
         }
         try:
-            result = await handler(parsed)
+            if lock is None:
+                result = await handler(parsed)
+            else:
+                async with lock:
+                    result = await handler(parsed)
         except _CAUGHT_EXCEPTIONS as exc:
             return json_dumps_tool(
                 {"error": str(exc), "error_type": type(exc).__name__}
