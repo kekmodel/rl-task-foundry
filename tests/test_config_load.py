@@ -32,7 +32,7 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.atomic_tools.max_batch_values == 128
     assert config.atomic_tools.float_precision == 2
     assert config.synthesis.runtime.max_turns == 20
-    assert config.synthesis.runtime.anchor_candidates_enabled is False
+    assert config.synthesis.runtime.anchor_candidates_enabled is True
     assert config.synthesis.runtime.anchor_candidate_limit == 10
     assert config.synthesis.runtime.max_generation_attempts == 5
     assert config.synthesis.runtime.max_consecutive_category_discards == 3

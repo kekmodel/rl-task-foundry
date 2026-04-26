@@ -141,6 +141,8 @@ synthesis:
     max_turns: 20
     tracing: true
     sdk_sessions_enabled: false
+    anchor_candidates_enabled: true
+    anchor_candidate_limit: 10
     max_generation_attempts: 5
     max_consecutive_category_discards: 3
     category_backoff_duration_s: 3600

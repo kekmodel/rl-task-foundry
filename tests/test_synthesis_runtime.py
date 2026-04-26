@@ -238,7 +238,14 @@ def _config_with_synthesis_output(tmp_path: Path):
         run_db_path=tmp_path / "run.db",
         traces_dir=tmp_path / "traces",
     )
-    return config.model_copy(update={"output": output}, deep=True)
+    runtime_config = config.synthesis.runtime.model_copy(
+        update={"anchor_candidates_enabled": False}
+    )
+    synthesis_config = config.synthesis.model_copy(update={"runtime": runtime_config})
+    return config.model_copy(
+        update={"output": output, "synthesis": synthesis_config},
+        deep=True,
+    )
 
 def _seed_min_initial_exploration(
     controller: SubmitDraftController,

@@ -102,7 +102,9 @@ not a task oracle or a forced topic. Composer may use one candidate, ignore all
 of them, or inspect different rows through tools; accepted labels still require
 live canonical query evidence. The runtime exposes this as an explicit
 experiment knob: `synthesis.runtime.anchor_candidates_enabled` with
-`anchor_candidate_limit`.
+`anchor_candidate_limit`. Production trial configs keep this enabled by default
+so stateless composer runs do not collapse back to the first visible primary-key
+row.
 
 Anchor sampling is evaluated by RLVR-start metrics, not by downstream composer
 success alone. Candidate-level metrics score anti-degeneracy, visible preview

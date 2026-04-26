@@ -2351,3 +2351,25 @@ Solver 30/30 완료 결과:
   reject too-hard at `<=1/8`, `<=3/12`, `<=4/16`, and `<=6/20`. This setting
   intentionally does not try to reject too-easy drafts in the first batch;
   proving pass rate above `0.9` would require at least `22/22` all-pass samples.
+
+## Iteration 53 — trial baseline after 20-run calibration
+
+- **Trial**:
+  `artifacts/trial_calibration20_pagila_qwen_01`, pagila, default
+  `opencode_zen/qwen3.5-plus`, calibration `[0.5, 0.9]`,
+  `max_solver_runs=20`, `solver_batch_size=4`.
+- **Result**:
+  `synthesis_failed / reject_too_hard` after the first solver batch:
+  `0/4` matched, all four failures evaluable. The one-sided exact early-stop
+  gate behaved as intended.
+- **Quality observations**:
+  This run is not a useful accepted-data quality sample. It exposed two setup
+  issues instead. First, the production config had anchor candidates disabled,
+  so the composer restarted from `customer_id=1` / MARY SMITH despite the
+  anti-degeneracy sampler existing. Second, qwen/opencode solver runs struggled
+  with the actor tool protocol: three runs ended as `missing_submit_result`
+  after emitting XML-style function text, and one hit `MaxTurnsExceeded`.
+- **Config follow-up**:
+  Enable `synthesis.runtime.anchor_candidates_enabled` in repo trial configs.
+  Keep qwen result as provider-compatibility evidence and rerun with the
+  previously accepted `minimax-m2.5` path before judging task-quality prompts.
