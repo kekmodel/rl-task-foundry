@@ -1,4 +1,4 @@
-# Prompt Tuning Log — qwen3.5-plus synthesis agent
+# Prompt Tuning Log — synthesis pipeline
 
 ## Context
 
@@ -2373,3 +2373,15 @@ Solver 30/30 완료 결과:
   Enable `synthesis.runtime.anchor_candidates_enabled` in repo trial configs.
   Keep qwen result as provider-compatibility evidence and rerun with the
   previously accepted `minimax-m2.5` path before judging task-quality prompts.
+
+## Iteration 54 — default experiment model switch
+
+- **Decision**:
+  Qwen remains too quota-sensitive for the default development loop, and the
+  Iteration 53 pagila run showed solver-side tool protocol instability on
+  `opencode_zen/qwen3.5-plus`. Default repo trial configs now use
+  `openrouter/openai/gpt-5.4-nano` for both composer and solver runs.
+- **Cross-check model**:
+  Use `openrouter/moonshotai/kimi-k2.5` for higher-quality validation runs.
+  Kimi is expected to be closer to the intended production composer class,
+  while Nano is the cheap high-volume tuning model.

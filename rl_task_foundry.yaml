@@ -46,29 +46,29 @@ providers:
 
 models:
   composer:
-    provider: "opencode_zen"
-    model: "qwen3.5-plus"
+    provider: "openrouter"
+    model: "openai/gpt-5.4-nano"
   solvers:
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
-    - {provider: "opencode_zen", model: "qwen3.5-plus"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
+    - {provider: "openrouter", model: "openai/gpt-5.4-nano"}
 
 provider_resilience:
   circuit_breaker_window_s: 60
