@@ -2491,3 +2491,49 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
   -> 40 passed. Targeted ruff and `git diff --check` passed.
+
+## Iteration 58 — context-quality prompt follow-up smoke
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_nano_context_quality_01`, pagila,
+  composer/solver `openrouter/openai/gpt-5.4-nano`, target 1, interrupted
+  after repeated failures.
+- **Result**:
+  No accepted task. The prompt update reduced the earlier easy/global payment
+  aggregate pattern, but shifted Nano toward too-hard or contract-invalid
+  drafts: film metadata lookup with `1/8` matched, United States customer count
+  at `0/4`, customer/rental/payment tasks with repeated
+  `answer_contract_phrase_missing` or `answer_contract_query_mismatch`, and
+  several `reject_too_hard` first-batch exits.
+- **Interpretation**:
+  The current validation/gating behavior is doing the right defensive work:
+  bad or badly calibrated drafts are not passing. The remaining bottleneck is
+  composer proposal quality for cheap Nano: it struggles to land naturally in
+  the `[0.5, 0.9]` band while satisfying the answer-contract fields. This is
+  not evidence that solver reward should enforce paths; solver remains
+  label-exact only.
+- **Next diagnostic**:
+  Cross-check with the stronger intended composer class (`kimi-k2.5`) before
+  adding more common prompt text. If Kimi lands good drafts under the same
+  strict tool contract, the issue is mostly Nano authoring ability/cost
+  tradeoff. If Kimi shows the same failure mode, simplify the answer-contract
+  authoring surface.
+
+## Iteration 59 — Kimi composer cross-check
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_kimi_crosscheck_01`, pagila,
+  composer `openrouter/moonshotai/kimi-k2.5`, solvers configured as
+  `openrouter/openai/gpt-5.4-nano`.
+- **Result**:
+  `synthesis_failed` before solver rollout. Kimi called `schema_map` and
+  `neighborhood(customer, row_id=353)`, then ended with empty final output and
+  no `submit_draft` call. No submit_draft feedback, solver run, or quality
+  gate result was produced.
+- **Interpretation**:
+  This does not confirm the same authoring-quality failure as Nano; it exposes
+  a different provider/model tool-protocol failure. Before treating Kimi as the
+  production composer class, run a tiny tool-call compliance smoke specifically
+  for "must eventually call submit_draft" under the strict schema surface. If
+  Kimi continues ending without submit, the pipeline needs provider-specific
+  handling or a different strong composer model for generation.
