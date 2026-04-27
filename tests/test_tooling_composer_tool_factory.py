@@ -307,6 +307,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "query"
     ]["$.spec.select"]
     assert "Do not select profile/scope fields" in descriptions["query"]["$.spec.select"]
+    assert "Do not select constraint, filter, scope" in descriptions[
+        "query"
+    ]["$.spec.select"]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]

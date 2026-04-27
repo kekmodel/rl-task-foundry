@@ -190,7 +190,10 @@ class SubmitDraftPayload(StrictModel):
             "to receive; if the latest query selected helper/context fields, "
             "rerun query with only the fields intended for submit_result. Do "
             "not include profile/scope fields merely to identify the current "
-            "entity unless the request asks for them."
+            "entity unless the request asks for them. Constraint, filter, "
+            "scope, ordering, and tie-break values belong in user_request and "
+            "answer_contract phrases, not in label_json, unless the user also "
+            "asks to receive those values."
         ),
     )
     entity_json: str = Field(

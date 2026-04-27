@@ -902,6 +902,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "Include only answer fields the user_request asks to receive" in schema_surface
     assert "rerun query with only the fields intended for submit_result" in schema_surface
     assert "Do not include profile/scope fields" in schema_surface
+    assert "Constraint, filter, scope, ordering, and tie-break values" in schema_surface
+    assert "unless the user also asks to receive those values" in schema_surface
     assert "do not make a raw handle the main selected answer" in schema_surface
     assert "latest successful query supplies structural evidence" in schema_surface
     assert "those values should stay hidden from user_request" in schema_surface

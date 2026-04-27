@@ -283,6 +283,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Prefer user-visible non-handle values" in instructions
     assert "include only fields that should appear in the submitted label" in instructions
     assert "every selected field becomes part of the exact submitted answer" in instructions
+    assert "Constraint, filter, scope, ordering, and tie-break values" in instructions
+    assert "should not be selected unless" in instructions
     assert "combines facts from the same event or record" in instructions
     assert "Avoid independent sibling joins" in instructions
     assert "Do not make a raw handle the main selected answer" in instructions

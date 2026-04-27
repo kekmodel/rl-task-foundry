@@ -2793,3 +2793,40 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry tests` and `git diff --check` passed.
   Full `uv run ruff check .` is currently blocked by an unrelated untracked
   `scripts/load_wikitree_sample.py` import-order/unused-import finding.
+
+## Iteration 69 — keep filter/context fields out of labels
+
+- **Trigger**:
+  Post-v6 pagila trial `artifacts/trial_related_filter_pagila_gpt54nano_01`
+  confirmed the new solver trace version (`atomic-resource-api-v6.trace.v1`)
+  but failed on the first submitted draft. The customer request asked for the
+  top five Japanese film titles, while the canonical label included both
+  `film_title` and helper field `language_name`. Solvers either returned the
+  hidden handle `language_id=3`, blank language strings, or otherwise failed
+  the extra field; the first batch was `0/4`, all evaluable, and the draft was
+  terminally rejected as too hard/low quality.
+- **Diagnosis**:
+  This is not a 100%-precision validation opportunity. Whether a selected
+  field is a requested answer field or just a filter/context field is semantic.
+  A hard validator would require string/token heuristics and would violate the
+  project rule. The correct layer is tool-schema and prompt contract: make the
+  composer query/submit surface state that filter/scope/order/tie-break values
+  must not be selected into the label unless the user also asks to receive
+  them.
+- **Fix**:
+  Strengthened three contract surfaces:
+  `query.spec.select`, `submit_draft.label_json`, and the durable composer
+  system instructions now all say that constraint, filter, scope, ordering, and
+  tie-break values belong in request/contract phrases, not in `label_json`,
+  unless the user asks to receive those values. Also clarified
+  `list_records.fields.path` for solvers: `path` contains only relation labels;
+  the final field name belongs in `column`.
+- **Why this follows the principles**:
+  No new semantic validator, no DB-specific names, and no token-based quality
+  rule were added. The change keeps precision-sensitive checks out of runtime
+  validation and improves the API contracts the two independent agents already
+  see.
+- **Verification**:
+  Targeted schema/prompt tests passed:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_tooling_atomic_tool_factory.py::test_v2_list_records_schema_distinguishes_paths_from_columns -q`
+  -> 4 passed.

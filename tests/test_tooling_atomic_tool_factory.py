@@ -451,6 +451,16 @@ def test_v2_tool_schemas_do_not_use_empty_or_unbounded_subschemas():
     } == {tool.name: [] for tool in tools}
 
 
+def test_v2_list_records_schema_distinguishes_paths_from_columns():
+    tools = {tool.name: tool for tool in build_atomic_tools(_stub_session())}
+    descriptions = _schema_descriptions(tools["list_records"].params_json_schema)
+    text = " ".join(descriptions)
+
+    assert "Put only relation labels in path" in text
+    assert "put the final field name in column" in text
+    assert "Do not include column names here" in text
+
+
 def test_v2_list_record_refs_allows_limit_one_and_uses_api_cap():
     session = _stub_session()
     session.max_fetch_limit = 17
