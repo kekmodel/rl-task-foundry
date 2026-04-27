@@ -1586,7 +1586,7 @@ class SubmitDraftController:
                 "Rejected. label must exactly match the latest successful query result. For kind='scalar', copy the one aggregate row as the label object. For kind='list', copy the query rows array as the label list, even when the query returned one row. If the latest query selected helper/context fields that the user did not ask to receive, rerun query with only the intended label fields instead of adding extras to label."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH: (
-                "Rejected. The latest successful query does not contain the required structural evidence for this answer. If a list query limit fixes the returned rows, user_request and answer_contract.limit_phrase must include that exact fixed size."  # noqa: E501
+                "Rejected. The latest successful query does not contain the required structural evidence for this answer. If a list query limit fixes the returned rows, include that exact fixed size in user_request and answer_contract.limit_phrase, or rerun query without limit when entity/filter evidence already fixes the row set."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
                 "Rejected. The latest list query has ambiguous ordering for exact verification. State deterministic answer-visible query.order_by tie-breakers in user_request and answer_contract, choose a row set with unique visible ordering, or return the tied rows as the list before submit_draft. Do not rely on unseen order keys to break ties."  # noqa: E501
