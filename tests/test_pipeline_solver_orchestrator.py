@@ -488,10 +488,10 @@ async def test_solver_orchestrator_can_reject_too_hard_before_full_denominator(
         await orchestrator.close()
 
     assert summary.planned_solver_runs == 20
-    # The one-sided exact upper bound for 0/4 is below 0.5 at alpha=0.1,
-    # so a clearly too-hard draft can be rejected after the first batch.
-    assert summary.total_solver_runs == 4
-    assert summary.evaluable_solver_runs == 4
+    # With the default lower bound 0.2, the one-sided exact upper bound first
+    # falls below the band after 12 straight misses.
+    assert summary.total_solver_runs == 12
+    assert summary.evaluable_solver_runs == 12
     assert summary.matched_solver_runs == 0
     assert summary.early_stop_decision == "reject_too_hard"
 
@@ -621,7 +621,7 @@ async def test_solver_orchestrator_counts_user_error_as_evaluable_actor_failure(
     assert summary.failed_solver_runs == 0
     assert summary.pass_rate == pytest.approx(1 / 3)
     gate = evaluate_rollout_summary(config, summary)
-    assert gate.status is TaskQualityGateStatus.CALIBRATION_INCONCLUSIVE
+    assert gate.status is TaskQualityGateStatus.ACCEPT
     assert gate.total_solver_runs == 3
     assert gate.evaluable_solver_runs == 3
 

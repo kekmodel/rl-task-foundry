@@ -302,6 +302,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "Filters define row membership" in descriptions["query"]["$.spec.where"]
     assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
     assert "Do not add helper filters" in descriptions["query"]["$.spec.where"]
+    assert "Match the requested scope granularity" in descriptions["query"][
+        "$.spec.where"
+    ]
+    assert "do not narrow a whole-context/history/list request" in descriptions[
+        "query"
+    ]["$.spec.where"]
     assert "Blocked or internal handle values" in descriptions["query"][
         "$.spec.where[].value"
     ]
@@ -327,6 +333,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "query"
     ]["$.spec.order_by"]
     assert "selecting the field as output is not enough" in descriptions["query"][
+        "$.spec.order_by"
+    ]
+    assert "returning the tied rows is safer" in descriptions["query"][
         "$.spec.order_by"
     ]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]

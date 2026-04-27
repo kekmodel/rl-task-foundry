@@ -331,7 +331,7 @@ outcomes and count as failures unless they are clearly infrastructural.
 evaluable solver runs or an exact early-stop decision. Current development
 configuration is:
 
-- pass-rate band `[0.5, 0.9]`
+- pass-rate band `[0.2, 0.9]`
 - `max_solver_runs = 20`
 - `solver_batch_size = 4`
 - `ci_alpha = 0.1`

@@ -620,8 +620,11 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "entity scope or a customer-visible constraint stated in "
                     "user_request and submit_draft.answer_contract. Do not "
                     "add helper filters only to make the row set unique, "
-                    "shorter, or easier. Joined-table filters are allowed "
-                    "only under the same rule."
+                    "shorter, or easier. Match the requested scope "
+                    "granularity: do not narrow a whole-context/history/list "
+                    "request to one child event or record unless the request "
+                    "asks for that specific event or record. Joined-table "
+                    "filters are allowed only under the same rule."
                 ),
                 "items": {
                     "type": "object",
@@ -688,7 +691,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "When rows can share the primary sort key, use an "
                     "answer-visible/reproducible tie-breaker only if "
                     "user_request and answer_contract ask for that secondary "
-                    "order; selecting the field as output is not enough. "
+                    "order; selecting the field as output is not enough, and "
+                    "returning the tied rows is safer than inventing a "
+                    "secondary order. "
                     "Otherwise choose a row set with unique visible ordering."
                 ),
                 "items": {

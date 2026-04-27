@@ -283,6 +283,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "'number 38 <entity>'" not in instructions
     assert "hidden structural handle" in instructions
     assert "hidden current subject/context" in instructions
+    assert "Match hidden scope" in instructions
+    assert "whole parent-context, list, or history requests" in instructions
+    assert "not one child event/record unless asked" in instructions
     assert "Do not attach `entity` to a global report" in instructions
     assert "latest query evidence is scoped" in instructions
     assert "do not expose that handle" in instructions

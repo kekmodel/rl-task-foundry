@@ -3397,3 +3397,48 @@ Solver 30/30 완료 결과:
   decisively rejecting the `1/20` case, and lowering to `0.1` would stop
   decisively rejecting `0/20`. The provisional recommendation from this stopped
   batch is `lower_pass_rate=0.2`, not `0.35` and not below `0.15`.
+
+## Iteration 86 — Lower-band and MIMIC scope/tool-surface fixes
+
+- **Change**:
+  Applied the stopped five-trial analysis directly. All shipped config files now
+  use `lower_pass_rate: 0.2` with the existing `upper_pass_rate: 0.9`,
+  `max_solver_runs=20`, and safe early termination. The lifecycle spec now
+  records the current development band as `[0.2, 0.9]`.
+- **Composer policy**:
+  Strengthened the durable system prompt and `query.where` schema around hidden
+  scope granularity. If the request asks about a whole parent context, list, or
+  history, the query must use that scope; it must not silently narrow to a
+  single child event or record unless the request asks for that exact event.
+  This targets the trial 03 failure without adding a literal/DB-specific
+  validator.
+- **Ordering policy**:
+  Strengthened `query.order_by` schema wording: selecting a field as output is
+  still not a tie-break request, and returning tied rows is safer than inventing
+  a secondary order. This is prompt/schema guidance only; no token or literal
+  heuristic was added.
+- **Solver tool surface**:
+  Strengthened atomic tool descriptions for related-field materialization.
+  `list_records.fields.path` is now explicitly the preferred way to output
+  related display names or labels while preserving one answer item per source
+  record. `follow_relation` now warns that it changes the record_set table and
+  can collapse many source records into fewer destination records. This targets
+  the trial 04 hard-good failures where solvers returned ids or wrong related
+  labels instead of source-aligned related display values.
+- **Principle review correction**:
+  Removed domain-example wording from the common prompt/tool surface during
+  review. Scope guidance now uses parent-context/list/history language, and
+  solver tool guidance says related display names or labels instead of naming
+  sample domains. This keeps the change prompt/schema-first without adding
+  validator logic, DB literals, or domain-specific teaching examples.
+- **Smoke**:
+  Ran live MIMIC demo smoke
+  `artifacts/trial_20260428_mimiciv_demo_lower02_fix_smoke_01` with Kimi
+  composer and default solver pool. It failed terminal `reject_too_hard` after
+  `0/12` matches, as expected under the new lower bound: the one-sided upper
+  confidence bound first fell below `0.2` after twelve straight misses. The run
+  still verified useful movement: composer kept the parent stay scope instead
+  of narrowing to one child event, and after order-ambiguity feedback it asked
+  for a visible same-time tie-break. Remaining failures were solver/tool-surface
+  issues around category filtering and related display materialization, not a
+  new hard-validator candidate.

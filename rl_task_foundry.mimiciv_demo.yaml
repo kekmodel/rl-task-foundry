@@ -116,7 +116,7 @@ solver_runtime:
   sdk_sessions_enabled: true
 
 calibration:
-  lower_pass_rate: 0.5
+  lower_pass_rate: 0.2
   upper_pass_rate: 0.9
   ci_alpha: 0.1
   solver_batch_size: 4

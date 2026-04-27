@@ -457,12 +457,31 @@ def test_v2_tool_schemas_do_not_use_empty_or_unbounded_subschemas():
 def test_v2_list_records_schema_distinguishes_paths_from_columns():
     tools = {tool.name: tool for tool in build_atomic_tools(_stub_session())}
     descriptions = _schema_descriptions(tools["list_records"].params_json_schema)
-    text = " ".join(descriptions)
+    text = " ".join([
+        tools["list_records"].description,
+        *descriptions,
+    ])
 
     assert "Put only relation labels from the record_set relations list in path" in text
     assert "not foreign-key column names" in text
     assert "put the final field name in column" in text
     assert "Do not include column names here" in text
+    assert "one answer item per source record" in text
+    assert "related display" in text
+
+
+def test_v2_follow_relation_schema_warns_when_source_alignment_matters():
+    tools = {tool.name: tool for tool in build_atomic_tools(_stub_session())}
+    descriptions = _schema_descriptions(tools["follow_relation"].params_json_schema)
+    text = " ".join([
+        tools["follow_relation"].description,
+        *descriptions,
+    ])
+
+    assert "changes the record_set table" in text
+    assert "collapse many source records" in text
+    assert "use list_records with fields.path" in text
+    assert "one item per source record" in text
 
 
 def test_v2_list_record_refs_allows_limit_one_and_uses_api_cap():

@@ -887,7 +887,9 @@ def build_filter_record_set_by_related_tool(session: AtomicSession) -> "Function
                 "minItems": 1,
                 "description": (
                     "Relation labels to follow from the source record_set table "
-                    "to the related table that owns column."
+                    "to the related table that owns column. For per-source "
+                    "output fields, prefer list_records with fields.path so "
+                    "the source records stay aligned."
                 ),
                 "items": {
                     "type": "string",
@@ -990,7 +992,8 @@ def build_filter_record_set_by_related_tool(session: AtomicSession) -> "Function
         description=(
             "Create a new source record_set by keeping source records that have "
             "at least one related record, reached through path, whose column "
-            "matches one scalar comparison."
+            "matches one scalar comparison. This filters source records; it "
+            "does not output related display fields."
         ),
         schema=schema,
         handler=handler,
@@ -1014,7 +1017,9 @@ def build_follow_relation_tool(session: AtomicSession) -> "FunctionTool":
                     "Reverse form: '<tgt><-<src>.<col>'. Must be one of the "
                     "source record_set resource's relations. Copy the exact "
                     "string from resource.relations; do not infer, translate, "
-                    "paraphrase, or combine table/column names."
+                    "paraphrase, or combine table/column names. Use this to "
+                    "move to destination records; use list_records fields.path "
+                    "when the answer must keep one item per source record."
                 ),
             },
         },
@@ -1046,7 +1051,10 @@ def build_follow_relation_tool(session: AtomicSession) -> "FunctionTool":
         description=(
             "Create a new record_set resource of unique destination records by "
             "following exactly one directed relation from the source record_set "
-            "resource."
+            "resource. It changes the record_set table and can collapse many "
+            "source records into fewer destination records; for source-record "
+            "lists with related names/labels, use list_records with "
+            "fields.path instead."
         ),
         schema=schema,
         handler=handler,
@@ -1267,7 +1275,9 @@ def build_list_records_tool(session: AtomicSession) -> "FunctionTool":
                     "step must produce at most one related record for each "
                     "source record. Put only relation labels from the "
                     "record_set relations list in path, not foreign-key "
-                    "column names; put the final field name in column."
+                    "column names; put the final field name in column. For "
+                    "related display names or labels, keep the source "
+                    "record_set and read the related display column here."
                 ),
                 "items": {
                     "type": "string",
@@ -1307,7 +1317,9 @@ def build_list_records_tool(session: AtomicSession) -> "FunctionTool":
                 "description": (
                     "Fields to return for each source record. Direct fields "
                     "read source-table columns; related fields preserve source "
-                    "record order while following single-record relation paths."
+                    "record order while following single-record relation paths. "
+                    "This is the preferred way to output related display "
+                    "values while keeping one answer item per source record."
                 ),
                 "items": field_schema,
             },
@@ -1415,7 +1427,9 @@ def build_list_records_tool(session: AtomicSession) -> "FunctionTool":
         description=(
             "Return selected field values for records in a record_set, preserving "
             "the record_set order. Fields may read source columns or columns on "
-            "single-record relation paths."
+            "single-record relation paths. Use fields.path for related labels "
+            "or names instead of follow_relation when the answer is a list of "
+            "the original source records."
         ),
         schema=schema,
         handler=handler,
