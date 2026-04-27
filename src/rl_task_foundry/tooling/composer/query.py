@@ -721,9 +721,11 @@ def _order_key_entries(
     *,
     chain: list[_ChainEntry],
     column_sources: list[dict[str, object]],
+    diagnostic_order_outputs: dict[int, str] | None = None,
 ) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
-    for clause in clauses:
+    diagnostic_order_outputs = diagnostic_order_outputs or {}
+    for index, clause in enumerate(clauses):
         entry: dict[str, object] = {"direction": clause.direction}
         if clause.output_name is not None:
             entry["output"] = clause.output_name
@@ -766,23 +768,66 @@ def _order_key_entries(
         )
         if source is not None:
             entry["output"] = str(source["output"])
+        elif index in diagnostic_order_outputs:
+            entry["diagnostic_output"] = diagnostic_order_outputs[index]
         entries.append(entry)
     return entries
 
 
-def _has_duplicate_signatures(
-    rows: list[dict[str, object]],
+def _signature(
+    row: dict[str, object],
     outputs: list[str],
+) -> tuple[str, ...]:
+    return tuple(repr(row.get(output)) for output in outputs)
+
+
+def _has_answer_distinguishable_ties(
+    rows: list[dict[str, object]],
+    group_outputs: list[str],
+    *,
+    answer_outputs: list[str],
 ) -> bool:
-    if not outputs:
-        return len(rows) > 1
-    signatures = [tuple(repr(row.get(output)) for output in outputs) for row in rows]
-    return len(signatures) != len(set(signatures))
+    if len(rows) <= 1:
+        return False
+    grouped_answer_signatures: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
+    for row in rows:
+        grouped_answer_signatures.setdefault(
+            _signature(row, group_outputs),
+            set(),
+        ).add(_signature(row, answer_outputs))
+    return any(
+        len(answer_signatures) > 1
+        for answer_signatures in grouped_answer_signatures.values()
+    )
+
+
+def _order_key_splits_answer_tie(
+    rows: list[dict[str, object]],
+    *,
+    represented_prefix: list[str],
+    diagnostic_output: str,
+    answer_outputs: list[str],
+) -> bool:
+    grouped: dict[tuple[str, ...], dict[str, set[tuple[str, ...]]]] = {}
+    for row in rows:
+        prefix_signature = _signature(row, represented_prefix)
+        bucket = grouped.setdefault(
+            prefix_signature,
+            {"answer": set(), "order": set()},
+        )
+        bucket["answer"].add(_signature(row, answer_outputs))
+        bucket["order"].add(_signature(row, [diagnostic_output]))
+    return any(
+        len(signatures["answer"]) > 1 and len(signatures["order"]) > 1
+        for signatures in grouped.values()
+    )
 
 
 def _unrepresented_order_by_tie_breakers(
     rows: list[dict[str, object]],
     order_entries: list[dict[str, object]],
+    *,
+    answer_outputs: list[str],
 ) -> list[dict[str, object]]:
     represented_prefix: list[str] = []
     unrepresented: list[dict[str, object]] = []
@@ -791,7 +836,17 @@ def _unrepresented_order_by_tie_breakers(
         if isinstance(output, str):
             represented_prefix.append(output)
             continue
-        if not _has_duplicate_signatures(rows, represented_prefix):
+        if entry.get("visibility") == "user_visible" and entry.get("is_handle") is not True:
+            continue
+        diagnostic_output = entry.get("diagnostic_output")
+        if not isinstance(diagnostic_output, str):
+            continue
+        if not _order_key_splits_answer_tie(
+            rows,
+            represented_prefix=represented_prefix,
+            diagnostic_output=diagnostic_output,
+            answer_outputs=answer_outputs,
+        ):
             continue
         unrepresented.append(
             {
@@ -810,10 +865,20 @@ def _ordering_diagnostics(
     parsed: _ParsedSpec,
     chain: list[_ChainEntry],
     column_sources: list[dict[str, object]],
+    diagnostic_rows: list[dict[str, object]] | None = None,
+    diagnostic_order_outputs: dict[int, str] | None = None,
 ) -> dict[str, object] | None:
+    answer_outputs = list(rows[0]) if rows else []
+    diagnostic_rows = diagnostic_rows or rows
     if parsed.limit is None or len(rows) <= 1:
         return None
     if not parsed.order_by:
+        if not _has_answer_distinguishable_ties(
+            diagnostic_rows,
+            [],
+            answer_outputs=answer_outputs,
+        ):
+            return None
         return {
             "missing_order_by_for_limit": True,
             "returned_row_count": len(rows),
@@ -828,10 +893,12 @@ def _ordering_diagnostics(
         parsed.order_by,
         chain=chain,
         column_sources=column_sources,
+        diagnostic_order_outputs=diagnostic_order_outputs,
     )
     unrepresented_tie_breakers = _unrepresented_order_by_tie_breakers(
-        rows,
+        diagnostic_rows,
         order_entries,
+        answer_outputs=answer_outputs,
     )
     if len(order_outputs) != len(parsed.order_by):
         if not unrepresented_tie_breakers:
@@ -842,8 +909,11 @@ def _ordering_diagnostics(
             "returned_row_count": len(rows),
             "limit": parsed.limit,
         }
-    signatures = [tuple(repr(row.get(output)) for output in order_outputs) for row in rows]
-    duplicate_order_key = len(signatures) != len(set(signatures))
+    duplicate_order_key = _has_answer_distinguishable_ties(
+        diagnostic_rows,
+        order_outputs,
+        answer_outputs=answer_outputs,
+    )
     diagnostics: dict[str, object] = {
         "order_by_outputs": order_outputs,
         "duplicate_order_key_in_returned_rows": duplicate_order_key,
@@ -956,6 +1026,31 @@ async def query(
                 }
             )
 
+    diagnostic_order_outputs: dict[int, str] = {}
+    if not parsed.aggregates:
+        for index, clause in enumerate(parsed.order_by):
+            if clause.ref is None:
+                continue
+            resolved = _resolve_ref(clause.ref, chain)
+            source = next(
+                (
+                    source
+                    for source in column_sources
+                    if source.get("table") == resolved.table.handle
+                    and source.get("column") == resolved.column
+                    and isinstance(source.get("output"), str)
+                ),
+                None,
+            )
+            if source is not None:
+                continue
+            output_name = f"__rtf_order_{index}"
+            diagnostic_order_outputs[index] = output_name
+            select_fragments.append(
+                f"{resolved.sql_alias}.{quote_ident(resolved.column)} AS "
+                f"{quote_ident(output_name)}"
+            )
+
     referenced_columns: list[dict[str, object]] = []
     for clause in parsed.where_clauses:
         referenced_columns.append(
@@ -1035,6 +1130,10 @@ async def query(
     materialized = [
         {column: row[column] for column in output_columns} for row in rows
     ]
+    diagnostic_columns = [*output_columns, *diagnostic_order_outputs.values()]
+    diagnostic_materialized = [
+        {column: row[column] for column in diagnostic_columns} for row in rows
+    ]
     result: dict[str, object] = {
         "columns": output_columns,
         "column_sources": column_sources,
@@ -1047,6 +1146,8 @@ async def query(
         parsed=parsed,
         chain=chain,
         column_sources=column_sources,
+        diagnostic_rows=diagnostic_materialized,
+        diagnostic_order_outputs=diagnostic_order_outputs,
     )
     if ordering_diagnostics is not None:
         result["ordering_diagnostics"] = ordering_diagnostics

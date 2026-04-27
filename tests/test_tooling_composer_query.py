@@ -480,9 +480,9 @@ async def test_query_reports_duplicate_limited_order_key_diagnostics():
 async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
     session, _ = _stub_session(
         rows=[
-            {"first_name": "ALICE"},
-            {"first_name": "ALICE"},
-            {"first_name": "BOB"},
+            {"first_name": "ALICE", "store_id": 1, "__rtf_order_1": 2},
+            {"first_name": "ALICE", "store_id": 2, "__rtf_order_1": 1},
+            {"first_name": "BOB", "store_id": 1, "__rtf_order_1": 3},
         ]
     )
 
@@ -490,7 +490,10 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
         session,
         spec={
             "from": _from("customer", "c"),
-            "select": [_select("c", "first_name")],
+            "select": [
+                _select("c", "first_name"),
+                _select("c", "store_id"),
+            ],
             "order_by": [
                 _order_ref("c", "first_name", "asc"),
                 _order_ref("c", "customer_id", "desc"),
@@ -515,11 +518,11 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
 
 
 @pytest.mark.asyncio
-async def test_query_reports_unrepresented_visible_tie_breaker_diagnostics():
+async def test_query_does_not_reject_unrepresented_visible_tie_breaker():
     session, _ = _stub_session(
         rows=[
-            {"first_name": "ALICE"},
-            {"first_name": "ALICE"},
+            {"first_name": "ALICE", "__rtf_order_1": 1},
+            {"first_name": "ALICE", "__rtf_order_1": 2},
         ]
     )
 
@@ -536,19 +539,32 @@ async def test_query_reports_unrepresented_visible_tie_breaker_diagnostics():
         },
     )
 
-    assert result["ordering_diagnostics"] == {
-        "order_by_outputs": ["first_name"],
-        "unrepresented_order_by_tie_breakers": [
-            {
-                "table": "customer",
-                "column": "store_id",
-                "direction": "desc",
-                "is_handle": False,
-            }
-        ],
-        "returned_row_count": 2,
-        "limit": 2,
-    }
+    assert "ordering_diagnostics" not in result
+
+
+@pytest.mark.asyncio
+async def test_query_does_not_reject_hidden_tie_breaker_for_identical_answers():
+    session, _ = _stub_session(
+        rows=[
+            {"first_name": "ALICE", "__rtf_order_1": 2},
+            {"first_name": "ALICE", "__rtf_order_1": 1},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [_select("c", "first_name")],
+            "order_by": [
+                _order_ref("c", "first_name", "asc"),
+                _order_ref("c", "customer_id", "desc"),
+            ],
+            "limit": 2,
+        },
+    )
+
+    assert "ordering_diagnostics" not in result
 
 
 @pytest.mark.asyncio

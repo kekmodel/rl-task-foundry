@@ -3021,12 +3021,11 @@ Solver 30/30 완료 결과:
   `trial_20260427_db_cross_mimiciv_demo_kimi_openrouter_09` showed a list
   ordered by a visible timestamp and then an unseen handle. The first submit
   was correctly rejected for duplicate visible order keys, but the retry used
-  the unseen handle as a tie-breaker and then failed solver rollout. `..._10`
-  showed the same structural problem with a non-handle visible order key
-  (`emar_seq`) that was not present in the request or label. The fix is a
-  common query diagnostic: limited lists now reject any unrepresented
-  `order_by` key that is needed to break duplicate answer-visible order
-  prefixes.
+  the unseen handle as a tie-breaker and then failed solver rollout. The fix is
+  a common query diagnostic for the structural subset only: limited lists
+  reject hidden/handle `order_by` tie-breakers when internal diagnostic order
+  values prove that the hidden key splits answer-distinguishable rows sharing
+  the represented order prefix.
 - **Observed filter-expression failure, not gated**:
   `trial_20260427_db_cross_mimiciv_demo_kimi_openrouter_11` used
   `statusdescription='FinishedRunning'` to define the answer row set, while
@@ -3045,3 +3044,23 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest -q` -> 429 passed. Targeted `ruff check` on touched files
   passed. `git diff --check` passed.
+
+## Iteration 74 — Literal-free order validator precision correction
+
+- **Issue**:
+  The initial order diagnostic was still too broad for the 100%-precision hard
+  validator rule. A user-visible non-handle order key can be legitimate even
+  when it is not selected as a label field, because the list order itself may
+  be the requested output. Also, a hidden tie-breaker does not matter when the
+  tied rows are answer-identical.
+- **Correction**:
+  The query tool now fetches unreturned order-key values only into internal
+  diagnostic aliases and does not expose them in the tool result rows. Hard
+  order diagnostics fire only when a hidden/handle order key actually splits
+  answer-distinguishable rows under the represented order prefix. User-visible
+  non-handle order keys are not hard rejected merely because they are not
+  selected outputs; expression in natural language would require a structured
+  binding, not a literal/text heuristic.
+- **Verification**:
+  `uv run pytest tests/test_tooling_composer_query.py tests/test_synthesis_runtime.py -q`
+  -> 87 passed. Targeted `ruff check` on the touched query/test files passed.
