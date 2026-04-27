@@ -90,3 +90,38 @@ def test_clopper_pearson_interval_and_ci_decision():
         )
         == "continue"
     )
+
+
+def test_kimi_02_would_continue_with_lower_band_035():
+    """Regression for the MIMIC `_kimi_02` trial: 2 passes out of 12."""
+
+    assert (
+        calibration_decision_from_counts(
+            total_solver_runs=20,
+            completed_solver_runs=12,
+            passes_so_far=2,
+            band=PassRateBand(lower=0.5, upper=0.9),
+            ci_alpha=0.1,
+        )
+        == "reject_too_hard"
+    )
+    assert (
+        calibration_decision_from_counts(
+            total_solver_runs=20,
+            completed_solver_runs=12,
+            passes_so_far=2,
+            band=PassRateBand(lower=0.35, upper=0.9),
+            ci_alpha=0.1,
+        )
+        == "continue"
+    )
+    assert (
+        calibration_decision_from_counts(
+            total_solver_runs=20,
+            completed_solver_runs=16,
+            passes_so_far=2,
+            band=PassRateBand(lower=0.35, upper=0.9),
+            ci_alpha=0.1,
+        )
+        == "reject_too_hard"
+    )
