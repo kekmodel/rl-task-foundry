@@ -54,6 +54,7 @@ from rl_task_foundry.synthesis.real_db_trial import (
 )
 from rl_task_foundry.synthesis.submit_draft_tool import SubmitDraftPayload
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
+from rl_task_foundry.tooling.common.sql import quote_ident
 
 PROOF_DB_ID = "proof_trip_fixture"
 PROOF_TASK_TOPIC = "itinerary"
@@ -779,6 +780,12 @@ async def _ensure_proof_schema(database: DatabaseConfig, schema_name: str) -> No
                 await conn.execute(statement)
             for statement in _split_sql_statements(PROOF_FIXTURE_SEED):
                 await conn.execute(statement)
+            if database.readonly_role:
+                role = quote_ident(database.readonly_role)
+                await conn.execute(f"GRANT USAGE ON SCHEMA {quoted} TO {role}")
+                await conn.execute(
+                    f"GRANT SELECT ON ALL TABLES IN SCHEMA {quoted} TO {role}"
+                )
     finally:
         await conn.close()
 

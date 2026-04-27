@@ -116,7 +116,10 @@ def test_proof_topic_is_itinerary_taxonomy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_proof_task_commits_and_exports_bundle(tmp_path: Path) -> None:
+async def test_run_proof_task_commits_and_exports_bundle(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     # Integration test: requires the Postgres instance described by
     # ``rl_task_foundry.yaml`` to be reachable. asyncpg raises when it
     # isn't, which surfaces as a test failure — consistent with the
@@ -139,6 +142,7 @@ async def test_run_proof_task_commits_and_exports_bundle(tmp_path: Path) -> None
     assert (summary.bundle_root / "databases" / PROOF_DB_ID / "tooling_version.json").exists()
     assert summary.task_id is not None
     assert (summary.bundle_root / "tasks" / summary.task_id / "task.yaml").exists()
+    assert "anchor candidate seeding failed" not in caplog.text
 
     phase_monitor_lines = [
         json.loads(line)
