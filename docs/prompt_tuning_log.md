@@ -2930,3 +2930,63 @@ Solver 30/30 완료 결과:
   into user context, and Codex-style `<environment_context>` is preserved.
   `uv run pytest -q` -> 418 passed. Targeted `ruff check` on touched files
   passed.
+
+## Iteration 72 — DB-swap cross-check and adaptive task-shape gates
+
+- **Goal clarified**:
+  The project target is DB-adaptive generation: changing the configured DB
+  should be enough for the composer to discover a reachable, calibrated task
+  from schema/data evidence. Durable policy belongs in the common system prompt
+  and structural validators; DB-specific knowledge belongs only in DB config
+  examples/pitfalls or observed tool evidence.
+- **DB surface cross-check**:
+  `validate-config` passed for pagila, postgres_air, mimiciv_demo, and
+  mimiciv. `check-db` now verifies the configured schema allowlist, table
+  counts, read-only mode, and SELECT coverage instead of only reporting
+  `current_schema=public`. Live checks passed for pagila
+  (`allowlist=public tables=22 selectable=22`), postgres_air
+  (`allowlist=postgres_air tables=10 selectable=10`), and MIMIC-IV demo
+  (`allowlist=mimiciv_hosp,mimiciv_icu tables=31 selectable=31`). Full MIMIC
+  did not run locally because the configured port 5435 container was absent.
+- **postgres_air result**:
+  Nano was still useful as cheap smoke and failed too-easy as expected.
+  Kimi trials initially failed on representation ambiguity and overly wide
+  row/list labels. The generic fix was to bind answer representation exactly,
+  keep initial row/list labels to 3-4 fields (max 5), and avoid open-ended
+  event/log lists. After those prompt changes,
+  `artifacts/trial_20260427_db_cross_postgres_air_kimi_openrouter_04`
+  accepted and committed `task_flight_booking_list_b361491fc973375f` with
+  `solver_pass_rate=0.85` and CI `[0.6563, 0.9578]`.
+- **MIMIC-IV demo findings**:
+  Kimi repeatedly found real clinical event surfaces, but the solver side often
+  picked a different plausible sibling table or answer column. Failures were
+  not fixed with MIMIC-specific examples. Instead, common gates/policies were
+  added for the observed generic failure classes:
+  list query limits must appear in `answer_contract.limit_phrase`; limited list
+  ordering with tied order keys is rejected before rollout; hidden blocked
+  handle filters must be present in `entity`; output aliases must preserve the
+  selected source column meaning; and source-role wording must distinguish
+  sibling tables such as event/admin/log surfaces from broader order/status
+  surfaces.
+- **Live validation of new gates**:
+  `artifacts/trial_20260427_db_cross_mimiciv_demo_kimi_openrouter_03` showed
+  blocked-label feedback working (`hadm_id` removed) and then exposed a
+  too-easy retry drift, so the Difficulty-Up Policy now tells list tasks to
+  preserve filters/order/limit/row set/output fields and add one visible field.
+  Phase-monitor label-change diagnostics now compare invalid retries against
+  the last solver-evaluated draft instead of drifting to invalid drafts.
+  `..._04` exposed order ties on lab events; `..._08` confirmed the new
+  `answer_contract_order_ambiguous` feedback fires before solver rollout.
+  `..._07` exposed hidden scope drift from `emar_id` entity to `subject_id`
+  filter, which is now rejected by `answer_contract_hidden_filter_unanchored`.
+- **Residual risk**:
+  MIMIC-IV demo still has no accepted Kimi final-confirmation run in this
+  iteration. The remaining pattern is semantic reachability across dense
+  sibling clinical tables: even with deterministic order and source-faithful
+  aliases, the request must make the selected source role obvious enough for
+  the solver to choose the same table. The next improvement should focus on
+  structural source-role hints or DB-local examples only if common policy stops
+  producing new generic fixes.
+- **Verification**:
+  `uv run pytest -q` -> 426 passed. Targeted `ruff check` on the touched
+  prompt/runtime/query/tool-schema/db files passed. `git diff --check` passed.
