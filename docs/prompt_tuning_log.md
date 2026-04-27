@@ -2990,3 +2990,57 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest -q` -> 426 passed. Targeted `ruff check` on the touched
   prompt/runtime/query/tool-schema/db files passed. `git diff --check` passed.
+
+## Iteration 73 — Three-DB generation log audit
+
+- **Request**:
+  Treat `mimiciv_demo` as the clinical DB target and audit logs across all
+  three configured DBs to distinguish pipeline errors from quality-gate
+  rejections.
+- **DB/config status**:
+  `validate-config` passed for pagila, postgres_air, and mimiciv_demo.
+  `check-db` passed for all three read-only surfaces:
+  pagila `allowlist=public tables=22 selectable=22`, postgres_air
+  `allowlist=postgres_air tables=10 selectable=10`, and mimiciv_demo
+  `allowlist=mimiciv_hosp,mimiciv_icu tables=31 selectable=31`.
+- **Generation log audit**:
+  Pagila has two accepted/committed/exported generation runs:
+  `task_customer_recent_rental_history_85bdb2f442fca725` at pass rate `0.9`
+  and `task_payment_history_with_films_bb2886f28864134a` at pass rate `0.55`.
+  Earlier pagila failures were provider setup issues: missing sourced `.env`
+  for OpenRouter and the wrong Opencode Kimi model name. Postgres_air has an
+  accepted/committed/exported run,
+  `task_flight_booking_list_b361491fc973375f`, at pass rate `0.85`; earlier
+  postgres_air failures were calibration/quality rejects, not DB or artifact
+  generation failures. MIMIC-IV demo repeatedly completed DB exploration,
+  composer queries, and solver batches with `solver_failed_runs=0`, but it has
+  no accepted/committed/exported run yet. Its failures are quality-signal
+  failures (`reject_too_hard` or `calibration_inconclusive`), not DB
+  connection, schema snapshot, registry, or bundle-export failures.
+- **New generic failure class from demo logs**:
+  `trial_20260427_db_cross_mimiciv_demo_kimi_openrouter_09` showed a list
+  ordered by a visible timestamp and then an unseen handle. The first submit
+  was correctly rejected for duplicate visible order keys, but the retry used
+  the unseen handle as a tie-breaker and then failed solver rollout. `..._10`
+  showed the same structural problem with a non-handle visible order key
+  (`emar_seq`) that was not present in the request or label. The fix is a
+  common query diagnostic: limited lists now reject any unrepresented
+  `order_by` key that is needed to break duplicate answer-visible order
+  prefixes.
+- **Second generic failure class from demo logs**:
+  `trial_20260427_db_cross_mimiciv_demo_kimi_openrouter_11` used
+  `statusdescription='FinishedRunning'` to define the answer row set, while
+  the user request and label did not expose that filter value. Solvers
+  reasonably retrieved the latest input events for the ICU stay without that
+  hidden membership filter. The fix is a common submit gate: user-visible
+  `where` filter values must be present in `user_request` or in the submitted
+  label; otherwise the draft receives feedback before solver rollout.
+- **Conclusion**:
+  The three DBs are healthy at the config/DB/tooling level. Pagila and
+  postgres_air prove end-to-end generation through bundle export. MIMIC-IV
+  demo does not yet prove accepted task generation; it is exposing dense
+  clinical-table ambiguity that now produces two additional generic gates
+  rather than DB-specific prompt examples.
+- **Verification**:
+  `uv run pytest -q` -> 430 passed. Targeted `ruff check` on touched files
+  passed. `git diff --check` passed.
