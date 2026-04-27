@@ -85,6 +85,9 @@ implementations.
     lists, and name-category maps such as "customer-like", "payment-like",
     "identifier-like", or "maintenance timestamp". Such logic is banned even
     when it appears helpful for privacy, naturalness, or weak-model guidance.
+    Runtime code also must not infer predicate expression, membership validity,
+    or user intent by checking whether a DB literal value appears as a substring
+    in generated user text or submitted label text.
 
 ## Absolute Rule: No Semantic Token Heuristics
 
@@ -95,6 +98,9 @@ Forbidden:
 - table-name, column-name, tool-name, or generated-text token lists
 - substring, prefix, suffix, regex, casing, or word-splitting rules used to infer
   domain meaning
+- DB-value literal containment checks against generated user text or label text
+  used to infer that a filter, membership rule, visibility rule, or task intent
+  is expressed
 - token-based role assignment, topic scoring, anchor scoring, affordance
   suppression, visibility/sensitivity classification, privacy classification,
   naturalness checks, hard validation, or retry feedback branches
@@ -108,9 +114,10 @@ Allowed:
 - measured live facts: profile statistics, sampled row non-emptiness,
   relationship counts, query evidence, and exact label equality
 - mechanical string handling that does not infer semantics, such as SQL
-  identifier quoting, env-var interpolation, stable relation labels, exact
-  substring checks for answer-contract phrases, and rendering observed names
-  back to the model
+  identifier quoting, env-var interpolation, stable relation labels, rendering
+  observed names back to the model, and exact substring checks for structured
+  answer-contract phrases supplied by the composer as pointers into
+  `user_request`, not as DB-value semantic evidence
 - registry near-duplicate detection over generated task text, including MinHash
   tokenization/shingling, because its purpose is string-surface similarity, not
   DB semantic inference
@@ -183,7 +190,9 @@ spec areas.
     labels, DB type metadata, row/profile statistics, sampled preview
     non-emptiness, and relationship counts. Relationship labels may include
     column names to identify the actual join, but names must not be interpreted
-    as business meaning.
+    as business meaning. Runtime logic also must not treat occurrence or
+    absence of DB literal values in generated user text or label text as proof
+    that a predicate is expressed, visible, hidden, or valid.
 12. DB-adaptive context should describe logical data surfaces, not storage
     implementation details. Partition children are hidden when their parent
     table is visible; primary keys and foreign keys are treated as tool handles
@@ -230,6 +239,9 @@ the runtime can prove exactly: schema/type shape, exact latest-query evidence,
 required provenance, explicitly configured exposure policy, and exact
 reward-visible label changes. If a rule could reject a valid task in an arbitrary
 well-designed database, it is not precise enough for hard validation.
+DB literal containment in natural-language requests or labels is not validator
+evidence; value-to-language alignment requires an explicit structured binding or
+belongs in prompt/tool guidance and solver pass-rate review.
 
 For the larger set of desirable behaviors, use LLM-facing contract design:
 

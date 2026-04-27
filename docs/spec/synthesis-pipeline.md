@@ -43,7 +43,7 @@ names as semantic evidence.
 
 The synthesis pipeline must not use token, substring, prefix/suffix, regex,
 case, word-splitting, or name-list logic over table names, column names, tool
-names, or generated user text to decide:
+names, generated user text, or DB literal values rendered into text to decide:
 
 - topic quality or topic family
 - anchor quality
@@ -59,6 +59,8 @@ names, or generated user text to decide:
 The only allowed signals for these decisions are explicit configuration,
 database structure, declared type metadata, profiler statistics, sampled rows,
 relationship counts, exact query evidence, and exact schema/contract checks.
+Literal occurrence or absence of an observed DB value in `user_request` or label
+text is not exact schema/contract evidence.
 This boundary does not ban registry near-duplicate detection over generated task
 text; MinHash tokenization/shingling is valid there because deduplication is
 string-surface similarity, not schema or task-validity inference.
@@ -381,6 +383,8 @@ schemas before trial changes are trusted. Current invariants:
   column-name tokens
 - hard submit validation does not reject drafts by token patterns in generated
   user text
+- hard submit validation does not reject drafts by DB literal occurrence or
+  absence in generated user text or label text
 - time affordances come from DB type metadata, not column-name tokens
 - numeric metrics come from DB type/profile metadata, not semantic name filters
 - path cards include a relation label with source and target join columns, so

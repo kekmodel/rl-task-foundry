@@ -452,6 +452,8 @@ rollout, or harvest behavior, answer these questions in the PR or tuning log:
    qualitative trace review, or solver pass-rate.
 6. Does the rule rely on table-name, column-name, tool-name, or generated-text
    tokens? If yes, it violates the no-semantic-token-heuristics rule.
+   Does it rely on DB literal occurrence or absence in generated text or label
+   text? If yes, it is also forbidden as validator evidence.
 7. Could this rule hide a valid task shape in an arbitrary good DB? If yes, it
    must not be a hard validator.
 8. Does the change leak composer, solver, actor, pass-rate, training, or
@@ -481,5 +483,6 @@ rollout, or harvest behavior, answer these questions in the PR or tuning log:
 - Letting hard validation steal the statistical job of solver rollout.
 - Repairing terminal low-quality drafts inside the same composer conversation.
 - Adding semantic token heuristics to "help" DB adaptation.
+- Adding DB-value literal containment checks as validation evidence.
 - Moving current-run DB facts into composer system instructions.
 - Giving the solver a system prompt or composer/quality-gate internals.
