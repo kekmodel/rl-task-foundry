@@ -27,6 +27,7 @@ artifacts/smoke/
 artifacts/eval_*/
 artifacts/trial_*/
 artifacts/tasks/
+artifacts/*/tasks/
 artifacts/task_registry.db*
 artifacts/*/task_registry.db*
 artifacts/tmp_configs/smoke_*.yaml
