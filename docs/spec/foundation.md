@@ -295,9 +295,15 @@ spec areas.
     good data. When a trial is too hard or inconclusive, inspect the canonical
     query, label, sampled rows, solver traces, and tool errors to decide whether
     the draft is low-quality, ambiguous, or data-broken, or whether it is a
-    sound but difficult problem for the current solver/tool surface. This review
-    must stay structural and trace-based; do not justify the judgment with
-    DB-literal or token-containment heuristics.
+    sound but difficult problem for the current solver/tool surface. The
+    decisive distinction is tool-solvability: if the submitted task can be
+    answered from the database using only the solver's provided tools, but the
+    sampled solvers fail, it is a difficult but good problem. If the submitted
+    task cannot be answered from the prompt, data, and solver tool surface
+    because the row set, ordering, entity, output mapping, or evidence path is
+    under-specified or unavailable, it is low-quality. This review must stay
+    structural and trace-based; do not justify the judgment with DB-literal or
+    token-containment heuristics.
 
 ## Validation And Guidance Boundary
 

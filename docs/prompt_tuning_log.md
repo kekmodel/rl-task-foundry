@@ -3306,23 +3306,29 @@ Solver 30/30 완료 결과:
 
 - **Quality adjudication**:
   Do not stop at the `reject_too_hard` gate label. Direct DB inspection changes
-  the interpretation of the two smokes:
+  the interpretation of the two smokes. The criterion is tool-solvability: if
+  the submitted task can be answered from the database using only the solver's
+  provided tools, but sampled solvers fail, it is a difficult but good problem;
+  if the submitted task cannot be answered from the prompt/data/tool surface, it
+  is low-quality.
 
   - `_kimi_01` is a low-quality draft, not merely a good hard task. The stay has
     824 `inputevents`; the request asks for "5 items in time order" but never
     says earliest/first or latest/recent. The canonical query silently chooses
     the earliest five rows and also uses `d_items.label` as a visible tie-break
-    without stating that tie-break in the user request. The DB rows themselves
-    are coherent, but the row-set membership is under-specified by the prompt.
-  - `_kimi_02` is a substantially better hard task. After feedback, the request
-    asks for the recent three input events and explicitly says same-time events
-    are sorted alphabetically by item name. Direct DB inspection for
+    without stating that tie-break in the user request. A solver cannot know the
+    intended row set from the prompt alone even though the DB rows themselves
+    are coherent.
+  - `_kimi_02` is a good hard task. After feedback, the request asks for the
+    recent three input events and explicitly says same-time events are sorted
+    alphabetically by item name. Direct DB inspection for
     `subject_id=10001217` shows 53 input events and confirms the canonical top
     three rows: `PO Intake` at `2157-12-20 14:00`, then `Magnesium Sulfate` and
     `Magnesium Sulfate (Bolus)` at `2157-12-20 09:25` sorted by label. Solver
     failures mostly came from MIMIC label/path confusion, wrong related fields,
     timestamp/end-time drift, or blank fallback output, not from an unsound
-    canonical row set.
+    canonical row set. The task is solvable with the given tools and data, so
+    the low pass rate marks difficulty rather than low quality.
 
   Future trial review must report this human quality adjudication alongside the
   numeric gate outcome; `too_hard` alone is not enough.

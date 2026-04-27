@@ -238,12 +238,14 @@ acceptable: all of those are reasons to discard the trial.
 
 Real trial analysis must go one step further than the gate label. For every
 too-hard or low-pass run, record an explicit human adjudication: is the
-canonical data and label sound, and did solvers fail because the task is
-genuinely difficult for the current tool surface, or because the draft is
-ambiguous, under-specified, hidden, non-unique, inconsistent, or otherwise
-low-quality? This judgment must be based on structured query evidence, sampled
-rows, solver tool traces, and error classes. Do not use DB-value literal
-occurrence or token containment in generated prose as evidence.
+canonical data and label sound, and can the task be solved from the prompt and
+database using only the solver's provided tools? If yes, solver failures mean
+the task is difficult but still good. If no, the draft is low-quality: ambiguous,
+under-specified, hidden, non-unique, inconsistent, tool-unreachable, or otherwise
+not actually answerable by the intended actor/tool surface. This judgment must
+be based on structured query evidence, sampled rows, solver tool traces, and
+error classes. Do not use DB-value literal occurrence or token containment in
+generated prose as evidence.
 
 The terminal-discard policy is intentional. Earlier designs allowed the
 composer to weaken a too-hard draft in the same conversation, but in practice
@@ -377,7 +379,9 @@ reliably solve with the given tools.
 The configured band is retargetable. Changing `[lower_pass_rate,
 upper_pass_rate]` changes the acceptance policy, not the underlying trace
 evidence. Trial reviews should therefore report both the numeric gate result and
-the trace-based quality judgment.
+the trace-based quality judgment. The quality judgment must classify the draft
+by tool-solvability: "solvable but not solved" is a hard good problem;
+"not solvable with the given data/tool surface" is low-quality.
 
 Do not replace that statistical role with heuristic validators. Hard validation
 is only for 100%-precision contract violations, and even then the state
