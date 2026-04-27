@@ -3262,3 +3262,27 @@ Solver 30/30 완료 결과:
   The new precision-100 guard works on real MIMIC data. The remaining failed
   model trials point at anchor/request selection and composer completion
   behavior, not at hidden row-set boundary control.
+
+## Iteration 84 — No-submit final output protocol feedback
+
+- **Issue**:
+  Kimi can stop before `max_turns` because `max_turns` is an upper bound, not a
+  minimum turn guarantee. In
+  `artifacts/trial_20260428_mimiciv_demo_rowset_kimi_01`, the composer stopped
+  at turn 7 with `final_output_text=""`, after data tools but without
+  `submit_draft`. This was not a submit rejection or max-turn exhaustion; it was
+  an early final output that violated the composer completion protocol.
+- **Correction**:
+  Added a precision-100 protocol feedback path. When the Agents backend receives
+  a normal final output while no draft is accepted and `submit_draft` has never
+  been called, the controller records `composer_submit_draft_missing` feedback:
+  plain final output is invalid, continue with tools if evidence is still
+  needed, and call `submit_draft` once the draft is valid. The backend then
+  resumes the same SDK history via `RunResult.to_input_list(mode="preserve_all")`
+  with that feedback appended, bounded by remaining turns and submission budget.
+  This check uses only execution protocol facts, not DB literals, token
+  matching, or answer-content heuristics.
+- **Verification**:
+  Added unit coverage for the controller feedback record and for backend
+  continuation after no-submit final output. Targeted tests and adjacent
+  synthesis backend/runtime tests passed.

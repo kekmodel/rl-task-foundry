@@ -981,6 +981,38 @@ async def test_submit_draft_feedback_consumes_total_submit_budget(tmp_path: Path
     assert third == "BudgetExhaustedError: No more attempts."
     assert controller.submissions_left() == 0
 
+
+def test_submit_draft_records_missing_submit_protocol_feedback(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {"from": {"table": "customers", "as": "c"}}},
+        result={"rows": [{"customer_id": 1}], "row_count": 1},
+    )
+
+    feedback = controller.record_missing_submit_feedback(
+        final_output_text="I can answer this now.",
+        tool_calls=("query",),
+    )
+
+    assert feedback.startswith("FeedbackError:")
+    assert "Plain final output is invalid" in feedback
+    assert "call submit_draft" in feedback
+    assert "Do not end the run with text only" in feedback
+    assert controller.feedback_events == 1
+    assert controller.last_feedback_error_codes == ("composer_submit_draft_missing",)
+    assert controller.submissions_left() == 2
+
+
 @pytest.mark.asyncio
 async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings(
     tmp_path: Path,

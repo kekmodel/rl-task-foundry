@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from time import perf_counter
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
@@ -52,6 +52,46 @@ class SynthesisConversationResult:
     turn_count: int
     token_usage: dict[str, int]
     tool_calls: tuple[str, ...] = ()
+
+
+def _final_output_text(run_result: object) -> str:
+    final_output = getattr(run_result, "final_output", None)
+    return final_output if isinstance(final_output, str) else str(final_output or "")
+
+
+def _tool_calls_from_result(run_result: object) -> tuple[str, ...]:
+    return tuple(
+        tool_name
+        for item in getattr(run_result, "new_items", []) or []
+        if (tool_name := _extract_tool_call_name(item)) is not None
+    )
+
+
+def _add_token_usage(
+    total: dict[str, int],
+    usage: dict[str, int],
+) -> None:
+    for key, value in usage.items():
+        total[key] = total.get(key, 0) + int(value)
+
+
+def _append_feedback_input(
+    run_result: object,
+    feedback_message: str,
+) -> list[object] | None:
+    to_input_list = getattr(run_result, "to_input_list", None)
+    if not callable(to_input_list):
+        return None
+    continuation = list(to_input_list(mode="preserve_all"))
+    continuation.append({"role": "user", "content": feedback_message})
+    return continuation
+
+
+def _controller_accepts_more_feedback(controller: object) -> bool:
+    submissions_left = getattr(controller, "submissions_left", None)
+    if not callable(submissions_left):
+        return True
+    return int(submissions_left()) > 0
 
 
 def _build_agent(
@@ -227,39 +267,85 @@ class OpenAIAgentsSynthesisBackend:
             affordance_map=affordance_map,
         )
         started_at = perf_counter()
-        try:
-            run_result = await sdk.Runner.run(
-                agent,
-                request_input,
-                max_turns=max_turns,
-                session=None,
-            )
-        except Exception as exc:
-            latency_ms = int((perf_counter() - started_at) * 1000)
-            event_logger = getattr(conversation.controller, "event_logger", None)
-            if event_logger is not None:
-                event_logger.log_sync(
-                    actor="composer",
-                    event_type="synthesis_failed",
-                    payload={
-                        "error_type": exc.__class__.__name__,
-                        "error_detail": str(exc),
-                        "latency_ms": latency_ms,
-                        "max_turns": max_turns,
-                        "run_items": _extract_run_error_items(exc),
-                    },
+        run_input: str | list[object] = request_input
+        total_turn_count = 0
+        token_usage: dict[str, int] = {}
+        tool_calls: list[str] = []
+        run_item_summaries: list[dict[str, Any]] = []
+        protocol_feedback_events = 0
+        final_output_text = ""
+        while True:
+            turns_left = max(1, max_turns - total_turn_count)
+            try:
+                run_result = await sdk.Runner.run(
+                    agent,
+                    run_input,
+                    max_turns=turns_left,
+                    session=None,
                 )
-            raise
+            except Exception as exc:
+                latency_ms = int((perf_counter() - started_at) * 1000)
+                event_logger = getattr(conversation.controller, "event_logger", None)
+                if event_logger is not None:
+                    event_logger.log_sync(
+                        actor="composer",
+                        event_type="synthesis_failed",
+                        payload={
+                            "error_type": exc.__class__.__name__,
+                            "error_detail": str(exc),
+                            "latency_ms": latency_ms,
+                            "max_turns": max_turns,
+                            "turn_count": total_turn_count,
+                            "token_usage": token_usage,
+                            "tool_calls": list(tool_calls),
+                            "protocol_feedback_events": protocol_feedback_events,
+                            "run_items": [
+                                *run_item_summaries,
+                                *_extract_run_error_items(exc),
+                            ],
+                        },
+                    )
+                raise
+            segment_turn_count = max(1, _extract_turn_count(run_result))
+            total_turn_count += segment_turn_count
+            segment_tool_calls = _tool_calls_from_result(run_result)
+            tool_calls.extend(segment_tool_calls)
+            _add_token_usage(token_usage, _extract_token_usage(run_result))
+            run_item_summaries.extend(
+                _summarize_run_item(item)
+                for item in getattr(run_result, "new_items", []) or []
+            )
+            final_output_text = _final_output_text(run_result)
+
+            controller = conversation.controller
+            missing_submit = (
+                getattr(controller, "accepted_draft", None) is None
+                and "submit_draft" not in tool_calls
+            )
+            if not missing_submit:
+                break
+            record_feedback = getattr(controller, "record_missing_submit_feedback", None)
+            if not callable(record_feedback):
+                break
+            if not _controller_accepts_more_feedback(controller):
+                break
+            feedback_message = record_feedback(
+                final_output_text=final_output_text,
+                tool_calls=tuple(tool_calls),
+            )
+            protocol_feedback_events += 1
+            if (
+                "BudgetExhaustedError: No more attempts." in feedback_message
+                or total_turn_count >= max_turns
+                or not _controller_accepts_more_feedback(controller)
+            ):
+                break
+            continuation_input = _append_feedback_input(run_result, feedback_message)
+            if continuation_input is None:
+                break
+            run_input = continuation_input
+
         latency_ms = int((perf_counter() - started_at) * 1000)
-        tool_calls = tuple(
-            tool_name
-            for item in getattr(run_result, "new_items", []) or []
-            if (tool_name := _extract_tool_call_name(item)) is not None
-        )
-        final_output = run_result.final_output
-        final_output_text = (
-            final_output if isinstance(final_output, str) else str(final_output or "")
-        )
         event_logger = getattr(conversation.controller, "event_logger", None)
         if event_logger is not None:
             event_logger.log_sync(
@@ -268,20 +354,18 @@ class OpenAIAgentsSynthesisBackend:
                 payload={
                     "final_output_text": final_output_text,
                     "latency_ms": latency_ms,
-                    "turn_count": _extract_turn_count(run_result),
-                    "token_usage": _extract_token_usage(run_result),
+                    "turn_count": total_turn_count,
+                    "token_usage": token_usage,
                     "tool_calls": list(tool_calls),
-                    "run_items": [
-                        _summarize_run_item(item)
-                        for item in getattr(run_result, "new_items", []) or []
-                    ],
+                    "protocol_feedback_events": protocol_feedback_events,
+                    "run_items": run_item_summaries,
                 },
             )
         return SynthesisConversationResult(
             provider=self.provider_name,
             model=self.model_name,
             final_output_text=final_output_text,
-            turn_count=_extract_turn_count(run_result),
-            token_usage=_extract_token_usage(run_result),
-            tool_calls=tool_calls,
+            turn_count=total_turn_count,
+            token_usage=token_usage,
+            tool_calls=tuple(tool_calls),
         )

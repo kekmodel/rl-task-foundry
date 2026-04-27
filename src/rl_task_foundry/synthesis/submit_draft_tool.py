@@ -109,9 +109,12 @@ JsonScalar = str | int | float | bool
 
 
 def _error_code_values(
-    codes: list[SubmitDraftErrorCode] | tuple[SubmitDraftErrorCode, ...],
+    codes: list[SubmitDraftErrorCode | str] | tuple[SubmitDraftErrorCode | str, ...],
 ) -> list[str]:
-    return [code.value for code in codes]
+    return [
+        code.value if isinstance(code, SubmitDraftErrorCode) else str(code)
+        for code in codes
+    ]
 
 
 def _validation_error_diagnostics(error: ValidationError) -> list[dict[str, object]]:
@@ -1120,6 +1123,59 @@ class SubmitDraftController:
             diagnostics=diagnostics,
         )
 
+    def record_missing_submit_feedback(
+        self,
+        *,
+        final_output_text: str,
+        tool_calls: tuple[str, ...],
+    ) -> str:
+        if self.accepted_draft is not None:
+            return _render_structured_message(
+                kind="Accepted",
+                result="Draft already stored.",
+            )
+        if self.submissions_left() <= 0:
+            return "BudgetExhaustedError: No more attempts."
+
+        attempts_left_after = self.submissions_left() - 1
+        primary = (
+            "Plain final output is invalid for this role; the synthesis composer "
+            "must finish through submit_draft, not a text-only final answer."
+        )
+        message = _render_structured_message(
+            kind="FeedbackError",
+            primary=primary,
+            next_step=(
+                "Continue with data tools if more evidence is needed; when the "
+                "task draft is valid, call submit_draft. Do not end the run "
+                "with text only."
+            ),
+            attempts_left=max(0, attempts_left_after),
+        )
+        diagnostics: dict[str, object] = {
+            "final_output_without_submit": True,
+            "tool_calls": list(tool_calls),
+        }
+        final_preview = final_output_text.strip()
+        if final_preview:
+            diagnostics["final_output_preview"] = preview_payload(
+                final_preview,
+                max_string_length=(
+                    self.config.synthesis.runtime.payload_preview_max_string_length
+                ),
+                max_list_items=self.config.synthesis.runtime.payload_preview_max_list_items,
+                max_dict_items=self.config.synthesis.runtime.payload_preview_max_dict_items,
+            )
+        return self._record_feedback(
+            message=message,
+            error_codes=["composer_submit_draft_missing"],
+            payload=None,
+            search_cost_observations=(
+                len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
+            ),
+            diagnostics=diagnostics,
+        )
+
     async def submit(self, payload: SubmitDraftPayload) -> str:
         if self.accepted_draft is not None:
             return _render_structured_message(
@@ -1677,7 +1733,7 @@ class SubmitDraftController:
         self,
         *,
         message: str,
-        error_codes: list[SubmitDraftErrorCode],
+        error_codes: list[SubmitDraftErrorCode | str],
         payload: SubmitDraftPayload | dict[str, object] | None = None,
         search_cost_observations: int | None = None,
         diagnostics: dict[str, object] | None = None,
