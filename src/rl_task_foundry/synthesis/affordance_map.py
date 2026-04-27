@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 
-from rl_task_foundry.infra.privacy import is_user_visible_visibility
+from rl_task_foundry.infra.visibility import is_user_visible_visibility
 from rl_task_foundry.schema.graph import (
     ColumnProfile,
     ForeignKeyEdge,

@@ -1,4 +1,4 @@
-from rl_task_foundry.infra.privacy import (
+from rl_task_foundry.infra.visibility import (
     blocks_direct_label_exposure,
     infer_visibility,
     is_blocked_visibility,
@@ -9,13 +9,13 @@ from rl_task_foundry.infra.privacy import (
 )
 
 
-def test_privacy_does_not_infer_visibility_from_column_names():
+def test_visibility_does_not_infer_visibility_from_column_names():
     assert infer_visibility("customer_email") is None
     assert infer_visibility("card_number") is None
     assert infer_visibility("delivery_status") is None
 
 
-def test_privacy_resolve_uses_only_overrides_and_default_visibility():
+def test_visibility_resolve_uses_only_overrides_and_default_visibility():
     visibility = resolve_visibility(
         "courier_phone",
         default_visibility="blocked",
@@ -48,7 +48,7 @@ def test_privacy_resolve_uses_only_overrides_and_default_visibility():
     assert payload["card_number"] == "[REDACTED]"
 
 
-def test_privacy_visibility_predicates_are_policy_metadata_checks():
+def test_visibility_predicates_are_policy_metadata_checks():
     assert is_visibility("blocked")
     assert is_visibility("internal")
     assert is_visibility("user_visible")

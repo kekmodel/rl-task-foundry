@@ -8,7 +8,7 @@ import asyncpg
 
 from rl_task_foundry.config.models import DatabaseConfig
 from rl_task_foundry.infra.db import _apply_session_settings, control_session_settings
-from rl_task_foundry.infra.privacy import Visibility
+from rl_task_foundry.infra.visibility import Visibility
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
 from rl_task_foundry.schema.sensitivity import ColumnRef, classify_columns
 

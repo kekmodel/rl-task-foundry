@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from rl_task_foundry.infra.privacy import Visibility
+from rl_task_foundry.infra.visibility import Visibility
 
 
 @dataclass(slots=True)

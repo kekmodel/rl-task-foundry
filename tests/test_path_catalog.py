@@ -123,8 +123,8 @@ async def _load_pagila_catalog():
     config = load_config("rl_task_foundry.yaml")
     introspector = PostgresSchemaIntrospector(
         database=config.database,
-        default_visibility=config.privacy.default_visibility,
-        visibility_overrides=config.privacy.visibility_overrides,
+        default_visibility=config.visibility.default_visibility,
+        visibility_overrides=config.visibility.visibility_overrides,
     )
     graph = await introspector.introspect()
     return build_path_catalog(graph, max_hops=4)

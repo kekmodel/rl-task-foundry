@@ -17,11 +17,11 @@ from pydantic import (
 )
 
 from rl_task_foundry.config.models import AppConfig
-from rl_task_foundry.infra.privacy import (
+from rl_task_foundry.infra.sdk_helpers import preview_payload
+from rl_task_foundry.infra.visibility import (
     blocks_direct_label_exposure,
     is_blocked_visibility,
 )
-from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import StrictModel
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger

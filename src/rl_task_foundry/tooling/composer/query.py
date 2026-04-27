@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_task_foundry.infra.privacy import is_user_visible_visibility
+from rl_task_foundry.infra.visibility import is_user_visible_visibility
 from rl_task_foundry.tooling.common.edges import TypedEdge, resolve_edge
 from rl_task_foundry.tooling.common.payload import ensure_int as _require_int
 from rl_task_foundry.tooling.common.schema import TableSpec

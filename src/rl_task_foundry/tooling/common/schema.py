@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from string import ascii_letters, digits
 
-from rl_task_foundry.infra.privacy import (
+from rl_task_foundry.infra.visibility import (
     VISIBILITY_BLOCKED,
     VISIBILITY_USER_VISIBLE,
     Visibility,

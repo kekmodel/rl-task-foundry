@@ -167,7 +167,7 @@ configuration or another 100%-precision structured source.
 `visibility` is column-level policy metadata, not a semantic guess from a name
 or value. The current value set is `blocked`, `internal`, and `user_visible`
 (`Visibility = Literal["blocked", "internal", "user_visible"]` in
-`infra/privacy.py`; config uses the same literal set).
+`infra/visibility.py`; config uses the same literal set).
 
 - `blocked`: not user-visible. Direct label exposure is rejected. PK/FK blocked
   columns may still be available as opaque handles for entity scope and

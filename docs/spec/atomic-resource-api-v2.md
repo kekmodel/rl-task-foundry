@@ -48,7 +48,7 @@ For each database:
   records by primary key, even after following a relation
 - record id handling comes from each table's primary-key metadata
 - scalar coercion comes from each column's PostgreSQL data type
-- visibility/privacy filtering must be applied before the snapshot becomes a
+- visibility filtering must be applied before the snapshot becomes a
   tool surface
 
 The generator must not special-case domain names such as `customer`, `rental`,

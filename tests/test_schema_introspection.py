@@ -83,8 +83,8 @@ async def test_postgres_schema_introspector_reads_pagila_schema():
     config = load_config("rl_task_foundry.yaml")
     introspector = PostgresSchemaIntrospector(
         database=config.database,
-        default_visibility=config.privacy.default_visibility,
-        visibility_overrides=config.privacy.visibility_overrides,
+        default_visibility=config.visibility.default_visibility,
+        visibility_overrides=config.visibility.visibility_overrides,
     )
 
     graph = await introspector.introspect()
@@ -96,7 +96,7 @@ async def test_postgres_schema_introspector_reads_pagila_schema():
     customer = graph.get_table("customer", schema_name="public")
     assert customer.primary_key == ("customer_id",)
     assert customer.get_column("customer_id").is_primary_key is True
-    assert customer.get_column("email").visibility == config.privacy.default_visibility
+    assert customer.get_column("email").visibility == config.visibility.default_visibility
 
     language = graph.get_table("language", schema_name="public")
     assert language.get_column("name").visibility == "user_visible"

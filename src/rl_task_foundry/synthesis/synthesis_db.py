@@ -77,8 +77,8 @@ class SynthesisDb:
                 return self._graph_cache
             introspector = PostgresSchemaIntrospector(
                 database=self.config.database,
-                default_visibility=self.config.privacy.default_visibility,
-                visibility_overrides=self.config.privacy.visibility_overrides,
+                default_visibility=self.config.visibility.default_visibility,
+                visibility_overrides=self.config.visibility.visibility_overrides,
             )
             self._graph_cache = await introspector.introspect()
         return self._graph_cache

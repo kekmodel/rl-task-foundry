@@ -452,8 +452,8 @@ class SolverOrchestrator:
                 return cached
             introspector = PostgresSchemaIntrospector(
                 database=self.config.database,
-                default_visibility=self.config.privacy.default_visibility,
-                visibility_overrides=self.config.privacy.visibility_overrides,
+                default_visibility=self.config.visibility.default_visibility,
+                visibility_overrides=self.config.visibility.visibility_overrides,
             )
             graph = await introspector.introspect()
             snapshot = snapshot_from_graph(graph)

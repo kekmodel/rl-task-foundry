@@ -198,7 +198,7 @@ class BudgetConfig(StrictModel):
     reserve_strategy: Literal["phase_specific"] = "phase_specific"
 
 
-class PrivacyConfig(StrictModel):
+class VisibilityConfig(StrictModel):
     default_visibility: Literal["blocked", "internal", "user_visible"] = "blocked"
     visibility_overrides: dict[str, Literal["blocked", "internal", "user_visible"]] = Field(
         default_factory=dict
@@ -223,8 +223,21 @@ class AppConfig(StrictModel):
     dedup: DedupConfig
     task_registry: TaskRegistryConfig = Field(default_factory=TaskRegistryConfig)
     budget: BudgetConfig
-    privacy: PrivacyConfig
+    visibility: VisibilityConfig
     output: OutputConfig
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_privacy_key(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        if "privacy" not in data:
+            return data
+        if "visibility" in data:
+            raise ValueError("Use only one of visibility or legacy privacy config")
+        normalized = dict(data)
+        normalized["visibility"] = normalized.pop("privacy")
+        return normalized
 
     @computed_field  # type: ignore[prop-decorator]
     @property

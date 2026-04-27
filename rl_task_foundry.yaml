@@ -139,7 +139,7 @@ budget:
   min_accept_rate_attempts: 10
   reserve_strategy: "phase_specific"
 
-privacy:
+visibility:
   default_visibility: "user_visible"
   visibility_overrides:
     courier_phone: "user_visible"

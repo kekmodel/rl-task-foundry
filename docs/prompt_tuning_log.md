@@ -3087,11 +3087,24 @@ Solver 30/30 완료 결과:
   token heuristic, but it weakens the contract boundary and makes `derived`
   query-source metadata easy to confuse with the column visibility literals.
 - **Correction**:
-  `infra/privacy.py` now owns visibility constants and predicates for the
+  `infra/visibility.py` now owns visibility constants and predicates for the
   literal set `blocked`, `internal`, and `user_visible`. Composer query
   diagnostics, submit validation, schema exposure, affordance maps, and schema
   summaries now use those helpers instead of ad hoc visibility string
   comparisons.
 - **Verification**:
-  Targeted privacy/tooling/synthesis tests passed: 115 passed. Targeted
+  Targeted visibility/tooling/synthesis tests passed: 115 passed. Targeted
   `ruff check` and `git diff --check` passed.
+
+## Iteration 77 — Rename privacy surface to visibility
+
+- **Issue**:
+  `privacy` suggested PII-specific handling, while the module actually owns the
+  broader column exposure policy: `blocked`, `internal`, and `user_visible`.
+- **Correction**:
+  Renamed `infra/privacy.py` to `infra/visibility.py`, renamed the config model
+  to `VisibilityConfig`, and made `visibility:` the canonical config key. A
+  loader compatibility path still accepts legacy `privacy:` config files.
+- **Verification**:
+  `uv run pytest -q` -> 432 passed. `uv run ruff check src tests` passed.
+  `git diff --check` passed.

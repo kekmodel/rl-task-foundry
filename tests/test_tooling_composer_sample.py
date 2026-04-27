@@ -330,8 +330,8 @@ async def _live_session() -> tuple[ComposerSession, asyncpg.Connection]:
     config = load_config(Path("rl_task_foundry.yaml"))
     introspector = PostgresSchemaIntrospector(
         database=config.database,
-        default_visibility=config.privacy.default_visibility,
-        visibility_overrides=config.privacy.visibility_overrides,
+        default_visibility=config.visibility.default_visibility,
+        visibility_overrides=config.visibility.visibility_overrides,
     )
     graph = await introspector.introspect()
     snap = snapshot_from_graph(graph)

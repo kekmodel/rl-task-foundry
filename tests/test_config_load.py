@@ -59,7 +59,22 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.task_registry.default_query_limit == 20
     assert config.task_registry.semantic_shingle_size == 3
     assert config.budget.min_accept_rate_attempts == 10
+    assert config.visibility.default_visibility == "user_visible"
     assert config.estimated_total_db_connections == 40
+
+
+def test_load_config_accepts_legacy_privacy_key(tmp_path: Path):
+    legacy_text = Path("rl_task_foundry.yaml").read_text(encoding="utf-8").replace(
+        "\nvisibility:\n",
+        "\nprivacy:\n",
+        1,
+    )
+    config_path = tmp_path / "legacy_privacy.yaml"
+    config_path.write_text(legacy_text, encoding="utf-8")
+
+    config = load_config(config_path)
+
+    assert config.visibility.default_visibility == "user_visible"
 
 
 def test_load_config_applies_runtime_model_overrides():

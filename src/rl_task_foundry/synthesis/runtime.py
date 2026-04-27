@@ -14,7 +14,7 @@ from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.db import DatabasePools
-from rl_task_foundry.infra.privacy import is_blocked_visibility
+from rl_task_foundry.infra.visibility import is_blocked_visibility
 from rl_task_foundry.pipeline.provider_resilience import (
     ProviderCircuitBreaker,
     ProviderCircuitSnapshot,

@@ -32,4 +32,4 @@ This file is the entrypoint to the RL Task Foundry specification. Normative cont
 
 When a rule appears in only one linked document, that linked document is authoritative for that topic. This index is intentionally short and should not duplicate normative details.
 
-The absolute no-semantic-token-heuristics rule in [Foundation](./spec/foundation.md) applies across the whole project and overrides local convenience arguments in synthesis, tooling, privacy, validation, feedback, and registry logic.
+The absolute no-semantic-token-heuristics rule in [Foundation](./spec/foundation.md) applies across the whole project and overrides local convenience arguments in synthesis, tooling, visibility, validation, feedback, and registry logic.

@@ -49,7 +49,7 @@ names, generated user text, or DB literal values rendered into text to decide:
 - anchor quality
 - table role
 - visible/readable/user-facing status
-- privacy or sensitivity
+- visibility or sensitivity
 - metric/filter/time/business affordances beyond DB type metadata
 - naturalness or customer-facing validity
 - hard accept/reject decisions
