@@ -3109,3 +3109,20 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest -q` -> 432 passed. `uv run ruff check src tests` passed.
   `git diff --check` passed.
+
+## Iteration 78 — Prompt tie policy without verbosity creep
+
+- **Issue**:
+  The structural validator can reject hidden-handle tie-breaks, but the durable
+  composer policy should also tell the composer what to do before validation:
+  if visible criteria do not uniquely pick one answer-distinguishable row, do
+  not choose one with a hidden handle.
+- **Correction**:
+  Added one concise sentence to the existing unique-result prompt rule: add a
+  visible criterion or return the tied rows as a canonical list; never pick one
+  with a hidden handle. Kept the full instruction under the existing 8k prompt
+  budget.
+- **Verification**:
+  Prompt length remains under budget at 7,990 characters. `uv run pytest -q`
+  -> 431 passed. `uv run ruff check src tests` passed. `git diff --check`
+  passed.
