@@ -3317,8 +3317,8 @@ Solver 30/30 완료 결과:
     says earliest/first or latest/recent. The canonical query silently chooses
     the earliest five rows and also uses `d_items.label` as a visible tie-break
     without stating that tie-break in the user request. A solver cannot know the
-    intended row set from the prompt alone even though the DB rows themselves
-    are coherent.
+    intended row set or exact same-timestamp output order from the prompt alone
+    even though the DB rows themselves are coherent.
   - `_kimi_02` is a good hard task. After feedback, the request asks for the
     recent three input events and explicitly says same-time events are sorted
     alphabetically by item name. Direct DB inspection for
@@ -3328,7 +3328,11 @@ Solver 30/30 완료 결과:
     failures mostly came from MIMIC label/path confusion, wrong related fields,
     timestamp/end-time drift, or blank fallback output, not from an unsound
     canonical row set. The task is solvable with the given tools and data, so
-    the low pass rate marks difficulty rather than low quality.
+    the low pass rate marks difficulty rather than low quality. `sort_record_set`
+    cannot directly sort by related `d_items.label`, but the solver can
+    materialize the top candidate rows with `item_label`, verify the boundary,
+    and submit the answer array in the requested same-time label order; two
+    sampled solvers did exactly match.
 
   Future trial review must report this human quality adjudication alongside the
   numeric gate outcome; `too_hard` alone is not enough.
