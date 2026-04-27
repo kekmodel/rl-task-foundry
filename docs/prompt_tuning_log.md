@@ -3141,3 +3141,28 @@ Solver 30/30 완료 결과:
 - **Verification**:
   Prompt length is now 7,969 characters. `uv run pytest -q` -> 431 passed.
   `uv run ruff check src tests` passed. `git diff --check` passed.
+
+## Iteration 80 — Trial quality adjudication policy
+
+- **Issue**:
+  The configured pass-rate band is a calibration policy, not a complete
+  definition of data quality. A too-hard result can be caused by bad data,
+  ambiguity, hidden constraints, weak request wording, solver/tool-surface
+  brittleness, or a genuinely sound task that is just hard for the current
+  solver pool. Treating `reject_too_hard` as automatically "bad data" loses that
+  distinction.
+- **Correction**:
+  Foundation and pipeline lifecycle now require manual trace adjudication for
+  too-hard or low-pass real trials. The analysis must report both the numeric
+  gate result and a structural judgment from canonical query evidence, sampled
+  rows, labels, solver traces, and tool errors. The judgment must not rely on
+  DB-literal occurrence or token-containment heuristics.
+- **Postgres Air example**:
+  `artifacts/trial_20260427_postgres_air_kimi_01` had a second submission with
+  `3/12 = 0.25`, but direct DB verification showed the label was correct:
+  account `611141` had two bookings with prices `5.96` and `767.57`, summing to
+  `773.53`. The failure was therefore not bad data; it was a solver/tool-surface
+  difficulty around copying the exact relation label `account<-booking.account_id`
+  after difficulty-up added `booking_count`.
+- **Verification**:
+  Documentation-only change; `git diff --check` passed.

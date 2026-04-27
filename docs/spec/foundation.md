@@ -290,6 +290,14 @@ spec areas.
     drafts may be strengthened in place because the same answer target can
     usually be narrowed with one grounded constraint; too-hard drafts should be
     discarded so harvest can start from a fresh conversation and anchor context.
+19. Trial analysis must separate gate status from human quality judgment. The
+    configured pass-rate band is a calibration policy, not the definition of
+    good data. When a trial is too hard or inconclusive, inspect the canonical
+    query, label, sampled rows, solver traces, and tool errors to decide whether
+    the draft is low-quality, ambiguous, or data-broken, or whether it is a
+    sound but difficult problem for the current solver/tool surface. This review
+    must stay structural and trace-based; do not justify the judgment with
+    DB-literal or token-containment heuristics.
 
 ## Validation And Guidance Boundary
 
@@ -314,7 +322,8 @@ For the larger set of desirable behaviors, use LLM-facing contract design:
   control mechanism
 
 The remaining gray zone is intentional. Difficulty, naturalness, and task
-usefulness are evaluated by solver pass-rate and qualitative trace review. This
+usefulness are evaluated by solver pass-rate and qualitative trace review. A low
+pass rate is evidence to investigate, not proof that the data is bad. This
 preserves the solver signal instead of replacing it with brittle heuristics.
 
 ## Absolute Rule: Prompt Layer Boundary

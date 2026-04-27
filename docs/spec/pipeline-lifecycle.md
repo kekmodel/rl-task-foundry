@@ -236,6 +236,15 @@ It can mean overconstrained, actor-unreachable, tool-trace-unfriendly,
 ambiguous/non-unique for exact match, or otherwise low-quality. That is
 acceptable: all of those are reasons to discard the trial.
 
+Real trial analysis must go one step further than the gate label. For every
+too-hard or low-pass run, record an explicit human adjudication: is the
+canonical data and label sound, and did solvers fail because the task is
+genuinely difficult for the current tool surface, or because the draft is
+ambiguous, under-specified, hidden, non-unique, inconsistent, or otherwise
+low-quality? This judgment must be based on structured query evidence, sampled
+rows, solver tool traces, and error classes. Do not use DB-value literal
+occurrence or token containment in generated prose as evidence.
+
 The terminal-discard policy is intentional. Earlier designs allowed the
 composer to weaken a too-hard draft in the same conversation, but in practice
 the composer often failed to simplify cleanly. It tended to spend extra turns in
@@ -365,6 +374,11 @@ hard validation should not guess: poor naturalness, under-specified ordering,
 multi-answer requests, awkward trace surfaces, or tasks that actors do not
 reliably solve with the given tools.
 
+The configured band is retargetable. Changing `[lower_pass_rate,
+upper_pass_rate]` changes the acceptance policy, not the underlying trace
+evidence. Trial reviews should therefore report both the numeric gate result and
+the trace-based quality judgment.
+
 Do not replace that statistical role with heuristic validators. Hard validation
 is only for 100%-precision contract violations, and even then the state
 transition must be correct.
@@ -473,6 +487,7 @@ rollout, or harvest behavior, answer these questions in the PR or tuning log:
 | Actor pass-rate is too low | Terminal trial discard; harvest starts fresh |
 | Actor pass-rate is too high | Same conversation feedback only when gate classifies too-easy/high inconclusive |
 | Task may be ambiguous, awkward, or low-quality but not exactly provable | Solver pass-rate, trace review, prompt/schema tuning |
+| Too-hard draft may actually be sound but difficult | Human trace adjudication; consider band/model/tool-surface changes before calling it bad data |
 | Provider rate limit or transport failure | Exclude as infra and top up, within attempt budget |
 | Unknown model/tool protocol failure | Count as evaluable failure unless explicitly classified as infra |
 | Duplicate accepted task | Registry duplicate; not a composer retry |
@@ -483,6 +498,8 @@ rollout, or harvest behavior, answer these questions in the PR or tuning log:
   checking whether that condition should terminate the trial.
 - Treating `reject_too_hard` as only "too difficult". It also carries other
   low-pass quality failures.
+- Treating `reject_too_hard` as proof of bad data without inspecting query
+  evidence, label correctness, and solver traces.
 - Letting hard validation steal the statistical job of solver rollout.
 - Repairing terminal low-quality drafts inside the same composer conversation.
 - Adding semantic token heuristics to "help" DB adaptation.
