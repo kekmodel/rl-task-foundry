@@ -3064,3 +3064,17 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest tests/test_tooling_composer_query.py tests/test_synthesis_runtime.py -q`
   -> 87 passed. Targeted `ruff check` on the touched query/test files passed.
+
+## Iteration 75 — Literal-containment rule clarification
+
+- **Issue**:
+  A DB literal discovered dynamically from `query(spec)` can still become a
+  forbidden heuristic if the runtime compares it against generated prose to
+  infer whether a predicate or membership rule was expressed.
+- **Correction**:
+  Foundation now defines DB literals broadly, bans literal/text containment as
+  validation or feedback evidence, records exact allowed uses such as typed
+  query execution and structured equality, and documents the `visibility`
+  metadata values: `blocked`, `internal`, and `user_visible`.
+- **Verification**:
+  Documentation-only change; `git diff --check` passed.

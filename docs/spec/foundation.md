@@ -122,6 +122,65 @@ Allowed:
   tokenization/shingling, because its purpose is string-surface similarity, not
   DB semantic inference
 
+### DB Literal Containment Boundary
+
+A DB literal is any concrete value observed from the current database or tool
+evidence: strings, enum/status/code values, numbers, booleans, dates,
+timestamps, UUIDs, handles, and redaction placeholders. The ban applies even
+when the value was discovered dynamically during the current run. A runtime rule
+is still heuristic if it asks whether an observed DB value occurs in generated
+natural-language text.
+
+Forbidden as validation or feedback evidence:
+
+- `value in user_request`, `value in label_json`, or `value in
+  answer_contract_phrase` checks used to infer that a predicate, filter,
+  membership rule, visibility rule, or task intent is expressed
+- case-folded, tokenized, regex, prefix/suffix, stemming, translation,
+  synonym, or paraphrase variants of that containment check
+- sample-derived allow/deny vocabularies that turn observed DB values into
+  natural-language accept/reject rules
+- rejecting a draft because a query predicate value such as a status code is
+  not literally or semantically visible in the request or label text
+
+Allowed exact uses of DB literals:
+
+- executing typed predicates inside the database as part of an observed query
+- exact structured equality checks: canonical label versus latest query result,
+  reward-visible label changes, submitted result versus label, or entity handle
+  values versus explicit anchor values
+- exact lookup through explicit configuration or an explicit structured mapping
+  supplied outside the model's generated prose
+- rendering observed values back to the model, logs, traces, or task artifacts
+  without treating their textual occurrence as proof of semantics
+
+Future structured predicate bindings may be validated for shape: a predicate can
+reference a concrete `constraint_phrase` id, the phrase can be required to exist
+in `user_request`, and the predicate can be required to appear in the latest
+query evidence. The runtime still must not decide that the phrase semantically
+means the DB value by substring, token, translation, or paraphrase matching.
+Semantic value-to-phrase equivalence is valid only when it comes from explicit
+configuration or another 100%-precision structured source.
+
+### Visibility Metadata
+
+`visibility` is column-level policy metadata, not a semantic guess from a name
+or value. The current value set is `blocked`, `internal`, and `user_visible`
+(`Visibility = Literal["blocked", "internal", "user_visible"]` in
+`infra/privacy.py`; config uses the same literal set).
+
+- `blocked`: not user-visible. Direct label exposure is rejected. PK/FK blocked
+  columns may still be available as opaque handles for entity scope and
+  navigation when the schema marks them as handles.
+- `internal`: available to internal tooling where exposed by the surface, but
+  not a customer-facing answer value. Direct label exposure is rejected.
+- `user_visible`: eligible to appear in user-facing answer values when the task
+  asks for it and the value is grounded in observed tool/query evidence.
+
+Visibility comes from explicit config/default metadata and snapshot
+materialization. The deprecated `infer_visibility` compatibility hook must not
+infer visibility from column-name tokens; it returns no classification.
+
 Reason:
 
 The product goal is DB-swappable RLVR data generation. Arbitrary good databases

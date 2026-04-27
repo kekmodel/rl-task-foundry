@@ -60,7 +60,11 @@ The only allowed signals for these decisions are explicit configuration,
 database structure, declared type metadata, profiler statistics, sampled rows,
 relationship counts, exact query evidence, and exact schema/contract checks.
 Literal occurrence or absence of an observed DB value in `user_request` or label
-text is not exact schema/contract evidence.
+text is not exact schema/contract evidence, even when that value came from the
+composer's own latest query rather than from a hand-written list. Query evidence
+may prove exact structured facts such as label equality, handle equality,
+column visibility, row order, or answer-distinguishable ties; it must not be
+converted into natural-language value-containment validation.
 This boundary does not ban registry near-duplicate detection over generated task
 text; MinHash tokenization/shingling is valid there because deduplication is
 string-surface similarity, not schema or task-validity inference.
