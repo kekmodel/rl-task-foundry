@@ -135,6 +135,8 @@ def test_synthesis_input_does_not_mirror_sdk_tool_surface() -> None:
     assert "<scenario_description>" in prompt
     assert "end-user support" in prompt
     assert "record_history" in prompt
+    assert "soft hint" in prompt
+    assert "make submitted topic and user_request match the actual query path" in prompt
     assert "Korean" in prompt
 
     # schema

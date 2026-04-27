@@ -81,7 +81,8 @@ def _topic_semantics_instruction(
         "Treat as a soft hint. Start from a grounded "
         "label first; if the hint leads to a trivial or "
         "id-only label, ignore it and choose a better "
-        "grounded topic."
+        "grounded topic. If you depart from the hint, make "
+        "submitted topic and user_request match the actual query path."
     )
 
 
