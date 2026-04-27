@@ -3479,3 +3479,42 @@ Solver 30/30 완료 결과:
   Tool descriptions were tightened to say that when a requested order names a
   related label/name returned through `list_records.fields.path`, the same
   related path should be used as a sort key before listing source records.
+
+## Iteration 88 — Controlled related-sort solver validation
+
+- **Question**:
+  After adding related sort keys, determine whether the remaining MIMIC demo
+  failures are a tool-surface impossibility, weak solver behavior, or low-quality
+  data. Use a fixed draft so composer variation cannot hide the signal.
+- **Fixed draft**:
+  MIMIC demo, `stay_id=39880770`, input events. The request asks for the most
+  recent five infusion/fluid events, ordered by `starttime desc`, with same-time
+  ties ordered by related `d_items.label asc`. The answer includes related item
+  name plus direct amount, unit, start time, and status.
+- **Nano solver run**:
+  `artifacts/controlled_solver_related_sort_20260428_01`, solver
+  `openrouter/openai/gpt-5.4-nano`, 12 fixed-draft runs, early termination off:
+  `2/12` exact matches, pass rate `0.1667`, CI `[0.0305, 0.4381]`.
+  `used_related_sort_runs=2`, `used_related_item_field_runs=4`, and both exact
+  matches are exactly the two runs that used
+  `sort_record_set.keys=[starttime desc, inputevents.itemid->d_items.label asc]`.
+  Failures mostly chose direct tie-breaks such as `itemid`, `amountuom`, or
+  `ordercategoryname`, or returned direct columns such as `itemid`,
+  `ordercategoryname`, or `ordercomponenttypedescription` instead of
+  `d_items.label`.
+- **Kimi solver run**:
+  `artifacts/controlled_solver_related_sort_20260428_kimi_01`, solver
+  `openrouter/moonshotai/kimi-k2.5`, 4 fixed-draft runs, early termination off:
+  `4/4` exact matches. All four runs used the related sort path and all four
+  listed the related `d_items.label` field. The statistical gate reads
+  `reject_too_easy` only because this is a small controlled strong-solver check,
+  not a band calibration sample.
+- **Interpretation**:
+  The new atomic sort surface is functionally sufficient and necessary for this
+  class. The task is not low-quality: a stronger solver solves it from the
+  visible request and tools without hidden row controls. The nano failures are
+  mostly reasoning/tool-selection failures, not evidence for another hard
+  validator. Further changes should avoid oracle shortcuts; if optimizing nano,
+  keep the change at prompt/tool-description clarity around matching the
+  `sort_record_set.keys.path` to the `list_records.fields.path` used for the
+  displayed related label.

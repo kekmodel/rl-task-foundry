@@ -26,6 +26,7 @@ artifacts/opencode_smoke_*/
 artifacts/smoke/
 artifacts/eval_*/
 artifacts/trial_*/
+artifacts/controlled_solver_*/
 artifacts/tasks/
 artifacts/*/tasks/
 artifacts/task_registry.db*
