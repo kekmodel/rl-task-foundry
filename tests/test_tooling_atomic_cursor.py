@@ -52,6 +52,7 @@ def test_plan_to_dict_nests_source_plans_in_order():
     ordered = OrderNode(source=base, column="rental_date", direction="asc")
     payload = plan_to_dict(ordered)
     assert payload["kind"] == "order"
+    assert payload["path"] == []
     assert payload["column"] == "rental_date"
     source = payload["source"]
     assert isinstance(source, dict)
@@ -103,6 +104,25 @@ def test_order_by_wraps_cursor_and_produces_new_id():
     assert isinstance(resolved, OrderNode)
     assert resolved.column == "rental_date"
     assert resolved.direction == "desc"
+    assert resolved.path == ()
+
+
+def test_order_by_accepts_relation_path():
+    store = CursorStore()
+    base_id = store.intern(_where())
+
+    ordered_id = order_by(
+        store,
+        base_id,
+        "first_name",
+        "asc",
+        path=("rental.customer_id->customer",),
+    )
+
+    resolved = store.resolve(ordered_id)
+    assert isinstance(resolved, OrderNode)
+    assert resolved.path == ("rental.customer_id->customer",)
+    assert resolved.column == "first_name"
 
 
 def test_order_by_rejects_invalid_direction():

@@ -3442,3 +3442,40 @@ Solver 30/30 완료 결과:
   for a visible same-time tie-break. Remaining failures were solver/tool-surface
   issues around category filtering and related display materialization, not a
   new hard-validator candidate.
+
+## Iteration 87 — Atomic related sort keys
+
+- **Problem**:
+  The previous smoke showed a genuine solver tool-surface gap, not just weak
+  model behavior. Composer could author a task whose exact answer is ordered by
+  a source timestamp plus a related display label, but solver-side
+  `sort_record_set` could only sort by direct source-table columns. Solvers
+  could output related labels through `list_records.fields.path`, yet could not
+  use that same related field to choose the top five before materialization.
+- **Change**:
+  Extended atomic ordering from a single direct column to ordered `keys`, each
+  with `{path, column, direction}`. Empty `path` keeps the old source-table
+  behavior. Forward relation paths allow stable ordering by a related display
+  value while preserving the source record_set. Reverse relation paths are
+  rejected because they can map one source record to multiple related records
+  and therefore do not define a precise per-source sort key.
+- **No heuristic**:
+  This is structural tool expressivity only. It does not inspect generated text,
+  compare DB literals, or add any hard validator. The rule is schema/path based:
+  forward FK traversal is single-destination per source record; reverse
+  traversal is not guaranteed to be.
+- **Direct DB verification**:
+  Replayed the prior MIMIC demo shape against live DB tools for
+  `stay_id=39268883`, `ordercategoryname='01-Drips'`, ordered by
+  `starttime asc` then related `inputevents.itemid->d_items.label asc`.
+  `list_records` returned the expected canonical order:
+  `Propofol`, `Solution`, `Dextrose 5%`, `Nitroglycerin`, `Dextrose 5%`.
+- **LLM smoke**:
+  Ran `artifacts/trial_20260428_mimiciv_demo_related_sort_smoke_01` with Kimi
+  composer and default nano solver pool. The run still failed `reject_too_hard`
+  at `0/12`, but it verified the new schema was live: solver traces used
+  `sort_record_set.keys`. The remaining observed failure is that nano solvers
+  mostly still chose direct sort keys instead of the available related path.
+  Tool descriptions were tightened to say that when a requested order names a
+  related label/name returned through `list_records.fields.path`, the same
+  related path should be used as a sort key before listing source records.

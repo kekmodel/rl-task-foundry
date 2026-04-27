@@ -32,6 +32,7 @@ from rl_task_foundry.tooling.atomic.cursor import (
     ViaNode,
     WhereNode,
 )
+from rl_task_foundry.tooling.common.edges import EdgeDirection, resolve_edge
 from rl_task_foundry.tooling.common.schema import SchemaSnapshot, TableSpec
 from rl_task_foundry.tooling.common.sql import (
     quote_ident,
@@ -199,15 +200,112 @@ def _array_cast(data_type: str) -> str:
     return mapping.get(normalized, f"{quote_ident(data_type)}[]")
 
 
-def _collect_order(plan: CursorPlan) -> tuple[CursorPlan, list[tuple[str, str]]]:
+OrderTerm = tuple[tuple[str, ...], str, str]
+
+
+def _collect_order(plan: CursorPlan) -> tuple[CursorPlan, list[OrderTerm]]:
     """Strip OrderNode wrappers, returning the inner plan and the
-    (column, direction) stack from outermost (highest priority) inward."""
-    orderings: list[tuple[str, str]] = []
+    (path, column, direction) stack from outermost (highest priority) inward."""
+    orderings: list[OrderTerm] = []
     current = plan
     while isinstance(current, OrderNode):
-        orderings.append((current.column, current.direction))
+        orderings.append((current.path, current.column, current.direction))
         current = current.source
     return current, orderings
+
+
+def _has_related_order(orderings: list[OrderTerm]) -> bool:
+    return any(path for path, _column, _direction in orderings)
+
+
+def _compile_order_path_joins(
+    snapshot: SchemaSnapshot,
+    *,
+    source_table: str,
+    source_alias: str,
+    path: tuple[str, ...],
+    key_index: int,
+) -> tuple[list[str], str, TableSpec]:
+    current_table = source_table
+    current_alias = source_alias
+    joins: list[str] = []
+    for step_index, edge_label in enumerate(path):
+        edge = resolve_edge(snapshot, current_table, edge_label)
+        if edge.direction is not EdgeDirection.FORWARD:
+            raise ValueError(
+                "sort_record_set related paths must follow forward relation labels"
+            )
+        destination = snapshot.table(edge.destination_table)
+        destination_alias = f"ord_{key_index}_{step_index}"
+        predicate = _join_columns_predicate(
+            left_alias=destination_alias,
+            left_columns=edge.destination_columns,
+            right_alias=current_alias,
+            right_columns=edge.origin_columns,
+        )
+        joins.append(
+            f"LEFT JOIN {quote_table(destination.schema, destination.name)} "
+            f"AS {destination_alias} ON {predicate}"
+        )
+        current_table = edge.destination_table
+        current_alias = destination_alias
+    return joins, current_alias, snapshot.table(current_table)
+
+
+def _compile_grouped_take(
+    snapshot: SchemaSnapshot,
+    *,
+    inner: CursorPlan,
+    orderings: list[OrderTerm],
+    limit: int,
+    offset: int,
+) -> CompiledQuery:
+    target = snapshot.table(inner.target_table)
+    target_pk_expr = _pk_expression(target, "tgt")
+    base_sql, params, _ = _compile_id_stream(snapshot, inner, 1)
+    if not orderings:
+        sql = readonly_select(
+            f"SELECT id FROM ({base_sql}) AS base "
+            f"GROUP BY id ORDER BY id ASC "
+            f"{_limit_offset_clause(limit, offset)}"
+        )
+        return CompiledQuery(sql=sql, params=params)
+
+    joins: list[str] = []
+    order_clauses: list[str] = []
+    for key_index, (path, column_name, direction) in enumerate(orderings):
+        if path:
+            path_joins, order_alias, order_table = _compile_order_path_joins(
+                snapshot,
+                source_table=target.handle,
+                source_alias="tgt",
+                path=path,
+                key_index=key_index,
+            )
+            joins.extend(path_joins)
+        else:
+            order_alias = "tgt"
+            order_table = target
+        order_table.column(column_name)
+        agg = "MIN" if direction == "asc" else "MAX"
+        order_clauses.append(
+            f"{agg}({order_alias}.{quote_ident(column_name)}) {direction.upper()}"
+        )
+    order_clauses.append("base.id ASC")
+    join_sql = " ".join(joins)
+    if join_sql:
+        join_sql += " "
+    sql = readonly_select(
+        f"SELECT base.id "
+        f"FROM ({base_sql}) AS base "
+        f"JOIN {quote_table(target.schema, target.name)} AS tgt "
+        f"ON {target_pk_expr} = base.id "
+        f"{join_sql}"
+        f"GROUP BY base.id "
+        f"ORDER BY {', '.join(order_clauses)} "
+        f"{_limit_offset_clause(limit, offset)}"
+    )
+    return CompiledQuery(sql=sql, params=params)
 
 
 def _compile_where_id_stream(
@@ -366,55 +464,52 @@ def compile_take(
     """
     inner, orderings = _collect_order(plan)
     if isinstance(inner, TableNode):
+        if _has_related_order(orderings):
+            return _compile_grouped_take(
+                snapshot,
+                inner=inner,
+                orderings=orderings,
+                limit=limit,
+                offset=offset,
+            )
         return _compile_take_table(snapshot, inner, orderings, limit, offset)
     if isinstance(inner, WhereNode):
+        if _has_related_order(orderings):
+            return _compile_grouped_take(
+                snapshot,
+                inner=inner,
+                orderings=orderings,
+                limit=limit,
+                offset=offset,
+            )
         return _compile_take_where(snapshot, inner, orderings, limit, offset)
     if not isinstance(inner, (FilterNode, ViaNode, IntersectNode)):
         raise TypeError(
             f"compile_take expected Table/Where/Filter/Via/Intersect base; got "
             f"{type(inner).__name__}"
         )
-    target = snapshot.table(inner.target_table)
-    target_pk_expr = _pk_expression(target, "tgt")
-    base_sql, params, _ = _compile_id_stream(snapshot, inner, 1)
-    if not orderings:
-        sql = readonly_select(
-            f"SELECT id FROM ({base_sql}) AS base "
-            f"GROUP BY id ORDER BY id ASC "
-            f"{_limit_offset_clause(limit, offset)}"
-        )
-        return CompiledQuery(sql=sql, params=params)
-    order_clauses: list[str] = []
-    for column_name, direction in orderings:
-        target.column(column_name)  # validate
-        agg = "MIN" if direction == "asc" else "MAX"
-        order_clauses.append(
-            f"{agg}(tgt.{quote_ident(column_name)}) {direction.upper()}"
-        )
-    order_clauses.append("base.id ASC")
-    sql = readonly_select(
-        f"SELECT base.id "
-        f"FROM ({base_sql}) AS base "
-        f"JOIN {quote_table(target.schema, target.name)} AS tgt "
-        f"ON {target_pk_expr} = base.id "
-        f"GROUP BY base.id "
-        f"ORDER BY {', '.join(order_clauses)} "
-        f"{_limit_offset_clause(limit, offset)}"
+    return _compile_grouped_take(
+        snapshot,
+        inner=inner,
+        orderings=orderings,
+        limit=limit,
+        offset=offset,
     )
-    return CompiledQuery(sql=sql, params=params)
 
 
 def _compile_take_table(
     snapshot: SchemaSnapshot,
     inner: TableNode,
-    orderings: list[tuple[str, str]],
+    orderings: list[OrderTerm],
     limit: int,
     offset: int,
 ) -> CompiledQuery:
     table = snapshot.table(inner.table)
     alias = "t"
     order_clauses: list[str] = []
-    for column_name, direction in orderings:
+    for path, column_name, direction in orderings:
+        if path:
+            raise ValueError("related order paths require grouped materialization")
         table.column(column_name)
         order_clauses.append(
             f"{alias}.{quote_ident(column_name)} {direction.upper()}"
@@ -433,7 +528,7 @@ def _compile_take_table(
 def _compile_take_where(
     snapshot: SchemaSnapshot,
     inner: WhereNode,
-    orderings: list[tuple[str, str]],
+    orderings: list[OrderTerm],
     limit: int,
     offset: int,
 ) -> CompiledQuery:
@@ -443,7 +538,9 @@ def _compile_take_where(
         snapshot=snapshot, plan=inner, alias=alias, param_start=1
     )
     order_clauses: list[str] = []
-    for column_name, direction in orderings:
+    for path, column_name, direction in orderings:
+        if path:
+            raise ValueError("related order paths require grouped materialization")
         table.column(column_name)
         order_clauses.append(
             f"{alias}.{quote_ident(column_name)} {direction.upper()}"

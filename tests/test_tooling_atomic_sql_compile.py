@@ -191,6 +191,52 @@ def test_compile_take_honors_order_annotation_before_tiebreak():
     assert "t.\"rental_id\" ASC" in clauses
 
 
+def test_compile_take_orders_by_forward_related_key():
+    snapshot = _customer_rental_snapshot()
+    base = WhereNode(
+        table="rental", column="customer_id", op="eq", value=45
+    )
+    related_tie_break = OrderNode(
+        source=base,
+        path=("rental.customer_id->customer",),
+        column="first_name",
+        direction="asc",
+    )
+    ordered = OrderNode(
+        source=related_tie_break,
+        column="rental_date",
+        direction="asc",
+    )
+
+    compiled = compile_take(snapshot, ordered, limit=5)
+
+    assert "GROUP BY base.id" in compiled.sql
+    assert (
+        "LEFT JOIN \"public\".\"customer\" AS ord_1_0 "
+        "ON ord_1_0.\"customer_id\" = tgt.\"customer_id\""
+    ) in compiled.sql
+    clauses = compiled.sql.split("ORDER BY ")[1].split("LIMIT")[0].strip()
+    assert clauses.startswith(
+        "MIN(tgt.\"rental_date\") ASC, MIN(ord_1_0.\"first_name\") ASC"
+    )
+    assert "base.id ASC" in clauses
+    assert compiled.params == (45,)
+
+
+def test_compile_take_rejects_reverse_related_order_path():
+    snapshot = _customer_rental_snapshot()
+    base = WhereNode(table="customer", column="store_id", op="eq", value=1)
+    ordered = OrderNode(
+        source=base,
+        path=("customer<-rental.customer_id",),
+        column="rental_date",
+        direction="asc",
+    )
+
+    with pytest.raises(ValueError, match="forward relation"):
+        compile_take(snapshot, ordered, limit=5)
+
+
 def test_compile_take_supports_in_op_with_array_cast():
     snapshot = _rental_snapshot()
     plan = WhereNode(

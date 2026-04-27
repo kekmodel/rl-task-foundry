@@ -99,6 +99,7 @@ class OrderNode:
     source: "CursorPlan"
     column: str
     direction: Direction
+    path: tuple[str, ...] = ()
 
     @property
     def target_table(self) -> str:
@@ -160,6 +161,7 @@ def plan_to_dict(plan: CursorPlan) -> dict[str, object]:
         return {
             "kind": "order",
             "source": plan_to_dict(plan.source),
+            "path": list(plan.path),
             "column": plan.column,
             "direction": plan.direction,
         }
@@ -236,6 +238,7 @@ def order_by(
     cursor_id: CursorId,
     column: str,
     direction: Direction,
+    path: tuple[str, ...] = (),
 ) -> CursorId:
     """Annotate a cursor with an ordering.
 
@@ -244,8 +247,10 @@ def order_by(
     """
     if direction not in ("asc", "desc"):
         raise ValueError("direction must be 'asc' or 'desc'")
+    if any(not isinstance(label, str) or not label for label in path):
+        raise ValueError("path must contain only non-empty relation labels")
     source = store.resolve(cursor_id)
-    plan = OrderNode(source=source, column=column, direction=direction)
+    plan = OrderNode(source=source, column=column, direction=direction, path=path)
     return store.intern(plan)
 
 

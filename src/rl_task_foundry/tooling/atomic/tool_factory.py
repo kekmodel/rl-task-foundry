@@ -90,6 +90,14 @@ class _ProjectionField:
     final_table: str
 
 
+@dataclass(frozen=True, slots=True)
+class _SortKey:
+    path: tuple[str, ...]
+    column: str
+    direction: Direction
+    final_table: str
+
+
 def _all_table_names(snapshot: SchemaSnapshot) -> list[str]:
     return sorted(snapshot.table_names())
 
@@ -236,6 +244,54 @@ def _parse_projection_fields(
                 name=name,
                 path=path,
                 column=column,
+                final_table=current_table,
+            )
+        )
+    return parsed
+
+
+def _parse_sort_keys(
+    session: AtomicSession,
+    *,
+    source_table: str,
+    raw_keys: object,
+) -> list[_SortKey]:
+    if not isinstance(raw_keys, list) or not raw_keys:
+        raise TypeError("'keys' must be a non-empty array")
+    if len(raw_keys) > 5:
+        raise ValueError("'keys' must contain at most 5 sort keys")
+    parsed: list[_SortKey] = []
+    for raw_key in raw_keys:
+        if not isinstance(raw_key, dict):
+            raise TypeError("each sort key must be an object")
+        column = raw_key.get("column")
+        if not isinstance(column, str) or not column:
+            raise TypeError("sort key column must be a non-empty string")
+        direction = raw_key.get("direction")
+        if direction not in ("asc", "desc"):
+            raise ValueError("sort key direction must be 'asc' or 'desc'")
+        raw_path = raw_key.get("path", [])
+        if raw_path is None:
+            raw_path = []
+        if not isinstance(raw_path, list) or any(
+            not isinstance(label, str) or not label for label in raw_path
+        ):
+            raise TypeError("sort key path must be an array of relation labels")
+        path = tuple(cast(list[str], raw_path))
+        current_table = source_table
+        for edge_label in path:
+            edge = resolve_edge(session.snapshot, current_table, edge_label)
+            if edge.direction is not EdgeDirection.FORWARD:
+                raise ValueError(
+                    "sort key paths must be forward relation labels"
+                )
+            current_table = edge.destination_table
+        session.snapshot.table(current_table).exposed_column(column)
+        parsed.append(
+            _SortKey(
+                path=path,
+                column=column,
+                direction=cast(Direction, direction),
                 final_table=current_table,
             )
         )
@@ -1109,20 +1165,37 @@ def build_intersect_record_sets_tool(session: AtomicSession) -> "FunctionTool":
 
 
 def build_sort_record_set_tool(session: AtomicSession) -> "FunctionTool":
-    schema: JsonObject = {
+    sort_key_schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["record_set_id", "column", "direction"],
+        "required": ["path", "column", "direction"],
         "properties": {
-            "record_set_id": {
-                "type": "string",
-                "description": "ID of the record_set resource to order.",
+            "path": {
+                "type": "array",
+                "default": [],
+                "description": (
+                    "Relation labels to follow before reading column. Use [] "
+                    "for a source-table sort key. Each path step must be a "
+                    "forward relation label from the current record_set "
+                    "resource, so each source record reaches at most one "
+                    "related record. When ordering by a related display value "
+                    "that will be returned through list_records fields.path, "
+                    "use the same path here."
+                ),
+                "items": {
+                    "type": "string",
+                    "description": (
+                        "Forward relation label copied exactly from the "
+                        "current record_set resource's relations list, then "
+                        "from each reached table's relations list."
+                    ),
+                },
             },
             "column": {
                 "type": "string",
                 "description": (
-                    "Column on the record_set resource's table to sort by. "
-                    "Must be one of the record_set resource's columns."
+                    "Column to sort by on the source table, or on the table "
+                    "reached after path. Must be exposed by that table."
                 ),
             },
             "direction": {
@@ -1132,29 +1205,65 @@ def build_sort_record_set_tool(session: AtomicSession) -> "FunctionTool":
             },
         },
     }
+    schema: JsonObject = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["record_set_id", "keys"],
+        "properties": {
+            "record_set_id": {
+                "type": "string",
+                "description": "ID of the record_set resource to order.",
+            },
+            "keys": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 5,
+                "description": (
+                    "Sort keys from highest to lowest priority. Use multiple "
+                    "keys for requested tie-breaks, including related display "
+                    "labels reachable through forward relation paths. If the "
+                    "requested order names a related label or name, sort by "
+                    "that related path before listing source records."
+                ),
+                "items": sort_key_schema,
+            },
+        },
+    }
 
     async def handler(payload: JsonObject) -> JsonObject:
         record_set_id = _require_str(payload, "record_set_id")
-        column = _require_str(payload, "column")
-        direction = _require_str(payload, "direction")
-        if direction not in ("asc", "desc"):
-            raise ValueError("'direction' must be 'asc' or 'desc'")
         cursor_id = _resolve_record_set(session, record_set_id)
         source_resource = _record_set_trace_resource(session, cursor_id)
         plan = session.store.resolve(cursor_id)
-        session.snapshot.table(plan.target_table).exposed_column(column)
-        sorted_cursor = order_by(
-            session.store,
-            cursor_id,
-            column,
-            cast(Direction, direction),
+        sort_keys = _parse_sort_keys(
+            session,
+            source_table=plan.target_table,
+            raw_keys=payload.get("keys"),
         )
+        sorted_cursor = cursor_id
+        for sort_key in reversed(sort_keys):
+            sorted_cursor = order_by(
+                session.store,
+                sorted_cursor,
+                sort_key.column,
+                sort_key.direction,
+                path=sort_key.path,
+            )
         _record_success_trace(
             session,
             action="transform_resource",
             operation="sort_record_set",
             input_resource=source_resource,
-            sort={"column": column, "direction": direction},
+            sort={
+                "keys": [
+                    {
+                        "path": list(sort_key.path),
+                        "column": sort_key.column,
+                        "direction": sort_key.direction,
+                    }
+                    for sort_key in sort_keys
+                ]
+            },
             output_resource=_record_set_trace_resource(session, sorted_cursor),
         )
         return _record_set_resource_payload(session, sorted_cursor)
@@ -1163,8 +1272,9 @@ def build_sort_record_set_tool(session: AtomicSession) -> "FunctionTool":
         session,
         name="sort_record_set",
         description=(
-            "Create a new record_set resource with a stable ordering. Listing "
-            "record references from the new record_set uses this order."
+            "Create a new record_set resource with a stable multi-key ordering. "
+            "Listing record references or records from the new record_set uses "
+            "this order."
         ),
         schema=schema,
         handler=handler,

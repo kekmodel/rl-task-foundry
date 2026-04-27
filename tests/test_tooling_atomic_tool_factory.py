@@ -332,7 +332,11 @@ def test_v2_create_and_filter_schemas_are_resource_oriented():
     assert "do not infer, translate, paraphrase" in follow_description
 
     sort_schema = tools["sort_record_set"].params_json_schema
-    assert "enum" not in sort_schema["properties"]["column"]
+    sort_key_schema = sort_schema["properties"]["keys"]["items"]
+    assert "enum" not in sort_key_schema["properties"]["column"]
+    assert sort_schema["required"] == ["record_set_id", "keys"]
+    assert sort_schema["properties"]["keys"]["minItems"] == 1
+    assert sort_key_schema["required"] == ["path", "column", "direction"]
 
     aggregate_schema = tools["aggregate_records"].params_json_schema
     assert "enum" not in aggregate_schema["properties"]["column"]
@@ -484,6 +488,21 @@ def test_v2_follow_relation_schema_warns_when_source_alignment_matters():
     assert "one item per source record" in text
 
 
+def test_v2_sort_record_set_schema_describes_related_sort_keys():
+    tools = {tool.name: tool for tool in build_atomic_tools(_stub_session())}
+    descriptions = _schema_descriptions(tools["sort_record_set"].params_json_schema)
+    text = " ".join([
+        tools["sort_record_set"].description,
+        *descriptions,
+    ])
+
+    assert "Sort keys from highest to lowest priority" in text
+    assert "requested tie-breaks" in text
+    assert "related display labels" in text
+    assert "use the same path here" in text
+    assert "sort by that related path before listing source records" in text
+
+
 def test_v2_list_record_refs_allows_limit_one_and_uses_api_cap():
     session = _stub_session()
     session.max_fetch_limit = 17
@@ -576,6 +595,73 @@ async def test_v2_create_filter_and_follow_relation_return_resource_payloads():
         "edge_label": "rental.customer_id->customer"
     }
     assert events[2]["output_resource"] == followed_trace_resource
+
+
+@pytest.mark.asyncio
+async def test_v2_sort_record_set_accepts_related_tie_break_keys():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+
+    created = await _invoke(tools["create_record_set"], {"table": "rental"})
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+
+    sorted_set = await _invoke(
+        tools["sort_record_set"],
+        {
+            "record_set_id": resource["id"],
+            "keys": [
+                {"path": [], "column": "rental_date", "direction": "asc"},
+                {
+                    "path": ["rental.customer_id->customer"],
+                    "column": "first_name",
+                    "direction": "asc",
+                },
+            ],
+        },
+    )
+
+    sorted_resource = sorted_set["resource"]
+    assert isinstance(sorted_resource, dict)
+    assert sorted_resource["table"] == "rental"
+    assert session.trace_events[-1]["sort"] == {
+        "keys": [
+            {"path": [], "column": "rental_date", "direction": "asc"},
+            {
+                "path": ["rental.customer_id->customer"],
+                "column": "first_name",
+                "direction": "asc",
+            },
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_v2_sort_record_set_rejects_reverse_related_key_path():
+    session = _stub_session()
+    tools = {tool.name: tool for tool in build_atomic_tools(session)}
+
+    created = await _invoke(tools["create_record_set"], {"table": "customer"})
+    resource = created["resource"]
+    assert isinstance(resource, dict)
+
+    response = await _invoke(
+        tools["sort_record_set"],
+        {
+            "record_set_id": resource["id"],
+            "keys": [
+                {
+                    "path": ["customer<-rental.customer_id"],
+                    "column": "rental_date",
+                    "direction": "asc",
+                }
+            ],
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["type"] == "request_error"
+    assert response["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio
@@ -922,8 +1008,9 @@ async def test_v2_resource_tool_chain_against_pagila():
             tools["sort_record_set"],
             {
                 "record_set_id": filtered_resource["id"],
-                "column": "rental_date",
-                "direction": "asc",
+                "keys": [
+                    {"path": [], "column": "rental_date", "direction": "asc"}
+                ],
             },
         )
         sorted_resource = sorted_rows["resource"]
@@ -999,8 +1086,9 @@ async def test_v2_list_records_preserves_source_alignment_across_fk_path():
             tools["sort_record_set"],
             {
                 "record_set_id": amount_resource["id"],
-                "column": "payment_date",
-                "direction": "desc",
+                "keys": [
+                    {"path": [], "column": "payment_date", "direction": "desc"}
+                ],
             },
         )
         sorted_resource = sorted_payments["resource"]
@@ -1109,8 +1197,9 @@ async def test_v2_filter_record_set_by_related_filters_source_records():
             tools["sort_record_set"],
             {
                 "record_set_id": rating_resource["id"],
-                "column": "rental_date",
-                "direction": "desc",
+                "keys": [
+                    {"path": [], "column": "rental_date", "direction": "desc"}
+                ],
             },
         )
         sorted_resource = sorted_rentals["resource"]
@@ -1263,8 +1352,9 @@ async def test_v2_composite_pk_chain_against_pagila_film_actor():
             tools["sort_record_set"],
             {
                 "record_set_id": film_resource["id"],
-                "column": "title",
-                "direction": "asc",
+                "keys": [
+                    {"path": [], "column": "title", "direction": "asc"}
+                ],
             },
         )
         sorted_resource = sorted_films["resource"]
