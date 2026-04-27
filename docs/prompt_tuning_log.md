@@ -3303,3 +3303,26 @@ Solver 30/30 완료 결과:
   terminally as `reject_too_hard` (`2/12`, pass rate `0.1667`). These are
   difficult/low-reachability clinical-list tasks, not evidence that the
   no-submit guard is overfiring.
+
+- **Quality adjudication**:
+  Do not stop at the `reject_too_hard` gate label. Direct DB inspection changes
+  the interpretation of the two smokes:
+
+  - `_kimi_01` is a low-quality draft, not merely a good hard task. The stay has
+    824 `inputevents`; the request asks for "5 items in time order" but never
+    says earliest/first or latest/recent. The canonical query silently chooses
+    the earliest five rows and also uses `d_items.label` as a visible tie-break
+    without stating that tie-break in the user request. The DB rows themselves
+    are coherent, but the row-set membership is under-specified by the prompt.
+  - `_kimi_02` is a substantially better hard task. After feedback, the request
+    asks for the recent three input events and explicitly says same-time events
+    are sorted alphabetically by item name. Direct DB inspection for
+    `subject_id=10001217` shows 53 input events and confirms the canonical top
+    three rows: `PO Intake` at `2157-12-20 14:00`, then `Magnesium Sulfate` and
+    `Magnesium Sulfate (Bolus)` at `2157-12-20 09:25` sorted by label. Solver
+    failures mostly came from MIMIC label/path confusion, wrong related fields,
+    timestamp/end-time drift, or blank fallback output, not from an unsound
+    canonical row set.
+
+  Future trial review must report this human quality adjudication alongside the
+  numeric gate outcome; `too_hard` alone is not enough.
