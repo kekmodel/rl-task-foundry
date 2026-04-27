@@ -260,8 +260,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "smallest single structural strengthening" in instructions
     assert "there is no fixed ladder" in instructions
     assert "preserving the current row set/query path" in instructions
-    assert "keeping all existing filters, order, limit, row set, and output fields" in instructions
-    assert "add exactly one user-visible output field" in instructions
+    assert "keep existing filters, order, limit" in instructions
+    assert "add exactly one user-visible field" in instructions
+    assert "ask for it in user_request/answer_contract" in instructions
     assert "Do not shrink the fixed list" in instructions
     assert "or combine a row-excluding filter" in instructions
     assert "difficulty jump" in instructions

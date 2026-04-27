@@ -1119,6 +1119,7 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
 
     assert "needs more specificity" in message
     assert "Apply the Difficulty-Up Policy from the system instructions" in message
+    assert "ask for it in user_request and answer_contract" in message
     assert "Current answer kind: scalar" in message
     assert "smallest single structural strengthening" not in message
     assert "Replacing a field on the same path is not an escalation" not in message
@@ -1161,6 +1162,7 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
 
     assert "needs more specificity" in message
     assert "Apply the Difficulty-Up Policy from the system instructions" in message
+    assert "ask for it in user_request and answer_contract" in message
     assert "Current answer kind: list" in message
     assert "selected-row query target" not in message
     assert "row-set-preserving" not in message

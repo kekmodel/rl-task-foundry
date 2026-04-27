@@ -1404,8 +1404,8 @@ class SubmitDraftController:
                     result="Draft needs more specificity.",
                     primary=(
                         "The current draft is too direct. Make it more "
-                        "specific by changing the canonical label, not just "
-                        "the wording."
+                        "specific by changing the canonical label and matching "
+                        "user_request/answer_contract, not just the wording."
                     ),
                     important=strengthening_guidance.strip(),
                     next_step=(
@@ -1444,7 +1444,8 @@ class SubmitDraftController:
                         primary=(
                             "The current draft is still too direct to accept "
                             "confidently. Make one grounded specificity change to the "
-                            "canonical label, not just the wording."
+                            "canonical label and matching user_request/answer_contract, "
+                            "not just the wording."
                         ),
                         important=strengthening_guidance.strip(),
                         next_step=(

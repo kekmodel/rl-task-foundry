@@ -79,5 +79,6 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
     return (
         " This draft failed specificity."
         f"{kind_note} Apply the Difficulty-Up Policy from the system "
-        "instructions before resubmitting."
+        "instructions before resubmitting. If you add an answer field, ask "
+        "for it in user_request and answer_contract."
     )
