@@ -122,9 +122,9 @@ def build_synthesis_agent_instructions(
         "3. If the path looks usable, inspect it with `neighborhood`; otherwise "
         "choose another observed path. Why: some rows lack customer-facing "
         "surface.\n"
-        "4. Run final `query(spec)` for the exact answer; do not write SQL. "
-        "Scope it to the hidden entity/context, then submit. Why: the label must be copied from "
-        "the latest query evidence and must not be a global answer with a "
+        "4. Run final `query(spec)` for the exact answer scoped to the hidden "
+        "entity/context, then submit. Why: the label must be copied from the "
+        "latest query evidence and must not be a global answer with a "
         "decorative entity attached.\n"
         "5. Stop on accept or overconstrained/terminal feedback.",
 

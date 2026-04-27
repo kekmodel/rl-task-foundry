@@ -3126,3 +3126,18 @@ Solver 30/30 완료 결과:
   Prompt length remains under budget at 7,990 characters. `uv run pytest -q`
   -> 431 passed. `uv run ruff check src tests` passed. `git diff --check`
   passed.
+
+## Iteration 79 — Remove redundant raw-SQL prompt ban
+
+- **Issue**:
+  The composer has a `query(spec)` DSL tool and no raw-SQL tool, so the workflow
+  phrase `do not write SQL` duplicated the tool surface instead of adding a
+  meaningful role policy.
+- **Correction**:
+  Removed the workflow-level raw-SQL prohibition and the test that required
+  that exact phrase. Kept the separate `answer_contract` rule forbidding table,
+  column, operator, or SQL restatement there, because that field is a natural
+  language request-binding surface.
+- **Verification**:
+  Prompt length is now 7,969 characters. `uv run pytest -q` -> 431 passed.
+  `uv run ruff check src tests` passed. `git diff --check` passed.

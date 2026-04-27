@@ -45,7 +45,6 @@ def test_synthesis_instructions_contain_hard_prohibitions() -> None:
     text = build_synthesis_agent_instructions(runtime_config)
 
     for prohibition in (
-        "do not write SQL",
         "never raw wording",
         "Do not invent ids",
         "Do not reformat",
