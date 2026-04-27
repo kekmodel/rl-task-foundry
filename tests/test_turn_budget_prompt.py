@@ -46,7 +46,7 @@ def test_synthesis_instructions_contain_hard_prohibitions() -> None:
 
     for prohibition in (
         "do not write SQL",
-        "not as raw user-facing wording",
+        "never raw wording",
         "Do not invent ids",
         "Do not reformat",
     ):

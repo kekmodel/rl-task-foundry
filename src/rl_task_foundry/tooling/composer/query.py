@@ -687,6 +687,67 @@ def _referenced_column_payload(
     return payload
 
 
+def _order_key_outputs(
+    clauses: list[_SortClause],
+    *,
+    chain: list[_ChainEntry],
+    column_sources: list[dict[str, object]],
+) -> list[str]:
+    outputs: list[str] = []
+    for clause in clauses:
+        if clause.output_name is not None:
+            outputs.append(clause.output_name)
+            continue
+        if clause.ref is None:
+            continue
+        resolved = _resolve_ref(clause.ref, chain)
+        source = next(
+            (
+                source
+                for source in column_sources
+                if source.get("table") == resolved.table.handle
+                and source.get("column") == resolved.column
+                and isinstance(source.get("output"), str)
+            ),
+            None,
+        )
+        if source is not None:
+            outputs.append(str(source["output"]))
+    return outputs
+
+
+def _ordering_diagnostics(
+    rows: list[dict[str, object]],
+    *,
+    parsed: _ParsedSpec,
+    chain: list[_ChainEntry],
+    column_sources: list[dict[str, object]],
+) -> dict[str, object] | None:
+    if parsed.limit is None or len(rows) <= 1:
+        return None
+    if not parsed.order_by:
+        return {
+            "missing_order_by_for_limit": True,
+            "returned_row_count": len(rows),
+            "limit": parsed.limit,
+        }
+    order_outputs = _order_key_outputs(
+        parsed.order_by,
+        chain=chain,
+        column_sources=column_sources,
+    )
+    if len(order_outputs) != len(parsed.order_by):
+        return None
+    signatures = [tuple(repr(row.get(output)) for output in order_outputs) for row in rows]
+    duplicate_order_key = len(signatures) != len(set(signatures))
+    return {
+        "order_by_outputs": order_outputs,
+        "duplicate_order_key_in_returned_rows": duplicate_order_key,
+        "returned_row_count": len(rows),
+        "limit": parsed.limit,
+    }
+
+
 def _assert_unique_output_name(name: str, names: set[str]) -> None:
     if name in names:
         raise ValueError(f"duplicate output column {name!r}")
@@ -867,13 +928,22 @@ async def query(
     materialized = [
         {column: row[column] for column in output_columns} for row in rows
     ]
-    return {
+    result: dict[str, object] = {
         "columns": output_columns,
         "column_sources": column_sources,
         "referenced_columns": referenced_columns,
         "rows": materialized,
         "row_count": len(materialized),
     }
+    ordering_diagnostics = _ordering_diagnostics(
+        materialized,
+        parsed=parsed,
+        chain=chain,
+        column_sources=column_sources,
+    )
+    if ordering_diagnostics is not None:
+        result["ordering_diagnostics"] = ordering_diagnostics
+    return result
 
 
 __all__ = ["query"]

@@ -662,7 +662,13 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                         "ref": ref_schema,
                         "as": {
                             "type": "string",
-                            "description": "Stable output field name.",
+                            "description": (
+                                "Stable output field name that preserves the "
+                                "selected source column meaning; do not make "
+                                "note/comment/description text look like a "
+                                "result/status/value field unless the request "
+                                "names that surface."
+                            ),
                         },
                     },
                 },
@@ -671,7 +677,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "type": "array",
                 "description": (
                     "Deterministic ordering. If user_request states top/latest/"
-                    "earliest, mirror that wording in submit_draft phrases."
+                    "earliest, mirror that wording in submit_draft phrases. "
+                    "When rows can share the primary sort key, add a "
+                    "tie-breaker."
                 ),
                 "items": {
                     "type": "object",

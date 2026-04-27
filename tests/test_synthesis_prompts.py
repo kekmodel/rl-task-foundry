@@ -260,7 +260,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "smallest single structural strengthening" in instructions
     assert "there is no fixed ladder" in instructions
     assert "preserving the current row set/query path" in instructions
-    assert "do not combine a new row-excluding filter" in instructions
+    assert "keeping all existing filters, order, limit, row set, and output fields" in instructions
+    assert "add exactly one user-visible output field" in instructions
+    assert "Do not shrink the fixed list" in instructions
+    assert "or combine a row-excluding filter" in instructions
     assert "difficulty jump" in instructions
     assert "overconstrained/terminal feedback" in instructions
 
@@ -268,6 +271,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Customer Request" in instructions
     assert "configured target language" in instructions
     assert "customer does not know DB tables" in instructions
+    assert "hidden id used in final query filters must appear in `entity`" in instructions
     assert "Use first-person ownership only" in instructions
     assert "non-user subject" in instructions
     assert "Bad patterns" not in instructions
@@ -280,6 +284,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "latest query evidence is scoped" in instructions
     assert "do not expose that handle" in instructions
     assert "multiple relationship roles" in instructions
+    assert "sibling tables" in instructions
+    assert "selected source role" in instructions
     assert not re.search(r"[가-힣]", instructions)
 
     # Label and contract rules preserve exact verifiability.
@@ -292,6 +298,14 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not reformat" in instructions
     assert "unrelated global answer is invalid" in instructions
     assert "Prefer user-visible non-handle values" in instructions
+    assert "Bind answer representation explicitly" in instructions
+    assert "Do not upgrade a code/reference" in instructions
+    assert "the request must ask for that exact representation" in instructions
+    assert "generic entity noun is not enough" in instructions
+    assert "multiple answer surfaces are valid" in instructions
+    assert "Keep output names faithful" in instructions
+    assert "note/comment/description text" in instructions
+    assert "multiple answer columns are plausible" in instructions
     assert "include only fields that should appear in the submitted label" in instructions
     assert "every selected field becomes part of the exact submitted answer" in instructions
     assert "Constraint, filter, scope, ordering, and tie-break values" in instructions
@@ -317,7 +331,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "List tasks" in instructions
     assert "avoid trivial 0/1 results" in instructions
     assert "homogeneous ordered list" in instructions
+    assert "first/latest/top 3-5 rows" in instructions
+    assert "avoid all matching when observed count exceeds 5" in instructions
     assert "at least one non-handle visible field" in instructions
+    assert "Keep initial row/list labels narrow" in instructions
+    assert "prefer 3-4 fields" in instructions
+    assert "max 5 before feedback" in instructions
+    assert "add one coherent field or relationship at a time" in instructions
     assert "Open-ended recommendations" in instructions
     assert "filters, thresholds, ordering, limit, and tie-breaks" in instructions
 
@@ -429,6 +449,6 @@ def test_synthesis_input_defaults_to_schema_map_entity_selection() -> None:
 
     assert "<starting_entity>" not in prompt
     assert "<candidate_starting_points>" not in prompt
-    assert "choose a plausible root table from the current DB" in instructions
-    assert "observe a real entity and candidate values" in instructions
+    assert "choose a plausible root table" in instructions
+    assert "observe real entity values" in instructions
     assert "follow that tool's schema exactly" in instructions

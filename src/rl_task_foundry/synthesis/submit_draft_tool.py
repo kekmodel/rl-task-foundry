@@ -60,6 +60,10 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_EVIDENCE_MISSING = "answer_contract_evidence_missing"
     ANSWER_CONTRACT_EVIDENCE_MISMATCH = "answer_contract_evidence_mismatch"
     ANSWER_CONTRACT_QUERY_MISMATCH = "answer_contract_query_mismatch"
+    ANSWER_CONTRACT_ORDER_AMBIGUOUS = "answer_contract_order_ambiguous"
+    ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED = (
+        "answer_contract_hidden_filter_unanchored"
+    )
     ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING = (
         "answer_contract_visibility_evidence_missing"
     )
@@ -89,6 +93,8 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING,
         SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
         SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL,
@@ -769,6 +775,57 @@ def _canonical_label_matches_query_result(
     return canonical_json(label, default=str) == canonical_json(expected, default=str)
 
 
+def _query_limit_from_params(params: object) -> int | None:
+    if not isinstance(params, dict):
+        return None
+    spec = params.get("spec")
+    if not isinstance(spec, dict):
+        return None
+    limit = spec.get("limit")
+    if isinstance(limit, int) and limit > 0:
+        return limit
+    return None
+
+
+def _query_ordering_is_ambiguous(query_result: dict[str, object]) -> bool:
+    diagnostics = query_result.get("ordering_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    return bool(
+        diagnostics.get("missing_order_by_for_limit")
+        or diagnostics.get("duplicate_order_key_in_returned_rows")
+        or diagnostics.get("limit_boundary_tie")
+    )
+
+
+def _unanchored_hidden_filter_sources(
+    query_result: dict[str, object],
+    *,
+    anchor_entity: dict[str, object],
+) -> list[dict[str, object]]:
+    referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
+    anchor_values = set(anchor_entity.values())
+    unanchored: list[dict[str, object]] = []
+    for ref in referenced_columns:
+        if ref.get("usage") != "where":
+            continue
+        if ref.get("visibility") != "blocked" or ref.get("is_handle") is not True:
+            continue
+        value = ref.get("value")
+        if "value" not in ref:
+            continue
+        if isinstance(value, (str, int, float, bool)) and value in anchor_values:
+            continue
+        unanchored.append(
+            {
+                "table": ref.get("table"),
+                "column": ref.get("column"),
+                "op": ref.get("op"),
+            }
+        )
+    return unanchored
+
+
 def _as_object_list(value: object) -> list[dict[str, object]] | None:
     if not isinstance(value, list):
         return None
@@ -873,6 +930,7 @@ class SubmitDraftController:
         init=False,
     )
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
+    _last_evaluated_label_data: dict[str, object] | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
     _last_feedback_error_codes: tuple[str, ...] = field(default=(), init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
@@ -927,6 +985,11 @@ class SubmitDraftController:
             )
 
     def _latest_successful_query_result_since_last_submission(self) -> dict[str, object] | None:
+        call = self._latest_successful_query_call_since_last_submission()
+        result = call.get("result") if call is not None else None
+        return result if isinstance(result, dict) else None
+
+    def _latest_successful_query_call_since_last_submission(self) -> dict[str, object] | None:
         recent_calls = self._raw_atomic_tool_calls[self._tool_call_count_at_last_submission :]
         for call in reversed(recent_calls):
             if call.get("tool_name") != "query":
@@ -937,7 +1000,7 @@ class SubmitDraftController:
                 and "error" not in result
                 and isinstance(result.get("rows"), list)
             ):
-                return result
+                return call
         return None
 
     def reject_invalid_payload(self, *, parsed: dict[str, object], error: ValidationError) -> str:
@@ -1120,9 +1183,12 @@ class SubmitDraftController:
                 ]
             )
 
-        latest_query_result = self._latest_successful_query_result_since_last_submission()
+        latest_query_call = self._latest_successful_query_call_since_last_submission()
+        latest_query_result = (
+            latest_query_call.get("result") if latest_query_call is not None else None
+        )
         current_query_evidence_signature: QueryEvidenceSignature | None = None
-        if latest_query_result is None:
+        if not isinstance(latest_query_result, dict):
             error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING)
         else:
             current_query_evidence_signature = _query_evidence_signature(
@@ -1151,6 +1217,41 @@ class SubmitDraftController:
             )
             error_codes.extend(visibility_error_codes)
             invalid_diagnostics.update(visibility_diagnostics)
+            if parsed_anchor:
+                unanchored_hidden_filters = _unanchored_hidden_filter_sources(
+                    latest_query_result,
+                    anchor_entity=parsed_anchor,
+                )
+                if unanchored_hidden_filters:
+                    error_codes.append(
+                        SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED
+                    )
+                    invalid_diagnostics["unanchored_hidden_filters"] = (
+                        unanchored_hidden_filters[
+                            : self.config.synthesis.runtime.diagnostic_item_limit
+                        ]
+                    )
+            query_limit = _query_limit_from_params(
+                latest_query_call.get("params") if latest_query_call is not None else None
+            )
+            latest_rows = latest_query_result.get("rows")
+            if (
+                payload.answer_contract.kind == "list"
+                and payload.answer_contract.limit_phrase is None
+                and query_limit is not None
+                and isinstance(latest_rows, list)
+                and len(latest_rows) == query_limit
+            ):
+                error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH)
+                invalid_diagnostics["missing_limit_phrase_for_query_limit"] = query_limit
+            if (
+                payload.answer_contract.kind == "list"
+                and _query_ordering_is_ambiguous(latest_query_result)
+            ):
+                error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS)
+                invalid_diagnostics["ordering_diagnostics"] = latest_query_result.get(
+                    "ordering_diagnostics"
+                )
 
         # After a too-easy rejection, require an answer change that is
         # visible to exact label verification.
@@ -1476,7 +1577,13 @@ class SubmitDraftController:
                 "Rejected. label must exactly match the latest successful query result. For kind='scalar', copy the one aggregate row as the label object. For kind='list', copy the query rows array as the label list, even when the query returned one row. If the latest query selected helper/context fields that the user did not ask to receive, rerun query with only the intended label fields instead of adding extras to label."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH: (
-                "Rejected. The latest successful query does not contain the required structural evidence for this answer."  # noqa: E501
+                "Rejected. The latest successful query does not contain the required structural evidence for this answer. If a list query limit fixes the returned rows, user_request and answer_contract.limit_phrase must include that exact fixed size."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
+                "Rejected. The latest list query has ambiguous ordering for exact verification. Add deterministic query.order_by tie-breakers before submit_draft."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
+                "Rejected. The latest query filters on a blocked handle value that is not present in entity. Put required hidden scope handles in entity or rerun the query using the submitted entity's handle."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
                 "Rejected. Call query again before submit_draft; the latest query result must include field visibility evidence."  # noqa: E501
@@ -1645,8 +1752,11 @@ class SubmitDraftController:
         if self.phase_monitor is None:
             return
         label_data = _monitor_label_data(payload, config=self.config)
+        previous_label_data = self._last_monitored_label_data
+        if self._needs_label_change and self._last_evaluated_label_data is not None:
+            previous_label_data = self._last_evaluated_label_data
         label_change = _label_change_summary(
-            previous=self._last_monitored_label_data,
+            previous=previous_label_data,
             current=label_data,
         )
         self.phase_monitor.emit(
@@ -1717,6 +1827,8 @@ class SubmitDraftController:
                 **diagnostics,
             },
         )
+        if pass_rate is not None:
+            self._last_evaluated_label_data = label_data
         self._last_monitored_label_data = label_data
 
 

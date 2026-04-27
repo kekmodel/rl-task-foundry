@@ -445,6 +445,62 @@ async def test_query_limit_and_order_by_ref_emitted_in_order():
     assert sql.rstrip().endswith("LIMIT 3")
 
 
+@pytest.mark.asyncio
+async def test_query_reports_duplicate_limited_order_key_diagnostics():
+    session, _ = _stub_session(
+        rows=[
+            {"customer_id": 1, "first_name": "ALICE"},
+            {"customer_id": 2, "first_name": "ALICE"},
+            {"customer_id": 3, "first_name": "BOB"},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [
+                _select("c", "customer_id"),
+                _select("c", "first_name"),
+            ],
+            "order_by": [_order_ref("c", "first_name", "asc")],
+            "limit": 3,
+        },
+    )
+
+    assert result["ordering_diagnostics"] == {
+        "order_by_outputs": ["first_name"],
+        "duplicate_order_key_in_returned_rows": True,
+        "returned_row_count": 3,
+        "limit": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_query_reports_missing_order_by_for_limited_multirow_list():
+    session, _ = _stub_session(
+        rows=[
+            {"customer_id": 1},
+            {"customer_id": 2},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [_select("c", "customer_id")],
+            "limit": 2,
+        },
+    )
+
+    assert result["ordering_diagnostics"] == {
+        "missing_order_by_for_limit": True,
+        "returned_row_count": 2,
+        "limit": 2,
+    }
+
+
 # ---------- join chain ----------
 
 

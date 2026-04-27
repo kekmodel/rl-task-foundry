@@ -99,6 +99,7 @@ def _record_query_evidence(
     column_sources: list[dict[str, object]] | None = None,
     referenced_columns: list[dict[str, object]] | None = None,
     query_params: dict[str, object] | None = None,
+    result_extra: dict[str, object] | None = None,
 ) -> None:
     del answer_contract
     rows = [label] if isinstance(label, dict) else label
@@ -116,16 +117,19 @@ def _record_query_evidence(
             }
             for column in columns
         ]
+    result: dict[str, object] = {
+        "columns": columns,
+        "column_sources": column_sources,
+        "referenced_columns": referenced_columns or [],
+        "rows": rows,
+        "row_count": len(rows) if isinstance(rows, list) else 0,
+    }
+    if result_extra:
+        result.update(result_extra)
     controller.record_atomic_tool_call(
         tool_name="query",
         params=query_params or {"spec": {"test_evidence": True, "where": [{"value": 1}]}},
-        result={
-            "columns": columns,
-            "column_sources": column_sources,
-            "referenced_columns": referenced_columns or [],
-            "rows": rows,
-            "row_count": len(rows) if isinstance(rows, list) else 0,
-        },
+        result=result,
     )
 
 
@@ -382,6 +386,15 @@ class _FakeSolverOrchestrator:
                 "pass_rate": self.matched_solver_runs / self.total_solver_runs,
             },
         )()
+
+
+@dataclass(slots=True)
+class _CollectingPhaseMonitor:
+    records: list[dict[str, object]] = field(default_factory=list)
+
+    def emit(self, **kwargs: object) -> dict[str, object]:
+        self.records.append(dict(kwargs))
+        return dict(kwargs)
 
 
 @dataclass(slots=True)
@@ -1430,6 +1443,194 @@ async def test_submit_draft_treats_list_limit_one_as_rows_array(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"customer_id": 1}
+    label = [
+        {"medication_name": "A", "start_time": "2134-09-19T08:00:00"},
+        {"medication_name": "B", "start_time": "2134-09-18T08:00:00"},
+        {"medication_name": "C", "start_time": "2134-09-17T08:00:00"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "recent_prescriptions",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "내 최근 처방전 목록을 보여주세요.",
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="최근 처방전 목록",
+                limit_phrase=None,
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        query_params={
+            "spec": {
+                "limit": 3,
+                "where": [{"value": 1}],
+                "order_by": [{"output": "start_time", "direction": "desc"}],
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "list query limit fixes the returned rows" in message
+    assert "answer_contract.limit_phrase" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_query_mismatch",)
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_ambiguous_limited_list_order(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="labs",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"subject_id": 1}
+    label = [
+        {"test_name": "Glucose", "test_time": "2177-03-19T05:45:00", "result": "___"},
+        {"test_name": "Chloride", "test_time": "2177-03-19T05:45:00", "result": "103"},
+        {"test_name": "Phosphate", "test_time": "2177-03-19T05:45:00", "result": "3.9"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "recent_labs",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "최근 혈액 검사 결과 3개 알려주세요.",
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="혈액 검사 결과",
+                limit_phrase="3개",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        query_params={
+            "spec": {
+                "limit": 3,
+                "where": [{"value": 1}],
+                "order_by": [{"output": "test_time", "direction": "desc"}],
+            }
+        },
+        result_extra={
+            "ordering_diagnostics": {
+                "order_by_outputs": ["test_time"],
+                "duplicate_order_key_in_returned_rows": True,
+                "returned_row_count": 3,
+                "limit": 3,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "ambiguous ordering" in message
+    assert "query.order_by tie-breakers" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medications",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"emar_id": "10027602-66"}
+    label = [
+        {
+            "medication": "Sodium Chloride 0.9%  Flush",
+            "administration_time": "2201-12-17T08:12:00",
+            "status": "Flushed",
+        }
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "medications",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "이 약물 투여 기록의 최근 투약 정보 1개를 알려주세요.",
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="최근 투약 정보",
+                limit_phrase="1개",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "emar",
+                "column": "subject_id",
+                "visibility": "blocked",
+                "is_handle": True,
+                "op": "eq",
+                "value": 10027602,
+            }
+        ],
+        query_params={"spec": {"limit": 1, "where": [{"value": 10027602}]}},
+    )
+
+    message = await controller.submit(payload)
+
+    assert "blocked handle value that is not present in entity" in message
+    assert "submitted entity's handle" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_hidden_filter_unanchored",
+    )
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
     tmp_path: Path,
 ) -> None:
@@ -1748,6 +1949,168 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
 
     assert "preserve prior filters/order and existing query output fields" in second_message
     assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
+    tmp_path: Path,
+) -> None:
+    monitor = _CollectingPhaseMonitor()
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="admissions",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=20,
+            total_solver_runs=20,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=5,
+        phase_monitor=monitor,  # type: ignore[arg-type]
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"subject_id": 10023117}
+    first_label = [
+        {
+            "admittime": "2175-07-06T15:57:00",
+            "dischtime": "2175-07-20T00:00:00",
+            "admission_type": "OBSERVATION ADMIT",
+            "admission_location": "EMERGENCY ROOM",
+        },
+        {
+            "admittime": "2175-03-20T23:29:00",
+            "dischtime": "2175-03-29T16:00:00",
+            "admission_type": "OBSERVATION ADMIT",
+            "admission_location": "TRANSFER FROM HOSPITAL",
+        },
+        {
+            "admittime": "2174-12-16T13:25:00",
+            "dischtime": "2174-12-20T10:27:00",
+            "admission_type": "DIRECT EMER.",
+            "admission_location": "PHYSICIAN REFERRAL",
+        },
+        {
+            "admittime": "2174-06-07T23:25:00",
+            "dischtime": "2174-06-12T15:55:00",
+            "admission_type": "URGENT",
+            "admission_location": "TRANSFER FROM HOSPITAL",
+        },
+        {
+            "admittime": "2173-04-16T22:15:00",
+            "dischtime": "2173-04-20T16:40:00",
+            "admission_type": "EW EMER.",
+            "admission_location": "EMERGENCY ROOM",
+        },
+    ]
+    first_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "admissions",
+            "label": first_label,
+            "entity": anchor_entity,
+            "user_request": (
+                "내 최근 5건의 입원 이력을 확인해 주세요. "
+                "입원일, 퇴원일, 입원 유형, 입원 경로를 알고 싶습니다."
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="입원 이력",
+                constraint_phrases=["입원일", "퇴원일", "입원 유형", "입원 경로"],
+                limit_phrase="5건",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        first_payload.label,
+        query_params={"spec": {"limit": 5, "where": [{"value": 10023117}]}},
+    )
+
+    first_message = await controller.submit(first_payload)
+
+    assert "needs more specificity" in first_message
+    weakened_label = [
+        {
+            "admittime": "2175-07-06T15:57:00",
+            "dischtime": "2175-07-20T00:00:00",
+            "admission_type": "OBSERVATION ADMIT",
+        },
+        {
+            "admittime": "2173-04-16T22:15:00",
+            "dischtime": "2173-04-20T16:40:00",
+            "admission_type": "EW EMER.",
+        },
+        {
+            "admittime": "2171-11-07T21:37:00",
+            "dischtime": "2171-11-22T15:30:00",
+            "admission_type": "EW EMER.",
+        },
+    ]
+    weakened_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "emergency_admissions",
+            "label": weakened_label,
+            "entity": anchor_entity,
+            "user_request": (
+                "응급실을 통해 입원한 내 최근 입원 이력 3건을 확인해 주세요. "
+                "입원일, 퇴원일, 입원 유형을 알고 싶습니다."
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="입원 이력",
+                constraint_phrases=["입원일", "퇴원일", "입원 유형", "응급실"],
+                limit_phrase="3건",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        weakened_payload.label,
+        query_params={"spec": {"limit": 3, "where": [{"value": 10023117}]}},
+    )
+
+    second_message = await controller.submit(weakened_payload)
+
+    assert "preserve prior filters/order and existing query output fields" in second_message
+    drifted_label = [
+        {
+            **row,
+            "discharge_location": value,
+        }
+        for row, value in zip(
+            weakened_label,
+            ["DIED", "HOME", "HOME HEALTH CARE"],
+            strict=True,
+        )
+    ]
+    drifted_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "emergency_admissions",
+            "label": drifted_label,
+            "entity": anchor_entity,
+            "user_request": (
+                "응급실을 통해 입원한 내 최근 입원 이력 3건을 확인해 주세요. "
+                "입원일, 퇴원일, 입원 유형, 퇴원 장소를 알고 싶습니다."
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="입원 이력",
+                constraint_phrases=["입원일", "퇴원일", "입원 유형", "퇴원 장소", "응급실"],
+                limit_phrase="3건",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        drifted_payload.label,
+        query_params={"spec": {"limit": 3, "where": [{"value": 10023117}]}},
+    )
+
+    await controller.submit(drifted_payload)
+
+    assert monitor.records[-1]["status"] == "feedback"
+    actual_data = monitor.records[-1]["actual_data"]
+    assert isinstance(actual_data, dict)
+    label_change = actual_data["label_change"]
+    assert isinstance(label_change, dict)
+    assert label_change["previous_canonical_answer_slot_count"] == 4
+    assert label_change["removed_field_names"] == ["admission_location"]
+    assert label_change["added_field_names"] == ["discharge_location"]
 
 
 @pytest.mark.asyncio

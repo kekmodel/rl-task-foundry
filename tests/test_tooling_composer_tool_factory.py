@@ -310,8 +310,15 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "Do not select constraint, filter, scope" in descriptions[
         "query"
     ]["$.spec.select"]
+    assert "preserves the selected source column meaning" in descriptions[
+        "query"
+    ]["$.spec.select[].as"]
+    assert "note/comment/description text" in descriptions[
+        "query"
+    ]["$.spec.select[].as"]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
+    assert "add a tie-breaker" in descriptions["query"]["$.spec.order_by"]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
     assert "without group_by so it returns one row" in descriptions["query"][
