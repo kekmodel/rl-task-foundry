@@ -299,6 +299,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     )
     assert "same event/record" in descriptions["query"]["$.spec.join"]
     assert "independent sibling joins" in descriptions["query"]["$.spec.join"]
+    assert "join_warnings" in descriptions["query"]["$.spec.join"]
     assert "joined-table filters are allowed" in descriptions["query"]["$.spec.where"]
     assert "Every selected field becomes a canonical label field" in descriptions[
         "query"

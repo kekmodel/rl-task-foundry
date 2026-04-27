@@ -2830,3 +2830,37 @@ Solver 30/30 완료 결과:
   Targeted schema/prompt tests passed:
   `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_tooling_atomic_tool_factory.py::test_v2_list_records_schema_distinguishes_paths_from_columns -q`
   -> 4 passed.
+
+## Iteration 70 — surface structurally risky sibling joins
+
+- **Trigger**:
+  Post-Iteration-69 trial `artifacts/trial_label_contract_pagila_gpt54nano_01`
+  no longer reproduced the Japanese-language helper-field label issue. It
+  instead exposed a different grounded-but-bad query shape: the composer joined
+  `customer -> payment` and `customer -> rental` as independent reverse sibling
+  branches, then asked for "the rental date corresponding to that payment."
+  The correct structural path is through the payment event
+  (`payment.rental_id -> rental`). The sibling join can pair unrelated payment
+  and rental records in one result row.
+- **Diagnosis**:
+  This should still not become a hard semantic validator. Some requests may
+  intentionally combine independent facts. But the risky shape itself is
+  identifiable with 100% structural precision: selected aliases come from two
+  or more reverse one-to-many joins off the same parent alias.
+- **Fix**:
+  `query` now returns `join_warnings` for selected independent reverse sibling
+  joins. The warning explains that a single result row may pair unrelated
+  records and suggests joining through the relevant event/record path when one
+  selected fact belongs to another. The query tool description also tells the
+  composer that these warnings may appear.
+- **Why this follows the principles**:
+  The warning is structural FK metadata, not a token/name heuristic. It does
+  not reject or rewrite the draft, so semantic judgment remains with the
+  composer and statistical solver gate.
+- **Verification**:
+  Targeted tests passed:
+  `uv run pytest tests/test_tooling_composer_query.py::test_query_warns_on_selected_independent_reverse_sibling_joins tests/test_tooling_composer_query.py::test_query_does_not_warn_when_related_event_path_is_chained tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  -> 3 passed.
+  Full verification after deleting the unrelated untracked
+  `scripts/load_wikitree_sample.py`: `uv run pytest -q` -> 420 passed,
+  `uv run ruff check .` -> passed, `git diff --check` -> passed.

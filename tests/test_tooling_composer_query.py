@@ -95,6 +95,18 @@ def _snapshot():
         ],
         primary_key=("rental_id",),
     )
+    payment = TableProfile(
+        schema_name="public",
+        table_name="payment",
+        columns=[
+            _column("payment", "payment_id", is_primary_key=True),
+            _column("payment", "customer_id", is_foreign_key=True),
+            _column("payment", "rental_id", is_foreign_key=True),
+            _column("payment", "amount", data_type="numeric"),
+            _column("payment", "payment_date", data_type="timestamptz"),
+        ],
+        primary_key=("payment_id",),
+    )
     inventory = TableProfile(
         schema_name="public",
         table_name="inventory",
@@ -141,10 +153,28 @@ def _snapshot():
             target_table="film",
             target_columns=("film_id",),
         ),
+        ForeignKeyEdge(
+            constraint_name="payment_customer",
+            source_schema="public",
+            source_table="payment",
+            source_columns=("customer_id",),
+            target_schema="public",
+            target_table="customer",
+            target_columns=("customer_id",),
+        ),
+        ForeignKeyEdge(
+            constraint_name="payment_rental",
+            source_schema="public",
+            source_table="payment",
+            source_columns=("rental_id",),
+            target_schema="public",
+            target_table="rental",
+            target_columns=("rental_id",),
+        ),
     ]
     return snapshot_from_graph(
         SchemaGraph(
-            tables=[customer, rental, inventory, film],
+            tables=[customer, rental, inventory, film, payment],
             edges=edges,
         )
     )
@@ -583,6 +613,81 @@ async def test_query_select_spans_from_and_joined_tables():
     sql, _ = conn.calls[0]
     assert "t1.\"rental_date\" AS \"rental_date\"" in sql
     assert "t2.\"first_name\" AS \"first_name\"" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_warns_on_selected_independent_reverse_sibling_joins():
+    session, _ = _stub_session(
+        rows=[
+            {
+                "amount": "0.99",
+                "rental_date": "2022-05-27T09:12:00+00:00",
+            }
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "join": [
+                {"from": "c", "via_edge": "customer<-payment.customer_id", "as": "p"},
+                {"from": "c", "via_edge": "customer<-rental.customer_id", "as": "r"},
+            ],
+            "select": [
+                _select("p", "amount"),
+                _select("r", "rental_date"),
+            ],
+        },
+    )
+
+    assert result["join_warnings"] == [
+        {
+            "code": "independent_reverse_sibling_join",
+            "severity": "warning",
+            "parent_alias": "c",
+            "aliases": ["p", "r"],
+            "relation_labels": [
+                "customer<-payment.customer_id",
+                "customer<-rental.customer_id",
+            ],
+            "message": (
+                "Selected aliases come from separate one-to-many branches "
+                "of the same parent. A single result row may pair unrelated "
+                "records. If one selected fact belongs to another event or "
+                "record, join through that event/record path instead."
+            ),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_query_does_not_warn_when_related_event_path_is_chained():
+    session, _ = _stub_session(
+        rows=[
+            {
+                "amount": "0.99",
+                "rental_date": "2022-05-27T09:12:00+00:00",
+            }
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "join": [
+                {"from": "c", "via_edge": "customer<-payment.customer_id", "as": "p"},
+                {"from": "p", "via_edge": "payment.rental_id->rental", "as": "r"},
+            ],
+            "select": [
+                _select("p", "amount"),
+                _select("r", "rental_date"),
+            ],
+        },
+    )
+
+    assert "join_warnings" not in result
 
 
 @pytest.mark.asyncio
