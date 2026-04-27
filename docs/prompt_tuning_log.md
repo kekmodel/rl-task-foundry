@@ -3518,3 +3518,41 @@ Solver 30/30 완료 결과:
   keep the change at prompt/tool-description clarity around matching the
   `sort_record_set.keys.path` to the `list_records.fields.path` used for the
   displayed related label.
+
+## Iteration 89 — Parallel Kimi batch-five MIMIC demo trial
+
+- **Question**:
+  Run the real MIMIC demo pipeline with Kimi composer and Kimi solver in a
+  five-trial parallel batch, then judge failed drafts by data quality rather
+  than treating `reject_too_hard` as conclusive evidence of good difficulty.
+- **Run**:
+  `artifacts/trial_20260428_mimiciv_demo_kimi_batch5_parallel_01`, DB
+  `mimiciv_demo`, topic `input_events`, composer and solver
+  `openrouter/moonshotai/kimi-k2.5`, `max_solver_runs=20`,
+  `solver_batch_size=4`, pass band `[0.2, 0.9]`. The batch ran five trials in
+  parallel, with per-trial DB pools reduced to avoid exhausting connections.
+- **Aggregate**:
+  `1/5` accepted. Trials 1-4 ended `synthesis_failed` with `reject_too_hard`
+  after `0/12` matches and CI high `0.2209`. Trial 5 accepted at `16/20`
+  matches, pass rate `0.8`, CI `[0.5990, 0.9286]`, committed as
+  `task_medication_input_events_803ff611ccd657bd`.
+- **Trial-quality read**:
+  Trial 1 is low-quality, not merely hard. After feedback added a visible
+  same-time tie-break "larger amount first", the canonical answer still placed
+  amount `1.0` before amount `200.0` at the same timestamp. Kimi solvers
+  followed the visible request and therefore mismatched.
+- **Nullability read**:
+  Trials 2, 3, and 4 exposed a structural nullability problem. The composer
+  included nullable fields such as `rate` and `rate_unit`; canonical answers
+  contained `null`, but the solver submit schema rejected nulls or forced
+  solvers into string/empty-string substitutes. This turns otherwise reachable
+  list tasks into apparent `too_hard` failures. Trial 3 is also the clearest
+  observed `too_easy -> too_hard` jump: the visible-tie-break version hit
+  `20/20`, then the difficulty-up response added nullable rate fields and the
+  final draft fell to `0/12`.
+- **Principle check**:
+  These findings do not justify literal or token heuristics. The next eligible
+  fix should be structural and precision-safe: propagate canonical/output
+  nullability into the solver answer schema, and separately ensure the accepted
+  canonical order agrees with visible `order_by` keys. Both are based on the
+  draft's own query/result contract, not on predicting database values.
