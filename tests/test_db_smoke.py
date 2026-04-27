@@ -13,3 +13,6 @@ async def test_smoke_test_connection_hits_pagila_container():
     assert info["database_name"] == "pagila"
     assert info["user_name"] == config.database.readonly_role
     assert info["read_only"] == "on"
+    assert info["schema_allowlist"] == "public"
+    assert int(info["allowlisted_table_count"]) > 0
+    assert info["selectable_table_count"] == info["allowlisted_table_count"]

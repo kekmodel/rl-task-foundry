@@ -60,6 +60,42 @@ def test_cli_validate_config_command():
     assert "synthesis_coverage=target_count_per_pair=3" in normalized
 
 
+def test_cli_check_db_reports_allowlisted_schema_surface(monkeypatch):
+    async def _smoke(_database):
+        return {
+            "database_name": "postgres_air",
+            "user_name": "rlvr_reader",
+            "schema_name": "public",
+            "read_only": "on",
+            "schema_allowlist": "postgres_air",
+            "allowlisted_table_count": "10",
+            "selectable_table_count": "10",
+        }
+
+    monkeypatch.setattr("rl_task_foundry.cli.smoke_test_connection", _smoke)
+
+    result = CliRunner().invoke(
+        app,
+        ["check-db", "--config-path", "rl_task_foundry.postgres_air.yaml"],
+    )
+    normalized = result.stdout.replace("\n", "")
+    assert result.exit_code == 0
+    assert "current_schema=public" in normalized
+    assert "allowlist=postgres_air" in normalized
+    assert "tables=10 selectable=10" in normalized
+
+
+def test_cli_check_db_reports_concise_failure(monkeypatch):
+    async def _smoke(_database):
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr("rl_task_foundry.cli.smoke_test_connection", _smoke)
+
+    result = CliRunner().invoke(app, ["check-db"])
+    assert result.exit_code == 1
+    assert "db check failed: ConnectionRefusedError: connection refused" in result.stdout
+
+
 def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(

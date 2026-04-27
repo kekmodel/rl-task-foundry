@@ -483,10 +483,17 @@ def check_db(config_path: Path = Path("rl_task_foundry.yaml")) -> None:
     """Run a small PostgreSQL connectivity smoke test."""
 
     config = load_config(config_path)
-    info = asyncio.run(smoke_test_connection(config.database))
+    try:
+        info = asyncio.run(smoke_test_connection(config.database))
+    except Exception as exc:
+        console.print(f"[red]db check failed[/red]: {type(exc).__name__}: {exc}")
+        raise typer.Exit(code=1) from exc
     console.print(
         "[green]db ok[/green]: "
-        f"db={info['database_name']} user={info['user_name']} schema={info['schema_name']}"
+        f"db={info['database_name']} user={info['user_name']} "
+        f"current_schema={info['schema_name']} read_only={info['read_only']} "
+        f"allowlist={info['schema_allowlist']} tables={info['allowlisted_table_count']} "
+        f"selectable={info['selectable_table_count']}"
     )
 
 
