@@ -148,10 +148,45 @@ Prompt layering:
 
 - Composer system instructions are durable role-local policy.
 - Composer user input is current-run context: language, domain/scenario,
-  schema/profile/affordance map, tool surface, optional anchor candidates, and
-  local examples.
+  schema/profile/affordance map, optional anchor candidates, and local
+  examples.
 - Composer should not be told actor, solver, pass-rate, training, registry, or
   dataset internals.
+
+Composer surface ownership principle:
+
+- Stable composer behavior policy belongs in the composer system instructions
+  first. This includes task-shape rules, label rules, retry strategy, role
+  isolation, and calibration behavior such as what to do after a specificity
+  rejection.
+- Durable policy must have one textual source of truth. Do not duplicate the
+  same behavior rule across prompts, tool descriptions, and feedback. If another
+  surface needs to invoke that rule, reference the named policy rather than
+  restating it.
+- Composer user input is for the current run only. Use it for DB/context facts,
+  requested language/topic, orientation data, candidates, and local examples;
+  do not use it as the main home for durable behavior policy. Render this
+  context in one tagged envelope with stable nested tags so each block has an
+  explicit boundary, using the Codex user-context style: an
+  `<environment_context>` root containing `<session_context>`,
+  `<database_context>`, and optional candidate/context blocks.
+- Do not mirror the SDK-injected callable tool surface in system instructions
+  or user input. Tool names, descriptions, and JSON schemas are sent through the
+  SDK/API tool channel; prompt text may reference a tool by name only when a
+  workflow step needs that tool.
+- Tool schemas and descriptions own tool-local contracts: valid argument shape,
+  parameter semantics, result interpretation, and misuse that can be prevented
+  at the API boundary. They should not carry broad composer strategy unless the
+  strategy is specific to that tool.
+- `submit_draft` validation feedback is reactive enforcement. It should report
+  exact contract failures or remind the composer to apply an existing policy in
+  the current failure state. It must not become the primary home for a new
+  general policy. If feedback text starts carrying reusable behavior guidance,
+  promote that policy to the system instructions and keep feedback as a short
+  pointer to the named policy.
+- Hard validation remains limited to 100%-precision contracts. Do not turn
+  semantic guesses, naturalness judgments, or inferred difficulty strategy into
+  runtime rejection rules.
 
 Composer tool calls are mirrored into `SubmitDraftController` by
 `build_instrumented_composer_tools`. This telemetry is the evidence source for

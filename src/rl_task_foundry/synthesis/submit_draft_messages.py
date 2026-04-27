@@ -73,68 +73,11 @@ def _format_ungrounded_value_guidance(diagnostics: dict[str, object] | None) -> 
 
 
 def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
-    common = (
-        " Keep the anchor entity locked; changing it is rejected. "
-        "Use the current DB evidence to choose a feasible structural "
-        "strengthening; there is no fixed ladder. Preserve existing "
-        "grounded structure unless it was overconstrained. Replacing "
-        "a field on the same path is not an escalation and will be "
-        "rejected. Keep answer_contract.kind fixed and preserve existing "
-        "query output fields. "
-    )
-    if answer_kind == "scalar":
-        return (
-            common
-            + "This is a scalar answer, so do not switch to a list, "
-            "Cardinality, or Cross-item rule. Add a new grounded "
-            "filter when the DB exposes a feasible visible dimension, "
-            "or add grounded compatible aggregate fields over the same "
-            "filtered evidence path when the user request asks for "
-            "those values. Every added constraint or output phrase must "
-            "appear verbatim in user_request and be represented in "
-            "answer_contract."
-        )
-    if answer_kind == "list":
-        return (
-            common
-            + "This is a list answer, so keep a selected-row query target. "
-            "Pick a valid list strengthening supported by the current "
-            "DB evidence: "
-            "(a) Filter — add a categorical exclusion or threshold "
-            "on the destination or join path, "
-            "(b) Composite — a second filter on a different "
-            "dimension than any existing filter, "
-            "(c) Cardinality — grow the same repeated list "
-            "structure one natural step (for example 1→2→3→5) "
-            "or eventually switch to all matching items, "
-            "(d) Item-complexity — keep the item count but add one "
-            "grounded per-item requirement, related visible field, "
-            "predicate, or deterministic tie-break from the same "
-            "query path, "
-            "(e) Order — add a secondary deterministic order_by "
-            "without removing existing order clauses. Every added "
-            "predicate, sort, cardinality, or item-complexity phrase "
-            "must appear verbatim in user_request and be represented "
-            "in answer_contract. Do not add passive display-only "
-            "fields as difficulty."
-        )
+    kind_note = ""
+    if answer_kind in {"scalar", "list"}:
+        kind_note = f" Current answer kind: {answer_kind}."
     return (
-        common
-        + "Pick a valid strengthening supported by current DB evidence: "
-        "(a) Filter — add a categorical exclusion or threshold, "
-        "preferably on a different table or business dimension for "
-        "scalar counts, "
-        "(b) Cardinality — return or grow a list of N items "
-        "where N is declared in user_request and increases the same "
-        "repeated structure gradually, "
-        "(c) Item-complexity — make each item require one additional "
-        "grounded condition, related visible field, or deterministic "
-        "tie-break from the same query path, "
-        "(d) Cross-item rule — uniqueness, ordering, or a "
-        "conditional relating list items (requires an existing "
-        "list), "
-        "(e) Composite — a second filter on a different "
-        "dimension than any existing filter. Every added predicate, "
-        "sort, cardinality, or item-complexity phrase must appear "
-        "verbatim in user_request and be represented in answer_contract."
+        " This draft failed specificity."
+        f"{kind_note} Apply the Difficulty-Up Policy from the system "
+        "instructions before resubmitting."
     )

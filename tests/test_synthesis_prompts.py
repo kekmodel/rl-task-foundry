@@ -75,7 +75,7 @@ def test_composer_surface_summary_exposes_only_callable_tools() -> None:
     assert "solver_primitives" not in summary
 
 
-def test_synthesis_input_renders_only_callable_composer_tool_surface() -> None:
+def test_synthesis_input_does_not_mirror_sdk_tool_surface() -> None:
     config = load_config("rl_task_foundry.yaml")
     prompt = build_synthesis_input(
         domain_name="service_operations",
@@ -123,14 +123,17 @@ def test_synthesis_input_renders_only_callable_composer_tool_surface() -> None:
         },
     )
 
-    # structural sections
-    assert "# Session Context" in prompt
-    assert "# Environment" in prompt
-    assert "# Tools Available" in prompt
+    # structural context envelope
+    assert prompt.startswith("<environment_context>\n")
+    assert prompt.endswith("\n</environment_context>")
+    assert "<session_context>" in prompt
+    assert "<database_context>" in prompt
+    assert "<tools_available>" not in prompt
 
     # session context
-    assert "Domain: service_operations" in prompt
-    assert "Scenario: end-user support" in prompt
+    assert "<domain_name>\nservice_operations\n</domain_name>" in prompt
+    assert "<scenario_description>" in prompt
+    assert "end-user support" in prompt
     assert "record_history" in prompt
     assert "Korean" in prompt
 
@@ -138,18 +141,21 @@ def test_synthesis_input_renders_only_callable_composer_tool_surface() -> None:
     assert "public.customer" in prompt
     assert "public.rental" in prompt
 
-    # data tools surface
-    assert "Data tools: 5" in prompt
-    assert "schema_map — Schema graph slice" in prompt
-    assert "query — JSON DSL compiler" in prompt
+    # callable shape lives in the SDK tool payload, not per-request context
+    assert "<tool_count>" not in prompt
+    assert '"name": "schema_map"' not in prompt
+    assert '"description": "Schema graph slice with hub/bridge tags."' not in prompt
+    assert '"name": "query"' not in prompt
+    assert '"description": "JSON DSL compiler for canonical answers."' not in prompt
     assert "DB-native topic choice" not in prompt
     assert "feasible strengthening directions" not in prompt
-    assert "# DB Affordance Map" in prompt
+    assert "<db_affordance_map>" in prompt
     assert "Complete rule-based navigation map" in prompt
-    assert "## Complete table index" in prompt
-    assert "## Complete relationship index" in prompt
+    assert "<table_affordances>" in prompt
+    assert "<path_affordances>" in prompt
     assert "High-signal" not in prompt
-    assert "public.customer: structure=hub" in prompt
+    assert '"table": "public.customer"' in prompt
+    assert '"structure": "hub"' in prompt
     assert "public.customer -> public.rental" in prompt
     assert "Topic affordance cards" not in prompt
 
@@ -193,6 +199,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
 
     # Minimal role, no pipeline/training meta.
     assert len(instructions) < 8000
+    assert "# Role" in instructions
     assert "grounded customer-facing task drafts" in instructions
     assert "synthetic" not in instructions
     assert "dataset" not in instructions
@@ -227,21 +234,18 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     ):
         assert primitive not in instructions
 
-    # Tool-call budget and tool surface are explicit.
-    assert "# Commit Rule" in instructions
+    # Tool-call budget is explicit; callable shape lives in SDK tool schemas.
+    assert "# Draft Submission Budget" in instructions
     assert "tool calls" in instructions
     assert "submit_draft" in instructions
-    assert "# Tools" in instructions
+    assert "# Tools" not in instructions
     assert "# Composer Tools" not in instructions
     assert "composer DSL" not in instructions
-    for tool in (
-        "schema_map",
-        "neighborhood",
-        "profile",
-        "sample",
-        "query",
-    ):
-        assert tool in instructions
+    assert "`schema_map(root_table?, depth?)`" not in instructions
+    assert "`sample(target)`" not in instructions
+    assert "`profile(target)`" not in instructions
+    assert "`neighborhood(table, row_id, max_per_edge?)`" not in instructions
+    assert "{as, column}" not in instructions
 
     # Workflow is short and each major instruction includes a reason.
     assert "# Workflow" in instructions
@@ -250,11 +254,18 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "hidden entity values must be grounded" in instructions
     assert "the label must be copied from the latest query evidence" in instructions
     assert "must not be a global answer with a decorative entity attached" in instructions
-    assert "specificity rejection" in instructions
+    assert "# Difficulty-Up Policy" in instructions
+    assert "Difficulty-Up Policy" in instructions
+    assert "needs more specificity" in instructions
+    assert "smallest single structural strengthening" in instructions
+    assert "there is no fixed ladder" in instructions
+    assert "preserving the current row set/query path" in instructions
+    assert "do not combine a new row-excluding filter" in instructions
+    assert "difficulty jump" in instructions
     assert "overconstrained/terminal feedback" in instructions
 
     # User-facing language and ID guidance stay general and English.
-    assert "# User Request" in instructions
+    assert "# Customer Request" in instructions
     assert "configured target language" in instructions
     assert "customer does not know DB tables" in instructions
     assert "Use first-person ownership only" in instructions
@@ -272,7 +283,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert not re.search(r"[가-힣]", instructions)
 
     # Label and contract rules preserve exact verifiability.
-    assert "# Label And Contract" in instructions
+    assert "# Label Contract" in instructions
     assert "structured result" in instructions
     assert "not final prose" in instructions
     assert "Use `answer_contract.kind='scalar'` only for aggregate answers" in instructions
@@ -298,7 +309,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "exact timestamp" in instructions
 
     # Task shape is domain-agnostic and concise.
-    assert "# Task Shape" in instructions
+    assert "# Task Shapes" in instructions
     assert "real data-service tasks" in instructions
     assert "plan-like list" in instructions
     assert "arbitrary good DBs" in instructions
@@ -352,13 +363,15 @@ def test_synthesis_input_can_include_tool_only_anchor_hint() -> None:
         },
     )
 
-    assert "# Starting Entity" in prompt
+    assert "<starting_entity>" in prompt
+    assert "</starting_entity>" in prompt
+    assert "# Starting Entity" not in prompt
     assert '"film_id": 42' in prompt
-    assert "Anchor table: film" in prompt
-    assert "Anchor primary key: film_id = 42" in prompt
-    assert 'submit_draft.entity_json: {"film_id": 42}' in prompt
+    assert "<anchor_table>\nfilm\n</anchor_table>" in prompt
+    assert "<anchor_primary_key_column>\nfilm_id\n</anchor_primary_key_column>" in prompt
+    assert "<submit_draft_entity_json>" in prompt
     assert "never pass `row_id: null`" in prompt
-    assert prompt.index("# Starting Entity") < prompt.index("# Session Context")
+    assert prompt.index("<starting_entity>") < prompt.index("<session_context>")
 
 
 def test_synthesis_input_can_include_candidate_anchor_pool() -> None:
@@ -386,9 +399,10 @@ def test_synthesis_input_can_include_candidate_anchor_pool() -> None:
         },
     )
 
-    assert "# Candidate Starting Points" in prompt
-    assert "# Starting Entity" not in prompt
-    assert "Candidate starting points:" in prompt
+    assert "<candidate_starting_points>" in prompt
+    assert "</candidate_starting_points>" in prompt
+    assert "<starting_entity>" not in prompt
+    assert "<candidate_entities>" in prompt
     assert '"row_id": 284' in prompt
     assert "not answer hints or required topics" in prompt
     assert "hidden current subject/context" in prompt
@@ -413,7 +427,8 @@ def test_synthesis_input_defaults_to_schema_map_entity_selection() -> None:
         tool_surface_summary=_composer_surface(),
     )
 
-    assert "# Starting Entity" not in prompt
+    assert "<starting_entity>" not in prompt
+    assert "<candidate_starting_points>" not in prompt
     assert "choose a plausible root table from the current DB" in instructions
     assert "observe a real entity and candidate values" in instructions
     assert "follow that tool's schema exactly" in instructions

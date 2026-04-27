@@ -1105,14 +1105,15 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     message = await controller.submit(_too_easy_readable_payload())
 
     assert "needs more specificity" in message
-    assert "choose a feasible structural strengthening" in message
-    assert "Replacing a field on the same path is not an escalation" in message
-    assert "new grounded filter" in message
-    assert "feasible visible dimension" in message
-    assert "do not switch to a list, Cardinality, or Cross-item rule" in message
+    assert "Apply the Difficulty-Up Policy from the system instructions" in message
+    assert "Current answer kind: scalar" in message
+    assert "smallest single structural strengthening" not in message
+    assert "Replacing a field on the same path is not an escalation" not in message
+    assert "row-set-preserving" not in message
     assert "return a list of N records" not in message
     assert "solver" not in message.lower()
     assert "pass rate" not in message.lower()
+    assert "quality gate" not in message.lower()
     assert "Width" not in message
     # no DB-specific field names in feedback
     assert "staff_name" not in message
@@ -1146,12 +1147,15 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     message = await controller.submit(payload)
 
     assert "needs more specificity" in message
-    assert "This is a list answer" in message
-    assert "selected-row query target" in message
-    assert "supported by the current DB evidence" in message
-    for axis in ("Filter", "Composite", "Cardinality", "Item-complexity", "Order"):
-        assert axis in message
-    assert "passive display-only fields" in message
+    assert "Apply the Difficulty-Up Policy from the system instructions" in message
+    assert "Current answer kind: list" in message
+    assert "selected-row query target" not in message
+    assert "row-set-preserving" not in message
+    assert "row-excluding filter" not in message
+    assert "passive display-only fields" not in message
+    assert "solver" not in message.lower()
+    assert "pass rate" not in message.lower()
+    assert "quality gate" not in message.lower()
     assert "Width" not in message
 
 @pytest.mark.asyncio

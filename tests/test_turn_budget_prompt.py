@@ -8,9 +8,9 @@ from rl_task_foundry.synthesis.turn_budget import build_tool_call_budget_instruc
 def test_budget_instruction_uses_tool_call_language_not_turns() -> None:
     text = build_tool_call_budget_instruction(max_tool_calls=18)
 
-    assert "18 tool calls" in text
+    assert "18 tool calls total" in text
     assert "submit_draft" in text
-    assert "# Commit Rule" in text
+    assert "# Draft Submission Budget" in text
     # Never say "turns" in the budget text — keep vocabulary concrete.
     assert "turn" not in text.lower().split("tool calls")[0]
     assert "data tools" in text
@@ -37,7 +37,7 @@ def test_synthesis_instructions_embed_the_budget_block() -> None:
 
     assert "21 tool calls" in text
     assert "submit_draft" in text
-    assert "# Commit Rule" in text
+    assert "# Draft Submission Budget" in text
 
 
 def test_synthesis_instructions_contain_hard_prohibitions() -> None:
