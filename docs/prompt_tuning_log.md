@@ -3587,3 +3587,40 @@ Solver 30/30 완료 결과:
   Broader relevant checks passed:
   `uv run pytest tests/test_synthesis_schema_inference.py tests/test_synthesis_canonicalize.py tests/test_solver_backend_openai_agents.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`.
   Ruff passed on the changed source and test files.
+
+## Iteration 91 — Nullable fix Kimi batch-five validation
+
+- **Run**:
+  `artifacts/trial_20260428_mimiciv_demo_kimi_batch5_parallel_nullable_01`, DB
+  `mimiciv_demo`, topic `input_events`, composer and solver
+  `openrouter/moonshotai/kimi-k2.5`, five trials in parallel with per-trial DB
+  pools reduced to `solver=8`, `control=2`, and OpenRouter concurrency capped
+  at 2 per trial.
+- **Aggregate**:
+  `3/5` accepted, `0` duplicates, `2` synthesis failures. This improves on the
+  previous parallel Kimi batch result of `1/5` accepted. Across all solver
+  rollouts in the new batch there were `112` solver runs and `0`
+  `invalid_submit_schema` terminations, so the nullable-answer schema failure
+  did not recur.
+- **Accepted trials**:
+  Trial 2 accepted at `18/20 = 0.9`, task
+  `task_patient_input_events_history_e73feddff3857250`. Trial 3 accepted at
+  `5/12 = 0.4167`, task `task_input_events_393cd5193991139a`. Trial 5 accepted
+  at `4/20 = 0.2`, task `task_input_events_dc70999f863002b2`; this accepted
+  draft includes nullable `rate` and `rate_unit`, confirming the specific
+  low-quality nullability failure from the prior batch is fixed in live rollout.
+- **Failed trials**:
+  Trials 1 and 4 failed high, not low. Both ended at `19/20 = 0.95` with
+  `calibration_inconclusive`. Trial 1 first fixed an ambiguous same-time order
+  and then became too easy; subsequent difficulty-up attempts were rejected as
+  `answer_contract_not_incremental` because the composer changed output
+  operation/source shape instead of making a clean incremental strengthening.
+  Trial 4 repeatedly missed exact `answer_contract`/limit phrasing before
+  ending too easy. These are composer retry-policy issues, not solver tool
+  schema failures.
+- **Interpretation**:
+  The structural nullable schema fix is validated. The next improvement target
+  is composer difficulty-up hygiene after a too-easy draft: preserve the current
+  query path and output source set while adding one clean visible field,
+  predicate, order, or cardinality change. That should remain prompt/schema
+  policy unless a precision-100 structural validator is identified.
