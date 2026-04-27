@@ -716,6 +716,94 @@ def _order_key_outputs(
     return outputs
 
 
+def _order_key_entries(
+    clauses: list[_SortClause],
+    *,
+    chain: list[_ChainEntry],
+    column_sources: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    for clause in clauses:
+        entry: dict[str, object] = {"direction": clause.direction}
+        if clause.output_name is not None:
+            entry["output"] = clause.output_name
+            source = next(
+                (
+                    source
+                    for source in column_sources
+                    if source.get("output") == clause.output_name
+                ),
+                None,
+            )
+            if source is not None:
+                for key in ("table", "column", "visibility", "is_handle"):
+                    if key in source:
+                        entry[key] = source[key]
+            entries.append(entry)
+            continue
+        if clause.ref is None:
+            entries.append(entry)
+            continue
+        resolved = _resolve_ref(clause.ref, chain)
+        column = resolved.table.column(resolved.column)
+        entry.update(
+            {
+                "table": resolved.table.handle,
+                "column": resolved.column,
+                "visibility": column.visibility,
+                "is_handle": column.is_handle_column,
+            }
+        )
+        source = next(
+            (
+                source
+                for source in column_sources
+                if source.get("table") == resolved.table.handle
+                and source.get("column") == resolved.column
+                and isinstance(source.get("output"), str)
+            ),
+            None,
+        )
+        if source is not None:
+            entry["output"] = str(source["output"])
+        entries.append(entry)
+    return entries
+
+
+def _has_duplicate_signatures(
+    rows: list[dict[str, object]],
+    outputs: list[str],
+) -> bool:
+    if not outputs:
+        return len(rows) > 1
+    signatures = [tuple(repr(row.get(output)) for output in outputs) for row in rows]
+    return len(signatures) != len(set(signatures))
+
+
+def _unrepresented_order_by_tie_breakers(
+    rows: list[dict[str, object]],
+    order_entries: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    represented_prefix: list[str] = []
+    unrepresented: list[dict[str, object]] = []
+    for entry in order_entries:
+        output = entry.get("output")
+        if isinstance(output, str):
+            represented_prefix.append(output)
+            continue
+        if not _has_duplicate_signatures(rows, represented_prefix):
+            continue
+        unrepresented.append(
+            {
+                "table": entry.get("table"),
+                "column": entry.get("column"),
+                "direction": entry.get("direction"),
+                "is_handle": entry.get("is_handle"),
+            }
+        )
+    return unrepresented
+
+
 def _ordering_diagnostics(
     rows: list[dict[str, object]],
     *,
@@ -736,16 +824,35 @@ def _ordering_diagnostics(
         chain=chain,
         column_sources=column_sources,
     )
+    order_entries = _order_key_entries(
+        parsed.order_by,
+        chain=chain,
+        column_sources=column_sources,
+    )
+    unrepresented_tie_breakers = _unrepresented_order_by_tie_breakers(
+        rows,
+        order_entries,
+    )
     if len(order_outputs) != len(parsed.order_by):
-        return None
+        if not unrepresented_tie_breakers:
+            return None
+        return {
+            "order_by_outputs": order_outputs,
+            "unrepresented_order_by_tie_breakers": unrepresented_tie_breakers,
+            "returned_row_count": len(rows),
+            "limit": parsed.limit,
+        }
     signatures = [tuple(repr(row.get(output)) for output in order_outputs) for row in rows]
     duplicate_order_key = len(signatures) != len(set(signatures))
-    return {
+    diagnostics: dict[str, object] = {
         "order_by_outputs": order_outputs,
         "duplicate_order_key_in_returned_rows": duplicate_order_key,
         "returned_row_count": len(rows),
         "limit": parsed.limit,
     }
+    if unrepresented_tie_breakers:
+        diagnostics["unrepresented_order_by_tie_breakers"] = unrepresented_tie_breakers
+    return diagnostics
 
 
 def _assert_unique_output_name(name: str, names: set[str]) -> None:

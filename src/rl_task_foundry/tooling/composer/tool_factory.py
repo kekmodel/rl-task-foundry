@@ -616,7 +616,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "type": "array",
                 "description": (
                     "Filters over from/join aliases. Use observed values; "
-                    "joined-table filters are allowed."
+                    "joined-table filters are allowed. User-visible filter "
+                    "values that define answer membership must appear in "
+                    "user_request or selected answer fields."
                 ),
                 "items": {
                     "type": "object",
@@ -679,7 +681,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Deterministic ordering. If user_request states top/latest/"
                     "earliest, mirror that wording in submit_draft phrases. "
                     "When rows can share the primary sort key, add a "
-                    "tie-breaker."
+                    "tie-breaker that is answer-visible/reproducible, or "
+                    "choose a row set with unique visible ordering."
                 ),
                 "items": {
                     "type": "object",

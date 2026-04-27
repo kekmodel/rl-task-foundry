@@ -477,6 +477,81 @@ async def test_query_reports_duplicate_limited_order_key_diagnostics():
 
 
 @pytest.mark.asyncio
+async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
+    session, _ = _stub_session(
+        rows=[
+            {"first_name": "ALICE"},
+            {"first_name": "ALICE"},
+            {"first_name": "BOB"},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [_select("c", "first_name")],
+            "order_by": [
+                _order_ref("c", "first_name", "asc"),
+                _order_ref("c", "customer_id", "desc"),
+            ],
+            "limit": 3,
+        },
+    )
+
+    assert result["ordering_diagnostics"] == {
+        "order_by_outputs": ["first_name"],
+        "unrepresented_order_by_tie_breakers": [
+            {
+                "table": "customer",
+                "column": "customer_id",
+                "direction": "desc",
+                "is_handle": True,
+            }
+        ],
+        "returned_row_count": 3,
+        "limit": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_query_reports_unrepresented_visible_tie_breaker_diagnostics():
+    session, _ = _stub_session(
+        rows=[
+            {"first_name": "ALICE"},
+            {"first_name": "ALICE"},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [_select("c", "first_name")],
+            "order_by": [
+                _order_ref("c", "first_name", "asc"),
+                _order_ref("c", "store_id", "desc"),
+            ],
+            "limit": 2,
+        },
+    )
+
+    assert result["ordering_diagnostics"] == {
+        "order_by_outputs": ["first_name"],
+        "unrepresented_order_by_tie_breakers": [
+            {
+                "table": "customer",
+                "column": "store_id",
+                "direction": "desc",
+                "is_handle": False,
+            }
+        ],
+        "returned_row_count": 2,
+        "limit": 2,
+    }
+
+
+@pytest.mark.asyncio
 async def test_query_reports_missing_order_by_for_limited_multirow_list():
     session, _ = _stub_session(
         rows=[

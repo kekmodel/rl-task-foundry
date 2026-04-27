@@ -321,6 +321,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "add a tie-breaker" in descriptions["query"]["$.spec.order_by"]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
+    assert "answer-visible/reproducible" in descriptions["query"]["$.spec.order_by"]
+    assert "unique visible ordering" in descriptions["query"]["$.spec.order_by"]
+    assert "User-visible filter values" in descriptions["query"]["$.spec.where"]
+    assert "user_request or selected answer fields" in descriptions["query"][
+        "$.spec.where"
+    ]
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"
     ]
