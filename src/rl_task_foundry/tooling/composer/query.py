@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from rl_task_foundry.infra.privacy import is_user_visible_visibility
 from rl_task_foundry.tooling.common.edges import TypedEdge, resolve_edge
 from rl_task_foundry.tooling.common.payload import ensure_int as _require_int
 from rl_task_foundry.tooling.common.schema import TableSpec
@@ -836,7 +837,10 @@ def _unrepresented_order_by_tie_breakers(
         if isinstance(output, str):
             represented_prefix.append(output)
             continue
-        if entry.get("visibility") == "user_visible" and entry.get("is_handle") is not True:
+        if (
+            is_user_visible_visibility(entry.get("visibility"))
+            and entry.get("is_handle") is not True
+        ):
             continue
         diagnostic_output = entry.get("diagnostic_output")
         if not isinstance(diagnostic_output, str):

@@ -14,6 +14,7 @@ from pydantic import Field, model_validator
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.db import DatabasePools
+from rl_task_foundry.infra.privacy import is_blocked_visibility
 from rl_task_foundry.pipeline.provider_resilience import (
     ProviderCircuitBreaker,
     ProviderCircuitSnapshot,
@@ -332,7 +333,9 @@ def summarize_schema_graph(
         exposed_columns = [
             c
             for c in columns
-            if c.visibility != "blocked" or c.is_primary_key or c.is_foreign_key
+            if not is_blocked_visibility(c.visibility)
+            or c.is_primary_key
+            or c.is_foreign_key
         ]
         readable = [
             c.column_name

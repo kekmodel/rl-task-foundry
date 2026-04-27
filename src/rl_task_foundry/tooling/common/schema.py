@@ -11,7 +11,12 @@ from collections import Counter
 from dataclasses import dataclass
 from string import ascii_letters, digits
 
-from rl_task_foundry.infra.privacy import Visibility
+from rl_task_foundry.infra.privacy import (
+    VISIBILITY_BLOCKED,
+    VISIBILITY_USER_VISIBLE,
+    Visibility,
+    is_visibility,
+)
 from rl_task_foundry.schema.graph import SchemaGraph
 
 
@@ -30,7 +35,7 @@ class ColumnSpec:
 
     @property
     def is_exposed(self) -> bool:
-        return self.visibility != "blocked" or self.is_handle_column
+        return self.visibility != VISIBILITY_BLOCKED or self.is_handle_column
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,8 +413,8 @@ def snapshot_from_dict(payload: dict[str, object]) -> SchemaSnapshot:
 
 
 def _visibility_or_default(mapping: dict[str, object]) -> Visibility:
-    value = mapping.get("visibility", "user_visible")
-    if value in ("blocked", "internal", "user_visible"):
+    value = mapping.get("visibility", VISIBILITY_USER_VISIBLE)
+    if is_visibility(value):
         return value
     raise ValueError(
         "schema snapshot column visibility must be one of "

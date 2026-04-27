@@ -17,6 +17,10 @@ from pydantic import (
 )
 
 from rl_task_foundry.config.models import AppConfig
+from rl_task_foundry.infra.privacy import (
+    blocks_direct_label_exposure,
+    is_blocked_visibility,
+)
 from rl_task_foundry.infra.sdk_helpers import preview_payload
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import StrictModel
@@ -811,7 +815,10 @@ def _unanchored_hidden_filter_sources(
     for ref in referenced_columns:
         if ref.get("usage") != "where":
             continue
-        if ref.get("visibility") != "blocked" or ref.get("is_handle") is not True:
+        if (
+            not is_blocked_visibility(ref.get("visibility"))
+            or ref.get("is_handle") is not True
+        ):
             continue
         value = ref.get("value")
         if "value" not in ref:
@@ -853,8 +860,7 @@ def _query_visibility_errors(
     for source in column_sources:
         if source.get("value_exposes_source") is not True:
             continue
-        visibility = source.get("visibility")
-        if visibility in {"blocked", "internal"}:
+        if blocks_direct_label_exposure(source.get("visibility")):
             label_sources.append(
                 {
                     key: source.get(key)

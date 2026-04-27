@@ -3078,3 +3078,20 @@ Solver 30/30 완료 결과:
   metadata values: `blocked`, `internal`, and `user_visible`.
 - **Verification**:
   Documentation-only change; `git diff --check` passed.
+
+## Iteration 76 — Visibility metadata predicate cleanup
+
+- **Issue**:
+  `visibility` is policy metadata, but runtime checks were comparing raw
+  strings from `dict.get("visibility")` at call sites. That is not a semantic
+  token heuristic, but it weakens the contract boundary and makes `derived`
+  query-source metadata easy to confuse with the column visibility literals.
+- **Correction**:
+  `infra/privacy.py` now owns visibility constants and predicates for the
+  literal set `blocked`, `internal`, and `user_visible`. Composer query
+  diagnostics, submit validation, schema exposure, affordance maps, and schema
+  summaries now use those helpers instead of ad hoc visibility string
+  comparisons.
+- **Verification**:
+  Targeted privacy/tooling/synthesis tests passed: 115 passed. Targeted
+  `ruff check` and `git diff --check` passed.

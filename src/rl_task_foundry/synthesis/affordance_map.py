@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 
+from rl_task_foundry.infra.privacy import is_user_visible_visibility
 from rl_task_foundry.schema.graph import (
     ColumnProfile,
     ForeignKeyEdge,
@@ -103,7 +104,7 @@ def _visible_non_key_columns(table: TableProfile) -> list[ColumnProfile]:
     return [
         column
         for column in table.columns
-        if column.visibility == "user_visible"
+        if is_user_visible_visibility(column.visibility)
         and not column.is_primary_key
         and not column.is_foreign_key
     ]
