@@ -2728,3 +2728,34 @@ Solver 30/30 완료 결과:
   -> 86 passed.
   `uv run pytest -q` -> 416 passed. `uv run ruff check .` and
   `git diff --check` passed.
+
+## Iteration 67 — post-fix real trial confirms list_records reachability
+
+- **Trial**:
+  `artifacts/eval_20260427_pagila_kimi_list_records_02`, pagila,
+  composer `openrouter/moonshotai/kimi-k2.5`, solver
+  `openrouter/openai/gpt-5.4-nano`.
+- **Result**:
+  The trial did not produce an accepted draft, but it positively confirmed the
+  main solver tool-surface fix. The first draft asked for a customer's five
+  most recent rentals with film title, rental date, and return date. Nano
+  solvers used `list_records` over a sorted `rental` record_set with the
+  related path `rental.inventory_id->inventory -> inventory.film_id->film`;
+  19/20 matched the canonical label, with `atomic-resource-api-v5.trace.v1`.
+- **Quality gate behavior**:
+  Because pass rate was `0.95`, the draft was rejected as still too easy /
+  calibration high side. This is expected: the new endpoint made the intended
+  per-item related-field task reachable, and the statistical gate correctly
+  refused an over-easy sample.
+- **Failure after strengthening**:
+  The composer then added a PG-13 rating filter and output field. The draft was
+  structurally grounded but became too hard for Nano: first batch was `0/4`,
+  all solver runs were evaluable, and there were no environment failures. The
+  terminal reject therefore reflects the intended "discard and restart" path
+  for over-hard or low-quality candidates.
+- **Interpretation**:
+  `list_records` is confirmed in the live actor loop. The remaining tuning
+  question is composer difficulty calibration after an over-easy rejection:
+  it can make a grounded jump that is valid but too large. This should be
+  handled through prompt/schema guidance or statistical retry policy, not a
+  semantic validator.
