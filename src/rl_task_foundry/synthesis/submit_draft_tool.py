@@ -64,7 +64,6 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED = (
         "answer_contract_hidden_filter_unanchored"
     )
-    ANSWER_CONTRACT_FILTER_UNEXPRESSED = "answer_contract_filter_unexpressed"
     ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING = (
         "answer_contract_visibility_evidence_missing"
     )
@@ -96,7 +95,6 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
-        SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNEXPRESSED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
         SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL,
@@ -830,57 +828,6 @@ def _unanchored_hidden_filter_sources(
     return unanchored
 
 
-def _label_contains_value(label: object, value: object) -> bool:
-    if label == value:
-        return True
-    if isinstance(label, dict):
-        return any(_label_contains_value(item, value) for item in label.values())
-    if isinstance(label, list):
-        return any(_label_contains_value(item, value) for item in label)
-    return False
-
-
-def _request_contains_value(user_request: str, value: object) -> bool:
-    if isinstance(value, str):
-        return value in user_request
-    if isinstance(value, (int, float, bool)):
-        return str(value) in user_request
-    return False
-
-
-def _unexpressed_visible_filter_sources(
-    query_result: dict[str, object],
-    *,
-    user_request: str,
-    label: object,
-) -> list[dict[str, object]]:
-    referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
-    unexpressed: list[dict[str, object]] = []
-    for ref in referenced_columns:
-        if ref.get("usage") != "where":
-            continue
-        if ref.get("visibility") != "user_visible" or ref.get("is_handle") is True:
-            continue
-        if "value" not in ref:
-            continue
-        value = ref.get("value")
-        if value is None:
-            continue
-        if _request_contains_value(user_request, value):
-            continue
-        if _label_contains_value(label, value):
-            continue
-        unexpressed.append(
-            {
-                "table": ref.get("table"),
-                "column": ref.get("column"),
-                "op": ref.get("op"),
-                "value": value,
-            }
-        )
-    return unexpressed
-
-
 def _as_object_list(value: object) -> list[dict[str, object]] | None:
     if not isinstance(value, list):
         return None
@@ -1286,20 +1233,6 @@ class SubmitDraftController:
                             : self.config.synthesis.runtime.diagnostic_item_limit
                         ]
                     )
-            unexpressed_visible_filters = _unexpressed_visible_filter_sources(
-                latest_query_result,
-                user_request=payload.user_request,
-                label=canonical_answer,
-            )
-            if unexpressed_visible_filters:
-                error_codes.append(
-                    SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNEXPRESSED
-                )
-                invalid_diagnostics["unexpressed_visible_filters"] = (
-                    unexpressed_visible_filters[
-                        : self.config.synthesis.runtime.diagnostic_item_limit
-                    ]
-                )
             query_limit = _query_limit_from_params(
                 latest_query_call.get("params") if latest_query_call is not None else None
             )
@@ -1653,9 +1586,6 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. The latest query filters on a blocked handle value that is not present in entity. Put required hidden scope handles in entity or rerun the query using the submitted entity's handle."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNEXPRESSED: (
-                "Rejected. The latest query filters on a user-visible value that is not present in user_request or label. Put that filter value in the request/answer_contract, select it as an answer field when the user asks to receive it, or rerun query without the hidden membership filter."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
                 "Rejected. Call query again before submit_draft; the latest query result must include field visibility evidence."  # noqa: E501

@@ -616,9 +616,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "type": "array",
                 "description": (
                     "Filters over from/join aliases. Use observed values; "
-                    "joined-table filters are allowed. User-visible filter "
-                    "values that define answer membership must appear in "
-                    "user_request or selected answer fields."
+                    "joined-table filters are allowed."
                 ),
                 "items": {
                     "type": "object",

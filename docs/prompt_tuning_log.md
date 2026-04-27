@@ -3027,20 +3027,21 @@ Solver 30/30 완료 결과:
   common query diagnostic: limited lists now reject any unrepresented
   `order_by` key that is needed to break duplicate answer-visible order
   prefixes.
-- **Second generic failure class from demo logs**:
+- **Observed filter-expression failure, not gated**:
   `trial_20260427_db_cross_mimiciv_demo_kimi_openrouter_11` used
   `statusdescription='FinishedRunning'` to define the answer row set, while
   the user request and label did not expose that filter value. Solvers
   reasonably retrieved the latest input events for the ICU stay without that
-  hidden membership filter. The fix is a common submit gate: user-visible
-  `where` filter values must be present in `user_request` or in the submitted
-  label; otherwise the draft receives feedback before solver rollout.
+  hidden membership filter. This was not promoted to a hard validator because
+  checking whether a DB value is "expressed" in natural language would require
+  literal or semantic token heuristics. It remains a prompt/tooling design
+  problem until a structured value-to-phrase binding exists.
 - **Conclusion**:
   The three DBs are healthy at the config/DB/tooling level. Pagila and
   postgres_air prove end-to-end generation through bundle export. MIMIC-IV
   demo does not yet prove accepted task generation; it is exposing dense
-  clinical-table ambiguity that now produces two additional generic gates
+  clinical-table ambiguity that produced one additional structural gate
   rather than DB-specific prompt examples.
 - **Verification**:
-  `uv run pytest -q` -> 430 passed. Targeted `ruff check` on touched files
+  `uv run pytest -q` -> 429 passed. Targeted `ruff check` on touched files
   passed. `git diff --check` passed.
