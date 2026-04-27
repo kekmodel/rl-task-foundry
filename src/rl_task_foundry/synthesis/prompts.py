@@ -216,13 +216,13 @@ def build_synthesis_agent_instructions(
         "result supplies structural evidence. Every contract phrase "
         "must be an exact substring of `user_request`. Why: this checks draft "
         "meaning without asking you to duplicate machine-derivable evidence.\n"
-        "- The request must have exactly one correct structured result. For "
-        "lists, fix membership, order, limit, and tie-breaks. For timestamps, "
-        "ask for exact timestamps when labels contain timestamps; date-only "
-        "requests need date labels. If requested order leaves "
-        "answer-distinguishable ties, ask for the visible tie-break before "
-        "using it in `query.order_by`; otherwise choose a uniquely ordered row "
-        "set or return tied rows; never use hidden handles.",
+        "- The request must have a single correct structured result. For "
+        "lists, fix membership, order, limit, and tie-breaks. Every row-set "
+        "control must be entity scope or request/contract. Timestamp "
+        "labels need exact timestamp requests; date-only requests need date "
+        "labels. If requested order leaves distinct-answer ties, ask for the "
+        "visible tie-break before using it in `query.order_by`; otherwise "
+        "choose unique ordering or return tied rows; never use hidden handles.",
 
         "# Task Shapes\n"
         "Prefer real data-service tasks: history lookup, shortlist, status "

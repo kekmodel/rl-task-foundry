@@ -299,7 +299,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     )
     assert "same event/record" in descriptions["query"]["$.spec.join"]
     assert "independent sibling joins" in descriptions["query"]["$.spec.join"]
-    assert "joined-table filters are allowed" in descriptions["query"]["$.spec.where"]
+    assert "Filters define row membership" in descriptions["query"]["$.spec.where"]
+    assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
+    assert "Do not add helper filters" in descriptions["query"]["$.spec.where"]
+    assert "Blocked or internal handle values" in descriptions["query"][
+        "$.spec.where[].value"
+    ]
     assert "Every selected field becomes a canonical label field" in descriptions[
         "query"
     ]["$.spec.select"]
@@ -326,6 +331,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
+    assert "cuts through rows with the same requested order key" in descriptions[
+        "query"
+    ]["$.spec.limit"]
     assert "answer-visible/reproducible" in descriptions["query"]["$.spec.order_by"]
     assert "unique visible ordering" in descriptions["query"]["$.spec.order_by"]
     assert "without group_by so it returns one row" in descriptions["query"][

@@ -775,6 +775,20 @@ def _order_key_entries(
     return entries
 
 
+def _order_key_signature_outputs(
+    order_entries: list[dict[str, object]],
+) -> list[str]:
+    outputs: list[str] = []
+    for entry in order_entries:
+        output = entry.get("output")
+        if not isinstance(output, str):
+            output = entry.get("diagnostic_output")
+        if not isinstance(output, str):
+            return []
+        outputs.append(output)
+    return outputs
+
+
 def _signature(
     row: dict[str, object],
     outputs: list[str],
@@ -863,6 +877,25 @@ def _unrepresented_order_by_tie_breakers(
     return unrepresented
 
 
+def _limit_boundary_has_answer_distinguishable_tie(
+    rows: list[dict[str, object]],
+    *,
+    limit: int,
+    order_outputs: list[str],
+    answer_outputs: list[str],
+) -> bool:
+    if limit <= 0 or len(rows) <= limit or not order_outputs:
+        return False
+    boundary_row = rows[limit - 1]
+    next_row = rows[limit]
+    if _signature(boundary_row, order_outputs) != _signature(next_row, order_outputs):
+        return False
+    return _signature(boundary_row, answer_outputs) != _signature(
+        next_row,
+        answer_outputs,
+    )
+
+
 def _ordering_diagnostics(
     rows: list[dict[str, object]],
     *,
@@ -878,7 +911,7 @@ def _ordering_diagnostics(
         return None
     if not parsed.order_by:
         if not _has_answer_distinguishable_ties(
-            diagnostic_rows,
+            rows,
             [],
             answer_outputs=answer_outputs,
         ):
@@ -899,22 +932,35 @@ def _ordering_diagnostics(
         column_sources=column_sources,
         diagnostic_order_outputs=diagnostic_order_outputs,
     )
+    order_signature_outputs = _order_key_signature_outputs(order_entries)
     unrepresented_tie_breakers = _unrepresented_order_by_tie_breakers(
         diagnostic_rows,
         order_entries,
         answer_outputs=answer_outputs,
     )
+    limit_boundary_tie = _limit_boundary_has_answer_distinguishable_tie(
+        diagnostic_rows,
+        limit=parsed.limit,
+        order_outputs=order_signature_outputs,
+        answer_outputs=answer_outputs,
+    )
     if len(order_outputs) != len(parsed.order_by):
-        if not unrepresented_tie_breakers:
+        if not unrepresented_tie_breakers and not limit_boundary_tie:
             return None
-        return {
+        diagnostics: dict[str, object] = {
             "order_by_outputs": order_outputs,
-            "unrepresented_order_by_tie_breakers": unrepresented_tie_breakers,
             "returned_row_count": len(rows),
             "limit": parsed.limit,
         }
+        if unrepresented_tie_breakers:
+            diagnostics["unrepresented_order_by_tie_breakers"] = (
+                unrepresented_tie_breakers
+            )
+        if limit_boundary_tie:
+            diagnostics["limit_boundary_tie"] = True
+        return diagnostics
     duplicate_order_key = _has_answer_distinguishable_ties(
-        diagnostic_rows,
+        rows,
         order_outputs,
         answer_outputs=answer_outputs,
     )
@@ -926,6 +972,8 @@ def _ordering_diagnostics(
     }
     if unrepresented_tie_breakers:
         diagnostics["unrepresented_order_by_tie_breakers"] = unrepresented_tie_breakers
+    if limit_boundary_tie:
+        diagnostics["limit_boundary_tie"] = True
     return diagnostics
 
 
@@ -1117,18 +1165,21 @@ async def query(
         for clause in parsed.order_by
     ]
     order_sql = "ORDER BY " + ", ".join(sort_fragments) if sort_fragments else ""
-    limit_sql = f"LIMIT {int(parsed.limit)}" if parsed.limit is not None else ""
 
     join_sql = _compile_join_chain(steps)
-    sql = readonly_select(
-        f"SELECT {', '.join(select_fragments)} "
-        f"FROM {quote_table(from_spec.schema, from_spec.name)} AS t0 "
-        f"{join_sql} "
-        f"{where_sql} "
-        f"{group_by_sql} "
-        f"{order_sql} "
-        f"{limit_sql}"
-    )
+    def _select_sql(limit: int | None) -> str:
+        limit_sql = f"LIMIT {int(limit)}" if limit is not None else ""
+        return readonly_select(
+            f"SELECT {', '.join(select_fragments)} "
+            f"FROM {quote_table(from_spec.schema, from_spec.name)} AS t0 "
+            f"{join_sql} "
+            f"{where_sql} "
+            f"{group_by_sql} "
+            f"{order_sql} "
+            f"{limit_sql}"
+        )
+
+    sql = _select_sql(parsed.limit)
 
     rows = await session.connection.fetch(sql, *params)
     materialized = [
@@ -1138,6 +1189,13 @@ async def query(
     diagnostic_materialized = [
         {column: row[column] for column in diagnostic_columns} for row in rows
     ]
+    if parsed.limit is not None and parsed.order_by and len(materialized) == parsed.limit:
+        diagnostic_sql = _select_sql(parsed.limit + 1)
+        diagnostic_rows = await session.connection.fetch(diagnostic_sql, *params)
+        diagnostic_materialized = [
+            {column: row[column] for column in diagnostic_columns}
+            for row in diagnostic_rows
+        ]
     result: dict[str, object] = {
         "columns": output_columns,
         "column_sources": column_sources,

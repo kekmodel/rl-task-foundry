@@ -33,12 +33,21 @@ from rl_task_foundry.tooling.composer._session import _Row
 
 
 class _RecordingConnection:
-    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]] | None = None,
+        *,
+        row_batches: list[list[dict[str, object]]] | None = None,
+    ) -> None:
         self.rows: list[dict[str, object]] = rows or []
+        self.row_batches = row_batches
         self.calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def fetch(self, sql: str, *args: object) -> Sequence[_Row]:
         self.calls.append((sql, args))
+        if self.row_batches is not None:
+            batch_index = min(len(self.calls) - 1, len(self.row_batches) - 1)
+            return cast(Sequence[_Row], list(self.row_batches[batch_index]))
         return cast(Sequence[_Row], list(self.rows))
 
     async def fetchrow(self, sql: str, *args: object):  # pragma: no cover
@@ -239,6 +248,14 @@ def _stub_session(
     rows: list[dict[str, object]] | None = None,
 ) -> tuple[ComposerSession, _RecordingConnection]:
     conn = _RecordingConnection(rows=rows)
+    session = ComposerSession(snapshot=_snapshot(), connection=conn)
+    return session, conn
+
+
+def _stub_session_with_batches(
+    row_batches: list[list[dict[str, object]]],
+) -> tuple[ComposerSession, _RecordingConnection]:
+    conn = _RecordingConnection(row_batches=row_batches)
     session = ComposerSession(snapshot=_snapshot(), connection=conn)
     return session, conn
 
@@ -474,6 +491,54 @@ async def test_query_reports_duplicate_limited_order_key_diagnostics():
         "returned_row_count": 3,
         "limit": 3,
     }
+
+
+@pytest.mark.asyncio
+async def test_query_reports_limit_boundary_tie_diagnostics():
+    session, conn = _stub_session_with_batches(
+        row_batches=[
+            [
+                {"store_id": 1, "first_name": "ALICE"},
+                {"store_id": 1, "first_name": "BOB"},
+                {"store_id": 1, "first_name": "CHRIS"},
+            ],
+            [
+                {"store_id": 1, "first_name": "ALICE"},
+                {"store_id": 1, "first_name": "BOB"},
+                {"store_id": 1, "first_name": "CHRIS"},
+                {"store_id": 2, "first_name": "CHRIS"},
+            ],
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [
+                _select("c", "store_id"),
+                _select("c", "first_name"),
+            ],
+            "order_by": [_order_ref("c", "first_name", "asc")],
+            "limit": 3,
+        },
+    )
+
+    assert result["rows"] == [
+        {"store_id": 1, "first_name": "ALICE"},
+        {"store_id": 1, "first_name": "BOB"},
+        {"store_id": 1, "first_name": "CHRIS"},
+    ]
+    assert result["ordering_diagnostics"] == {
+        "order_by_outputs": ["first_name"],
+        "duplicate_order_key_in_returned_rows": False,
+        "returned_row_count": 3,
+        "limit": 3,
+        "limit_boundary_tie": True,
+    }
+    assert len(conn.calls) == 2
+    diagnostic_sql, _ = conn.calls[1]
+    assert diagnostic_sql.rstrip().endswith("LIMIT 4")
 
 
 @pytest.mark.asyncio

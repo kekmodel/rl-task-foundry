@@ -615,8 +615,13 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
             "where": {
                 "type": "array",
                 "description": (
-                    "Filters over from/join aliases. Use observed values; "
-                    "joined-table filters are allowed."
+                    "Filters define row membership over from/join aliases. "
+                    "Every filter must be justified by either the hidden "
+                    "entity scope or a customer-visible constraint stated in "
+                    "user_request and submit_draft.answer_contract. Do not "
+                    "add helper filters only to make the row set unique, "
+                    "shorter, or easier. Joined-table filters are allowed "
+                    "only under the same rule."
                 ),
                 "items": {
                     "type": "object",
@@ -633,7 +638,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                             "anyOf": _VALUE_ANY_OF,
                             "description": (
                                 "Filter value copied from observed data; "
-                                "omit/null only for null checks."
+                                "omit/null only for null checks. Blocked or "
+                                "internal handle values are valid only when "
+                                "they are the submitted hidden entity scope."
                             ),
                         },
                     },
@@ -711,7 +718,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "description": (
                     "Fixed row cap. If the task asks for N items, use the "
                     "same N in user_request and "
-                    "submit_draft.answer_contract.limit_phrase."
+                    "submit_draft.answer_contract.limit_phrase. When limit "
+                    "cuts through rows with the same requested order key, "
+                    "choose a unique visible ordering or return the tied rows."
                 ),
             },
             "group_by": {

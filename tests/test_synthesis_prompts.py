@@ -321,11 +321,12 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not restate tables, columns, operators, or SQL" in instructions
     assert "latest query result supplies structural evidence" in instructions
     assert "Every contract phrase must be an exact substring of `user_request`" in instructions
-    assert "exactly one correct structured result" in instructions
+    assert "single correct structured result" in instructions
     assert "fix membership, order, limit, and tie-breaks" in instructions
-    assert "requested order leaves answer-distinguishable ties" in instructions
+    assert "Every row-set control must be entity scope" in instructions
+    assert "requested order leaves distinct-answer ties" in instructions
     assert "ask for the visible tie-break before" in instructions
-    assert "choose a uniquely ordered row set or return tied rows" in instructions
+    assert "choose unique ordering or return tied rows" in instructions
     assert "never use hidden handles" in instructions
     assert "exact timestamp" in instructions
 
