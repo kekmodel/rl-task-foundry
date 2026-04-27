@@ -3189,3 +3189,27 @@ Solver 30/30 완료 결과:
 - **Verification**:
   Targeted prompt/schema tests passed: 3 passed. Prompt length remains under
   budget at 7,975 characters.
+
+## Iteration 82 — MIMIC requested tie-break smoke
+
+- **Trial**:
+  `artifacts/trial_20260427_mimiciv_demo_requested_tiebreak_kimi_01`, MIMIC demo,
+  composer and solver `openrouter/moonshotai/kimi-k2.5`.
+- **Result**:
+  `synthesis_failed / calibration_inconclusive`, `solver_pass_rate=0.4`
+  (`8/20`, CI `[0.2171, 0.6064]`). The submitted task asked for the most recent
+  five voiding/output records during one ICU stay. The canonical query used
+  `outputevents` joined to `d_items`, ordered only by `charttime desc`; ordering
+  diagnostics reported `duplicate_order_key_in_returned_rows=false`.
+- **Quality adjudication**:
+  The previous MIMIC hidden secondary ordering failure did not recur. Direct DB
+  verification showed the latest five `outputevents` rows for the stay are also
+  the latest five `Void` rows, so the label is sound. The low pass rate came from
+  solver search difficulty around mapping the Korean request for voiding records
+  to MIMIC `outputevents`/`d_items` labels (`Void`, `Foley`, urine-like searches)
+  and several max-turn runs, not from bad data or hidden tie-breaks.
+- **Next implication**:
+  No new hard validator is justified. This is a real hard/semantic tool-surface
+  case; future tuning should consider request wording, examples, solver
+  turn-budget/tool guidance, or band retargeting rather than DB-literal or token
+  heuristics.
