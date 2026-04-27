@@ -1158,6 +1158,14 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
         controller,
         payload.label,
         answer_contract=payload.answer_contract,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "payment",
+                "column": "payment_date",
+                "direction": "desc",
+            }
+        ],
     )
 
     message = await controller.submit(payload)
@@ -1485,6 +1493,14 @@ async def test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list(
     _record_query_evidence(
         controller,
         label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "prescriptions",
+                "column": "start_time",
+                "direction": "desc",
+            }
+        ],
         query_params={
             "spec": {
                 "limit": 3,
@@ -1564,6 +1580,60 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
 
     assert "ambiguous ordering" in message
     assert "query.order_by tie-breakers" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_multirow_list_without_order_by(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="payments",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"customer_id": 550}
+    label = [
+        {"amount": "3.99", "payment_date": "2022-03-15T23:11:18+00:00"},
+        {"amount": "4.99", "payment_date": "2022-03-06T17:31:26+00:00"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "payments",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "내 결제 내역을 보여주세요.",
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="내 결제 내역을 보여주세요.",
+                limit_phrase=None,
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        query_params={
+            "spec": {
+                "where": [{"value": 550}],
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "ambiguous ordering" in message
+    assert "query.order_by" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
@@ -2107,7 +2177,21 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     _record_query_evidence(
         controller,
         first_payload.label,
-        query_params={"spec": {"limit": 5, "where": [{"value": 10023117}]}},
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "admissions",
+                "column": "admittime",
+                "direction": "desc",
+            }
+        ],
+        query_params={
+            "spec": {
+                "limit": 5,
+                "where": [{"value": 10023117}],
+                "order_by": [{"output": "admittime", "direction": "desc"}],
+            }
+        },
     )
 
     first_message = await controller.submit(first_payload)

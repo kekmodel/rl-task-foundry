@@ -794,6 +794,12 @@ def _query_limit_from_params(params: object) -> int | None:
 
 
 def _query_ordering_is_ambiguous(query_result: dict[str, object]) -> bool:
+    rows = query_result.get("rows")
+    if isinstance(rows, list) and len(rows) > 1:
+        referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
+        has_order_by = any(ref.get("usage") == "order_by" for ref in referenced_columns)
+        if not has_order_by:
+            return True
     diagnostics = query_result.get("ordering_diagnostics")
     if not isinstance(diagnostics, dict):
         return False
