@@ -3213,3 +3213,52 @@ Solver 30/30 완료 결과:
   case; future tuning should consider request wording, examples, solver
   turn-budget/tool guidance, or band retargeting rather than DB-literal or token
   heuristics.
+
+## Iteration 83 — Precision-100 row-set boundary guard
+
+- **Issue**:
+  Prompt/schema policy already rejected hidden or unrequested tie-breaks inside
+  returned rows, but a limited list can still cut through an answer-distinguishable
+  tie at the `LIMIT N` boundary. In that case the returned rows themselves may
+  have unique visible order keys, while the excluded `N+1` row shares the same
+  requested order key as row `N`. This is a row-set membership problem, not a
+  model-style preference.
+- **Correction**:
+  Added a structural `limit_boundary_tie` diagnostic in `query(spec)`. For
+  limited ordered list queries that return exactly `N` rows, the tool now runs a
+  diagnostic `N+1` fetch and compares row `N` with row `N+1`. If they share the
+  full query order-key signature but have different answer signatures, the draft
+  is rejected by the existing order-ambiguity path. This uses only query DSL,
+  source metadata, and observed DB rows; no DB literal, token, or string
+  containment heuristic is involved. Also strengthened the composer prompt and
+  `query.where`/`query.limit` schema descriptions so row-set controls must be
+  either hidden entity scope or request/contract wording.
+- **Verification**:
+  Unit verification passed: targeted prompt/schema/query tests `67 passed`, full
+  `uv run pytest -q` `433 passed`, full `ruff check`, and `git diff --check`.
+  Prompt length stayed under budget at `7,993`.
+- **Experiment**:
+  OpenRouter nano smoke
+  `artifacts/trial_20260428_mimiciv_demo_rowset_openrouter_nano_02` reached
+  solver evaluation but failed `reject_too_hard` with `3/12 = 0.25`. Trace review
+  showed a separate anchor/request mismatch: the draft used an `inputevents`
+  composite key as hidden entity while asking for the user's recent five events.
+  This is not evidence of the hidden order bug.
+
+  Kimi confirmation
+  `artifacts/trial_20260428_mimiciv_demo_rowset_kimi_01` did not submit a draft
+  (`composer_submit_draft_missing`), but its final query showed the old kind of
+  unsafe list shape: `order_by_outputs=["start_time"]` with
+  `duplicate_order_key_in_returned_rows=true`. The composer did not submit that
+  ambiguous list.
+
+  Directed live-DB diagnostic on the same MIMIC demo data verified the new guard:
+  querying subject `10005817` input events with `ORDER BY starttime DESC LIMIT 2`
+  returned two rows whose visible order keys were unique inside the returned
+  label, but the diagnostic `N+1` row shared the second row's `start_time`.
+  `query(spec)` reported
+  `{"duplicate_order_key_in_returned_rows": false, "limit_boundary_tie": true}`.
+- **Next implication**:
+  The new precision-100 guard works on real MIMIC data. The remaining failed
+  model trials point at anchor/request selection and composer completion
+  behavior, not at hidden row-set boundary control.
