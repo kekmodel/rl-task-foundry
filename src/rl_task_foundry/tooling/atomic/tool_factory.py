@@ -1012,7 +1012,9 @@ def build_follow_relation_tool(session: AtomicSession) -> "FunctionTool":
                 "description": (
                     "Directed relation label. Forward form: '<src>.<col>-><tgt>'. "
                     "Reverse form: '<tgt><-<src>.<col>'. Must be one of the "
-                    "source record_set resource's relations."
+                    "source record_set resource's relations. Copy the exact "
+                    "string from resource.relations; do not infer, translate, "
+                    "paraphrase, or combine table/column names."
                 ),
             },
         },

@@ -327,6 +327,9 @@ def test_v2_create_and_filter_schemas_are_resource_oriented():
 
     follow_schema = tools["follow_relation"].params_json_schema
     assert "enum" not in follow_schema["properties"]["edge_label"]
+    follow_description = follow_schema["properties"]["edge_label"]["description"]
+    assert "Copy the exact string from resource.relations" in follow_description
+    assert "do not infer, translate, paraphrase" in follow_description
 
     sort_schema = tools["sort_record_set"].params_json_schema
     assert "enum" not in sort_schema["properties"]["column"]
