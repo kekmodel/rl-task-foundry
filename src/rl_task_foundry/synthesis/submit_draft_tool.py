@@ -145,7 +145,9 @@ class AnswerContract(StrictModel):
             "Exact contiguous user_request substrings for meaningful filters, "
             "entity scope, ordering, or tie-breaks. Use [] only when the "
             "request truly has no additional constraint beyond the answer "
-            "target. Structural evidence is derived from the latest query."
+            "target. If query.order_by uses tie-break fields, user_request "
+            "must visibly ask for those tie-breaks here. Structural evidence "
+            "is derived from the latest query."
         ),
     )
     limit_phrase: str | None = Field(

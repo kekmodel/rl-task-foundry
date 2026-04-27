@@ -907,6 +907,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "Answer shape copied from the latest query" in schema_surface
     assert "the query rows array" in schema_surface
     assert "Do not restate tables, columns, operators, or SQL" in schema_surface
+    assert "query.order_by uses tie-break fields" in schema_surface
+    assert "must visibly ask for those tie-breaks" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
     assert "JSON string for the canonical submit_result payload" in schema_surface
     assert "decorative anchor" in schema_surface
