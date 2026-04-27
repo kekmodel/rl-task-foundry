@@ -3103,8 +3103,9 @@ Solver 30/30 완료 결과:
   broader column exposure policy: `blocked`, `internal`, and `user_visible`.
 - **Correction**:
   Renamed `infra/privacy.py` to `infra/visibility.py`, renamed the config model
-  to `VisibilityConfig`, and made `visibility:` the canonical config key. A
-  loader compatibility path still accepts legacy `privacy:` config files.
+  to `VisibilityConfig`, and made `visibility:` the canonical config key. The
+  previous `privacy:` key is intentionally not supported; this is a pre-release
+  clean break recorded in the tuning log rather than a compatibility shim.
 - **Verification**:
   `uv run pytest -q` -> 432 passed. `uv run ruff check src tests` passed.
   `git diff --check` passed.

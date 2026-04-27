@@ -226,19 +226,6 @@ class AppConfig(StrictModel):
     visibility: VisibilityConfig
     output: OutputConfig
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_privacy_key(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        if "privacy" not in data:
-            return data
-        if "visibility" in data:
-            raise ValueError("Use only one of visibility or legacy privacy config")
-        normalized = dict(data)
-        normalized["visibility"] = normalized.pop("privacy")
-        return normalized
-
     @computed_field  # type: ignore[prop-decorator]
     @property
     def estimated_total_db_connections(self) -> int:
