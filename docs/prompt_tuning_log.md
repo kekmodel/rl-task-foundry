@@ -3336,3 +3336,64 @@ Solver 30/30 완료 결과:
 
   Future trial review must report this human quality adjudication alongside the
   numeric gate outcome; `too_hard` alone is not enough.
+
+## Iteration 85 — MIMIC lower-band stop-after-five analysis
+
+- **Experiment setup**:
+  Started
+  `artifacts/trial_20260428_mimiciv_demo_kimi_composer_bound_batch_01`,
+  MIMIC demo `input_events`, composer
+  `openrouter/moonshotai/kimi-k2.5`, configured solver pool unchanged at
+  `openrouter/openai/gpt-5.4-nano` x20. The batch config set
+  `safe_early_termination=false` so submitted drafts get full 20-solver
+  observations instead of being cut off by the current `0.5` lower bound. The
+  user stopped the batch after five completed attempts; trial 06 was
+  interrupted during feedback and excluded.
+- **Observed outcomes**:
+  - trial 01: `1/20 = 0.05`, terminal `reject_too_hard`, two feedback events
+    before rollout.
+  - trial 02: no solver rollout; five `submit_draft` feedback events exhausted
+    the budget, ending on `answer_contract_order_ambiguous`.
+  - trial 03: `0/20 = 0.0`, terminal `reject_too_hard`.
+  - trial 04: `0/20 = 0.0`, terminal `reject_too_hard`.
+  - trial 05: `0/20 = 0.0`, terminal `reject_too_hard`, one order-ambiguity
+    feedback event before rollout.
+- **Quality adjudication**:
+  - trial 01 is tool-solvable but too hard for the current nano solver pool.
+    The final request asks for the recent five medication events for the hidden
+    subject, explicitly includes output fields, and states tie-breaks by amount
+    then item label. Direct DB inspection found 1,105 `inputevents` rows for
+    `subject_id=10039708`; the canonical top five are reproducible by
+    `starttime desc`, `amount desc`, and `d_items.label asc`. One solver matched
+    exactly. Failures mostly missed the secondary ordering, chose the wrong
+    table/path, or confused item labels/units.
+  - trial 02 is a caught low-quality draft, not a band sample. The composer kept
+    adding hidden or non-user-visible tie-break controls (`itemid`/handle-like
+    ordering) for the earliest five rows of stay `32453351`; the validator
+    rejected the shape before rollout.
+  - trial 03 is low-quality. The request asks for infusion information during
+    the ICU stay, but the canonical query filters a single `(orderid, itemid)`
+    row. Direct DB inspection showed the same stay has 381 input events and many
+    infusion-like rows, so the intended row set cannot be inferred from the
+    prompt and solver tool surface.
+  - trial 04 is tool-solvable but too hard for the current nano solver pool. The
+    request asks for the five most recent input events for stay `38559363`; the
+    DB has 40 rows and the latest five have unique `starttime` values, so there
+    is no observed row-set or same-time order ambiguity. Solver failures came
+    from related-field materialization errors such as returning `itemid`, "Main
+    order parameter", or placeholder/error rows instead of `d_items.label`.
+  - trial 05 is low-quality. The request asks for the first five rows in time
+    order for stay `35446858`, but the first two rows have the same
+    `starttime`. The canonical query silently adds `d_items.label asc` as a
+    tie-break, while the request does not state that same-time ordering rule. A
+    solver can find the same two rows and still choose the opposite order, so
+    exact-list grading is not justified by the visible task.
+- **Lower-bound implication**:
+  On these five attempts, there is no evidence that lowering below `0.2` would
+  preserve good hard tasks without admitting low-quality drafts. With 20 solver
+  samples and `ci_alpha=0.1`, `0/20` has a one-sided upper bound around `0.109`
+  and `1/20` around `0.181`; therefore a lower bound of `0.2` still decisively
+  filters all observed `0/20` and `1/20` cases. Lowering to `0.15` would stop
+  decisively rejecting the `1/20` case, and lowering to `0.1` would stop
+  decisively rejecting `0/20`. The provisional recommendation from this stopped
+  batch is `lower_pass_rate=0.2`, not `0.35` and not below `0.15`.
