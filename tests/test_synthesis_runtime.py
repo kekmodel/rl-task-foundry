@@ -1107,6 +1107,8 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "needs more specificity" in message
     assert "choose a feasible structural strengthening" in message
     assert "Replacing a field on the same path is not an escalation" in message
+    assert "Apply exactly one strengthening axis per retry" in message
+    assert "combining multiple axes" in message
     assert "new grounded filter" in message
     assert "feasible visible dimension" in message
     assert "do not switch to a list, Cardinality, or Cross-item rule" in message
@@ -1149,6 +1151,8 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "This is a list answer" in message
     assert "selected-row query target" in message
     assert "supported by the current DB evidence" in message
+    assert "Apply exactly one strengthening axis per retry" in message
+    assert "combining multiple axes" in message
     for axis in ("Filter", "Composite", "Cardinality", "Item-complexity", "Order"):
         assert axis in message
     assert "passive display-only fields" in message

@@ -80,7 +80,11 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
         "grounded structure unless it was overconstrained. Replacing "
         "a field on the same path is not an escalation and will be "
         "rejected. Keep answer_contract.kind fixed and preserve existing "
-        "query output fields. "
+        "query output fields. Apply exactly one strengthening axis "
+        "per retry; combining multiple axes in one retry (for example "
+        "adding a new filter and a new per-item field together) tends "
+        "to overshoot. If 'needs more specificity' fires again, add "
+        "the next axis on the following retry. "
     )
     if answer_kind == "scalar":
         return (

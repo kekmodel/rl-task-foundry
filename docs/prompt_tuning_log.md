@@ -2855,3 +2855,61 @@ Solver 30/30 완료 결과:
   useful evidence that the existing schema map plus join description can guide
   the composer, but it is not evidence that the warning field itself helps.
   Keeping unused warning surface would add API noise without measured benefit.
+
+## Iteration 71 — single-axis strengthening guidance after too-easy
+
+- **Trigger**:
+  Iteration 67's open question: after a too-easy rejection the composer can
+  make a grounded jump that is valid but too large, dropping pass rate from
+  ~0.95 to 0.0 in one retry. The Iter 67 trial's failing retry combined two
+  axes at once (a categorical filter on a related table plus a new per-item
+  output field). Iter 68 widened solver reach for that specific symptom and
+  Iter 69 tightened label-field hygiene, but neither addressed the underlying
+  multi-axis stacking pattern.
+- **Diagnosis**:
+  This is not a 100%-precision detection target. Counting "axes" in a draft
+  diff requires semantic interpretation of constraints/output fields, which
+  would push runtime into token/heuristic territory (banned). The system
+  prompt's Workflow step 5 already says to "add exactly one grounded filter,
+  deterministic order/limit, repeated item, or item requirement" on a
+  specificity rejection, but the too-easy retry feedback in
+  `submit_draft_messages._too_easy_retry_guidance` enumerates five axes
+  (a)–(e) without echoing the single-axis discipline. After a too-easy
+  rejection the composer reads that menu and stacks two axes in one retry.
+- **Fix**:
+  Reinforced the single-axis rule in the shared `common` block of
+  `_too_easy_retry_guidance` so it applies across scalar, list, and unknown
+  answer kinds. The new sentence is:
+  "Apply exactly one strengthening axis per retry; combining multiple axes
+  in one retry (for example adding a new filter and a new per-item field
+  together) tends to overshoot. If 'needs more specificity' fires again,
+  add the next axis on the following retry."
+  Added regression tests in `tests/test_synthesis_runtime.py` for both
+  scalar and list too-easy feedback paths and a regression assertion in
+  `tests/test_synthesis_prompts.py` confirming the system prompt still
+  carries `add exactly one grounded filter`.
+- **Why this follows the principles**:
+  - Layer choice matches the spec hierarchy (foundation §validation-and-
+    guidance, synthesis-pipeline §control-priority): the rule lives in the
+    system prompt as durable role-local policy and is mirrored — not
+    re-introduced — in the retry feedback. No hard validator is added.
+  - No semantic token heuristics: the rule talks about authoring discipline,
+    not about table/column/tool/text tokens.
+  - No role leak: feedback wording stays inside composer authoring vocabulary
+    (no solver / actor / pass_rate / training / dataset language).
+  - DB-neutral: works across arbitrary introspectable schemas; no Pagila or
+    sample-DB names appear.
+- **Verification**:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_messages.py
+  tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py` passed.
+  `git diff --check` passed.
+  Direct text verification: all three branches of `_too_easy_retry_guidance`
+  contain the new single-axis rule. Pytest collection is currently blocked
+  by an unrelated Python 3.14.0rc2 / pydantic 2.13.3 `_eval_type` signature
+  mismatch (`prefer_fwd_module` keyword) that pre-dates this change; once
+  the toolchain is upgraded, the targeted tests
+  `tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_preserves_readable_path`,
+  `tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_is_list_aware`,
+  and
+  `tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow`
+  encode the new wording and should pass.

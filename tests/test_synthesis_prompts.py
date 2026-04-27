@@ -251,6 +251,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "the label must be copied from the latest query evidence" in instructions
     assert "must not be a global answer with a decorative entity attached" in instructions
     assert "specificity rejection" in instructions
+    assert "add exactly one grounded filter" in instructions
     assert "overconstrained/terminal feedback" in instructions
 
     # User-facing language and ID guidance stay general and English.
