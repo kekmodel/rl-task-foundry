@@ -3284,5 +3284,22 @@ Solver 30/30 완료 결과:
   matching, or answer-content heuristics.
 - **Verification**:
   Added unit coverage for the controller feedback record and for backend
-  continuation after no-submit final output. Targeted tests and adjacent
-  synthesis backend/runtime tests passed.
+  continuation after no-submit final output. Targeted tests, adjacent synthesis
+  backend/runtime tests, full `uv run pytest -q`, `ruff check`, and
+  `git diff --check` passed.
+
+  Real DB smoke after the patch:
+  `artifacts/trial_20260428_mimiciv_demo_missing_submit_kimi_01` and
+  `artifacts/trial_20260428_mimiciv_demo_missing_submit_kimi_02`, MIMIC demo
+  `input_events`, composer `openrouter/moonshotai/kimi-k2.5`. Both trials
+  reached `submit_draft`; `protocol_feedback_events=0` in `synthesis_completed`,
+  so the new no-submit protocol feedback did not trigger spuriously. Trial 01
+  submitted once and failed terminally as `reject_too_hard` (`0/4`, pass rate
+  `0.0`). Trial 02 exercised the existing order-ambiguity feedback path: first
+  submit was rejected with `answer_contract_order_ambiguous` because
+  `order_by_outputs=["start_time"]` and
+  `duplicate_order_key_in_returned_rows=true`; Kimi then reran the query with
+  `order_by_outputs=["start_time", "item_label"]`, resubmitted, and failed
+  terminally as `reject_too_hard` (`2/12`, pass rate `0.1667`). These are
+  difficult/low-reachability clinical-list tasks, not evidence that the
+  no-submit guard is overfiring.
