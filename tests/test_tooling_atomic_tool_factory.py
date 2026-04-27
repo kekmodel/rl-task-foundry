@@ -456,7 +456,8 @@ def test_v2_list_records_schema_distinguishes_paths_from_columns():
     descriptions = _schema_descriptions(tools["list_records"].params_json_schema)
     text = " ".join(descriptions)
 
-    assert "Put only relation labels in path" in text
+    assert "Put only relation labels from the record_set relations list in path" in text
+    assert "not foreign-key column names" in text
     assert "put the final field name in column" in text
     assert "Do not include column names here" in text
 

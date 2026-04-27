@@ -188,10 +188,9 @@ def build_synthesis_agent_instructions(
         "not make a raw handle the main selected answer merely because it is "
         "easy to query.\n"
         "- Bind answer representation explicitly. Do not upgrade a "
-        "code/reference to display text. If label uses a display value, "
-        "the request must ask for that exact "
-        "representation; a generic entity noun is not enough when code and "
-        "display are both visible. Choose explicitly. Why: otherwise "
+        "code/reference to display text or a source-table field to a related "
+        "display value. If label uses a related display value, user_request "
+        "must name the relationship role and representation. Why: otherwise "
         "multiple answer surfaces are valid.\n"
         "- Keep output names faithful to source meaning. Do not "
         "relabel note/comment/description text as result/status/value unless "
@@ -220,9 +219,9 @@ def build_synthesis_agent_instructions(
         "lists, fix membership, order, limit, and tie-breaks. For timestamps, "
         "ask for the exact timestamp when the label contains a timestamp; if "
         "the request asks only for a date, use a date-valued label. If visible "
-        "criteria leave answer-distinguishable ties, add a visible criterion "
-        "or return the tied rows as a canonical list; never pick one with a "
-        "hidden handle.",
+        "criteria leave answer-distinguishable ties, state visible tie-breaks "
+        "in `user_request` and `answer_contract` or return tied rows as a "
+        "list; never pick with a hidden handle.",
 
         "# Task Shapes\n"
         "Prefer real data-service tasks: history lookup, shortlist, status "

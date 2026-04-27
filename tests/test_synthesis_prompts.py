@@ -300,8 +300,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Prefer user-visible non-handle values" in instructions
     assert "Bind answer representation explicitly" in instructions
     assert "Do not upgrade a code/reference" in instructions
-    assert "the request must ask for that exact representation" in instructions
-    assert "generic entity noun is not enough" in instructions
+    assert "related display value" in instructions
+    assert "must name the relationship role and representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
     assert "Keep output names faithful" in instructions
     assert "note/comment/description text" in instructions
@@ -321,8 +321,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "exactly one correct structured result" in instructions
     assert "fix membership, order, limit, and tie-breaks" in instructions
     assert "visible criteria leave answer-distinguishable ties" in instructions
-    assert "return the tied rows as a canonical list" in instructions
-    assert "never pick one with a hidden handle" in instructions
+    assert "state visible tie-breaks" in instructions
+    assert "return tied rows as a list" in instructions
+    assert "never pick with a hidden handle" in instructions
     assert "exact timestamp" in instructions
 
     # Task shape is domain-agnostic and concise.

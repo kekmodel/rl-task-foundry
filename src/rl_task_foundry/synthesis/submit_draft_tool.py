@@ -1588,7 +1588,7 @@ class SubmitDraftController:
                 "Rejected. The latest successful query does not contain the required structural evidence for this answer. If a list query limit fixes the returned rows, user_request and answer_contract.limit_phrase must include that exact fixed size."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
-                "Rejected. The latest list query has ambiguous ordering for exact verification. Add deterministic answer-visible query.order_by tie-breakers, choose a row set with unique visible ordering, or choose a different task before submit_draft. Do not rely on unseen order keys to break ties."  # noqa: E501
+                "Rejected. The latest list query has ambiguous ordering for exact verification. State deterministic answer-visible query.order_by tie-breakers in user_request and answer_contract, choose a row set with unique visible ordering, or return the tied rows as the list before submit_draft. Do not rely on unseen order keys to break ties."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. The latest query filters on a blocked handle value that is not present in entity. Put required hidden scope handles in entity or rerun the query using the submitted entity's handle."  # noqa: E501

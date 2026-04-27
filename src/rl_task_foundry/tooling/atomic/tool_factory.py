@@ -1263,8 +1263,9 @@ def build_list_records_tool(session: AtomicSession) -> "FunctionTool":
                     "Relation labels to follow from each source record before "
                     "reading column. Use [] for a source-table field. Each "
                     "step must produce at most one related record for each "
-                    "source record. Put only relation labels in path; put the "
-                    "final field name in column."
+                    "source record. Put only relation labels from the "
+                    "record_set relations list in path, not foreign-key "
+                    "column names; put the final field name in column."
                 ),
                 "items": {
                     "type": "string",
