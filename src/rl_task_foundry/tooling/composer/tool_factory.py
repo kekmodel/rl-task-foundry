@@ -688,6 +688,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "description": (
                     "Deterministic ordering. If user_request states top/latest/"
                     "earliest, mirror that wording in submit_draft phrases. "
+                    "If user_request states a direction or ranking, such as "
+                    "larger/smaller first or ascending/descending, make "
+                    "query.order_by.direction match that wording exactly. "
                     "When rows can share the primary sort key, use an "
                     "answer-visible/reproducible tie-breaker only if "
                     "user_request and answer_contract ask for that secondary "
@@ -712,7 +715,11 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                         "direction": {
                             "type": "string",
                             "enum": ["asc", "desc"],
-                            "description": "Sort direction.",
+                            "description": (
+                                "Sort direction. Match the direction or ranking "
+                                "stated in user_request before using the rows as "
+                                "the canonical label."
+                            ),
                         },
                     },
                 },

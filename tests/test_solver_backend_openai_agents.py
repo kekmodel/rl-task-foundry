@@ -477,6 +477,62 @@ def test_submit_result_tool_wraps_non_object_roots() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submit_result_tool_accepts_nullable_fields() -> None:
+    output_schema = OutputSchemaContract(
+        root=OutputFieldContract(
+            name="answer",
+            type=OutputFieldType.LIST,
+            ordered=True,
+            length=2,
+            items=OutputFieldContract(
+                name="item",
+                type=OutputFieldType.OBJECT,
+                fields=[
+                    OutputFieldContract(name="medication", type=OutputFieldType.STRING),
+                    OutputFieldContract(
+                        name="rate",
+                        type=OutputFieldType.FLOAT,
+                        nullable=True,
+                    ),
+                ],
+            ),
+        ),
+        primary_output_format="json_array",
+    )
+    tool = backend_module._make_submit_result_tool(output_schema)
+
+    rate_schema = tool.params_json_schema["properties"]["answer"]["items"][
+        "properties"
+    ]["rate"]
+    assert {"type": "null"} in rate_schema["anyOf"]
+    assert any(
+        branch.get("type") == "number"
+        for branch in rate_schema["anyOf"]
+        if isinstance(branch, dict)
+    )
+
+    result = await tool.on_invoke_tool(  # pyright: ignore[reportAttributeAccessIssue]
+        None,
+        json.dumps(
+            {
+                "answer": [
+                    {"medication": "A", "rate": 4.5},
+                    {"medication": "B", "rate": None},
+                ]
+            }
+        ),
+    )
+
+    assert result == {
+        "submitted": True,
+        "answer": [
+            {"medication": "A", "rate": 4.5},
+            {"medication": "B", "rate": None},
+        ],
+    }
+
+
+@pytest.mark.asyncio
 async def test_submit_result_tool_rejects_wrong_list_length() -> None:
     output_schema = OutputSchemaContract(
         root=OutputFieldContract(

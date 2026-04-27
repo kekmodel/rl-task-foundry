@@ -3556,3 +3556,34 @@ Solver 30/30 완료 결과:
   nullability into the solver answer schema, and separately ensure the accepted
   canonical order agrees with visible `order_by` keys. Both are based on the
   draft's own query/result contract, not on predicting database values.
+
+## Iteration 90 — Nullable submit schema and sort-direction policy
+
+- **Change**:
+  Reworked canonical-answer schema inference to inspect the full canonical
+  answer instead of the first list item. If any canonical field is `null`, the
+  internal `OutputFieldContract` marks that field nullable while preserving the
+  observed non-null scalar type when present. The solver-facing `submit_result`
+  schema already emits nullable fields as `anyOf[..., {"type": "null"}]`, so
+  the structural fix is in inference rather than in solver logic.
+- **Observed-trial replay**:
+  Replayed the final canonical answers from
+  `artifacts/trial_20260428_mimiciv_demo_kimi_batch5_parallel_01` trials 2, 3,
+  and 4. Each now infers `rate` and `rate_unit` as nullable and canonicalizes
+  the original answer successfully. This directly addresses the low-quality
+  `null is not allowed for this field` failures without adding DB literals or
+  text heuristics. Directly invoking the new `submit_result` tool with trial 2's
+  null-containing canonical payload returns `submitted=True` for all five rows.
+- **Composer policy**:
+  Trial 1's wrong-direction tie-break is not safely catchable by a hard
+  validator because `answer_contract` intentionally contains request phrases,
+  not duplicated structured order metadata. Added prompt/tool-schema guidance
+  instead: match the requested sort direction before using query rows as the
+  canonical label. This keeps the fix prompt-first for composer policy and
+  avoids natural-language heuristic validation.
+- **Verification**:
+  Focused checks passed:
+  `uv run pytest tests/test_synthesis_schema_inference.py tests/test_solver_backend_openai_agents.py::test_submit_result_tool_accepts_nullable_fields tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`.
+  Broader relevant checks passed:
+  `uv run pytest tests/test_synthesis_schema_inference.py tests/test_synthesis_canonicalize.py tests/test_solver_backend_openai_agents.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`.
+  Ruff passed on the changed source and test files.

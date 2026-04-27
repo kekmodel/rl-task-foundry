@@ -6,6 +6,7 @@ from rl_task_foundry.synthesis.canonicalize import compute_reward
 from rl_task_foundry.synthesis.contracts import OutputFieldType
 from rl_task_foundry.synthesis.schema_inference import (
     extract_output_schema_from_canonical,
+    extract_prompt_schema_from_canonical,
 )
 
 
@@ -109,3 +110,42 @@ def test_reward_rejects_primitive_list_in_different_order() -> None:
 
     assert result.status == "em_mismatch"
     assert result.reward == 0.0
+
+
+def test_schema_inference_marks_null_fields_nullable_across_list_items() -> None:
+    canonical_answer = [
+        {"medication": "A", "rate": 10.5, "rate_unit": "mL/hour"},
+        {"medication": "B", "rate": None, "rate_unit": None},
+    ]
+
+    schema = extract_output_schema_from_canonical(canonical_answer)
+
+    assert schema.root.items is not None
+    item_fields = {field.name: field for field in schema.root.items.fields}
+    assert item_fields["rate"].type is OutputFieldType.FLOAT
+    assert item_fields["rate"].nullable is True
+    assert item_fields["rate_unit"].type is OutputFieldType.STRING
+    assert item_fields["rate_unit"].nullable is True
+
+    result = compute_reward(
+        submitted_answer_text=json.dumps(canonical_answer),
+        canonical_answer=canonical_answer,
+        output_schema=schema,
+    )
+
+    assert result.status == "matched"
+    assert result.reward == 1.0
+
+
+def test_prompt_schema_allows_null_for_nullable_canonical_fields() -> None:
+    prompt_schema = extract_prompt_schema_from_canonical(
+        [
+            {"item": "A", "rate": None},
+            {"item": "B", "rate": 4.25},
+        ]
+    )
+
+    rate_schema = prompt_schema["$defs"]["AnswerSchemaItem"]["properties"]["rate"]
+
+    assert {"type": "null"} in rate_schema["anyOf"]
+    assert {"type": "number"} in rate_schema["anyOf"]

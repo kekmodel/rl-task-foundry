@@ -332,12 +332,18 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "use an answer-visible/reproducible tie-breaker only if" in descriptions[
         "query"
     ]["$.spec.order_by"]
+    assert "query.order_by.direction match that wording exactly" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
     assert "selecting the field as output is not enough" in descriptions["query"][
         "$.spec.order_by"
     ]
     assert "returning the tied rows is safer" in descriptions["query"][
         "$.spec.order_by"
     ]
+    assert "Match the direction or ranking stated in user_request" in descriptions[
+        "query"
+    ]["$.spec.order_by[].direction"]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
     assert "cuts through rows with the same requested order key" in descriptions[

@@ -217,11 +217,12 @@ def build_synthesis_agent_instructions(
         "must be an exact substring of `user_request`. Why: this checks draft "
         "meaning without asking you to duplicate machine-derivable evidence.\n"
         "- The request must have a single correct structured result. For "
-        "lists, fix membership, order, limit, and tie-breaks. Every row-set "
-        "control must be entity scope or request/contract. Timestamp "
-        "labels need exact timestamp requests; date-only requests need date "
-        "labels. If requested order leaves distinct-answer ties, ask for the "
-        "visible tie-break before using it in `query.order_by`; otherwise "
+        "lists, fix membership, order, limit, and tie-breaks. Row-set "
+        "controls must be entity scope or request/contract. Exact timestamp "
+        "labels need timestamp requests; date-only labels need date requests. "
+        "Match sort direction. "
+        "If requested order leaves distinct-answer ties, ask for the "
+        "visible tie-break before `query.order_by`; otherwise "
         "choose unique ordering or return tied rows; never use hidden handles.",
 
         "# Task Shapes\n"
