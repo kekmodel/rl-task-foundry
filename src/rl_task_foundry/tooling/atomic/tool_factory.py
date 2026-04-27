@@ -42,7 +42,12 @@ from rl_task_foundry.tooling.atomic.sql_compile import (
     _AGGREGATE_FNS,
     AggregateFn,
 )
-from rl_task_foundry.tooling.common.edges import available_edges, resolve_edge
+from rl_task_foundry.tooling.common.edges import (
+    EdgeDirection,
+    TypedEdge,
+    available_edges,
+    resolve_edge,
+)
 from rl_task_foundry.tooling.common.payload import (
     JsonObject,
 )
@@ -235,6 +240,29 @@ def _parse_projection_fields(
             )
         )
     return parsed
+
+
+def _resolve_relation_path(
+    session: AtomicSession,
+    *,
+    source_table: str,
+    path: list[str],
+) -> list[TypedEdge]:
+    if not path:
+        raise ValueError("'path' must contain at least one relation label")
+    current_table = source_table
+    edges: list[TypedEdge] = []
+    for edge_label in path:
+        edge = resolve_edge(session.snapshot, current_table, edge_label)
+        edges.append(edge)
+        current_table = edge.destination_table
+    return edges
+
+
+def _inverse_edge_label(edge: TypedEdge) -> str:
+    if edge.direction is EdgeDirection.FORWARD:
+        return edge.spec.reverse_label
+    return edge.spec.forward_label
 
 
 def _row_id_cache_key(table: str, row_id: object) -> tuple[str, str]:
@@ -838,6 +866,131 @@ def build_filter_record_set_by_null_tool(session: AtomicSession) -> "FunctionToo
         description=(
             "Create a new record_set resource by keeping records where one "
             "column is null or not null."
+        ),
+        schema=schema,
+        handler=handler,
+    )
+
+
+def build_filter_record_set_by_related_tool(session: AtomicSession) -> "FunctionTool":
+    schema: JsonObject = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["record_set_id", "path", "column", "op", "value"],
+        "properties": {
+            "record_set_id": {
+                "type": "string",
+                "description": "ID of an existing source record_set resource.",
+            },
+            "path": {
+                "type": "array",
+                "minItems": 1,
+                "description": (
+                    "Relation labels to follow from the source record_set table "
+                    "to the related table that owns column."
+                ),
+                "items": {
+                    "type": "string",
+                    "description": (
+                        "Relation label copied from the current record_set "
+                        "resource's relations list, then from each returned "
+                        "table's relations list."
+                    ),
+                },
+            },
+            "column": {
+                "type": "string",
+                "description": (
+                    "Column on the related table reached after path. The related "
+                    "column must be exposed by that table."
+                ),
+            },
+            "op": {
+                "type": "string",
+                "enum": sorted(_SCALAR_FILTER_OPS),
+                "description": "Scalar comparison operator that requires a non-null value.",
+            },
+            "value": {
+                "description": (
+                    "Single comparison value for the related column. Must be a "
+                    "scalar and must not be null."
+                ),
+                "anyOf": _FILTER_VALUE_SCALAR_ANY_OF,
+            },
+        },
+    }
+
+    async def handler(payload: JsonObject) -> JsonObject:
+        record_set_id = _require_str(payload, "record_set_id")
+        raw_path = _require_str_list(payload, "path")
+        column_name = _require_str(payload, "column")
+        op_name = _require_str(payload, "op")
+        if op_name not in _SCALAR_FILTER_OPS:
+            raise ValueError(
+                f"'op' must be one of {sorted(_SCALAR_FILTER_OPS)}"
+            )
+        if "value" not in payload or payload.get("value") is None:
+            raise TypeError(
+                "'value' is required and cannot be null for this operator"
+            )
+        if isinstance(payload.get("value"), list | dict):
+            raise TypeError("'value' must be a scalar for this endpoint")
+
+        source_cursor = _resolve_record_set(session, record_set_id)
+        source_resource = _record_set_trace_resource(session, source_cursor)
+        source_table = session.store.resolve(source_cursor).target_table
+        edges = _resolve_relation_path(
+            session,
+            source_table=source_table,
+            path=raw_path,
+        )
+        related_table = edges[-1].destination_table
+        related_spec = session.snapshot.table(related_table)
+        column_spec = related_spec.exposed_column(column_name)
+        value = coerce_scalar(payload.get("value"), column_spec.data_type)
+
+        related_cursor = create_record_set(session, table=related_table)
+        matching_related = filter_rows(
+            session,
+            cursor=related_cursor,
+            column=column_name,
+            op=cast(FilterOp, op_name),
+            value=value,
+        )
+        back_projected = matching_related
+        for edge in reversed(edges):
+            back_projected = rows_via(
+                session,
+                cursor=back_projected,
+                edge_label=_inverse_edge_label(edge),
+            )
+        filtered = intersect(
+            session,
+            left=source_cursor,
+            right=back_projected,
+        )
+        _record_success_trace(
+            session,
+            action="transform_resource",
+            operation="filter_record_set_by_related",
+            input_resource=source_resource,
+            related_predicate={
+                "path": raw_path,
+                "column": column_name,
+                "op": op_name,
+                "value": value,
+            },
+            output_resource=_record_set_trace_resource(session, filtered),
+        )
+        return _record_set_resource_payload(session, filtered)
+
+    return _make_tool(
+        session,
+        name="filter_record_set_by_related",
+        description=(
+            "Create a new source record_set by keeping source records that have "
+            "at least one related record, reached through path, whose column "
+            "matches one scalar comparison."
         ),
         schema=schema,
         handler=handler,
@@ -1476,6 +1629,7 @@ def build_atomic_tools(session: AtomicSession) -> list["FunctionTool"]:
         build_filter_record_set_by_values_tool(session),
         build_filter_record_set_by_pattern_tool(session),
         build_filter_record_set_by_null_tool(session),
+        build_filter_record_set_by_related_tool(session),
         build_follow_relation_tool(session),
         build_intersect_record_sets_tool(session),
         build_sort_record_set_tool(session),
@@ -1493,6 +1647,7 @@ __all__ = [
     "build_count_records_tool",
     "build_create_record_set_tool",
     "build_filter_record_set_by_pattern_tool",
+    "build_filter_record_set_by_related_tool",
     "build_filter_record_set_by_null_tool",
     "build_filter_record_set_by_values_tool",
     "build_filter_record_set_tool",

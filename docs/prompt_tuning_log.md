@@ -2759,3 +2759,37 @@ Solver 30/30 완료 결과:
   it can make a grounded jump that is valid but too large. This should be
   handled through prompt/schema guidance or statistical retry policy, not a
   semantic validator.
+
+## Iteration 68 — related-field filters are first-class solver actions
+
+- **Trigger**:
+  Iteration 67's second draft added a grounded PG-13 filter on `film.rating`
+  while keeping a `rental` answer list. Composer could express this naturally
+  in `query`, but the solver had no direct source-preserving endpoint for
+  "keep rental records whose related film has rating X." The actor could
+  theoretically build the result by creating a film set, filtering it, walking
+  reverse relations back to rental, and intersecting with the customer rental
+  set, but Nano went `0/4`.
+- **Fix**:
+  Added solver endpoint `filter_record_set_by_related`. It takes a source
+  `record_set_id`, a FK `path`, a related `column`, scalar `op`, and scalar
+  `value`, then returns a new record_set over the original source table. The
+  implementation resolves the path structurally, filters the related table,
+  walks inverse FK edges back to the source table, and intersects with the
+  source record_set. The tooling version was bumped to
+  `atomic-resource-api-v6`.
+- **Why this follows the principles**:
+  This is an actor reachability improvement, not a validator. It uses only
+  schema/FK metadata and typed scalar values; there are no DB-specific names,
+  token rules, or semantic quality heuristics. It also keeps the API-like
+  resource contract: filter a collection by a related field and continue with
+  sort/list/submit.
+- **Verification**:
+  `uv run pytest tests/test_tooling_atomic_tool_factory.py::test_build_atomic_tools_returns_tools_in_calculus_order tests/test_tooling_atomic_tool_factory.py::test_v2_filter_record_set_by_related_filters_source_records -q`
+  -> 2 passed.
+  `uv run pytest tests/test_tooling_atomic_tool_factory.py tests/test_synthesis_prompts.py tests/test_pipeline_solver_orchestrator.py tests/test_synthesis_bundle_exporter.py -q`
+  -> 48 passed.
+  `uv run pytest -q` -> 417 passed.
+  `uv run ruff check src/rl_task_foundry tests` and `git diff --check` passed.
+  Full `uv run ruff check .` is currently blocked by an unrelated untracked
+  `scripts/load_wikitree_sample.py` import-order/unused-import finding.

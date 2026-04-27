@@ -223,6 +223,7 @@ def test_build_atomic_tools_returns_tools_in_calculus_order():
         "filter_record_set_by_values",
         "filter_record_set_by_pattern",
         "filter_record_set_by_null",
+        "filter_record_set_by_related",
         "follow_relation",
         "intersect_record_sets",
         "sort_record_set",
@@ -241,6 +242,7 @@ def test_package_public_surface_is_v2_only():
         "build_filter_record_set_by_values_tool",
         "build_filter_record_set_by_pattern_tool",
         "build_filter_record_set_by_null_tool",
+        "build_filter_record_set_by_related_tool",
         "build_sort_record_set_tool",
         "build_list_record_refs_tool",
         "build_list_records_tool",
@@ -1025,6 +1027,123 @@ async def test_v2_list_records_preserves_source_alignment_across_fk_path():
                 "amount": "3.99",
                 "payment_date": "2022-06-24T09:54:08.027069+00:00",
                 "film_title": "BILL OTHERS",
+            },
+        ]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v2_filter_record_set_by_related_filters_source_records():
+    session, conn = await _live_session()
+    try:
+        tools = {tool.name: tool for tool in build_atomic_tools(session)}
+
+        base = await _invoke(tools["create_record_set"], {"table": "rental"})
+        base_resource = base["resource"]
+        assert isinstance(base_resource, dict)
+
+        customer_filtered = await _invoke(
+            tools["filter_record_set"],
+            {
+                "record_set_id": base_resource["id"],
+                "column": "customer_id",
+                "op": "eq",
+                "value": 546,
+            },
+        )
+        customer_resource = customer_filtered["resource"]
+        assert isinstance(customer_resource, dict)
+
+        rating_filtered = await _invoke(
+            tools["filter_record_set_by_related"],
+            {
+                "record_set_id": customer_resource["id"],
+                "path": [
+                    "rental.inventory_id->inventory",
+                    "inventory.film_id->film",
+                ],
+                "column": "rating",
+                "op": "eq",
+                "value": "PG-13",
+            },
+        )
+        rating_resource = rating_filtered["resource"]
+        assert isinstance(rating_resource, dict)
+        assert rating_resource["table"] == "rental"
+
+        sorted_rentals = await _invoke(
+            tools["sort_record_set"],
+            {
+                "record_set_id": rating_resource["id"],
+                "column": "rental_date",
+                "direction": "desc",
+            },
+        )
+        sorted_resource = sorted_rentals["resource"]
+        assert isinstance(sorted_resource, dict)
+
+        listed = await _invoke(
+            tools["list_records"],
+            {
+                "record_set_id": sorted_resource["id"],
+                "limit": 5,
+                "offset": 0,
+                "fields": [
+                    {
+                        "name": "film_title",
+                        "column": "title",
+                        "path": [
+                            "rental.inventory_id->inventory",
+                            "inventory.film_id->film",
+                        ],
+                    },
+                    {"name": "rented_on", "column": "rental_date", "path": []},
+                    {"name": "returned_on", "column": "return_date", "path": []},
+                    {
+                        "name": "rating",
+                        "column": "rating",
+                        "path": [
+                            "rental.inventory_id->inventory",
+                            "inventory.film_id->film",
+                        ],
+                    },
+                ],
+            },
+        )
+        assert listed["ok"] is True
+        data = listed["data"]
+        assert isinstance(data, dict)
+        assert data["items"] == [
+            {
+                "film_title": "DRIFTER COMMANDMENTS",
+                "rented_on": "2022-08-17T10:17:21+00:00",
+                "returned_on": "2022-08-18T08:14:21+00:00",
+                "rating": "PG-13",
+            },
+            {
+                "film_title": "ENGLISH BULWORTH",
+                "rented_on": "2022-07-12T21:11:21+00:00",
+                "returned_on": "2022-07-21T01:35:21+00:00",
+                "rating": "PG-13",
+            },
+            {
+                "film_title": "HOBBIT ALIEN",
+                "rented_on": "2022-07-08T12:12:12+00:00",
+                "returned_on": "2022-07-10T08:01:12+00:00",
+                "rating": "PG-13",
+            },
+            {
+                "film_title": "EVOLUTION ALTER",
+                "rented_on": "2022-07-08T09:01:28+00:00",
+                "returned_on": "2022-07-12T09:37:28+00:00",
+                "rating": "PG-13",
+            },
+            {
+                "film_title": "SEATTLE EXPECATIONS",
+                "rented_on": "2022-06-18T12:19:05+00:00",
+                "returned_on": "2022-06-23T06:59:05+00:00",
+                "rating": "PG-13",
             },
         ]
     finally:
