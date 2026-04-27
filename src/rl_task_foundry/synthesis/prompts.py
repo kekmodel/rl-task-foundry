@@ -218,11 +218,11 @@ def build_synthesis_agent_instructions(
         "meaning without asking you to duplicate machine-derivable evidence.\n"
         "- The request must have exactly one correct structured result. For "
         "lists, fix membership, order, limit, and tie-breaks. For timestamps, "
-        "ask for the exact timestamp when the label contains a timestamp; if "
-        "the request asks only for a date, use a date-valued label. If visible "
-        "criteria leave answer-distinguishable ties, state visible tie-breaks "
-        "in `user_request` and `answer_contract` or return tied rows as a "
-        "list; never pick with a hidden handle.",
+        "ask for exact timestamps when labels contain timestamps; date-only "
+        "requests need date labels. If requested order leaves "
+        "answer-distinguishable ties, ask for the visible tie-break before "
+        "using it in `query.order_by`; otherwise choose a uniquely ordered row "
+        "set or return tied rows; never use hidden handles.",
 
         "# Task Shapes\n"
         "Prefer real data-service tasks: history lookup, shortlist, status "

@@ -678,9 +678,11 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "description": (
                     "Deterministic ordering. If user_request states top/latest/"
                     "earliest, mirror that wording in submit_draft phrases. "
-                    "When rows can share the primary sort key, add a "
-                    "tie-breaker that is answer-visible/reproducible, or "
-                    "choose a row set with unique visible ordering."
+                    "When rows can share the primary sort key, use an "
+                    "answer-visible/reproducible tie-breaker only if "
+                    "user_request and answer_contract ask for that secondary "
+                    "order; selecting the field as output is not enough. "
+                    "Otherwise choose a row set with unique visible ordering."
                 ),
                 "items": {
                     "type": "object",

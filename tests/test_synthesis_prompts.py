@@ -323,10 +323,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Every contract phrase must be an exact substring of `user_request`" in instructions
     assert "exactly one correct structured result" in instructions
     assert "fix membership, order, limit, and tie-breaks" in instructions
-    assert "visible criteria leave answer-distinguishable ties" in instructions
-    assert "state visible tie-breaks" in instructions
-    assert "return tied rows as a list" in instructions
-    assert "never pick with a hidden handle" in instructions
+    assert "requested order leaves answer-distinguishable ties" in instructions
+    assert "ask for the visible tie-break before" in instructions
+    assert "choose a uniquely ordered row set or return tied rows" in instructions
+    assert "never use hidden handles" in instructions
     assert "exact timestamp" in instructions
 
     # Task shape is domain-agnostic and concise.

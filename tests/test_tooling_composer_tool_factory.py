@@ -318,7 +318,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]["$.spec.select[].as"]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
-    assert "add a tie-breaker" in descriptions["query"]["$.spec.order_by"]
+    assert "use an answer-visible/reproducible tie-breaker only if" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
+    assert "selecting the field as output is not enough" in descriptions["query"][
+        "$.spec.order_by"
+    ]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
     assert "answer-visible/reproducible" in descriptions["query"]["$.spec.order_by"]

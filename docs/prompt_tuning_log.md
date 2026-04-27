@@ -3166,3 +3166,26 @@ Solver 30/30 완료 결과:
   after difficulty-up added `booking_count`.
 - **Verification**:
   Documentation-only change; `git diff --check` passed.
+
+## Iteration 81 — Requested tie-break before selected-field ordering
+
+- **Issue**:
+  MIMIC demo `artifacts/trial_20260427_mimiciv_demo_kimi_02` failed
+  `reject_too_hard` with `0/4`, but trace review showed the solvers found the
+  same five `inputevents` rows and only disagreed with the hidden secondary
+  ordering. The canonical query ordered by `starttime ASC, item_name ASC`, while
+  the user request only asked for start-time order. `item_name` was selected in
+  the label, but selecting a field to return is not the same as asking to use it
+  as a tie-breaker.
+- **Correction**:
+  Kept this as prompt/schema policy rather than a hard validator because
+  detecting natural-language tie-break intent with 100% precision is not
+  possible. The composer system prompt, `query.order_by` schema, and
+  `answer_contract.constraint_phrases` schema now say that when requested order
+  leaves answer-distinguishable ties, the composer must ask for the visible
+  tie-break before using it in `query.order_by`; merely selecting that field as
+  output is not enough. Otherwise it should choose a uniquely ordered row set or
+  return the tied rows.
+- **Verification**:
+  Targeted prompt/schema tests passed: 3 passed. Prompt length remains under
+  budget at 7,975 characters.

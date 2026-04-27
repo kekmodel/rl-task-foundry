@@ -146,8 +146,9 @@ class AnswerContract(StrictModel):
             "entity scope, ordering, or tie-breaks. Use [] only when the "
             "request truly has no additional constraint beyond the answer "
             "target. If query.order_by uses tie-break fields, user_request "
-            "must visibly ask for those tie-breaks here. Structural evidence "
-            "is derived from the latest query."
+            "must visibly ask for that secondary order here; merely selecting "
+            "the field as output is not enough. Structural evidence is derived "
+            "from the latest query."
         ),
     )
     limit_phrase: str | None = Field(
