@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_task_foundry.tooling.common.edges import EdgeDirection, TypedEdge, resolve_edge
+from rl_task_foundry.tooling.common.edges import TypedEdge, resolve_edge
 from rl_task_foundry.tooling.common.payload import ensure_int as _require_int
 from rl_task_foundry.tooling.common.schema import TableSpec
 from rl_task_foundry.tooling.common.sql import (
@@ -80,7 +80,6 @@ class _JoinSpec:
 @dataclass(frozen=True, slots=True)
 class _JoinStep:
     edge: TypedEdge
-    source_user_alias: str
     source_sql_alias: str
     destination_sql_alias: str
     destination_table: TableSpec
@@ -453,7 +452,6 @@ def _resolve_join_chain(
         steps.append(
             _JoinStep(
                 edge=edge,
-                source_user_alias=source_alias,
                 source_sql_alias=source_entry.sql_alias,
                 destination_sql_alias=destination_sql_alias,
                 destination_table=destination,
@@ -695,62 +693,6 @@ def _assert_unique_output_name(name: str, names: set[str]) -> None:
     names.add(name)
 
 
-def _referenced_aliases(parsed: _ParsedSpec) -> frozenset[str]:
-    aliases: set[str] = set()
-    if parsed.select is not None:
-        aliases.update(item.ref.alias for item in parsed.select)
-    aliases.update(item.ref.alias for item in parsed.group_by)
-    aliases.update(
-        aggregate.ref.alias
-        for aggregate in parsed.aggregates
-        if aggregate.ref is not None
-    )
-    aliases.update(
-        clause.ref.alias
-        for clause in parsed.order_by
-        if clause.ref is not None
-    )
-    return frozenset(aliases)
-
-
-def _join_warnings(
-    *,
-    parsed: _ParsedSpec,
-    steps: list[_JoinStep],
-) -> list[dict[str, object]]:
-    used_aliases = _referenced_aliases(parsed)
-    reverse_siblings_by_parent: dict[str, list[_JoinStep]] = {}
-    for step in steps:
-        if step.user_alias not in used_aliases:
-            continue
-        if step.edge.direction is not EdgeDirection.REVERSE:
-            continue
-        reverse_siblings_by_parent.setdefault(
-            step.source_user_alias, []
-        ).append(step)
-
-    warnings: list[dict[str, object]] = []
-    for parent_alias, siblings in reverse_siblings_by_parent.items():
-        if len(siblings) < 2:
-            continue
-        warnings.append(
-            {
-                "code": "independent_reverse_sibling_join",
-                "severity": "warning",
-                "parent_alias": parent_alias,
-                "aliases": [step.user_alias for step in siblings],
-                "relation_labels": [step.edge.label for step in siblings],
-                "message": (
-                    "Selected aliases come from separate one-to-many branches "
-                    "of the same parent. A single result row may pair unrelated "
-                    "records. If one selected fact belongs to another event or "
-                    "record, join through that event/record path instead."
-                ),
-            }
-        )
-    return warnings
-
-
 async def query(
     session: ComposerSession,
     *,
@@ -925,17 +867,13 @@ async def query(
     materialized = [
         {column: row[column] for column in output_columns} for row in rows
     ]
-    payload: dict[str, object] = {
+    return {
         "columns": output_columns,
         "column_sources": column_sources,
         "referenced_columns": referenced_columns,
         "rows": materialized,
         "row_count": len(materialized),
     }
-    warnings = _join_warnings(parsed=parsed, steps=steps)
-    if warnings:
-        payload["join_warnings"] = warnings
-    return payload
 
 
 __all__ = ["query"]

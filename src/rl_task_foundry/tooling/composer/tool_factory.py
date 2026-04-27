@@ -583,9 +583,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "and a new alias for the destination table. When one "
                     "answer item combines facts from the same event/record, "
                     "continue joining from that event/record alias; avoid "
-                    "independent sibling joins that merely share the root. "
-                    "Query results may include join_warnings when selected "
-                    "aliases come from separate one-to-many branches."
+                    "independent sibling joins that merely share the root."
                 ),
                 "items": {
                     "type": "object",
