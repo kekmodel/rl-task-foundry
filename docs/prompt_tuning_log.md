@@ -2855,3 +2855,78 @@ Solver 30/30 완료 결과:
   useful evidence that the existing schema map plus join description can guide
   the composer, but it is not evidence that the warning field itself helps.
   Keeping unused warning surface would add API noise without measured benefit.
+
+## Iteration 71 — composer prompt surface ownership cleanup
+
+- **Trigger**:
+  Recent too-easy repairs exposed an instruction ownership problem. The
+  durable difficulty-up behavior was split across system prompt wording,
+  `submit_draft` feedback, and tool-surface summaries. The composer also saw
+  redundant tool descriptions in prompt text even though the Agents SDK already
+  injects callable tools through the API tool channel.
+- **Diagnosis**:
+  `too_easy` should not be handled by adding a new validation heuristic or by
+  expanding feedback text. It is a composer policy issue: feedback should only
+  say the draft needs more specificity and point to the named system policy.
+  The system prompt should own durable strategy; user context should own only
+  current-run facts; SDK tool schema/description should own callable contracts.
+- **Fix**:
+  Reworked the composer system prompt into Codex-style named sections:
+  `# Role`, `# Draft Submission Budget`, `# Workflow`,
+  `# Difficulty-Up Policy`, `# Customer Request`, `# Label Contract`, and
+  `# Task Shapes`. Removed the prompt `# Tools` section and stopped mirroring
+  composer tool names/descriptions into `<environment_context>`, because the
+  SDK sends `FunctionTool` name, description, JSON schema, and strictness via
+  the separate API `tools` payload. Converted user context to a stable
+  `<environment_context>` envelope with nested tags. Shortened too-easy
+  feedback so it references `Difficulty-Up Policy` instead of restating the
+  policy.
+- **Principle captured**:
+  Added the composer surface ownership rule to
+  `docs/spec/pipeline-lifecycle.md`: one textual source of truth per durable
+  policy; no SDK tool-surface mirroring in system/user prompt text; feedback is
+  reactive enforcement only.
+- **Smoke results**:
+  `validate-config` passed. `check-db` passed against pagila as
+  `rlvr_reader`. A no-quota proof vertical slice accepted, committed, and
+  exported a bundle with `solver_pass_rate=0.5` and
+  `registry_status=committed`. During smoke, proof anchor seeding initially
+  logged a read-only permission warning for the ephemeral proof schema; fixed
+  by granting the read-only role `USAGE` on the proof schema and `SELECT` on
+  its tables, then added a regression assertion that the warning does not
+  return.
+- **Real trial attempt**:
+  The operational model policy from Iteration 54 still applies: GPT-5.4 Nano
+  (`openrouter/openai`, Opencode, or direct OpenAI route) is the frequent
+  low-cost experiment model; Kimi K2.5 (`openrouter` or Opencode route) is the
+  higher-quality final confirmation model. A default Nano trial
+  (`artifacts/trial_20260427_sharp_meadow_01`) reached schema snapshotting but
+  failed before composer behavior could be observed because the shell had not
+  loaded the repo-level `.env` (`openrouter/openai/gpt-5.4-nano:
+  AuthenticationError`). After sourcing `/Users/jd/workspace/rl-task-foundry/.env`,
+  the OpenRouter Kimi final-confirmation trial
+  (`artifacts/trial_20260427_sharp_meadow_kimi_openrouter_02`, composer
+  `openrouter/moonshotai/kimi-k2.5`, solver `openrouter/openai/gpt-5.4-nano`)
+  accepted and committed `task_customer_recent_rental_history_85bdb2f442fca725`
+  with `solver_pass_rate=0.9` and CI `[0.7174, 0.9819]`.
+
+  Opencode Kimi needed the provider-native short model name:
+  `opencode_zen/moonshotai/kimi-k2.5` failed provider authentication, while
+  `opencode_zen/kimi-k2.5` succeeded in
+  `artifacts/trial_20260427_sharp_meadow_kimi_opencode_short_01`. This run
+  directly exercised the new policy: the first payment-history draft for
+  customer 248 was rejected as calibration-inconclusive/too easy with
+  `pass_rate=1.0`; the composer then preserved the same anchor, list shape,
+  recent-payment query path, and row set, and added `film_title` through the
+  rental/inventory/film join. The second draft
+  `task_payment_history_with_films_bb2886f28864134a` accepted and committed
+  with `solver_pass_rate=0.55` and CI `[0.3469, 0.7413]`. This is the intended
+  `Difficulty-Up Policy` behavior: a single structural strengthening instead
+  of changing the task or stacking unrelated filters.
+- **Verification**:
+  Prompt/feedback smoke assertions confirmed: `# Difficulty-Up Policy` is
+  present, too-easy feedback points to that policy, the old specificity policy
+  name is absent, prompt `# Tools` is absent, SDK tool surface is not mirrored
+  into user context, and Codex-style `<environment_context>` is preserved.
+  `uv run pytest -q` -> 418 passed. Targeted `ruff check` on touched files
+  passed.
