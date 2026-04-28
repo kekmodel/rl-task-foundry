@@ -4493,3 +4493,18 @@ Solver 30/30 완료 결과:
   prevented these failures from being miscounted as data-quality outcomes. A
   valid Kimi or nano batch is still needed once provider access is healthy or
   the OpenRouter SDK failure is diagnosed.
+
+## Iteration 109 — Default provider route back to Opencode Zen
+
+- **Change**:
+  Repo default `rl_task_foundry.yaml` composer and all 20 solver entries now use
+  `provider: opencode_zen` with the existing frequent-experiment model
+  `openai/gpt-5.4-nano`.
+- **Reason**:
+  User preference is to make Opencode Zen the default route. Kimi remains an
+  explicit high-quality validation override rather than the base config.
+- **Verification**:
+  `load_config("rl_task_foundry.yaml")` resolves composer and all solvers to
+  `opencode_zen/openai/gpt-5.4-nano`. Config-load tests and the real-db trial
+  CLI override summary test passed. `ruff` passed for the touched Python test
+  surfaces.
