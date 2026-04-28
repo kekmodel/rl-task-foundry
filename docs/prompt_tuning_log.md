@@ -5307,3 +5307,35 @@ Solver 30/30 완료 결과:
   composer prompt as durable policy, not in a hard validator, because deciding
   whether natural wording uniquely implies one semantic source is qualitative
   rather than precision-100.
+
+## Iteration 124 — Preserve OpenRouter Kimi reasoning in Agents traces
+
+- **Question**:
+  Did Iteration 123 really prove that Kimi/OpenRouter did not emit reasoning
+  content, or did our Agents SDK path drop it before persistence?
+- **Finding**:
+  Direct OpenRouter chat completion calls to `moonshotai/kimi-k2.5` returned
+  provider-visible reasoning in `message.reasoning` and `reasoning_details`.
+  The Agents SDK `OpenAIChatCompletionsModel` then converted the chat message
+  into `ResponseOutputMessage` items and only promoted `reasoning_content`, not
+  OpenRouter's `reasoning` field, into `ReasoningItem`. The previous
+  `reasoning_content_items=0` observation therefore meant "not exposed through
+  our current SDK item surface", not "the provider did not emit reasoning".
+- **Change**:
+  Added an Agents compatibility wrapper that copies chat-completion
+  `message.reasoning` into `message.reasoning_content` before SDK conversion.
+  The existing sidecar writer can then persist it as `reasoning_content.jsonl`.
+  The raw extractor also now recognizes direct `reasoning` and
+  `reasoning_details` fields if a future SDK exposes them without conversion.
+- **Verification**:
+  A live minimal OpenRouter Kimi call through the patched wrapper produced a
+  `ReasoningItem`, and `extract_raw_reasoning_records` returned one reasoning
+  record.
+
+  `uv run pytest tests/test_sdk_helpers.py tests/test_solver_backend_openai_agents.py tests/test_synthesis_backend_openai_agents.py -q`
+  passed (`31 passed`).
+
+  `uv run ruff check src/rl_task_foundry/infra/sdk_helpers.py src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/solver/backend_openai_agents.py tests/test_sdk_helpers.py`
+  passed.
+
+  `git diff --check` passed.

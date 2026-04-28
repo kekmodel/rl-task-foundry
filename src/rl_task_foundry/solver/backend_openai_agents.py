@@ -12,6 +12,7 @@ from typing import Any, ClassVar
 
 from rl_task_foundry.config.models import ProviderConfig, SolverModelConfig, SolverRuntimeConfig
 from rl_task_foundry.infra.sdk_helpers import (
+    build_reasoning_preserving_chat_completions_model,
     build_reasoning_replay_hook,
     tool_choice_for_model,
 )
@@ -386,7 +387,8 @@ class OpenAIAgentsSolverBackend:
             timeout=float(self.provider_config.timeout_s),
             max_retries=self.provider_config.max_retries,
         )
-        self._model = sdk.OpenAIChatCompletionsModel(
+        self._model = build_reasoning_preserving_chat_completions_model(
+            sdk,
             model=self.solver_config.model,
             openai_client=client,
             should_replay_reasoning_content=build_reasoning_replay_hook(),

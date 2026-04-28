@@ -16,6 +16,51 @@ ToolExecutor = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 ToolInvokeCallback = Callable[[str, dict[str, Any], Any], Any | Awaitable[Any]]
 
 
+def normalize_chat_completion_reasoning_for_agents(response: Any) -> None:
+    """Preserve OpenAI-compatible reasoning fields before Agents conversion.
+
+    The Agents SDK chat-completions converter promotes `reasoning_content` into
+    a `ReasoningItem`, but OpenRouter normalizes thinking output as `reasoning`
+    on the chat message. Copying it into `reasoning_content` keeps the raw
+    provider-visible reasoning available to our sidecar writer without changing
+    model behavior.
+    """
+
+    choices = getattr(response, "choices", None) or []
+    for choice in choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        if getattr(message, "reasoning_content", None):
+            continue
+        reasoning = getattr(message, "reasoning", None)
+        if reasoning:
+            setattr(message, "reasoning_content", reasoning)
+
+
+def build_reasoning_preserving_chat_completions_model(
+    sdk: SimpleNamespace,
+    *,
+    model: str,
+    openai_client: Any,
+    should_replay_reasoning_content: Callable[[Any], bool] | None = None,
+) -> Any:
+    """Build an Agents chat-completions model that preserves OpenRouter reasoning."""
+
+    class ReasoningPreservingChatCompletionsModel(sdk.OpenAIChatCompletionsModel):
+        async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:
+            result = await super()._fetch_response(*args, **kwargs)
+            if not isinstance(result, tuple):
+                normalize_chat_completion_reasoning_for_agents(result)
+            return result
+
+    return ReasoningPreservingChatCompletionsModel(
+        model=model,
+        openai_client=openai_client,
+        should_replay_reasoning_content=should_replay_reasoning_content,
+    )
+
+
 def normalize_tool_result(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -402,7 +447,13 @@ def _is_reasoning_item(item: Any, raw: Any) -> bool:
     raw_type = _dual_attr(raw, "type")
     if raw_type == "reasoning":
         return True
-    for attr in ("reasoning_content", "thinking_blocks", "thinking"):
+    for attr in (
+        "reasoning_content",
+        "reasoning",
+        "reasoning_details",
+        "thinking_blocks",
+        "thinking",
+    ):
         if getattr(raw, attr, None):
             return True
         if isinstance(raw, dict) and raw.get(attr):

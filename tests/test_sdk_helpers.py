@@ -8,6 +8,7 @@ import pytest
 from rl_task_foundry.infra.sdk_helpers import (
     extract_raw_reasoning_records,
     make_sdk_tool,
+    normalize_chat_completion_reasoning_for_agents,
     preview_payload,
 )
 
@@ -229,3 +230,34 @@ def test_extract_raw_reasoning_records_preserves_model_dump_strings() -> None:
             }
         ],
     }
+
+
+def test_normalize_chat_completion_reasoning_for_agents_copies_openrouter_field() -> None:
+    message = SimpleNamespace(reasoning="openrouter reasoning", content="done")
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    normalize_chat_completion_reasoning_for_agents(response)
+
+    assert message.reasoning_content == "openrouter reasoning"
+
+
+def test_extract_raw_reasoning_records_accepts_openrouter_reasoning_field() -> None:
+    raw_message = SimpleNamespace(
+        type="message",
+        reasoning="provider-visible reasoning",
+        content="done",
+    )
+
+    records = extract_raw_reasoning_records([SimpleNamespace(raw_item=raw_message)])
+
+    assert records == [
+        {
+            "run_item_index": 0,
+            "run_item_type": "SimpleNamespace",
+            "raw_item": {
+                "type": "message",
+                "reasoning": "provider-visible reasoning",
+                "content": "done",
+            },
+        }
+    ]
