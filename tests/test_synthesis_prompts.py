@@ -291,6 +291,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "If no primary key" in instructions
     assert "primary-key-backed path" in instructions
     assert "hidden path guessing" in instructions
+    assert "several reachable record surfaces share the same everyday noun" in instructions
+    assert "fix the chosen lifecycle/source role" in instructions
+    assert "do not depend on output_schema field names" in instructions
     assert "# Feedback And Difficulty-Up Policy" in instructions
     assert "not a new durable instruction source" in instructions
     assert "pointer to an existing named policy" in instructions
@@ -349,6 +352,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "source-field-to-related-field upgrade" in instructions
     assert "user_request names that role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
+    assert "Source-sensitive fields" in instructions
+    assert "same source role used by the query path" in instructions
+    assert "Broad entity wording is not enough" in instructions
     assert "Keep output names faithful" in instructions
     assert "do not relabel one surface as another" in instructions
     assert "Vague field words are invalid" in instructions

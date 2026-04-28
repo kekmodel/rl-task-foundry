@@ -5540,6 +5540,61 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 132 — Source-surface ambiguity in medication lists
+
+- **질문**:
+  Iteration 131의 accepted sample 뒤, broad request가 계속 output surface를
+  흐리게 만드는가? 특히 같은 everyday noun이 여러 record surface에 걸쳐 있을 때
+  composer가 선택한 source role을 request에 충분히 고정하는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_post_accept_surface_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 `synthesis_failed`로 끝났다.
+
+  - outcome: `artifact_invalid`
+  - error code: `calibration_inconclusive`
+  - pass rate: `1/8 = 0.125`
+  - CI low/high: `0.0064 / 0.4707`
+  - solver failed runs: `0`
+
+  후보 request는 "이번 입원 기간 동안 투약된 약물 목록"을 묻고, 약물명/처리 유형/
+  투여 경로/복용 주기/시작 시간을 요청했다. canonical query는 `pharmacy` surface의
+  `medication`, `proc_type`, `administration_route`, `frequency`, `starttime`을
+  사용했다. 그러나 7/8 solver는 `prescriptions` surface를 자연스럽게 선택했고,
+  `drug_type`/`doses_per_24_hrs` 쪽 값을 제출했다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 데이터가 어려워서 좋은 문제가 된 것이
+  아니라, request가 선택한 source lifecycle을 고정하지 못했다. MIMIC demo에서
+  "투약/약물/복용 주기/처리 유형"은 pharmacy와 prescriptions 양쪽에서 그럴듯하게
+  해석될 수 있고, 서로 다른 값을 만든다. solver가 prescriptions를 고른 것은
+  비합리적 실패가 아니라 request ambiguity의 증상이다.
+
+  low-quality accepted는 발생하지 않았다. rejection은 바람직하다.
+- **변경**:
+  validator는 추가하지 않았다. 이 ambiguity는 schema/path 의미 해석 문제라
+  precision-100 rule로 구분할 수 없고, DB literal/token heuristic으로 막으면
+  원칙 위반이다.
+
+  대신 prompt-first 원칙에 따라 DB-neutral durable policy를 강화했다.
+
+  - Core Definitions의 Source surface에 "여러 reachable record surface가 같은
+    everyday noun을 공유하면 user_request가 lifecycle/source role을 고정해야 하며
+    output_schema field names에 기대면 안 된다"를 추가했다.
+  - Label Contract에 status/type/category/frequency/stage/route 같은
+    source-sensitive field는 query path와 같은 source role로 묶여야 한다고 추가했다.
+  - 길이 예산을 지키기 위해 기존 중복 문장을 압축했고, budget helper 문구도 같은
+    의미 안에서 줄였다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`12 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py`
+  통과.
+
 ## Iteration 131 — Accepted admission-history smoke
 
 - **질문**:
