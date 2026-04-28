@@ -395,7 +395,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "not generated rank" in instructions
     assert "artificial technical sequence/id/order wording" in instructions
     assert "choose unique ordering, or return tied rows" in instructions
-    assert "never add hidden handles" in instructions
+    assert "Do not shrink limits" in instructions
+    assert "or add hidden handles" in instructions
     assert "date/time granularity" in instructions
 
     # Task shape is domain-agnostic and concise.

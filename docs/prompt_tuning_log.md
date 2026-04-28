@@ -5540,6 +5540,46 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 145 — Duplicate-row repair must not shrink the list
+
+- **질문**:
+  Iteration 144의 list difficulty-up 확장 뒤 단일 smoke에서 duplicate-row/list repair가 안정적인가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_list_difficulty_up_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted되지 않고 `MaxTurnsExceeded`로 끝났다.
+
+  - first feedback: `composer_submit_draft_missing`
+  - second submit: microbiology list, `answer_contract_duplicate_answer_rows`
+  - third submit: microbiology list, `answer_contract_binding_missing`
+  - final failure: `MaxTurnsExceeded`
+
+- **정성 평가**:
+  accepted data: 없음. 저품질 accepted도 없음.
+
+  rejected data: low-quality rejected. 두 번째 submit은 projected answer rows가 중복되어
+  exact answer row를 구분할 수 없었다. 세 번째 submit은 이를 고치려다 list size를 5건에서
+  3건으로 줄이고, query.order_by의 두 번째 order key를 request/order binding에 제대로 묶지
+  못했다. 즉 문제는 어려운 좋은 데이터가 아니라 duplicate-row repair가 list determinism을
+  보존하지 못한 것이다.
+- **변경**:
+  List Determinism Policy와 duplicate-row feedback을 보강했다.
+
+  - duplicate projected answer rows는 natural visible field/aggregate를 추가해서 구분한다.
+  - 중복을 숨기기 위해 limit/list size를 줄이지 않는다.
+  - feedback도 list size를 보존하고 one natural visible distinguishing field or aggregate를
+    추가한 뒤 label query를 다시 실행하고 `submit_draft`하라고 상기한다.
+
+  이 변경은 기존 List Determinism Policy의 repair 절차를 더 명확히 한 것이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_rejects_duplicate_projected_list_rows -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

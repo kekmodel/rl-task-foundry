@@ -2082,7 +2082,7 @@ class SubmitDraftController:
                 "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. If the tie-break is sequence/rank-like, request wording must name source record sequence instead of a generated display rank. Do not repair this with hidden handles or artificial id wording."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
-                "Rejected. Label Contract reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query and submit_draft."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND: (
                 "Rejected. Request Contract reminder: user-visible non-null row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501

@@ -2149,6 +2149,8 @@ async def test_submit_draft_rejects_duplicate_projected_list_rows(
 
     assert "duplicate projected answer rows" in message
     assert "not distinguishable through requested output fields" in message
+    assert "Preserve the list size" in message
+    assert "add one natural visible distinguishing field or aggregate" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_duplicate_answer_rows",
     )
