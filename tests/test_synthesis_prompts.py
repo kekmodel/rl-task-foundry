@@ -311,7 +311,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "whole parent-context, list, or history requests" in instructions
     assert "not one child event/record unless asked" in instructions
     assert "Do not attach `entity` to a global report" in instructions
-    assert "latest query evidence is scoped" in instructions
+    assert "Never invent visible context values" in instructions
+    assert "latest scoped query evidence" in instructions
     assert "do not expose that handle" in instructions
     assert "multiple relationship roles" in instructions
     assert "sibling tables" in instructions

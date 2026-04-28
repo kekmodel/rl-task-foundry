@@ -1916,6 +1916,90 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_duplicate_projected_list_rows(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="procedures",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"stay_id": 30913302}
+    label = [
+        {
+            "procedure_name": "Invasive Ventilation",
+            "start_time": "2187-05-18T18:30:00",
+        },
+        {"procedure_name": "18 Gauge", "start_time": "2187-05-18T18:45:00"},
+        {"procedure_name": "18 Gauge", "start_time": "2187-05-18T18:45:00"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "procedures",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "시술 내역 3개를 시작 시간 순서로 보여주세요.",
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="시술 내역",
+                limit_phrase="3개",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "procedureevents",
+                "column": "starttime",
+                "direction": "asc",
+            }
+        ],
+        query_params={
+            "spec": {
+                "limit": 3,
+                "where": [{"value": 30913302}],
+                "order_by": [{"output": "start_time", "direction": "asc"}],
+            }
+        },
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 3,
+                "order_by_outputs": ["start_time"],
+                "returned_row_count": 3,
+            },
+            "projection_diagnostics": {
+                "duplicate_answer_rows": True,
+                "duplicate_answer_row_groups": [[1, 2]],
+                "unique_answer_row_count": 2,
+                "returned_row_count": 3,
+            },
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "duplicate projected answer rows" in message
+    assert "not distinguishable through requested output fields" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_duplicate_answer_rows",
+    )
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_multirow_list_without_order_by(
     tmp_path: Path,
 ) -> None:

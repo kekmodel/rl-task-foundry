@@ -65,6 +65,9 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_EVIDENCE_MISMATCH = "answer_contract_evidence_mismatch"
     ANSWER_CONTRACT_QUERY_MISMATCH = "answer_contract_query_mismatch"
     ANSWER_CONTRACT_ORDER_AMBIGUOUS = "answer_contract_order_ambiguous"
+    ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS = (
+        "answer_contract_duplicate_answer_rows"
+    )
     ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED = (
         "answer_contract_hidden_filter_unanchored"
     )
@@ -100,6 +103,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS,
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
         SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING,
@@ -1045,6 +1049,16 @@ def _query_ordering_is_ambiguous(query_result: dict[str, object]) -> bool:
     )
 
 
+def _query_projection_has_duplicate_answer_rows(
+    query_result: dict[str, object],
+) -> bool:
+    diagnostics = query_result.get("projection_diagnostics")
+    return (
+        isinstance(diagnostics, dict)
+        and diagnostics.get("duplicate_answer_rows") is True
+    )
+
+
 def _unanchored_hidden_filter_sources(
     query_result: dict[str, object],
     *,
@@ -1570,6 +1584,16 @@ class SubmitDraftController:
                 invalid_diagnostics["ordering_diagnostics"] = latest_query_result.get(
                     "ordering_diagnostics"
                 )
+            if (
+                payload.answer_contract.kind == "list"
+                and _query_projection_has_duplicate_answer_rows(latest_query_result)
+            ):
+                error_codes.append(
+                    SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS
+                )
+                invalid_diagnostics["projection_diagnostics"] = latest_query_result.get(
+                    "projection_diagnostics"
+                )
 
         # After a too-easy rejection, require an answer change that is
         # visible to exact label verification.
@@ -1927,6 +1951,9 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
                 "Rejected. List Determinism Policy violation: the latest list query does not uniquely determine the submitted order or limited row membership for exact verification. Apply that policy to the current query/order evidence before resubmitting."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
+                "Rejected. Label Contract violation: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Add a natural user-visible distinguishing field, aggregate duplicates, or choose another grounded task; never add hidden handles."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. The latest query filters on a blocked handle value that is not present in entity. Put required hidden scope handles in entity or rerun the query using the submitted entity's handle."  # noqa: E501

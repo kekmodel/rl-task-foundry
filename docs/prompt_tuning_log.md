@@ -4776,3 +4776,79 @@ Solver 30/30 완료 결과:
   Python files. The broader focused query/runtime command printed `50 passed`;
   as in earlier runs, the pytest process did not exit after printing the pass
   result and was killed after the result was visible.
+
+## Iteration 116 — Eight-solver experiment batch and duplicate-row feedback
+
+- **Question**:
+  Can a cheaper five-trial `mimiciv_demo` batch with only eight Kimi solver
+  rollouts still expose the next data-quality failure modes?
+- **Setup**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_openrouter_kimi_8solver_no_topic_batch5_01`.
+  Temporary per-trial configs used `openrouter/moonshotai/kimi-k2.5` for
+  composer and solver, no topic hint, `max_solver_runs=8`,
+  `solver_batch_size=4`, and provider concurrency `1`. The repo default
+  rollout count was not changed.
+- **Raw result**:
+  Five quality samples, no provider failures. Accepted: 2 (`trial_04`,
+  `trial_05`). Failed: 3 (`trial_01`, `trial_02`, `trial_03`).
+
+  The lower rollout count is useful for fast experiments but weakens the
+  automatic gate: `trial_01` ended `0/8` and `trial_02` ended `1/8`, yet both
+  were `calibration_inconclusive` rather than a decisive too-hard rejection
+  because the confidence interval was still too wide.
+- **Accepted data audit**:
+  `trial_04` is low-quality accepted. The anchored admission evidence has
+  `admittime=2180-06-26T18:27:00`, but the submitted user request says
+  `2118년 6월 26일`. The query and label answer the hidden `hadm_id`, but the
+  visible customer context value is hallucinated. This should be handled
+  prompt-first; parsing and comparing natural-language dates would not be a
+  precision-100 validator.
+
+  `trial_05` is low-quality accepted. The accepted task asks for ICU procedure
+  rows with only `procedure_name` and `start_time`. The label contains two
+  identical rows: `18 Gauge` at `2187-05-18T18:45:00`. The query tool already
+  exposes this exact condition through `projection_diagnostics`, and the shared
+  prompt already says list rows should be distinguishable through requested
+  output fields.
+- **Rejected/failed data audit**:
+  `trial_01` is hard-good rejected/inconclusive. The final medication
+  administration task is grounded, scoped to the hidden subject, asks for
+  visible tie-breaks, and has a deterministic final query, but Kimi solvers
+  matched `0/8`.
+
+  `trial_02` is hard-good rejected/inconclusive. The final admission medication
+  task is similarly grounded and solvable through the tool surface, but matched
+  `1/8`. It demonstrates that the eight-rollout setting is a fast probe, not a
+  strong statistical accept/reject gate.
+
+  `trial_03` is low-quality rejected. The composer first labeled patient
+  demographics for a medication/fluid request, then repeatedly failed phrase
+  and query-contract requirements before budget exhaustion. The bad draft did
+  not reach solver calibration.
+- **Change**:
+  Strengthened the Customer Request prompt rule to forbid invented visible
+  context values: dates, names, statuses, and places must be copied only from
+  latest scoped query evidence.
+
+  Added `answer_contract_duplicate_answer_rows` feedback. For list drafts, if
+  the latest `query` reports `projection_diagnostics.duplicate_answer_rows`,
+  `submit_draft` now rejects with a Label Contract reminder to add a natural
+  user-visible distinguishing field, aggregate duplicates, or choose another
+  grounded task. This is not a new durable instruction source; it enforces the
+  existing prompt rule with exact query diagnostics.
+- **Why this follows the principles**:
+  The duplicate-row feedback uses only structured query evidence generated from
+  the submitted draft's latest query. It does not inspect DB literals, table
+  names, column-name tokens, model behavior, or precomputed domain-specific
+  strings. The wrong-date failure remains prompt-only because a hard
+  natural-language date validator would require non-precision-100 parsing
+  heuristics.
+- **Verification**:
+  Prompt instructions render at `7961` characters. Focused tests passed for
+  duplicate projected rows, ambiguous list order, hidden tie-break rejection,
+  synthesis prompts, and composer query projection diagnostics (`5 passed`
+  total across the two pytest commands). Ruff passed for touched source and
+  test files. As in earlier focused runtime tests, one pytest process printed
+  `3 passed` and then did not exit; it was killed after the pass result was
+  visible.
