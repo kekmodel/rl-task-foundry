@@ -108,6 +108,7 @@ class TrialEventLogger:
             for record in records:
                 handle.write(json.dumps(record, ensure_ascii=False, default=str))
                 handle.write("\n")
+            handle.flush()
         return path
 
     def close(self) -> None:

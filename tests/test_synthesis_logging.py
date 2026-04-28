@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from rl_task_foundry.infra.event_log import TrialEventLogger
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.pipeline_events import PipelineFlowLogger
 
@@ -53,3 +54,20 @@ def test_pipeline_flow_logger_reuses_file_handle(tmp_path: Path) -> None:
     assert first_handle is second_handle
     lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert [line["status"] for line in lines] == ["started", "completed"]
+
+
+def test_trial_event_logger_flushes_sidecar_records_immediately(tmp_path: Path) -> None:
+    logger = TrialEventLogger(tmp_path / "trial_events.jsonl")
+
+    sidecar = logger.write_sidecar_jsonl(
+        "reasoning_content.jsonl",
+        [{"actor": "composer", "raw_item": {"type": "reasoning"}}],
+    )
+
+    assert sidecar == tmp_path / "reasoning_content.jsonl"
+    lines = sidecar.read_text(encoding="utf-8").splitlines()
+    assert json.loads(lines[0]) == {
+        "actor": "composer",
+        "raw_item": {"type": "reasoning"},
+    }
+    logger.close()

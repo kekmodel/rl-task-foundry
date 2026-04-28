@@ -319,9 +319,11 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not attach `entity` to a global report" in instructions
     assert "Copy visible context values" in instructions
     assert "latest scoped query evidence" in instructions
-    assert "Keep the request realistic and compact" in instructions
-    assert "long tie-break ladder" in instructions
-    assert "mechanical field enumeration" in instructions
+    assert "Keep request realistic/compact" in instructions
+    assert "Field keys stay in JSON" in instructions
+    assert "avoid schema-like aliases in parentheses" in instructions
+    assert "long tie-breaks" in instructions
+    assert "mechanical field lists" in instructions
     assert "do not expose it" in instructions
     assert "exact object/scope/source" in instructions
     assert not re.search(r"[가-힣]", instructions)
@@ -339,7 +341,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "copy label values from latest successful `query(spec)` result" in instructions
     assert "Do not reformat" in instructions
     assert "unrelated global answer is invalid" in instructions
-    assert "user-visible non-handle values" in instructions
+    assert "semantic API-style field names" in instructions
+    assert "not raw DB aliases" in instructions
+    assert "values stay user-visible non-handles" in instructions
     assert "Bind answer representation exactly" in instructions
     assert "no code/reference-to-display" in instructions
     assert "source-field-to-related-field upgrade" in instructions

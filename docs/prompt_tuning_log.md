@@ -5360,3 +5360,114 @@ Solver 30/30 완료 결과:
 - **Verification**:
   `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
   passed (`12 passed`).
+
+## Iteration 126 — Keep DB aliases out of customer requests
+
+- **Question**:
+  After source ambiguity policy, does a single MIMIC demo smoke reveal remaining
+  composer-quality failures that are not solver failures?
+- **Experiment**:
+  Ran one no-topic MIMIC demo smoke with OpenRouter Kimi K2.5 composer/solver,
+  eight solver rollouts, and solver batch size four:
+  `artifacts/trial_20260429_mimiciv_demo_source_ambiguity_kimi_8solver_no_topic_smoke_02`.
+
+  The trial accepted at `7/8 = 0.875` pass rate. The first draft was correctly
+  rejected for an unrepresented hidden order tie-break. Composer then replaced
+  hidden `orderid` ordering with visible `endtime` and `ordercategoryname`
+  controls, so list determinism was not the remaining issue.
+- **Reasoning audit**:
+  Preserved composer reasoning showed the model found a plausible ICU procedure
+  row set and noticed duplicate projected rows. It then made the rows
+  distinguishable by adding visible fields and, after feedback, repaired hidden
+  ordering.
+
+  The remaining quality flaw was in the customer/request surface: the accepted
+  Korean request leaked schema-like aliases such as `Duration` and `Location`
+  in parentheses, and the label used raw-source-style field keys where natural
+  semantic output names were available. This is a composer request/label surface
+  problem, not a solver-tool problem.
+- **Change**:
+  Tightened the prompt only:
+
+  - Request Contract: field keys stay in JSON, not request text; avoid
+    schema-like aliases in parentheses.
+  - Label Contract: use semantic API-style field names, not raw DB aliases.
+
+  This stays within the prompt-first principle. No hard validator was added
+  because identifying "DB-ish" wording is qualitative and not precision-100
+  without forbidden literal heuristics.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  passed (`12 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py`
+  passed.
+
+## Iteration 127 — Alias-surface smoke and incremental feedback reminder
+
+- **Question**:
+  Does the request/field-surface prompt cleanup make the next no-topic MIMIC
+  smoke produce more natural user text and semantic label fields?
+- **Experiment**:
+  Ran one no-topic MIMIC demo smoke with OpenRouter Kimi K2.5 composer/solver,
+  eight solver rollouts, and solver batch size four:
+  `artifacts/trial_20260429_mimiciv_demo_alias_surface_kimi_8solver_no_topic_smoke_01`.
+
+  The first draft used a natural Korean request without schema aliases:
+  `내 중환자실 입원 기간 동안 기록된 배출량 5건을 최신순으로 보여주세요.`
+  Its label fields were semantic API-style names:
+  `output_volume`, `unit`, `recorded_time`, `stored_time`.
+
+  This confirms the Iteration 126 prompt direction for the sampled case.
+- **Outcome**:
+  The trial still ended `synthesis_failed`, not because the data was low
+  quality, but because every solver matched the candidate (`8/8 = 1.0`) and the
+  quality gate treated it as too easy / calibration-inconclusive.
+
+  Retry timeline:
+
+  - submit 1: `calibration_inconclusive`, pass rate `1.0`.
+  - submit 2: `answer_contract_not_incremental`, replaced `stored_time` with
+    an output-type field.
+  - submit 3: `answer_contract_not_incremental`, again replaced `stored_time`
+    with a measurement-name field.
+  - submit 4: `answer_contract_binding_missing`, kept more fields but omitted
+    required order binding coverage.
+  - submit 5: preserved the prior four fields and added `care_unit`, but solver
+    pass rate was still `1.0`, so the attempt exhausted on calibration.
+- **Reasoning audit**:
+  Composer reasoning after feedback showed it understood the high-level rule
+  late: it explicitly concluded it had to preserve
+  `output_volume`, `unit`, `recorded_time`, and `stored_time`, then add only
+  `care_unit`. The wasted retries happened before that realization, when it
+  interpreted "add specificity" as replacing one existing output source with a
+  different related source.
+
+  This is a feedback-reminder issue, not a new durable policy gap. The durable
+  prompt already says list feedback should keep filters/order/limit/row set and
+  output source meanings, then append exactly one user-visible field.
+- **Change**:
+  Tightened the `answer_contract_not_incremental` feedback reminder so it points
+  back to the existing Difficulty-Up Policy more concretely: list retries must
+  keep every prior output field/source and prior order binding, then append
+  exactly one grounded user-visible field or tie-break.
+
+  Also made `TrialEventLogger.write_sidecar_jsonl` explicitly flush sidecar
+  writes. This does not make composer reasoning available before an Agents SDK
+  run segment returns, but it prevents sidecar buffering once reasoning records
+  are handed to our logger.
+- **Qualitative audit**:
+  Accepted data: none.
+
+  Rejected/failed data: hard-good but too easy. Solvers could solve it reliably
+  with the available tools; the final draft was clean and naturally phrased, but
+  below the intended difficulty band. This is not low-quality accepted data.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract tests/test_synthesis_runtime.py::test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline tests/test_synthesis_logging.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  passed (`17 passed`).
+
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_too_easy_rejects_renamed_same_scalar_value -q`
+  passed.
+
+  `uv run ruff check src/rl_task_foundry/infra/event_log.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_logging.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  passed.

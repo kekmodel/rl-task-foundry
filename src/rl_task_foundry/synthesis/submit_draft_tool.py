@@ -1994,6 +1994,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
+                " For list retries, keep every prior output field/source and prior order binding, then append exactly one grounded user-visible field or tie-break."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. Tool schema reminder: submit_draft arguments did "

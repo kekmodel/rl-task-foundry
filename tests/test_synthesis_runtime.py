@@ -2717,6 +2717,7 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
     assert "Difficulty-Up Policy reminder" in second_message
     assert "preserving the evaluated task" in second_message
     assert "one grounded strengthening" in second_message
+    assert "keep every prior output field/source" in second_message
     assert controller.accepted_draft is None
 
 
@@ -2880,6 +2881,7 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     assert "Difficulty-Up Policy reminder" in second_message
     assert "preserving the evaluated task" in second_message
     assert "one grounded strengthening" in second_message
+    assert "keep every prior output field/source" in second_message
     drifted_label = [
         {
             **row,
