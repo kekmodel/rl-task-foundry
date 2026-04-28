@@ -928,9 +928,11 @@ def _ordering_diagnostics(
 ) -> dict[str, object] | None:
     answer_outputs = list(rows[0]) if rows else []
     diagnostic_rows = diagnostic_rows or rows
-    if parsed.limit is None or len(rows) <= 1:
+    if len(rows) <= 1:
         return None
     if not parsed.order_by:
+        if parsed.limit is None:
+            return None
         if not _has_answer_distinguishable_ties(
             rows,
             [],
@@ -959,11 +961,15 @@ def _ordering_diagnostics(
         order_entries,
         answer_outputs=answer_outputs,
     )
-    limit_boundary_tie = _limit_boundary_has_answer_distinguishable_tie(
-        diagnostic_rows,
-        limit=parsed.limit,
-        order_outputs=order_signature_outputs,
-        answer_outputs=answer_outputs,
+    limit_boundary_tie = (
+        _limit_boundary_has_answer_distinguishable_tie(
+            diagnostic_rows,
+            limit=parsed.limit,
+            order_outputs=order_signature_outputs,
+            answer_outputs=answer_outputs,
+        )
+        if parsed.limit is not None
+        else False
     )
     diagnostic_returned_rows = diagnostic_rows[: len(rows)]
     duplicate_order_key = (
@@ -985,8 +991,9 @@ def _ordering_diagnostics(
         diagnostics: dict[str, object] = {
             "order_by_outputs": order_outputs,
             "returned_row_count": len(rows),
-            "limit": parsed.limit,
         }
+        if parsed.limit is not None:
+            diagnostics["limit"] = parsed.limit
         if duplicate_order_key:
             diagnostics["duplicate_order_key_in_returned_rows"] = True
         if unrepresented_tie_breakers:
@@ -1000,8 +1007,9 @@ def _ordering_diagnostics(
         "order_by_outputs": order_outputs,
         "duplicate_order_key_in_returned_rows": duplicate_order_key,
         "returned_row_count": len(rows),
-        "limit": parsed.limit,
     }
+    if parsed.limit is not None:
+        diagnostics["limit"] = parsed.limit
     if unrepresented_tie_breakers:
         diagnostics["unrepresented_order_by_tie_breakers"] = unrepresented_tie_breakers
     if limit_boundary_tie:

@@ -4703,3 +4703,76 @@ Solver 30/30 완료 결과:
   `25 passed`; as in earlier runs, the pytest process did not exit after
   completion and was terminated after the pass result was visible. Ruff passed
   for the touched source and test files.
+
+## Iteration 115 — OpenRouter Kimi no-topic batch and exact low-quality guards
+
+- **Question**:
+  With OpenRouter Kimi as the default composer/solver route and no injected
+  topic, does a five-trial `mimiciv_demo` batch produce clean accepted data?
+- **Setup**:
+  The first batch root
+  `artifacts/trial_20260428_mimiciv_demo_openrouter_kimi_no_topic_batch5_01`
+  was aborted as invalid because it was generated from the default Pagila config
+  instead of `rl_task_foundry.mimiciv_demo.yaml`.
+
+  The valid batch root was
+  `artifacts/trial_20260428_mimiciv_demo_openrouter_kimi_no_topic_batch5_02`,
+  using `openrouter/moonshotai/kimi-k2.5`, no topic hint, one solver model
+  template, and `max_solver_runs=20`. The original trial 4 process hung in the
+  provider/SDK path and was killed; it is an infra sample only. The retried
+  `trial_04_retry_01` completed and is the quality sample.
+- **Raw result**:
+  Valid quality samples: 5. Accepted: 4 (`trial_01`, `trial_02`,
+  `trial_03`, `trial_04_retry_01`). Rejected: 1 (`trial_05`). Excluded infra:
+  original `trial_04`.
+- **Accepted data audit**:
+  `trial_01` is low-quality accepted. The final query returned a full ICU
+  procedure list ordered by `starttime` plus hidden `orderid`, but the request
+  only asked for time ordering. Three rows shared the same procedure time, so
+  exact answer order depended on an unrequested handle. The same accepted
+  draft also used fake binding phrases such as `_category_`, `_status_`, and
+  `_location_` for fields not literally requested.
+
+  `trial_02` is borderline accepted. The final admission-history task is
+  answerable and the accepted data is structurally reasonable, but the composer
+  abandoned an earlier prescription-history path after order-ambiguity feedback.
+  That is a recovery hygiene concern, not a final row-set defect.
+
+  `trial_03` is clean accepted. The output-record task preserved the admission
+  scope, made the extra record-time field explicit after an over-easy draft, and
+  accepted at `17/20 = 0.85`.
+
+  `trial_04_retry_01` is clean accepted. The final ICU medication/fluid list
+  asks for the returned fields, has no observed same-time tie in the top five,
+  and accepted at `5/8 = 0.625`.
+- **Rejected data audit**:
+  `trial_05` is low-quality rejected. The pharmacy task was too wide and
+  included indistinguishable duplicate medication rows plus a null medication
+  name. The gate rejected it at `1/20 = 0.05`, so this did not become
+  low-quality accepted data.
+- **Change**:
+  Extended composer `query` ordering diagnostics beyond limited lists. Any
+  ordered multi-row query can now report duplicate order keys or unrepresented
+  hidden/handle tie-breakers. `limit_boundary_tie` remains limited-list only.
+
+  Enforced the existing answer-contract phrase rule for
+  `output_bindings[*].requested_by_phrase` and
+  `order_bindings[*].requested_by_phrase`, not only answer/constraint/limit
+  phrases. A submitted binding phrase must be an exact substring copied from
+  `user_request`.
+
+  Added `artifacts/tmp_configs/trial_*/` to `.gitignore` so per-trial config
+  directories do not appear as untracked files.
+- **Why this follows the principles**:
+  Both guards are precision-100 structural checks. They use only the latest
+  query result/order metadata and the submitted request/contract strings. No
+  DB literals, table-name heuristics, column-name heuristics, or model-specific
+  assumptions were added.
+- **Verification**:
+  Re-running the exact final `trial_01` query against `mimiciv_demo` now
+  reports `unrepresented_order_by_tie_breakers` for `procedureevents.orderid`.
+  Focused query diagnostics tests passed (`4 passed`), focused answer-contract
+  phrase/binding tests passed (`4 passed`), and `ruff` passed for touched
+  Python files. The broader focused query/runtime command printed `50 passed`;
+  as in earlier runs, the pytest process did not exit after printing the pass
+  result and was killed after the result was visible.

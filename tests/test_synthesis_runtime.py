@@ -1507,6 +1507,46 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
     assert controller.accepted_draft is None
 
 
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_binding_phrase_absent_from_request(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = _accepted_payload()
+    raw_payload = payload.model_dump(mode="json")
+    raw_payload["answer_contract"] = {
+        **raw_payload["answer_contract"],
+        "output_bindings": [
+            {
+                "label_field": "customer_count",
+                "requested_by_phrase": "_customer_count_",
+            }
+        ],
+    }
+    payload = SubmitDraftPayload.model_validate(raw_payload)
+    _record_query_evidence(
+        controller,
+        payload.label,
+        answer_contract=payload.answer_contract,
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Every answer_contract phrase" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
+    assert controller.accepted_draft is None
+
+
 def test_submit_draft_reports_malformed_answer_contract_as_feedback(
     tmp_path: Path,
 ) -> None:

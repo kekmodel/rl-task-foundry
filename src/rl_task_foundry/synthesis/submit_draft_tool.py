@@ -684,6 +684,20 @@ def _contract_component_phrase_errors(
         (f"constraint_phrases[{index}]", phrase)
         for index, phrase in enumerate(contract.constraint_phrases)
     )
+    components.extend(
+        (
+            f"output_bindings[{index}].requested_by_phrase",
+            binding.requested_by_phrase,
+        )
+        for index, binding in enumerate(contract.output_bindings or [])
+    )
+    components.extend(
+        (
+            f"order_bindings[{index}].requested_by_phrase",
+            binding.requested_by_phrase,
+        )
+        for index, binding in enumerate(contract.order_bindings or [])
+    )
     for path, phrase in components:
         if phrase is not None and not _phrase_is_in_request(
             phrase=phrase,
@@ -1900,7 +1914,7 @@ class SubmitDraftController:
                 "Rejected. answer_contract must be a valid JSON object with kind, answer_phrase, constraint_phrases, and limit_phrase. Do not paste query result JSON or SQL structure into answer_contract. Do not pass a malformed JSON string; pass a complete object whose brackets and list items are closed."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING: (
-                "Rejected. Every answer_contract phrase must be an exact contiguous substring copied from user_request. Write the user_request wording first, then paste the exact same words into answer_phrase, constraint_phrases, and limit_phrase."  # noqa: E501
+                "Rejected. Every answer_contract phrase must be an exact contiguous substring copied from user_request. Write the user_request wording first, then paste the exact same words into answer_phrase, constraint_phrases, limit_phrase, output_bindings, and order_bindings."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING: (
                 "Rejected. Call query immediately before submit_draft; the canonical label must be copied from the latest successful query result."  # noqa: E501

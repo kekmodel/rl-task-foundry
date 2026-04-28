@@ -622,6 +622,74 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
 
 
 @pytest.mark.asyncio
+async def test_query_reports_unrepresented_order_by_tie_breaker_without_limit():
+    session, _ = _stub_session(
+        rows=[
+            {"first_name": "ALICE", "store_id": 1, "__rtf_order_1": 2},
+            {"first_name": "ALICE", "store_id": 2, "__rtf_order_1": 1},
+            {"first_name": "BOB", "store_id": 1, "__rtf_order_1": 3},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [
+                _select("c", "first_name"),
+                _select("c", "store_id"),
+            ],
+            "order_by": [
+                _order_ref("c", "first_name", "asc"),
+                _order_ref("c", "customer_id", "desc"),
+            ],
+        },
+    )
+
+    assert result["ordering_diagnostics"] == {
+        "order_by_outputs": ["first_name"],
+        "unrepresented_order_by_tie_breakers": [
+            {
+                "table": "customer",
+                "column": "customer_id",
+                "direction": "desc",
+                "is_handle": True,
+            }
+        ],
+        "returned_row_count": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_query_reports_duplicate_order_key_without_limit():
+    session, _ = _stub_session(
+        rows=[
+            {"customer_id": 1, "first_name": "ALICE"},
+            {"customer_id": 2, "first_name": "ALICE"},
+            {"customer_id": 3, "first_name": "BOB"},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [
+                _select("c", "customer_id"),
+                _select("c", "first_name"),
+            ],
+            "order_by": [_order_ref("c", "first_name", "asc")],
+        },
+    )
+
+    assert result["ordering_diagnostics"] == {
+        "order_by_outputs": ["first_name"],
+        "duplicate_order_key_in_returned_rows": True,
+        "returned_row_count": 3,
+    }
+
+
+@pytest.mark.asyncio
 async def test_query_does_not_reject_unrepresented_visible_tie_breaker():
     session, _ = _stub_session(
         rows=[
