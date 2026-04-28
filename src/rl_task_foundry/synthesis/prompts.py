@@ -137,10 +137,10 @@ def build_synthesis_agent_instructions(
         "Visible ties must be returned, naturally distinguished, aggregated, or "
         "avoided; never rely on hidden ids/order/filters.\n"
         "- Source surface: user wording, label fields, and query path name the "
-        "same concept/role. If a concept has several roles or sibling surfaces, "
-        "bind selected role or choose another. If no primary key, do not "
-        "expose row values; use a primary-key-backed path or "
-        "aggregate; no hidden path guessing.",
+        "same concept/role. If one phrase can map to several roles/surfaces "
+        "with different values, name chosen source in "
+        "request/contract or choose another label. If no primary key, use a "
+        "primary-key-backed path or aggregate; no hidden path guessing.",
 
         "# Request Contract\n"
         "Write only the customer's request body in the configured target "
@@ -160,9 +160,9 @@ def build_synthesis_agent_instructions(
         "- Keep the request realistic and compact. If exact controls need a "
         "long tie-break ladder, technical sequence wording, or mechanical "
         "field enumeration, choose a more naturally requestable label.\n"
-        "- Bind modifiers to exact object/scope. If parent and child rows can "
-        "match a phrase, name the surface; avoid child-row-filter wording "
-        "unless the query uses it.",
+        "- Bind modifiers to exact object/scope/source. If parent and child "
+        "rows can match a phrase, name the surface; avoid child-row-filter "
+        "wording unless the query uses it.",
 
         "# Label Contract\n"
         "Label is the structured result that answers `user_request`, not final "
@@ -182,9 +182,10 @@ def build_synthesis_agent_instructions(
         "- Bind answer representation exactly: no code/reference-to-display or "
         "source-field-to-related-field upgrade unless user_request names that "
         "role/representation; multiple answer surfaces are valid.\n"
-        "- Keep output names faithful to source meaning; do not relabel "
-        "note/comment/description text as result/status/value unless request "
-        "names that surface; multiple answer columns are plausible.\n"
+        "- Keep output names faithful to source meaning; do not relabel one "
+        "surface as another unless request names that role. Vague field words "
+        "are invalid when several reachable sources could answer them; "
+        "multiple columns are plausible.\n"
         "- `query.select` includes only returned label fields; every selected "
         "field becomes exact answer. Use `where`/`order_by` for context, "
         "filters, sorting. Do not select helper values unless user asks.\n"

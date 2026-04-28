@@ -5339,3 +5339,24 @@ Solver 30/30 완료 결과:
   passed.
 
   `git diff --check` passed.
+
+## Iteration 125 — Source ambiguity prompt policy
+
+- **Question**:
+  What should change after Iteration 123 showed a rejected MIMIC medication task
+  where the same everyday word could point to two reachable data surfaces with
+  different values?
+- **Change**:
+  Tightened the composer system prompt's `Source surface` and label wording
+  rules. If one user phrase can map to several roles or source surfaces with
+  different values, the composer must name the chosen source in the
+  `user_request`/`answer_contract` or choose another label. It must also avoid
+  relabeling one surface as another unless the request names that role; vague
+  field words are invalid when several reachable sources could answer them.
+
+  This is intentionally prompt policy only. Natural-language source ambiguity is
+  qualitative and cannot be rejected with a precision-100 validator without
+  sneaking in DB-specific literal heuristics.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  passed (`12 passed`).

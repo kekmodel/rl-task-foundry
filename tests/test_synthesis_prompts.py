@@ -286,6 +286,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Core Definitions" in instructions
     assert "Source surface" in instructions
     assert "user wording, label fields, and query path" in instructions
+    assert "one phrase can map to several roles/surfaces" in instructions
+    assert "name chosen source in request/contract" in instructions
     assert "If no primary key" in instructions
     assert "primary-key-backed path" in instructions
     assert "hidden path guessing" in instructions
@@ -321,8 +323,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "long tie-break ladder" in instructions
     assert "mechanical field enumeration" in instructions
     assert "do not expose it" in instructions
-    assert "several roles or sibling surfaces" in instructions
-    assert "selected role" in instructions
+    assert "exact object/scope/source" in instructions
     assert not re.search(r"[가-힣]", instructions)
 
     # Label and contract rules preserve exact verifiability.
@@ -345,8 +346,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "user_request names that role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
     assert "Keep output names faithful" in instructions
-    assert "note/comment/description text" in instructions
-    assert "multiple answer columns are plausible" in instructions
+    assert "do not relabel one surface as another" in instructions
+    assert "Vague field words are invalid" in instructions
+    assert "several reachable sources" in instructions
+    assert "multiple columns are plausible" in instructions
     assert "`query.select` includes only returned label fields" in instructions
     assert "every selected field becomes exact answer" in instructions
     assert "distinguishable through requested output fields" in instructions
