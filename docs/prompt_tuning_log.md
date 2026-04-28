@@ -3653,3 +3653,49 @@ Solver 30/30 완료 결과:
   and related checks passed:
   `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py -q`
   (`69 passed`). Ruff passed on the changed source and test files.
+
+## Iteration 93 — Kimi batch-five difficulty-up policy smoke
+
+- **Run**:
+  `artifacts/trial_20260428_mimiciv_demo_kimi_batch5_parallel_diffup_01`, DB
+  `mimiciv_demo`, topic `input_events`, composer and solver
+  `openrouter/moonshotai/kimi-k2.5`, five trials in parallel. Each trial used
+  DB pools `solver=8`, `control=2`, OpenRouter concurrency `2`, pass band
+  `[0.2, 0.9]`, `max_solver_runs=20`, `solver_batch_size=4`, and
+  `safe_early_termination=true`.
+- **Aggregate**:
+  `4/5` accepted, `0` duplicates, `1` synthesis failure. Accepted trials were
+  trial 1 at `5/8 = 0.625`, trial 2 at `17/20 = 0.85`, trial 3 at
+  `8/12 = 0.6667`, and trial 5 at `18/20 = 0.9`. No trial ended with
+  `answer_contract_not_incremental`; the run therefore did not reproduce the
+  previous too-easy retry shape-drift failure.
+- **Feedback path read**:
+  Initial feedbacks were ordinary structural issues:
+  `label_values_not_grounded` / `answer_contract_evidence_mismatch` in trial 1,
+  `answer_contract_order_ambiguous` in trial 2,
+  `answer_contract_phrase_missing` in trial 3, and
+  `answer_contract_query_mismatch` plus `answer_contract_order_ambiguous` in
+  trial 5. Each accepted trial recovered without violating the new incremental
+  retry policy.
+- **Failed-trial quality read**:
+  Trial 4 is low-quality, not merely difficult. It failed at `0/12` with
+  `reject_too_hard`, but the data shows an unrequested visible tie-break. The
+  user request asked for the latest five medication/fluid input records in
+  latest-time order. The accepted canonical query sorted by
+  `starttime DESC, item_name ASC`, while the request and `answer_contract`
+  did not ask for item-name tie-breaking. A DB cross-check for `stay_id=30057454`
+  shows the first two rows share `starttime=2171-11-18T17:53:00`; ordering by
+  `starttime DESC` returns `Potassium Chloride` before `KCL (Bolus)`, while
+  ordering by `starttime DESC, item_name ASC` returns `KCL (Bolus)` before
+  `Potassium Chloride`. Solver rollouts consistently found the same row set but
+  submitted the start-time-only order, so exact matching reported `0/12`.
+- **Interpretation**:
+  The difficulty-up tightening did not regress the batch and likely helped keep
+  retries cleaner, but this run is not a direct live proof of the too-easy
+  recovery path because no trial crossed above the current upper band. The next
+  issue is visible-but-unrequested tie-breaks. The prompt and tool schema
+  already say a tie-break must be requested, so another prompt-only change would
+  risk duplication. A precision-safe next direction is to add structured
+  detection/feedback for solver order-only mismatches, or add a structured
+  request-order contract before enforcing visible secondary order keys. Do not
+  add natural-language or literal heuristics for this.
