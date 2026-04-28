@@ -4117,3 +4117,76 @@ Solver 30/30 완료 결과:
   topic-drifted accepted task is discounted. The next improvement target is not
   topic control; it is recovery around deterministic list ordering and avoiding
   solver-inaccessible/no-primary-key detail surfaces.
+
+## Iteration 104 — No-PK row label source guard
+
+- **Question**:
+  Can the previous no-primary-key detail-surface failure be handled by a
+  100%-precision structural rule without adding DB literal or token heuristics?
+- **Change**:
+  Commit `3eb07b1` adds `table_has_primary_key` to composer `query`
+  `column_sources`, reminds the Source Surface Policy and query `select`
+  description, and makes `submit_draft` return feedback-only
+  `label_no_primary_key_source` when a label directly exposes row values from a
+  table with no primary key. Count-style derived aggregates are explicitly
+  allowed.
+- **Why this layer**:
+  This is schema/query-provenance evidence, not natural-language matching. The
+  runtime can prove exactly that a selected label value came from a no-PK table
+  and that it exposes source row values. The same composer conversation should
+  continue because the fix is usually to choose a primary-key-backed path or a
+  derived aggregate.
+- **Verification**:
+  `ruff` passed for the touched files. Targeted pytest passed:
+  `8 passed` across query provenance, submit feedback, prompt role-boundary, and
+  tool-description tests.
+- **Trial**:
+  Ran five parallel `mimiciv_demo` trials with no `--topic-hint`. Composer and
+  solver were `opencode_zen/kimi-k2.5`, using
+  `artifacts/tmp_configs/trial_mimiciv_demo_kimi_bound_batch_01.yaml`.
+  Artifact root:
+  `artifacts/trial_20260428_mimiciv_demo_no_pk_guard_kimi_no_topic_batch5_01`.
+- **Result**:
+  Raw accept count was `1/5`.
+  - Trial 1 accepted `task_icu_stay_admission_details_4922d550b8dc23cd` at
+    `16/20 = 0.80`.
+  - Trial 2 failed `reject_too_hard` at `1/20 = 0.05`.
+  - Trials 3 and 5 failed `reject_too_hard` at `0/20`.
+  - Trial 4 ended with `MaxTurnsExceeded` after feedback loops.
+- **Accepted data audit**:
+  Trial 1 is clean. The request asks for admission information related to the
+  current ICU stay. After one feedback event, the final query anchors on
+  `icustays.stay_id`, follows the primary-key-backed admission path, and returns
+  a single admission-information object as a one-row list. The topic, request,
+  entity, query path, and label fields are aligned. No no-PK row source is
+  exposed.
+- **Rejected data audit**:
+  Trial 2 is hard-good rejected. The final task asks for the latest five lab
+  results and states the same-time tie-break by test ID. The row source is
+  primary-key-backed and the selected tie-break is visible in the label/request.
+  The `1/20` pass rate reflects solver difficulty, not an unsound row set.
+
+  Trial 3 is low-quality rejected. The final request asks for five medications
+  ordered by start time and same-time medication name, but the submitted label
+  still includes route/status fields that the final request does not ask to
+  receive. The ordering itself is solvable; the output contract drift is the
+  quality issue.
+
+  Trial 4 is low-quality rejected / composer failure. A too-easy ICU/admission
+  draft was followed by non-incremental topic/path changes into medication and
+  radiology-order drafts, with query mismatch and an unanchored hidden filter.
+  This is not a hard-good solver miss.
+
+  Trial 5 is low-quality rejected. The final task asks for recent medication
+  information by start time, but the query uses stop time to complete ordering
+  and returns stop time even though the request does not ask for that tie-break
+  or field. The quality gate rejected it, so this is not low-quality accepted.
+- **Interpretation**:
+  The no-PK guard did not directly fire in this random batch because the sampled
+  drafts avoided no-PK label sources. That means this trial does not prove yield
+  improvement, but it does show no low-quality accepted data and no false
+  positive on primary-key-backed rows or derived counts. The remaining repeated
+  low-quality pattern is selected outputs and visible tie-break fields drifting
+  beyond the final user request. That pattern is not a 100%-precision validator
+  target unless represented by explicit structured bindings; treat it as
+  prompt/tool-description/example work, not a literal/token heuristic.
