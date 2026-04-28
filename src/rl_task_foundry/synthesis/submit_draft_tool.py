@@ -245,6 +245,8 @@ class AnswerContract(StrictModel):
             "separate source record sequence from generated display rank. "
             "Non-null filters and date/time granularity must be explicit row-set "
             "or representation constraints, not inferred from output fields. "
+            "Source type/category/status filters must use source-role wording, "
+            "not broad synonyms. "
             "Structural evidence is derived from the latest query."
         ),
     )

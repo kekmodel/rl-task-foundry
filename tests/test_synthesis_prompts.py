@@ -353,16 +353,16 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "source-field-to-related-field upgrade" in instructions
     assert "user_request names role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
-    assert "Source-sensitive fields" in instructions
+    assert "Source-sensitive fields/filters" in instructions
     assert "same source role used by the query path" in instructions
     assert "request wording must name it" in instructions
     assert "no normalized choices" in instructions
     assert "Distinguish source sequence from display rank" in instructions
-    assert "Broad field words are invalid" in instructions
+    assert "Broad words are invalid" in instructions
     assert "Keep output names faithful" in instructions
-    assert "do not relabel one surface as another" in instructions
-    assert "Vague field words are invalid" in instructions
-    assert "several reachable sources" in instructions
+    assert "do not relabel surfaces" in instructions
+    assert "Vague words are invalid" in instructions
+    assert "several reachable sources fit" in instructions
     assert "`query.select` includes only returned label fields" in instructions
     assert "every selected field becomes exact answer" in instructions
     assert "distinguishable through requested output fields" in instructions

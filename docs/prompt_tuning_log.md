@@ -5540,6 +5540,58 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 142 — Source-category filters need source-role wording
+
+- **질문**:
+  Iteration 141의 ambiguous output binding validator 뒤 단일 smoke에서 accepted 저품질이 줄어드는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_distinct_output_phrase_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted되지 않았다.
+
+  - first submit: `label_no_primary_key_source`
+  - second submit: `answer_contract_order_ambiguous`
+  - third submit: `calibration_inconclusive`, pass rate `0/8 = 0.0`
+  - failed solver runs: `0`
+  - final request: `내가 머물고 있는 ICU 병동에서 가장 최근에 투여된 5가지 수액의 종류, 투여 시작 시간, 투여량, 단위를 알려주세요. 동일한 시간에 투여된 경우에는 수액 종류 가나다순으로 정렬해주세요.`
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: 대부분 low-quality rejected. 첫 submit은 `chartevents`처럼 primary-key 없는
+  row source에서 최신 측정 목록을 만들려 해서 거절된 것이 맞다. 두 번째 submit은 `inputevents`
+  수액 목록으로 이동했지만 `starttime desc`만 써서 limit boundary/order tie가 생겼고,
+  `answer_contract_order_ambiguous`로 잘 막혔다.
+
+  세 번째 submit은 tie-break를 추가했지만 여전히 저품질이다. 쿼리는
+  `ordercategoryname LIKE '%Fluid%'`로 row set을 정했고, 실제 canonical rows는
+  `02-Fluids (Crystalloids)` category에 해당했다. 반면 request는 그냥 `수액`이라고만 했다.
+  solver들은 이를 전체 투여 이벤트, IV fluid, crystalloid category 등으로 다르게 해석했다.
+  그래서 pass rate 0.0은 좋은 어려움이 아니라 source category filter가 자연어에서 충분히
+  고정되지 않은 문제로 판단한다.
+- **변경**:
+  precision-100 validator를 추가하지 않았다. `수액`이 `%Fluid%` category를 뜻하는지 여부는
+  DB literal/token heuristic 없이는 안전하게 판정할 수 없다.
+
+  대신 durable prompt/tool schema 계약을 보강했다.
+
+  - prompt Label Contract: source-sensitive 대상을 `fields`에서 `fields/filters`로 확장했다.
+    status/type/category/frequency/stage/route/sequence/rank 계열 filter도 query path의 source
+    role을 user_request가 명명해야 한다.
+  - prompt 문구를 압축해 길이 예산을 지켰다. 최종 prompt 길이: `7962`.
+  - `answer_contract.constraint_phrases` schema: source type/category/status filters는 broad
+    synonyms가 아니라 source-role wording을 사용해야 한다고 명시했다.
+
+  이 변경은 DB 특화 예시나 literal heuristic이 아니라 범용 source-role 원칙 보강이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 141 — Output bindings need distinct request roles
 
 - **질문**:
