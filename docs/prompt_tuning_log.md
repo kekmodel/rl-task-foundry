@@ -4046,3 +4046,19 @@ Solver 30/30 완료 결과:
   `requested_topic`, and CLI output labels it the same way. Trial generation
   now exposes only `--topic-hint`; old `--topic` / `--category` aliases were not
   preserved because normal generation should not look topic-targeted.
+
+## Iteration 102 — Topic hints require explicit approval
+
+- **Decision**:
+  Experiments also omit topic hints by default. `topic_experiment_hint` is only
+  for targeted re-experiments after a recurring edge case has been observed and
+  the user explicitly approves using a seed.
+- **Operational guard**:
+  `run-real-db-trial --topic-hint ...` now fails unless
+  `--topic-hint-approved` is also supplied. This does not replace the human
+  approval requirement; it makes the exceptional path visible in command history
+  and prevents accidental hint use.
+- **Analysis rule**:
+  When a topic hint is used, the experiment log must state why the targeted
+  re-experiment needed it. Ordinary batch comparisons without that approval must
+  run without a topic hint.

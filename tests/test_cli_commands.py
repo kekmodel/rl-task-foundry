@@ -287,6 +287,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
             str(output_dir),
             "--topic-hint",
             "assignment",
+            "--topic-hint-approved",
             "--composer-provider",
             "opencode_zen",
             "--composer-model",
@@ -321,6 +322,52 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert config.models.composer.provider == "opencode_zen"
     assert config.models.composer.model == "minimax-m2.5"
     assert {solver.model for solver in config.models.solvers} == {"minimax-m2.5"}
+
+
+def test_cli_run_real_db_trial_requires_topic_hint_approval(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    called = False
+
+    @dataclass
+    class _DummyTrialRunner:
+        _config: object
+
+        async def run(
+            self,
+            output_dir: Path,
+            *,
+            db_id: str,
+            topic: CategoryTaxonomy,
+        ) -> RealDbTrialSummary:
+            nonlocal called
+            called = True
+            return RealDbTrialSummary(
+                db_id=db_id,
+                requested_topic=topic,
+                trial_status=RealDbTrialStatus.ACCEPTED,
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("rl_task_foundry.cli.RealDbTrialRunner", _DummyTrialRunner)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-real-db-trial",
+            "sakila",
+            str(tmp_path / "real_trial_output"),
+            "--topic-hint",
+            "assignment",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--topic-hint-approved" in result.output
+    assert called is False
 
 
 def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:

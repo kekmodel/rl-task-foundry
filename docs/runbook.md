@@ -55,6 +55,13 @@ rewrite 진행 중에는 아래를 확인한다.
 실험 분석 원칙으로 아래 정성 비교를 반드시 수행한다. 이 정성 비교는
 정량 결과와 별도로 기록한다.
 
+- Topic hint use:
+  - 기본 실험에서는 `topic_experiment_hint`를 주입하지 않는다.
+  - 반복적으로 발생한 edge case를 표적 재실험할 때만 제한적으로 사용한다.
+  - 사용 전 명시적 사용자 승인을 받아야 하며, 실험 기록에 승인 이유를
+    남긴다.
+  - CLI는 `--topic-hint` 사용 시 `--topic-hint-approved`를 함께 요구한다.
+
 - Accepted data audit:
   - accepted count와 pass rate만으로 품질을 판단하지 않는다.
   - 각 accepted task의 `task.yaml`/`task.json`, `instance.json`,

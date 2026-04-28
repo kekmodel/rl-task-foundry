@@ -332,13 +332,18 @@ def run_proof_task_cli(
 def run_real_db_trial(
     db_id: str,
     output_dir: Path,
-    topic: str | None = typer.Option(
+    topic_hint: str | None = typer.Option(
         None,
         "--topic-hint",
         help=(
-            "Optional edge-case experiment hint. Omit for normal "
-            "composer-led topic selection."
+            "Edge-case experiment hint. Requires explicit user approval and "
+            "--topic-hint-approved. Omit for normal trials."
         ),
+    ),
+    topic_hint_approved: bool = typer.Option(
+        False,
+        "--topic-hint-approved",
+        help="Confirm the user explicitly approved using --topic-hint.",
     ),
     config_path: Path = Path("rl_task_foundry.yaml"),
     composer_provider: str | None = None,
@@ -347,6 +352,12 @@ def run_real_db_trial(
     solver_model: str | None = None,
 ) -> None:
     """Run a real-database single-task trial."""
+    if topic_hint is not None and not topic_hint_approved:
+        raise typer.BadParameter(
+            "--topic-hint is only for targeted edge-case re-experiments and "
+            "requires --topic-hint-approved after explicit user approval.",
+            param_hint="--topic-hint",
+        )
 
     async def _run() -> None:
         config = load_config(
@@ -356,9 +367,7 @@ def run_real_db_trial(
             solver_provider=solver_provider,
             solver_model=solver_model,
         )
-        resolved_topic = (
-            normalize_topic(topic) if topic else None
-        )
+        resolved_topic = normalize_topic(topic_hint) if topic_hint else None
 
         runner = RealDbTrialRunner(config)
         try:
