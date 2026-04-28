@@ -38,6 +38,10 @@ from rl_task_foundry.synthesis.submit_draft_validators import (
     _rebuild_anchor_connected_strings,
     _ungrounded_answer_strings,
 )
+from rl_task_foundry.synthesis.turn_budget import (
+    FEEDBACK_REPAIR_MAX_DATA_TOOLS,
+    FIRST_SUBMIT_MAX_DATA_TOOLS,
+)
 
 if TYPE_CHECKING:
     from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
@@ -775,6 +779,60 @@ def _duplicate_output_binding_phrases(
     return duplicates
 
 
+def _duplicate_order_binding_phrases(
+    order_bindings: list[AnswerOrderBinding],
+) -> list[dict[str, object]]:
+    fields_by_phrase: dict[str, list[str]] = {}
+    for index, binding in enumerate(order_bindings):
+        field = (
+            binding.label_field
+            if binding.label_field is not None
+            else f"order_bindings[{index}]"
+        )
+        fields_by_phrase.setdefault(binding.requested_by_phrase, []).append(field)
+    duplicates: list[dict[str, object]] = []
+    for phrase, fields in fields_by_phrase.items():
+        unique_fields = _ordered_unique_texts(fields)
+        if len(unique_fields) > 1:
+            duplicates.append(
+                {
+                    "requested_by_phrase": phrase,
+                    "label_fields": unique_fields,
+                }
+            )
+    return duplicates
+
+
+def _order_binding_reused_output_phrases(
+    *,
+    order_bindings: list[AnswerOrderBinding],
+    output_bindings: list[AnswerOutputBinding],
+) -> list[dict[str, object]]:
+    output_fields_by_phrase: dict[str, list[str]] = {}
+    for binding in output_bindings:
+        output_fields_by_phrase.setdefault(binding.requested_by_phrase, []).append(
+            binding.label_field
+        )
+
+    reused: list[dict[str, object]] = []
+    for index, binding in enumerate(order_bindings):
+        output_fields = output_fields_by_phrase.get(binding.requested_by_phrase)
+        if not output_fields:
+            continue
+        reused.append(
+            {
+                "requested_by_phrase": binding.requested_by_phrase,
+                "order_binding": (
+                    binding.label_field
+                    if binding.label_field is not None
+                    else f"order_bindings[{index}]"
+                ),
+                "output_fields": _ordered_unique_texts(output_fields),
+            }
+        )
+    return reused
+
+
 def _query_order_output_names(query_result: dict[str, object]) -> list[str]:
     diagnostics = query_result.get("ordering_diagnostics")
     if not isinstance(diagnostics, dict):
@@ -815,6 +873,11 @@ def _answer_contract_binding_diagnostics(
     )
     duplicate_output_binding_phrases = _duplicate_output_binding_phrases(
         output_bindings
+    )
+    duplicate_order_binding_phrases = _duplicate_order_binding_phrases(order_bindings)
+    order_binding_reused_output_phrases = _order_binding_reused_output_phrases(
+        order_bindings=order_bindings,
+        output_bindings=output_bindings,
     )
     bound_order_label_fields = _ordered_unique_texts(
         [binding.label_field for binding in order_bindings if binding.label_field is not None]
@@ -872,6 +935,12 @@ def _answer_contract_binding_diagnostics(
         "duplicate_output_binding_phrases": duplicate_output_binding_phrases[
             :item_limit
         ],
+        "duplicate_order_binding_phrases": duplicate_order_binding_phrases[
+            :item_limit
+        ],
+        "order_binding_reused_output_phrases": order_binding_reused_output_phrases[
+            :item_limit
+        ],
     }
 
 
@@ -897,6 +966,12 @@ def _answer_contract_binding_errors(
     missing_label_bindings = diagnostics.get("missing_order_label_bindings")
     if isinstance(missing_label_bindings, list) and missing_label_bindings:
         errors.append("missing_order_label_bindings")
+    duplicate_order_phrases = diagnostics.get("duplicate_order_binding_phrases")
+    if isinstance(duplicate_order_phrases, list) and duplicate_order_phrases:
+        errors.append("duplicate_order_binding_phrases")
+    reused_output_phrases = diagnostics.get("order_binding_reused_output_phrases")
+    if isinstance(reused_output_phrases, list) and reused_output_phrases:
+        errors.append("order_binding_reused_output_phrases")
     return errors
 
 
@@ -1205,7 +1280,7 @@ def _dedicated_constraint_phrase_surfaces(contract: AnswerContract) -> set[str]:
     }
 
 
-def _unbound_user_visible_non_null_filters(
+def _unbound_user_visible_filters(
     query_result: dict[str, object],
     *,
     contract: AnswerContract,
@@ -1217,8 +1292,6 @@ def _unbound_user_visible_non_null_filters(
     for ref in referenced_columns:
         if ref.get("usage") != "where":
             continue
-        if ref.get("op") != "is_not_null":
-            continue
         if (
             is_blocked_visibility(ref.get("visibility"))
             or ref.get("is_handle") is True
@@ -1229,6 +1302,7 @@ def _unbound_user_visible_non_null_filters(
                 "table": ref.get("table"),
                 "column": ref.get("column"),
                 "op": ref.get("op"),
+                "value": ref.get("value") if "value" in ref else None,
             }
         )
     return unbound
@@ -1365,6 +1439,7 @@ class SubmitDraftController:
     _atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
     _raw_atomic_tool_calls: list[dict[str, object]] = field(default_factory=list, init=False)
     _tool_call_count_at_last_submission: int = field(default=0, init=False)
+    _tool_call_count_at_last_protocol_boundary: int = field(default=0, init=False)
     _last_label_signature: str | None = field(default=None, init=False)
     _last_label_scalar_value_signature: str | None = field(default=None, init=False)
     _last_label_slot_count: int | None = field(default=None, init=False)
@@ -1427,6 +1502,41 @@ class SubmitDraftController:
                     "call_index": len(self._atomic_tool_calls),
                 },
             )
+
+    def data_tool_budget_feedback(self) -> dict[str, object] | None:
+        if self.accepted_draft is not None or self._terminated_too_hard:
+            return None
+        calls_since_boundary = (
+            len(self._raw_atomic_tool_calls)
+            - self._tool_call_count_at_last_protocol_boundary
+        )
+        if not self.attempts and self._feedback_events == 0:
+            if calls_since_boundary < FIRST_SUBMIT_MAX_DATA_TOOLS:
+                return None
+            return {
+                "error": "submit_draft_required",
+                "message": (
+                    "ToolBudgetFeedback: Draft Submission Budget reminder: "
+                    "call submit_draft after at most "
+                    f"{FIRST_SUBMIT_MAX_DATA_TOOLS} data tools before the first "
+                    "submit_draft. Use the best grounded label query now."
+                ),
+                "calls_since_boundary": calls_since_boundary,
+                "limit": FIRST_SUBMIT_MAX_DATA_TOOLS,
+            }
+        if calls_since_boundary < FEEDBACK_REPAIR_MAX_DATA_TOOLS:
+            return None
+        return {
+            "error": "submit_draft_required",
+                "message": (
+                    "ToolBudgetFeedback: Draft Submission Budget reminder: after "
+                    "feedback, call submit_draft after at most "
+                    f"{FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools. If the repair "
+                    "query has returned label values, submit them now."
+                ),
+            "calls_since_boundary": calls_since_boundary,
+            "limit": FEEDBACK_REPAIR_MAX_DATA_TOOLS,
+        }
 
     def _latest_successful_query_result_since_last_submission(self) -> dict[str, object] | None:
         call = self._latest_successful_query_call_since_last_submission()
@@ -1749,14 +1859,14 @@ class SubmitDraftController:
                             : self.config.synthesis.runtime.diagnostic_item_limit
                         ]
                     )
-            unbound_non_null_filters = _unbound_user_visible_non_null_filters(
+            unbound_user_visible_filters = _unbound_user_visible_filters(
                 latest_query_result,
                 contract=payload.answer_contract,
             )
-            if unbound_non_null_filters:
+            if unbound_user_visible_filters:
                 error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND)
-                invalid_diagnostics["unbound_non_null_filters"] = (
-                    unbound_non_null_filters[
+                invalid_diagnostics["unbound_user_visible_filters"] = (
+                    unbound_user_visible_filters[
                         : self.config.synthesis.runtime.diagnostic_item_limit
                     ]
                 )
@@ -2164,7 +2274,7 @@ class SubmitDraftController:
                 "Rejected. Task Shapes reminder: fixed list labels must stay at 3-5 rows. Do not use 6+ rows to add difficulty; keep the same target with a smaller natural limit, or choose a harder label through visible fields, relationships, or row-preserving constraints."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND: (
-                "Rejected. Request Contract reminder: user-visible non-null row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501
+                "Rejected. Request Contract reminder: user-visible row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If a parent/list/history request broadens from a child record, keep that parent/current-subject handle in entity or choose a label scoped to the existing entity."  # noqa: E501
@@ -2261,6 +2371,7 @@ class SubmitDraftController:
     ) -> str:
         self._feedback_events += 1
         self._last_feedback_error_codes = tuple(_error_code_values(error_codes))
+        self._tool_call_count_at_last_protocol_boundary = len(self._raw_atomic_tool_calls)
         attempts_left_after = self.submissions_left()
         self._emit_monitor(
             status="budget_exhausted" if attempts_left_after <= 0 else "feedback",
@@ -2297,6 +2408,7 @@ class SubmitDraftController:
         diagnostics: dict[str, object] | None = None,
     ) -> str:
         attempts_left_after = self.submissions_left() - 1
+        self._tool_call_count_at_last_protocol_boundary = len(self._raw_atomic_tool_calls)
         self.attempts.append(
             SubmitDraftAttemptRecord(
                 index=submission_index,

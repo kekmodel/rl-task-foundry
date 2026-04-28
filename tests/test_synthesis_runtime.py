@@ -37,6 +37,10 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
 )
 from rl_task_foundry.synthesis.submit_draft_validators import _ungrounded_answer_strings
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
+from rl_task_foundry.synthesis.turn_budget import (
+    FEEDBACK_REPAIR_MAX_DATA_TOOLS,
+    FIRST_SUBMIT_MAX_DATA_TOOLS,
+)
 
 
 def _wrap_user_prompt(anchor_entity: dict[str, object], body: str) -> str:
@@ -816,6 +820,77 @@ def test_submit_draft_payload_caches_parsed_canonical_answer() -> None:
         assert payload.canonical_answer == cached_answer
         mocked_loads.assert_not_called()
 
+
+def test_data_tool_budget_feedback_blocks_late_first_submit(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+
+    for index in range(FIRST_SUBMIT_MAX_DATA_TOOLS - 1):
+        controller.record_atomic_tool_call(
+            tool_name="sample",
+            params={"index": index},
+            result={"rows": []},
+        )
+        assert controller.data_tool_budget_feedback() is None
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"index": FIRST_SUBMIT_MAX_DATA_TOOLS},
+        result={"rows": [{"value": 1}]},
+    )
+
+    feedback = controller.data_tool_budget_feedback()
+
+    assert feedback is not None
+    assert feedback["error"] == "submit_draft_required"
+    assert feedback["calls_since_boundary"] == FIRST_SUBMIT_MAX_DATA_TOOLS
+    assert feedback["limit"] == FIRST_SUBMIT_MAX_DATA_TOOLS
+    assert "first submit_draft" in str(feedback["message"])
+
+
+def test_data_tool_budget_feedback_blocks_late_feedback_repair(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    controller._record_feedback(
+        message="FeedbackError: repair",
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
+    )
+    controller.record_atomic_tool_call(
+        tool_name="profile",
+        params={"target": "field"},
+        result={"distinct_count": 2},
+    )
+    assert controller.data_tool_budget_feedback() is None
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {}},
+        result={"rows": [{"value": 1}]},
+    )
+
+    feedback = controller.data_tool_budget_feedback()
+
+    assert feedback is not None
+    assert feedback["error"] == "submit_draft_required"
+    assert feedback["calls_since_boundary"] == FEEDBACK_REPAIR_MAX_DATA_TOOLS
+    assert feedback["limit"] == FEEDBACK_REPAIR_MAX_DATA_TOOLS
+    assert "after feedback" in str(feedback["message"])
+
+
 def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
     payload = _accepted_payload().model_dump(mode="json")
     payload["anchor_query"] = {
@@ -1300,6 +1375,206 @@ async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
     ]
     assert diagnostics["answer_contract_binding_errors"] == [
         "duplicate_output_binding_phrases"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_feedbacks_duplicate_order_binding_phrase(
+    tmp_path: Path,
+) -> None:
+    monitor = _CollectingPhaseMonitor()
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="procedures",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+        phase_monitor=monitor,  # type: ignore[arg-type]
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {
+            "procedure_name": "A",
+            "start_time": "2024-01-02T00:00:00",
+            "order_id": 9,
+        },
+        {
+            "procedure_name": "B",
+            "start_time": "2024-01-02T00:00:00",
+            "order_id": 8,
+        },
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "procedures",
+            "label": label,
+            "entity": {"stay_id": 1},
+            "user_request": (
+                "최근 시술 2건의 시술명, 시작 시간, 주문 ID를 "
+                "최근 시행된 순서대로 보여 주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "시술",
+                "constraint_phrases": ["최근 시행된 순서대로"],
+                "limit_phrase": "2건",
+                "output_bindings": [
+                    {"label_field": "procedure_name", "requested_by_phrase": "시술명"},
+                    {"label_field": "start_time", "requested_by_phrase": "시작 시간"},
+                    {"label_field": "order_id", "requested_by_phrase": "주문 ID"},
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "desc",
+                        "label_field": "start_time",
+                        "requested_by_phrase": "최근 시행된 순서대로",
+                    },
+                    {
+                        "direction": "desc",
+                        "label_field": "order_id",
+                        "requested_by_phrase": "최근 시행된 순서대로",
+                    },
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "procedure",
+                "column": "start_time",
+                "direction": "desc",
+            },
+            {
+                "usage": "order_by",
+                "table": "procedure",
+                "column": "order_id",
+                "direction": "desc",
+            },
+        ],
+        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 2,
+                "order_by_outputs": ["start_time", "order_id"],
+                "returned_row_count": 2,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Do not reuse one broad order phrase" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert controller.attempts == []
+    diagnostics = monitor.records[-1]["diagnostics"]
+    assert isinstance(diagnostics, dict)
+    binding_diagnostics = diagnostics["answer_contract_binding_diagnostics"]
+    assert isinstance(binding_diagnostics, dict)
+    assert binding_diagnostics["duplicate_order_binding_phrases"] == [
+        {
+            "requested_by_phrase": "최근 시행된 순서대로",
+            "label_fields": ["start_time", "order_id"],
+        }
+    ]
+    assert diagnostics["answer_contract_binding_errors"] == [
+        "duplicate_order_binding_phrases"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_feedbacks_order_binding_reusing_output_phrase(
+    tmp_path: Path,
+) -> None:
+    monitor = _CollectingPhaseMonitor()
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+        phase_monitor=monitor,  # type: ignore[arg-type]
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {"test_time": "2024-01-02T00:00:00", "result": "negative"},
+        {"test_time": "2024-01-01T00:00:00", "result": "positive"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "results",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": "최근 검사 결과 2개와 검사 시간을 보여 주세요.",
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "검사 결과",
+                "constraint_phrases": ["최근"],
+                "limit_phrase": "2개",
+                "output_bindings": [
+                    {"label_field": "test_time", "requested_by_phrase": "검사 시간"},
+                    {"label_field": "result", "requested_by_phrase": "검사 결과"},
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "desc",
+                        "label_field": "test_time",
+                        "requested_by_phrase": "검사 시간",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "test",
+                "column": "test_time",
+                "direction": "desc",
+            }
+        ],
+        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 2,
+                "order_by_outputs": ["test_time"],
+                "returned_row_count": 2,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Display-only output wording is not enough" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert controller.attempts == []
+    diagnostics = monitor.records[-1]["diagnostics"]
+    assert isinstance(diagnostics, dict)
+    binding_diagnostics = diagnostics["answer_contract_binding_diagnostics"]
+    assert isinstance(binding_diagnostics, dict)
+    assert binding_diagnostics["order_binding_reused_output_phrases"] == [
+        {
+            "requested_by_phrase": "검사 시간",
+            "order_binding": "test_time",
+            "output_fields": ["test_time"],
+        }
+    ]
+    assert diagnostics["answer_contract_binding_errors"] == [
+        "order_binding_reused_output_phrases"
     ]
 
 
@@ -3070,7 +3345,78 @@ async def test_submit_draft_rejects_unbound_visible_non_null_filter(
 
     message = await controller.submit(payload)
 
-    assert "non-null row-set filters need a dedicated constraint phrase" in message
+    assert "user-visible row-set filters need a dedicated constraint phrase" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_filter_unbound",)
+    assert controller.attempts == []
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_unbound_visible_equality_filter(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="admissions",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {
+            "admission_time": "2175-04-05T15:36:00",
+            "discharge_time": "2175-04-10T16:55:00",
+            "admission_source": "EMERGENCY ROOM",
+        }
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "admissions",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": (
+                "내 입원 기록을 확인해주세요. 입원 시간, 퇴원 시간, "
+                "입원 경로를 알려주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "입원 기록",
+                "constraint_phrases": [
+                    "입원 시간",
+                    "퇴원 시간",
+                    "입원 경로",
+                ],
+                "limit_phrase": None,
+                "output_bindings": [
+                    {"label_field": "admission_time", "requested_by_phrase": "입원 시간"},
+                    {"label_field": "discharge_time", "requested_by_phrase": "퇴원 시간"},
+                    {"label_field": "admission_source", "requested_by_phrase": "입원 경로"},
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "admissions",
+                "column": "admission_type",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "op": "eq",
+                "value": "EW EMER.",
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "user-visible row-set filters need a dedicated constraint phrase" in message
     assert controller.last_feedback_error_codes == ("answer_contract_filter_unbound",)
     assert controller.attempts == []
 

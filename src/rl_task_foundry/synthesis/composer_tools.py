@@ -64,8 +64,16 @@ def instrument_composer_tool(
     name = tool.name
 
     async def wrapped(ctx: object, input_json: str) -> str:
-        output = await inner(ctx, input_json)  # pyright: ignore[reportArgumentType]
         params = _safe_parse_json_object(input_json)
+        budget_feedback = controller.data_tool_budget_feedback()
+        if budget_feedback is not None:
+            controller.record_atomic_tool_call(
+                tool_name=name,
+                params=params,
+                result=budget_feedback,
+            )
+            return json.dumps(budget_feedback, ensure_ascii=False)
+        output = await inner(ctx, input_json)  # pyright: ignore[reportArgumentType]
         result = _safe_parse_result(output)
         controller.record_atomic_tool_call(
             tool_name=name,

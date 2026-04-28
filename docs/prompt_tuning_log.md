@@ -5761,6 +5761,70 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py tests/test_tooling_composer_query.py`
   통과.
 
+## Iteration 154 — Budget feedback and visible filter binding
+
+- **질문**:
+  Iteration 153의 PK limit 완화 이후 MIMIC no-topic smoke에서 남은 low-quality
+  accepted 위험은 무엇인가?
+- **실험**:
+  아래 smoke들을 순차 실행했다. 모두 topic hint 없이 OpenRouter Kimi K2.5,
+  solver 4개, synthesis `run_timeout_s=300` 설정이다.
+
+  - `artifacts/trial_20260429_mimiciv_demo_pk_limit_guard_kimi_4solver_no_topic_smoke_01/trial_01`
+  - `artifacts/trial_20260429_mimiciv_demo_order_binding_guard_kimi_4solver_no_topic_smoke_01/trial_01`
+  - `artifacts/trial_20260429_mimiciv_demo_feedback_submit_deadline_kimi_4solver_no_topic_smoke_01/trial_01`
+  - `artifacts/trial_20260429_mimiciv_demo_difficulty_examples_kimi_4solver_no_topic_smoke_01/trial_01`
+  - `artifacts/trial_20260429_mimiciv_demo_tool_budget_feedback_kimi_4solver_no_topic_smoke_01/trial_01`
+  - `artifacts/trial_20260429_mimiciv_demo_visible_filter_guard_kimi_4solver_no_topic_smoke_01/trial_01`
+- **결과**:
+  1. ICU procedure list에서 같은 `start_time` rows를 `order_id`로 몰래 정렬한
+     draft가 solver pass-rate 0으로 떨어졌다. request는 "최근순"만 말했고,
+     `order_bindings`가 같은 phrase를 `start_time`과 `order_id`에 재사용했다.
+  2. HCPCS/admission/outputevents runs에서 composer가 feedback 뒤 submit 없이 data
+     tools를 계속 호출하거나 timeout나는 패턴이 반복됐다.
+  3. admission list에서는 `admission_type = EW EMER.` visible filter가 row set을
+     정했지만, user_request/contract에는 해당 filter가 dedicated constraint로
+     고정되지 않았다. solver들은 다른 응급실 해석으로 4건을 찾았다.
+  4. 최종 visible-filter-guard smoke는 accepted:
+     `task_blood_chemistry_recent_results_9f0bbe714f94dd34`, pass-rate 0.25.
+- **정성 평가**:
+  accepted data: clean에 가까운 hard-good. 최종 task는 subject `10039831`의
+  Chemistry lab events를 `charttime desc, lab label asc`로 정렬한 최근 5개다.
+  DB를 직접 교차검증했고 canonical answer가 SQL 결과와 일치했다. 요청도
+  "혈액 화학", "최신순", "같은 시간대는 검사 항목명 알파벳순"을 자연스럽게
+  포함한다. 낮은 pass-rate는 solver가 category filter나 tie-break를 놓친
+  어려운 케이스로 본다.
+
+  rejected data: 대부분 low-quality rejected다. hidden/unanchored scope, ambiguous
+  order, blocked handle exposure, ungrounded/evidence mismatch가 submit_draft에서
+  막혔다. 특히 admission filter 사례는 hard-good이 아니라 request/filter
+  mismatch였고, solver까지 보내면 저품질이 된다.
+- **변경**:
+  - `submit_draft` binding diagnostics에 `duplicate_order_binding_phrases`와
+    `order_binding_reused_output_phrases`를 추가했다. 같은 order phrase를 여러
+    order key에 재사용하거나, display-only output phrase를 order evidence로
+    재사용하면 `answer_contract_binding_missing`으로 feedback한다.
+  - durable prompt에는 feedback 이후 2 data tool 내 재제출 deadline과
+    DB-agnostic Difficulty-Up mini example을 추가했다. 예시는 기호화된
+    `<draft_before>/<draft_after>/<commentary>` 형식이며 길이 예산 8k를 유지했다.
+  - prompt를 지켰는데도 data tool 호출이 계속되는 경우를 위해 composer data tool
+    wrapper가 정확한 호출 수 기준 `ToolBudgetFeedback`을 반환한다. 첫 submit 전은
+    3 data tools, feedback 이후는 2 data tools가 limit이다.
+  - user-visible where filter가 있는데 dedicated constraint phrase가 하나도 없으면
+    `answer_contract_filter_unbound`로 feedback한다. 기존 non-null 전용 검증을
+    equality/range 등 일반 visible row-set filter로 확장했다.
+- **원칙 준수**:
+  DB literal/token/table-name heuristic은 추가하지 않았다. 새 hard checks는
+  `answer_contract` 구조, query metadata의 visibility/filter/order provenance,
+  그리고 tool call count만 본다. Prompt 우선 원칙에 따라 durable prompt를 먼저
+  보강했고, 그 지침을 계속 어긴 카운트 초과는 feedback/tool wrapper에서만 막았다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`78 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows
 
 - **질문**:

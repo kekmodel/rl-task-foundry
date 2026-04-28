@@ -282,6 +282,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "remove/rename/replace fields" in instructions
     assert "or combine a row-excluding filter" in instructions
     assert "difficulty jump" in instructions
+    assert "# Difficulty-Up Examples" in instructions
+    assert "<draft_before>list rows R with fields A,B" in instructions
+    assert "<commentary>Good: the canonical label changes" in instructions
+    assert "<commentary>Bad: this is wording drift" in instructions
     assert "If `submit_draft` says the conversation is terminated" in instructions
 
     # Durable policies are named so feedback/tool descriptions can reference
