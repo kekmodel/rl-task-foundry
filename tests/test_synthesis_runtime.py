@@ -2671,6 +2671,173 @@ async def test_submit_draft_allows_non_user_visible_query_predicate(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_unbound_visible_non_null_filter(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medications",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {
+            "medication": "Sodium Bicarbonate",
+            "start_time": "2123-02-20T05:00:00",
+        }
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "medications",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": "처방 시작 시간 순서대로 약물명과 처방 시작 시간을 보여 주세요.",
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "약물명과 처방 시작 시간",
+                "constraint_phrases": ["처방 시작 시간 순서대로"],
+                "limit_phrase": None,
+                "output_bindings": [
+                    {"label_field": "medication", "requested_by_phrase": "약물명"},
+                    {
+                        "label_field": "start_time",
+                        "requested_by_phrase": "처방 시작 시간",
+                    },
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "asc",
+                        "label_field": "start_time",
+                        "requested_by_phrase": "처방 시작 시간 순서대로",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "pharmacy",
+                "column": "medication",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "op": "is_not_null",
+                "value": None,
+            },
+            {
+                "usage": "order_by",
+                "table": "pharmacy",
+                "column": "starttime",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "direction": "asc",
+            },
+        ],
+        result_extra={"ordering_diagnostics": {"order_by_outputs": ["start_time"]}},
+    )
+
+    message = await controller.submit(payload)
+
+    assert "non-null row-set filters need a dedicated constraint phrase" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_filter_unbound",)
+    assert controller.attempts == []
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_allows_bound_visible_non_null_filter(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medications",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {
+            "medication": "Sodium Bicarbonate",
+            "start_time": "2123-02-20T05:00:00",
+        }
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "medications",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": (
+                "약물명이 기록된 처방을 처방 시작 시간 순서대로 보여 주세요. "
+                "약물명과 처방 시작 시간을 알고 싶습니다."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "약물명과 처방 시작 시간",
+                "constraint_phrases": [
+                    "약물명이 기록된",
+                    "처방 시작 시간 순서대로",
+                ],
+                "limit_phrase": None,
+                "output_bindings": [
+                    {"label_field": "medication", "requested_by_phrase": "약물명"},
+                    {
+                        "label_field": "start_time",
+                        "requested_by_phrase": "처방 시작 시간",
+                    },
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "asc",
+                        "label_field": "start_time",
+                        "requested_by_phrase": "처방 시작 시간 순서대로",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "pharmacy",
+                "column": "medication",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "op": "is_not_null",
+                "value": None,
+            },
+            {
+                "usage": "order_by",
+                "table": "pharmacy",
+                "column": "starttime",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "direction": "asc",
+            },
+        ],
+        result_extra={"ordering_diagnostics": {"order_by_outputs": ["start_time"]}},
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
     tmp_path: Path,
 ) -> None:

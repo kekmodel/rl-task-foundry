@@ -68,6 +68,7 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS = (
         "answer_contract_duplicate_answer_rows"
     )
+    ANSWER_CONTRACT_FILTER_UNBOUND = "answer_contract_filter_unbound"
     ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED = (
         "answer_contract_hidden_filter_unanchored"
     )
@@ -104,6 +105,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
         SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND,
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
         SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING,
@@ -1114,6 +1116,57 @@ def _query_projection_has_duplicate_answer_rows(
     )
 
 
+def _dedicated_constraint_phrase_surfaces(contract: AnswerContract) -> set[str]:
+    non_constraint_surfaces = {
+        _contract_phrase_surface(contract.answer_phrase),
+    }
+    if contract.limit_phrase is not None:
+        non_constraint_surfaces.add(_contract_phrase_surface(contract.limit_phrase))
+    non_constraint_surfaces.update(
+        _contract_phrase_surface(binding.requested_by_phrase)
+        for binding in contract.output_bindings or []
+    )
+    non_constraint_surfaces.update(
+        _contract_phrase_surface(binding.requested_by_phrase)
+        for binding in contract.order_bindings or []
+    )
+    return {
+        surface
+        for phrase in contract.constraint_phrases
+        if (surface := _contract_phrase_surface(phrase))
+        and surface not in non_constraint_surfaces
+    }
+
+
+def _unbound_user_visible_non_null_filters(
+    query_result: dict[str, object],
+    *,
+    contract: AnswerContract,
+) -> list[dict[str, object]]:
+    referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
+    if _dedicated_constraint_phrase_surfaces(contract):
+        return []
+    unbound: list[dict[str, object]] = []
+    for ref in referenced_columns:
+        if ref.get("usage") != "where":
+            continue
+        if ref.get("op") != "is_not_null":
+            continue
+        if (
+            is_blocked_visibility(ref.get("visibility"))
+            or ref.get("is_handle") is True
+        ):
+            continue
+        unbound.append(
+            {
+                "table": ref.get("table"),
+                "column": ref.get("column"),
+                "op": ref.get("op"),
+            }
+        )
+    return unbound
+
+
 def _unanchored_hidden_filter_sources(
     query_result: dict[str, object],
     *,
@@ -1617,6 +1670,17 @@ class SubmitDraftController:
                             : self.config.synthesis.runtime.diagnostic_item_limit
                         ]
                     )
+            unbound_non_null_filters = _unbound_user_visible_non_null_filters(
+                latest_query_result,
+                contract=payload.answer_contract,
+            )
+            if unbound_non_null_filters:
+                error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND)
+                invalid_diagnostics["unbound_non_null_filters"] = (
+                    unbound_non_null_filters[
+                        : self.config.synthesis.runtime.diagnostic_item_limit
+                    ]
+                )
             query_limit = _query_limit_from_params(
                 latest_query_call.get("params") if latest_query_call is not None else None
             )
@@ -2019,6 +2083,9 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
                 "Rejected. Label Contract reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND: (
+                "Rejected. Request Contract reminder: user-visible non-null row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If a parent/list/history request broadens from a child record, keep that parent/current-subject handle in entity or choose a label scoped to the existing entity."  # noqa: E501

@@ -5540,6 +5540,54 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 143 — Non-null row-set filters need a dedicated constraint phrase
+
+- **질문**:
+  Iteration 142의 source-category filter wording 뒤 단일 smoke에서 accepted 품질이 개선되는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_source_filter_wording_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted되지 않았다.
+
+  - first submit: `answer_contract_order_ambiguous`
+  - second submit: `answer_contract_phrase_missing`
+  - third submit: `calibration_inconclusive`, pass rate `0/8 = 0.0`
+  - failed solver runs: `0`
+  - final request: `이 입원 중에 처방된 약물 이력을 처방 시작 시간 순서대로 조회해 주세요. 약물명, 약국 확인 시간, 처분 상태, 그리고 처분 유형을 알고 싶습니다. 동일한 처방 시작 시간의 경우 약국 확인 시간이 빠른 순으로 정렬해 주세요. 가장 빠른 5개 항목만 보여주세요.`
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 최종 draft의 query path는 `pharmacy` table 기준으로
+  hadm_id scope, `starttime asc`, `verifiedtime asc`, limit 5를 사용했다. solvers 대부분 같은
+  table/path를 찾았으나 일부는 5번째 row의 `medication: null`을 포함했고, invalid submit도
+  같은 이유로 발생했다.
+
+  원인은 query에 `medication IS NOT NULL`이 들어갔지만 request/answer_contract에는
+  `약물명이 기록된 처방만` 같은 row-set filter 문구가 없다는 점이다. `약물명`은 output field
+  요청이지 null 약물명 row를 제외한다는 row-set constraint가 아니다. 따라서 pass rate 0.0은
+  좋은 어려움이 아니라 hidden non-null row-set control 문제다.
+- **변경**:
+  기존 prompt/tool schema의 "Non-null filters need row-set wording" 원칙을 precision-100
+  validator로 집행한다.
+
+  - latest query metadata에서 user-visible, non-handle `where op=is_not_null` predicate를 찾는다.
+  - `answer_contract.constraint_phrases`에 answer/output/order/limit phrase로 재사용되지 않은
+    dedicated constraint phrase가 없으면 `answer_contract_filter_unbound`로 reject한다.
+  - feedback은 user-visible non-null row-set filter에는 dedicated constraint phrase가 필요하며,
+    output field wording으로는 부족하다고 상기한다.
+
+  이 검사는 DB literal/token heuristic이 아니다. query가 실제로 사용한 predicate metadata와
+  composer가 제출한 answer_contract 구조만 사용한다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_unbound_visible_non_null_filter tests/test_synthesis_runtime.py::test_submit_draft_allows_bound_visible_non_null_filter tests/test_synthesis_runtime.py::test_submit_draft_allows_non_user_visible_query_predicate -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 142 — Source-category filters need source-role wording
 
 - **질문**:
