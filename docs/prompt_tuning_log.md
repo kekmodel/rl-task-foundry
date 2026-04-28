@@ -3893,3 +3893,43 @@ Solver 30/30 완료 결과:
   `uv run pytest tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py -q`
   (`82 passed`). Ruff passed on the touched prompt, feedback, tool-schema, and
   test files.
+
+## Iteration 98 — A/B test for symbolic `submit_draft` policy examples
+
+- **Question**:
+  Should the common composer prompt include a minimal, DB-neutral
+  `submit_draft`-payload example for the violation the current trials repeat
+  most often?
+- **A condition**:
+  Used commit `a2d7e88` with no new examples. Ran five parallel
+  `mimiciv_demo` / `input_events` trials with the default frequent-experiment
+  nano model config. Artifact root:
+  `artifacts/ab_submit_examples_A_20260428_01`.
+- **A result**:
+  Accepted `0/5`. All five failed before accepted draft. The dominant pattern
+  was repeated `answer_contract_order_ambiguous`: drafts asked for recent
+  ordered lists by a time field while returned rows contained answer-distinct
+  ties under that order. This confirmed that list determinism, not the earlier
+  source-surface mismatch, was the right target for this A/B.
+- **B condition**:
+  Temporarily added one common-prompt section with a symbolic
+  `<submit_draft>{...}</submit_draft>` payload showing a bad list-order draft
+  and commentary saying to request/query a visible tie-break or return tied
+  rows. The example used only placeholders such as `<time>`, `<f>`, and
+  `<topic>`; no DB/table/value literal or token heuristic was introduced.
+  Focused prompt/runtime checks and ruff passed during the temporary patch.
+  Artifact root: `artifacts/ab_submit_examples_B_20260428_01`.
+- **B result**:
+  Accepted `0/5`. The repeated order-ambiguity loop became less dominant, but
+  the batch shifted into other low-quality modes: single-row drafts with
+  `reject_too_hard`, missing/invalid anchor entity, missing contract phrase,
+  and an empty/invalid canonical answer. This is not a positive result: the
+  example did not improve acceptance or data quality, and it appears to have
+  encouraged evasive narrowing instead of robust list construction.
+- **Decision**:
+  Do not keep the common prompt example. The tested change obeyed the
+  no-literal/no-heuristic rule, but failed the empirical quality bar. Keep the
+  current prompt/feedback baseline and treat this as evidence that the next
+  improvement should be more targeted than a broad in-prompt example, likely in
+  precision-safe tool diagnostics or in feedback that reminds an already named
+  policy without adding a new instruction source.
