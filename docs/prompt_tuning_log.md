@@ -3699,3 +3699,60 @@ Solver 30/30 완료 결과:
   detection/feedback for solver order-only mismatches, or add a structured
   request-order contract before enforcing visible secondary order keys. Do not
   add natural-language or literal heuristics for this.
+
+## Iteration 94 — Accepted-task qualitative audit for the same Kimi batch
+
+- **Question**:
+  Do not treat accepted tasks as automatically good. Audit the four accepted
+  tasks from
+  `artifacts/trial_20260428_mimiciv_demo_kimi_batch5_parallel_diffup_01` for
+  request clarity, row-set/order determinism, and solver failure patterns.
+- **Trial 1, accepted at `5/8 = 0.625`**:
+  Borderline but usable. The request asks for the latest five nutrition/intake
+  records during an ICU stay. The final query orders by `starttime DESC` and
+  the returned top five rows are all `PO Intake`, with no duplicate returned
+  start-time key. A DB cross-check of the top ten rows for `stay_id=31269608`
+  shows the first five are `PO Intake`, then later rows include non-nutrition
+  items such as insulin. The quality risk is semantic: the query did not
+  explicitly filter a nutrition/intake item category, so solvers must infer that
+  the observed top rows are the requested nutrition records. Failed solvers did
+  try nutrition-like filters and ran out of turns. This is hard-good leaning,
+  but a cleaner draft would name the concrete surface (`PO Intake` / intake
+  records) or use a visible grounded filter.
+- **Trial 2, accepted at `17/20 = 0.85`**:
+  Good. The request explicitly asks for the latest five input-event records and
+  includes visible tie-breaks: same start time sorted by end time ascending,
+  then item name alphabetically. The final query orders by
+  `starttime DESC, endtime ASC, item label ASC`, matching the request and using
+  selected answer-visible fields. The three solver failures were missing-submit
+  or malformed-tool-call failures, not evidence of bad data.
+- **Trial 3, accepted at `8/12 = 0.6667`**:
+  Borderline/low-quality due recency ambiguity. The request asks for the “most
+  recent” five input records but does not say whether recency means start time,
+  end time, or store time. The canonical query uses `starttime DESC`. A DB
+  cross-check for `stay_id=35436337` shows a `D5LR` row with
+  `starttime=2185-06-18T05:51:00` and `endtime=2185-06-18T11:50:00`; it is not
+  in the canonical top five by start time, but it is second by end time. Several
+  solver mismatches included that row, which is a reasonable interpretation of
+  “recent” in an interval table. This should be made explicit in the request
+  (for example start-time 기준) before accepting similar drafts.
+- **Trial 5, accepted at `18/20 = 0.9`**:
+  Low-quality accepted / should ideally reject. The request explicitly says
+  “start time 기준 최신순,” but the returned list contains three rows with the
+  same `starttime=2148-01-08T15:46:00`. The final accepted rows bake in a tied
+  order among those rows; one retry also introduced `storetime DESC` as a
+  secondary order without asking the user for that tie-break. A DB cross-check
+  confirms the tied rows share the requested start-time key, and two rows also
+  share the secondary store-time key. Since ordered exact matching is used,
+  this arbitrary tied order can look correct only because most solvers converged
+  on the same tool behavior. The draft is too easy and under-specified, not a
+  clean accepted task.
+- **Overall read**:
+  Accepted rate alone overstates quality. This batch has one clean accepted
+  task, two borderline tasks, and one accepted task that should not be trusted.
+  The next improvement should target structured order determinism: for ordered
+  list tasks, either every ordering key that affects exact order must be
+  requested and answer-visible/reproducible, or the tied rows should be treated
+  as an unordered equivalence group. Avoid adding literal or text-token
+  heuristics; the signal comes from query metadata and solver order-only
+  mismatch patterns.
