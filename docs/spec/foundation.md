@@ -311,9 +311,10 @@ spec areas.
 
 Hard validators are not quality critics. They are accept/reject gates for facts
 the runtime can prove exactly: schema/type shape, exact latest-query evidence,
-required provenance, explicitly configured exposure policy, and exact
-reward-visible label changes. If a rule could reject a valid task in an arbitrary
-well-designed database, it is not precise enough for hard validation.
+required provenance, explicitly configured exposure policy, source table
+primary-key availability for row-valued labels, and exact reward-visible label
+changes. If a rule could reject a valid task in an arbitrary well-designed
+database, it is not precise enough for hard validation.
 DB literal containment in natural-language requests or labels is not validator
 evidence; value-to-language alignment requires an explicit structured binding or
 belongs in prompt/tool guidance and solver pass-rate review.

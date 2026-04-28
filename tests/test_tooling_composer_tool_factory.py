@@ -325,6 +325,8 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]["$.spec.select[].as"]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
+    assert "without a primary key" in descriptions["query"]["$.spec.select"]
+    assert "primary-key-backed path" in descriptions["query"]["$.spec.select"]
     assert "Direction must match user_request wording exactly" in descriptions[
         "query"
     ]["$.spec.order_by"]

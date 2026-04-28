@@ -107,8 +107,7 @@ def build_synthesis_agent_instructions(
     return "\n\n".join([
         "# Role\n"
         "Prepare grounded customer-facing task drafts from the DB. "
-        "Use data tools, then submit through `submit_draft`. Keep it "
-        "deterministic and reachable.",
+        "Use data tools, then submit through `submit_draft`.",
 
         build_tool_call_budget_instruction(
             max_tool_calls=runtime_config.max_turns,
@@ -142,11 +141,12 @@ def build_synthesis_agent_instructions(
         "# Source Surface Policy\n"
         "The user-facing source surface and canonical query surface must match. If "
         "one concept maps to multiple surfaces, bind user_request to the "
-        "selected surface/representation. Bad: the "
+        "selected surface. Bad: the "
         "request can reasonably name one source surface while the label comes "
-        "from another unmentioned source. Good: the request names the selected "
-        "source surface and label fields come from that path. Why: no hidden "
-        "path guessing.",
+        "from another. Good: the request names the selected source surface "
+        "and label fields come from that path. If no primary key, do not "
+        "expose row values as labels; use a primary-key-backed path or "
+        "aggregate. Why: no hidden path guessing.",
 
         "# Feedback Handling Policy\n"
         "FeedbackError is not a new durable instruction source. Treat feedback "

@@ -487,6 +487,7 @@ rollout, or harvest behavior, answer these questions in the PR or tuning log:
 | Tool argument shape is wrong | JSON schema / strict schema / concise field description |
 | Label is not copied from latest query | `submit_draft` feedback-only validation |
 | Label exposes explicit `internal` or `blocked` source field | `submit_draft` feedback-only validation |
+| Label exposes row values from a table without a primary key | `submit_draft` feedback-only validation |
 | Composer produced a too-easy draft | Same conversation feedback; preserve answer kind/target and strengthen |
 | Actor pass-rate is too low | Terminal trial discard; harvest starts fresh |
 | Actor pass-rate is too high | Same conversation feedback only when gate classifies too-easy/high inconclusive |

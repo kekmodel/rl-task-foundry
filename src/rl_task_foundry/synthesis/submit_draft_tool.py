@@ -72,6 +72,7 @@ class SubmitDraftErrorCode(StrEnum):
         "answer_contract_visibility_evidence_missing"
     )
     LABEL_NON_USER_VISIBLE_SOURCE = "label_non_user_visible_source"
+    LABEL_NO_PRIMARY_KEY_SOURCE = "label_no_primary_key_source"
     ANSWER_CONTRACT_NOT_INCREMENTAL = "answer_contract_not_incremental"
     SUBMIT_PAYLOAD_INVALID = "submit_payload_invalid"
     DRAFT_VALIDATION_FAILED = "draft_validation_failed"
@@ -101,6 +102,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
         SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE,
+        SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL,
     }
 )
@@ -869,29 +871,35 @@ def _query_visibility_errors(
         )
 
     label_sources: list[dict[str, object]] = []
+    unstable_record_sources: list[dict[str, object]] = []
     for source in column_sources:
         if source.get("value_exposes_source") is not True:
             continue
-        if blocks_direct_label_exposure(source.get("visibility")):
-            label_sources.append(
-                {
-                    key: source.get(key)
-                    for key in (
-                        "output",
-                        "kind",
-                        "table",
-                        "column",
-                        "visibility",
-                    )
-                    if key in source
-                }
+        source_payload = {
+            key: source.get(key)
+            for key in (
+                "output",
+                "kind",
+                "table",
+                "column",
+                "visibility",
+                "table_has_primary_key",
             )
+            if key in source
+        }
+        if blocks_direct_label_exposure(source.get("visibility")):
+            label_sources.append(source_payload)
+        if source.get("table_has_primary_key") is False:
+            unstable_record_sources.append(source_payload)
 
     codes: list[SubmitDraftErrorCode] = []
     diagnostics: dict[str, object] = {}
     if label_sources:
         codes.append(SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE)
         diagnostics["non_user_visible_label_sources"] = label_sources
+    if unstable_record_sources:
+        codes.append(SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE)
+        diagnostics["no_primary_key_label_sources"] = unstable_record_sources
     return codes, diagnostics
 
 _ENTITY_BLOCK_PREFIX = "<entity>\n"
@@ -1664,6 +1672,9 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE: (
+                "Rejected. Source Surface Policy violation: the latest query exposes label values from a table without a primary key. Rows from that table cannot be revisited as stable records; choose a primary-key-backed source path or use a derived aggregate that does not expose those row values."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy violation: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501

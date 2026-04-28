@@ -360,6 +360,7 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "column": "email",
             "visibility": "internal",
             "is_handle": False,
+            "table_has_primary_key": True,
             "value_exposes_source": True,
         }
     ]
@@ -381,6 +382,44 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "is_handle": False,
             "direction": "asc",
         },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_query_marks_label_sources_without_primary_key():
+    detail = TableProfile(
+        schema_name="public",
+        table_name="event_detail",
+        columns=[
+            _column("event_detail", "event_id", is_foreign_key=True),
+            _column("event_detail", "detail_text", data_type="text"),
+        ],
+        primary_key=(),
+    )
+    session = ComposerSession(
+        snapshot=snapshot_from_graph(SchemaGraph(tables=[detail], edges=[])),
+        connection=_RecordingConnection(),
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("event_detail", "d"),
+            "select": [_select("d", "detail_text")],
+        },
+    )
+
+    assert result["column_sources"] == [
+        {
+            "output": "detail_text",
+            "kind": "select",
+            "table": "event_detail",
+            "column": "detail_text",
+            "visibility": "user_visible",
+            "is_handle": False,
+            "table_has_primary_key": False,
+            "value_exposes_source": True,
+        }
     ]
 
 
@@ -878,6 +917,7 @@ async def test_query_join_chain_uses_schema_handles_for_duplicate_tables():
             "column": "name",
             "visibility": "user_visible",
             "is_handle": False,
+            "table_has_primary_key": True,
             "value_exposes_source": True,
         }
     ]

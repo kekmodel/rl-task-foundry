@@ -656,7 +656,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Policy and Difficulty-Up Policy. Prefer user-visible "
                     "non-handle values; expose handle-like values only when "
                     "evidence marks them user-visible and the request asks for "
-                    "that reference."
+                    "that reference. Do not expose row values from a table "
+                    "without a primary key; choose a primary-key-backed path "
+                    "or a derived aggregate instead."
                 ),
                 "items": {
                     "type": "object",

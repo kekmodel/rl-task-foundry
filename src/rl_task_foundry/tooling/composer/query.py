@@ -656,6 +656,7 @@ def _column_source_payload(
             "column": resolved.column,
             "visibility": column.visibility,
             "is_handle": column.is_handle_column,
+            "table_has_primary_key": bool(resolved.table.primary_key),
         }
     )
     return payload
@@ -1085,6 +1086,7 @@ async def query(
                     "column": column.name,
                     "visibility": column.visibility,
                     "is_handle": column.is_handle_column,
+                    "table_has_primary_key": bool(target_spec.primary_key),
                     "value_exposes_source": True,
                 }
             )

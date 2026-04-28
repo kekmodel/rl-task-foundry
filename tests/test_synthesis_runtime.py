@@ -1880,6 +1880,112 @@ async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_label_from_table_without_primary_key(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"detail_status": "complete"},
+            "entity": {"event_id": 1},
+            "user_request": "이 이벤트의 상세 상태를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="상세 상태",
+                table="event_detail",
+                column="detail_status",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        column_sources=[
+            {
+                "output": "detail_status",
+                "kind": "select",
+                "table": "event_detail",
+                "column": "detail_status",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "table_has_primary_key": False,
+                "value_exposes_source": True,
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "table without a primary key" in message
+    assert "stable records" in message
+    assert controller.last_feedback_error_codes == ("label_no_primary_key_source",)
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_allows_count_from_table_without_primary_key(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"detail_count": 3},
+            "entity": {"event_id": 1},
+            "user_request": "이 이벤트의 상세 기록 수를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="상세 기록 수",
+                table="event_detail",
+                fn="count",
+                column="event_id",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        column_sources=[
+            {
+                "output": "detail_count",
+                "kind": "aggregate",
+                "fn": "count",
+                "table": "event_detail",
+                "column": "event_id",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "table_has_primary_key": False,
+                "value_exposes_source": False,
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_allows_handle_label_when_visibility_policy_allows_it(
     tmp_path: Path,
 ) -> None:

@@ -282,6 +282,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "canonical query surface" in instructions
     assert "Bad: the request can reasonably name one source surface" in instructions
     assert "Good: the request names the selected source surface" in instructions
+    assert "If no primary key" in instructions
+    assert "primary-key-backed path" in instructions
     assert "hidden path guessing" in instructions
     assert "# Feedback Handling Policy" in instructions
     assert "not a new durable instruction source" in instructions
