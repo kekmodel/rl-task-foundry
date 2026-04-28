@@ -65,7 +65,7 @@ def instrument_composer_tool(
 
     async def wrapped(ctx: object, input_json: str) -> str:
         params = _safe_parse_json_object(input_json)
-        budget_feedback = controller.data_tool_budget_feedback()
+        budget_feedback = controller.data_tool_budget_feedback(tool_name=name)
         if budget_feedback is not None:
             controller.record_atomic_tool_call(
                 tool_name=name,

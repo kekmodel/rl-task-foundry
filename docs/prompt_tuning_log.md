@@ -5825,6 +5825,68 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
   통과.
 
+## Iteration 155 — Budget feedback must allow label-query repair
+
+- **질문**:
+  Iteration 154의 `ToolBudgetFeedback`가 실제 smoke에서 submit을 앞당기되,
+  제출에 필요한 label query와 query repair까지 막지는 않는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 반복했다. composer/solver는
+  OpenRouter Kimi K2.5, solver 4개, lower band 0.2:
+
+  - `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_01`
+  - `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_01_retry_01`
+  - `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_01_retry_02`
+- **관찰**:
+  1. 첫 trial은 budget feedback이 `schema_map/neighborhood/sample` 3회 뒤
+     모든 data tool을 막아, 제출에 필요한 최종 `query`도 실행하지 못했다.
+     이건 제출 강제가 아니라 근거 생성 차단이었다.
+  2. retry_01에서는 최종 `query`는 허용됐지만, 이미 성공한 query가
+     `limit_boundary_tie`/duplicate order diagnostics를 보이는 경우에도 다음
+     repair query가 막혔다.
+  3. 같은 retry에서 contract-only feedback 뒤 composer가 이전 transfer label을
+     버리고 lab label로 갈아타려는 현상도 보였다. `answer_contract_phrase_missing`
+     / `answer_contract_query_mismatch`는 label 교체가 필요 없는 계약 수리인데,
+     모델이 feedback을 task reset으로 사용한 것이다.
+  4. retry_02에서는 최종 accepted:
+     `task_patient_admissions_history_256f3a899c44871b`, pass-rate `3/4 = 0.75`.
+- **변경**:
+  - `data_tool_budget_feedback(tool_name=...)`로 호출 tool을 보게 했다.
+    budget limit에 도달했더라도 아직 성공한 label query가 없으면 `query`만
+    허용한다. 성공한 query가 있더라도 query diagnostics가 ambiguous ordering
+    또는 duplicate projected rows를 보고하면 repair query를 허용한다.
+  - durable budget prompt도 같은 원칙으로 정리했다. limit 이후에는 행이 없는
+    경우 label `query`만 허용하고, rows가 돌아오면 submit한다.
+  - contract-only feedback(`answer_contract_phrase_missing`,
+    `answer_contract_query_mismatch`)은 canonical label signature를 잠근다.
+    이후 label이 바뀌면 `label_changed_during_repair` feedback을 반환한다.
+    이는 DB literal/table/column heuristic이 아니라 제출된 label 구조 비교다.
+- **정성 평가**:
+  accepted data: clean. 최종 요청은 "내 최근 입원 이력 3건"을 `admittime desc`
+  로 정렬하고 `admission_type`, `admittime`, `dischtime`,
+  `discharge_location`, `admission_location`을 요구한다. 직접 DB에서
+  `mimiciv_hosp.admissions where subject_id=10012853 order by admittime desc
+  limit 5`를 실행해 top 3가 canonical answer와 일치함을 확인했다. 낮지 않은
+  pass-rate 0.75이고, 1개 solver 실패는 정답이 여러 개인 문제가 아니라 solver가
+  최근순/limit을 잘못 적용한 hard-good 실패로 본다.
+
+  rejected data: low-quality rejected. 첫 draft는 너무 쉬워서 reject된 정상
+  케이스다. 이후 ICU join 강화는 list 3건을 1건으로 줄였고
+  `answer_contract_not_incremental/cardinality_weakened`로 막혔다. 이는 좋은
+  hard task가 아니라 Difficulty-Up Policy 위반이다. low-quality accepted는
+  발생하지 않았다.
+- **원칙 준수**:
+  새 hard checks는 tool call count, query diagnostics, canonical label
+  signature만 사용한다. DB 값/테이블명/컬럼명 리터럴 기반 휴리스틱은 추가하지
+  않았다. Prompt가 정책을 정의하고, feedback/tool wrapper는 그 정책을 어겼을 때
+  상기하거나 submit을 요구하는 역할로 유지했다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`82 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows
 
 - **질문**:

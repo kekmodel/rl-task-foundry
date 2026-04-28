@@ -62,6 +62,7 @@ class SubmitDraftErrorCode(StrEnum):
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
     LABEL_NOT_STRENGTHENED = "label_not_strengthened"
+    LABEL_CHANGED_DURING_REPAIR = "label_changed_during_repair"
     ANSWER_CONTRACT_REQUIRED = "answer_contract_required"
     ANSWER_CONTRACT_JSON_INVALID = "answer_contract_json_invalid"
     ANSWER_CONTRACT_PHRASE_MISSING = "answer_contract_phrase_missing"
@@ -91,6 +92,14 @@ class SubmitDraftErrorCode(StrEnum):
     CALIBRATION_INCONCLUSIVE = "calibration_inconclusive"
 
 
+_LABEL_LOCKING_REPAIR_ERROR_VALUES = frozenset(
+    {
+        SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING.value,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH.value,
+    }
+)
+
+
 _FEEDBACK_ONLY_ERROR_CODES = frozenset(
     {
         SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION,
@@ -103,6 +112,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
         SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
+        SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR,
         SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING,
         SubmitDraftErrorCode.ANSWER_CONTRACT_JSON_INVALID,
         SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING,
@@ -1450,6 +1460,7 @@ class SubmitDraftController:
     )
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
     _last_evaluated_label_data: dict[str, object] | None = field(default=None, init=False)
+    _repair_locked_label_signature: str | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
     _last_feedback_error_codes: tuple[str, ...] = field(default=(), init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
@@ -1469,6 +1480,15 @@ class SubmitDraftController:
     @property
     def last_feedback_error_codes(self) -> tuple[str, ...]:
         return self._last_feedback_error_codes
+
+    @staticmethod
+    def _feedback_codes_lock_label(
+        error_codes: list[SubmitDraftErrorCode | str] | tuple[str, ...],
+    ) -> bool:
+        values = tuple(_error_code_values(error_codes))
+        return bool(values) and all(
+            value in _LABEL_LOCKING_REPAIR_ERROR_VALUES for value in values
+        )
 
     def record_atomic_tool_call(
         self,
@@ -1503,13 +1523,25 @@ class SubmitDraftController:
                 },
             )
 
-    def data_tool_budget_feedback(self) -> dict[str, object] | None:
+    def data_tool_budget_feedback(self, *, tool_name: str) -> dict[str, object] | None:
         if self.accepted_draft is not None or self._terminated_too_hard:
             return None
         calls_since_boundary = (
             len(self._raw_atomic_tool_calls)
             - self._tool_call_count_at_last_protocol_boundary
         )
+        latest_query_call = self._latest_successful_query_call_since_protocol_boundary()
+        latest_query_result = (
+            latest_query_call.get("result") if latest_query_call is not None else None
+        )
+        query_needs_repair = isinstance(latest_query_result, dict) and (
+            _query_ordering_is_ambiguous(latest_query_result)
+            or _query_projection_has_duplicate_answer_rows(latest_query_result)
+        )
+        if tool_name == "query" and (
+            latest_query_call is None or query_needs_repair
+        ):
+            return None
         if not self.attempts and self._feedback_events == 0:
             if calls_since_boundary < FIRST_SUBMIT_MAX_DATA_TOOLS:
                 return None
@@ -1528,12 +1560,12 @@ class SubmitDraftController:
             return None
         return {
             "error": "submit_draft_required",
-                "message": (
-                    "ToolBudgetFeedback: Draft Submission Budget reminder: after "
-                    "feedback, call submit_draft after at most "
-                    f"{FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools. If the repair "
-                    "query has returned label values, submit them now."
-                ),
+            "message": (
+                "ToolBudgetFeedback: Draft Submission Budget reminder: after "
+                "feedback, call submit_draft after at most "
+                f"{FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools. If the repair "
+                "query has returned label values, submit them now."
+            ),
             "calls_since_boundary": calls_since_boundary,
             "limit": FEEDBACK_REPAIR_MAX_DATA_TOOLS,
         }
@@ -1545,6 +1577,20 @@ class SubmitDraftController:
 
     def _latest_successful_query_call_since_last_submission(self) -> dict[str, object] | None:
         recent_calls = self._raw_atomic_tool_calls[self._tool_call_count_at_last_submission :]
+        return self._latest_successful_query_call(recent_calls)
+
+    def _latest_successful_query_call_since_protocol_boundary(
+        self,
+    ) -> dict[str, object] | None:
+        recent_calls = self._raw_atomic_tool_calls[
+            self._tool_call_count_at_last_protocol_boundary :
+        ]
+        return self._latest_successful_query_call(recent_calls)
+
+    @staticmethod
+    def _latest_successful_query_call(
+        recent_calls: list[dict[str, object]],
+    ) -> dict[str, object] | None:
         for call in reversed(recent_calls):
             if call.get("tool_name") != "query":
                 continue
@@ -1937,6 +1983,13 @@ class SubmitDraftController:
                         : self.config.synthesis.runtime.diagnostic_item_limit
                     ]
                 )
+        if (
+            not self._needs_label_change
+            and self._repair_locked_label_signature is not None
+            and label_signature != self._repair_locked_label_signature
+        ):
+            error_codes.append(SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR)
+            invalid_diagnostics["repair_locked_label_changed"] = True
 
         if not error_codes and submission_diagnostics:
             binding_diagnostics = submission_diagnostics.get(
@@ -2246,6 +2299,9 @@ class SubmitDraftController:
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED: (
                 "Rejected. Difficulty-Up Policy reminder: after specificity feedback, the canonical answer itself must change through a grounded strengthening step. Use the last evaluated too-easy label as the baseline; keep fields already added and add one new grounded field, relationship, or coherent constraint."  # noqa: E501
             ),
+            SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR: (
+                "Rejected. Feedback Handling Policy reminder: this feedback only requires contract repair, so preserve the previous canonical label/query target and change only the failing request/answer_contract wording or rerun that same label query."  # noqa: E501
+            ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_REQUIRED: (
                 "Rejected. Tool schema reminder: answer_contract is required."
             ),
@@ -2371,6 +2427,19 @@ class SubmitDraftController:
     ) -> str:
         self._feedback_events += 1
         self._last_feedback_error_codes = tuple(_error_code_values(error_codes))
+        if self._feedback_codes_lock_label(error_codes) and isinstance(
+            payload,
+            SubmitDraftPayload,
+        ):
+            self._repair_locked_label_signature = canonical_json(
+                payload.canonical_answer,
+                default=str,
+            )
+        elif (
+            SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR.value
+            not in _error_code_values(error_codes)
+        ):
+            self._repair_locked_label_signature = None
         self._tool_call_count_at_last_protocol_boundary = len(self._raw_atomic_tool_calls)
         attempts_left_after = self.submissions_left()
         self._emit_monitor(

@@ -15,7 +15,8 @@ def test_budget_instruction_uses_tool_call_language_not_turns() -> None:
     assert "turn" not in text.lower().split("tool calls")[0]
     assert "data tools" in text
     assert "After feedback, use at most 2 data tools" in text
-    assert "repair query returns the label, submit immediately" in text
+    assert "only label `query`" in text
+    assert "submit when rows return" in text
     for leaked in ("composer tools", "too_easy", "too_hard", "trial"):
         assert leaked not in text
 

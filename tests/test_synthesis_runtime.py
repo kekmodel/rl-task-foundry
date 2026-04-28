@@ -839,20 +839,56 @@ def test_data_tool_budget_feedback_blocks_late_first_submit(tmp_path: Path) -> N
             params={"index": index},
             result={"rows": []},
         )
-        assert controller.data_tool_budget_feedback() is None
+        assert controller.data_tool_budget_feedback(tool_name="sample") is None
     controller.record_atomic_tool_call(
         tool_name="query",
         params={"index": FIRST_SUBMIT_MAX_DATA_TOOLS},
         result={"rows": [{"value": 1}]},
     )
 
-    feedback = controller.data_tool_budget_feedback()
+    feedback = controller.data_tool_budget_feedback(tool_name="sample")
 
     assert feedback is not None
     assert feedback["error"] == "submit_draft_required"
     assert feedback["calls_since_boundary"] == FIRST_SUBMIT_MAX_DATA_TOOLS
     assert feedback["limit"] == FIRST_SUBMIT_MAX_DATA_TOOLS
     assert "first submit_draft" in str(feedback["message"])
+
+
+def test_data_tool_budget_feedback_allows_first_label_query_after_limit(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+
+    for index in range(FIRST_SUBMIT_MAX_DATA_TOOLS):
+        controller.record_atomic_tool_call(
+            tool_name="sample",
+            params={"index": index},
+            result={"rows": []},
+        )
+
+    assert controller.data_tool_budget_feedback(tool_name="query") is None
+    assert controller.data_tool_budget_feedback(tool_name="sample") is not None
+
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {}},
+        result={"rows": [{"value": 1}]},
+    )
+
+    feedback = controller.data_tool_budget_feedback(tool_name="query")
+
+    assert feedback is not None
+    assert feedback["error"] == "submit_draft_required"
 
 
 def test_data_tool_budget_feedback_blocks_late_feedback_repair(tmp_path: Path) -> None:
@@ -875,20 +911,101 @@ def test_data_tool_budget_feedback_blocks_late_feedback_repair(tmp_path: Path) -
         params={"target": "field"},
         result={"distinct_count": 2},
     )
-    assert controller.data_tool_budget_feedback() is None
+    assert controller.data_tool_budget_feedback(tool_name="profile") is None
     controller.record_atomic_tool_call(
         tool_name="query",
         params={"spec": {}},
         result={"rows": [{"value": 1}]},
     )
 
-    feedback = controller.data_tool_budget_feedback()
+    feedback = controller.data_tool_budget_feedback(tool_name="sample")
 
     assert feedback is not None
     assert feedback["error"] == "submit_draft_required"
     assert feedback["calls_since_boundary"] == FEEDBACK_REPAIR_MAX_DATA_TOOLS
     assert feedback["limit"] == FEEDBACK_REPAIR_MAX_DATA_TOOLS
     assert "after feedback" in str(feedback["message"])
+
+
+def test_data_tool_budget_feedback_allows_repair_query_after_limit(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    controller._record_feedback(
+        message="FeedbackError: repair",
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
+    )
+    for index in range(FEEDBACK_REPAIR_MAX_DATA_TOOLS):
+        controller.record_atomic_tool_call(
+            tool_name="profile",
+            params={"index": index},
+            result={"distinct_count": index + 1},
+        )
+
+    assert controller.data_tool_budget_feedback(tool_name="query") is None
+    assert controller.data_tool_budget_feedback(tool_name="sample") is not None
+
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {}},
+        result={"rows": [{"value": 1}]},
+    )
+
+    feedback = controller.data_tool_budget_feedback(tool_name="query")
+
+    assert feedback is not None
+    assert feedback["error"] == "submit_draft_required"
+
+
+def test_data_tool_budget_feedback_allows_query_repair_for_ambiguous_query(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    controller._record_feedback(
+        message="FeedbackError: repair",
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH],
+    )
+    for index in range(FEEDBACK_REPAIR_MAX_DATA_TOOLS):
+        controller.record_atomic_tool_call(
+            tool_name="profile",
+            params={"index": index},
+            result={"distinct_count": index + 1},
+        )
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {}},
+        result={
+            "rows": [{"value": 1}, {"value": 2}],
+            "referenced_columns": [
+                {"usage": "order_by", "table": "t", "column": "created_at"}
+            ],
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": True,
+                "limit_boundary_tie": True,
+            },
+        },
+    )
+
+    assert controller.data_tool_budget_feedback(tool_name="query") is None
+    assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 
 def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
@@ -1376,6 +1493,50 @@ async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
     assert diagnostics["answer_contract_binding_errors"] == [
         "duplicate_output_binding_phrases"
     ]
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    first_payload_data = _accepted_payload().model_dump(mode="json")
+    first_payload_data["answer_contract"]["answer_phrase"] = "요청에 없는 문구"
+    first_payload = SubmitDraftPayload.model_validate(first_payload_data)
+    _record_query_evidence(controller, first_payload.label)
+
+    first_message = await controller.submit(first_payload)
+
+    assert "exact contiguous substring" in first_message
+    assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
+
+    second_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"store_id": 2, "customer_count": 9},
+            "entity": {"customer_id": 1},
+            "user_request": "내가 배정된 매장과 전체 고객 수를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(phrase="전체 고객 수"),
+        }
+    )
+    _record_query_evidence(controller, second_payload.label)
+
+    second_message = await controller.submit(second_payload)
+
+    assert "Feedback Handling Policy reminder" in second_message
+    assert "preserve the previous canonical label" in second_message
+    assert controller.last_feedback_error_codes == ("label_changed_during_repair",)
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
 
 
 @pytest.mark.asyncio
