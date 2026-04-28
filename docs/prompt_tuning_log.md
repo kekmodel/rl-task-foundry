@@ -4544,3 +4544,65 @@ Solver 30/30 완료 결과:
   `openai_api/gpt-5.4-mini`. Config-load tests now assert the default provider
   and model. Config-load tests and the real-db trial CLI override summary test
   passed. `ruff` passed for the touched Python test surfaces.
+
+## Iteration 112 — OpenAI API mini retry and GPT-5.5 single comparison
+
+- **Question**:
+  After the explicit sort-direction prompt change, can direct OpenAI API runs
+  produce valid `mimiciv_demo` quality samples, and is `gpt-5.4-mini` too weak
+  for this composer/solver loop?
+- **Setup**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_explicit_sort_direction_openai_mini_no_topic_batch5_01`.
+  The first five no-topic `mimiciv_demo` trials used
+  `openai_api/gpt-5.4-mini` for composer and solvers. All five failed before
+  any draft with `RateLimitError` on OpenAI TPM. These are provider failures,
+  not quality samples.
+
+  Retried with provider concurrency `1`, solver batch size `1`, and higher
+  SDK retry count. Trial 1 completed 20 solver runs and was rejected at
+  `0/20`; the draft asked for the globally earliest ICU stay while carrying a
+  locked stay anchor, so this is a low-quality rejected sample. Trial 2 was
+  rejected twice as too easy at `20/20`, then stopped on
+  `answer_contract_not_incremental`. Trial 3 was still producing mostly
+  too-easy admission-record drafts when the run was intentionally interrupted
+  to test a stronger model. Trials 4 and 5 were not run.
+- **GPT-5.5 comparison**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_explicit_sort_direction_openai_gpt55_no_topic_single_01`.
+  A minimal direct health check resolved `gpt-5.5` to
+  `gpt-5.5-2026-04-23`. One no-topic trial used `openai_api/gpt-5.5` for both
+  composer and all 20 solvers, with concurrency `1`.
+- **Result**:
+  The GPT-5.5 trial accepted
+  `task_pharmacy medication orders_9380b3be793d760b` at
+  `15/20 = 0.75`, CI `[0.544, 0.896]`.
+- **Accepted data audit**:
+  This is not clean. The request explicitly says the list should be latest-first
+  by medication order start time, and same-time rows should be ordered by
+  medication name ascending. The answer contract correctly binds those order
+  keys, and both keys are user-visible and included in the label. This directly
+  satisfies the explicit sort-direction target.
+
+  The accepted sample is borderline, leaning low-quality accepted. The top
+  three pharmacy rows contain two distinct `Senna` orders with different hidden
+  `pharmacy_id` values, but the requested output fields make the two answer
+  objects identical. The user receives two indistinguishable rows. The failed
+  solver runs also show a real wording ambiguity: several solvers interpreted
+  `2161-11-15에 시작된` as a medication start-date filter instead of an admission
+  start-date anchor.
+- **Rejected/failed data audit**:
+  Mini parallel failures are provider/infra failures. Mini retry Trial 1 is
+  low-quality rejected. Mini retry Trial 2 is too-easy rejected, followed by a
+  non-incremental difficulty crank failure. The interrupted mini Trial 3 is not
+  a final quality sample.
+- **Interpretation**:
+  GPT-5.5 produced a structurally stronger draft than mini: explicit direction,
+  visible tie-break binding, and an in-band pass rate. However, the accepted
+  data quality is still not good enough to call clean. The next improvement
+  candidate should target general prompt guidance against ambiguous anchor
+  phrasing and indistinguishable duplicate answer rows. A hard validator for
+  natural-language ambiguity is not precision-100; duplicate projected answer
+  rows are structurally detectable, but rejecting them as low quality is still
+  a policy judgment unless the contract explicitly requires distinguishable
+  records.
