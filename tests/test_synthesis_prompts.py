@@ -257,9 +257,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert instructions.count("Why:") >= 8
     assert "the DB decides the domain" in instructions
     assert "hidden entity values must be grounded" in instructions
-    assert "Build the label first" in instructions
+    assert "Build a requestable label candidate" in instructions
     assert "interesting, unique, verifiable, scoped" in instructions
-    assert "Derive `user_request` and `topic` from the label" in instructions
+    assert "Check requestability" in instructions
+    assert "realistic customer" in instructions
+    assert "without technical or awkward control wording" in instructions
+    assert "choose another label" in instructions
+    assert "Derive `user_request` and `topic` from that label" in instructions
     assert "exactly the label fields and row controls" in instructions
     assert "supplies copied label JSON" in instructions
     assert "no global answer with a decorative entity" in instructions
@@ -313,6 +317,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not attach `entity` to a global report" in instructions
     assert "Copy visible context values" in instructions
     assert "latest scoped query evidence" in instructions
+    assert "Keep the request realistic and compact" in instructions
+    assert "long tie-break ladder" in instructions
+    assert "mechanical field enumeration" in instructions
     assert "do not expose it" in instructions
     assert "several roles or sibling surfaces" in instructions
     assert "selected role" in instructions
@@ -377,6 +384,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "List tasks" in instructions
     assert "avoid trivial 0/1 results" in instructions
     assert "homogeneous ordered list" in instructions
+    assert "Prefer natural orders needing zero or one visible tie-break" in instructions
     assert "first/latest/top 3-5 rows" in instructions
     assert "avoid all matching when observed count exceeds 5" in instructions
     assert "at least one non-handle visible field" in instructions

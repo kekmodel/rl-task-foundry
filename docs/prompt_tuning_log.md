@@ -5028,3 +5028,83 @@ Solver 30/30 완료 결과:
 
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
   passed.
+
+## Iteration 119 — Requestable-label gate after label-first audit
+
+- **Question**:
+  Does label-first materially improve `user_request` quality, or does it mostly
+  improve label/query alignment while still allowing awkward customer wording?
+- **Setup**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_prompt_reminder_role_binding_kimi_8solver_no_topic_batch5_01`.
+  `mimiciv_demo`, no topic hint, `openrouter/moonshotai/kimi-k2.5` for composer
+  and solvers, `max_solver_runs=8`, `solver_batch_size=4`, provider concurrency
+  `1`.
+- **Raw result**:
+  Completed quality samples: `4`; incomplete/infra-aborted sample: `1`.
+
+  Accepted: `trial_01` at `7/8 = 0.875`.
+
+  Failed: `trial_03` at `1/8 = 0.125`, `trial_04` at `1/8 = 0.125`,
+  `trial_05` at `0/8 = 0.0`.
+
+  `trial_02` ended without an exit file after a too-easy first submission at
+  `8/8 = 1.0`; exclude it from quality statistics until retried.
+- **Accepted data audit**:
+  `trial_01` is structurally clean/borderline accepted. The final query,
+  label, answer contract, and solver pass rate align. However, the request is
+  verbose and contract-shaped: it asks for admission prescriptions, then spells
+  out start-time ordering plus two tie-break clauses. This is not low-quality
+  accepted, but it shows that label-first alone does not reliably produce
+  natural customer requests.
+- **Rejected/failed data audit**:
+  `trial_03` is low-quality rejected/inconclusive. The Jevity enteral-nutrition
+  request is specific, but the very low pass rate and trace pattern suggest a
+  hidden-scope or row-set mismatch rather than a good hard task.
+
+  `trial_04` is low-quality rejected. It used technical sequence wording
+  (`순번`) and first hit `answer_contract_hidden_filter_unanchored`; the final
+  request remained mechanical.
+
+  `trial_05` is low-quality rejected / mechanical hard case. The composer moved
+  toward a deterministic medication list, but the final request still reads as
+  an ordering contract over repeated medication names rather than a natural user
+  need. No low-quality accepted sample came from this batch.
+
+  `trial_02` is incomplete. Its first request was more natural but too easy;
+  because the process exited without a completed recovery attempt, it is an
+  infra-aborted sample, not evidence that label-first solved request quality.
+- **Conclusion**:
+  Label-first contributes to label/query/request alignment, but its contribution
+  to request quality is weak in the current design. The composer can still pick
+  a label that is only verifiable through awkward ordering, technical sequence
+  wording, or long field enumeration, then faithfully derive an awkward
+  `user_request` from it.
+- **Change**:
+  Redesign the workflow from plain label-first to requestable-label-first.
+  The composer now builds a requestable label candidate and checks whether a
+  realistic customer can ask for the exact fields, row set, order, and
+  tie-breaks without technical or awkward control wording. If not, it must
+  choose another label.
+
+  Added a compact Request Contract rule: keep requests realistic and compact;
+  if exact deterministic controls require a long tie-break ladder, technical
+  sequence wording, or mechanical field enumeration, choose a more naturally
+  requestable label instead. List tasks now prefer natural orders needing zero
+  or one visible tie-break.
+- **Why this follows the principles**:
+  This is durable composer behavior, so it belongs in the system prompt. No
+  validator was added because request naturalness, awkwardness, and "too much
+  deterministic control wording" are not precision-100 properties. The change
+  stays DB-neutral and does not inspect DB literals, table names, column-name
+  tokens, or model outputs with heuristic string rules.
+- **Verification**:
+  Prompt instructions render at `7998` characters with `16` `Why:` markers.
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py`
+  passed (`12 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py`
+  passed.
+
+  `git diff --check` passed.
