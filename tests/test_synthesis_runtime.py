@@ -995,6 +995,62 @@ async def test_submit_draft_feedbacks_missing_list_output_binding(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
+    tmp_path: Path,
+) -> None:
+    monitor = _CollectingPhaseMonitor()
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medications",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+        phase_monitor=monitor,  # type: ignore[arg-type]
+    )
+    _seed_min_initial_exploration(controller)
+    label = [{"dose": "650", "unit": "mg", "route": "PO"}]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "medications",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": "최근 처방 약물 1개의 용량과 투여 경로를 보여 주세요.",
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "처방 약물",
+                "constraint_phrases": ["최근"],
+                "limit_phrase": "1개",
+                "output_bindings": [
+                    {"label_field": "dose", "requested_by_phrase": "용량"},
+                    {"label_field": "unit", "requested_by_phrase": "용량"},
+                    {"label_field": "route", "requested_by_phrase": "투여 경로"},
+                ],
+            },
+        }
+    )
+    _record_query_evidence(controller, payload.label)
+
+    message = await controller.submit(payload)
+
+    assert "own natural role phrase" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert controller.attempts == []
+    diagnostics = monitor.records[-1]["diagnostics"]
+    assert isinstance(diagnostics, dict)
+    binding_diagnostics = diagnostics["answer_contract_binding_diagnostics"]
+    assert isinstance(binding_diagnostics, dict)
+    assert binding_diagnostics["duplicate_output_binding_phrases"] == [
+        {"requested_by_phrase": "용량", "label_fields": ["dose", "unit"]}
+    ]
+    assert diagnostics["answer_contract_binding_errors"] == [
+        "duplicate_output_binding_phrases"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key(
     tmp_path: Path,
 ) -> None:

@@ -748,6 +748,27 @@ def _ordered_unique_texts(values: list[str]) -> list[str]:
     return unique
 
 
+def _duplicate_output_binding_phrases(
+    output_bindings: list[AnswerOutputBinding],
+) -> list[dict[str, object]]:
+    fields_by_phrase: dict[str, list[str]] = {}
+    for binding in output_bindings:
+        fields_by_phrase.setdefault(binding.requested_by_phrase, []).append(
+            binding.label_field
+        )
+    duplicates: list[dict[str, object]] = []
+    for phrase, fields in fields_by_phrase.items():
+        unique_fields = _ordered_unique_texts(fields)
+        if len(unique_fields) > 1:
+            duplicates.append(
+                {
+                    "requested_by_phrase": phrase,
+                    "label_fields": unique_fields,
+                }
+            )
+    return duplicates
+
+
 def _query_order_output_names(query_result: dict[str, object]) -> list[str]:
     diagnostics = query_result.get("ordering_diagnostics")
     if not isinstance(diagnostics, dict):
@@ -780,6 +801,9 @@ def _answer_contract_binding_diagnostics(
     order_reference_count = _query_order_reference_count(query_result)
     bound_output_fields = _ordered_unique_texts(
         [binding.label_field for binding in output_bindings]
+    )
+    duplicate_output_binding_phrases = _duplicate_output_binding_phrases(
+        output_bindings
     )
     bound_order_label_fields = _ordered_unique_texts(
         [binding.label_field for binding in order_bindings if binding.label_field is not None]
@@ -831,6 +855,9 @@ def _answer_contract_binding_diagnostics(
             set(bound_order_label_fields) - label_field_set
         )[:item_limit],
         "missing_requested_by_phrases": missing_requested_by_phrases[:item_limit],
+        "duplicate_output_binding_phrases": duplicate_output_binding_phrases[
+            :item_limit
+        ],
     }
 
 
@@ -847,6 +874,9 @@ def _answer_contract_binding_errors(
         extra_outputs = diagnostics.get("extra_output_bindings")
         if isinstance(extra_outputs, list) and extra_outputs:
             errors.append("extra_output_bindings")
+        duplicate_output_phrases = diagnostics.get("duplicate_output_binding_phrases")
+        if isinstance(duplicate_output_phrases, list) and duplicate_output_phrases:
+            errors.append("duplicate_output_binding_phrases")
     missing_by_count = diagnostics.get("missing_order_binding_count")
     if isinstance(missing_by_count, int) and missing_by_count > 0:
         errors.append("missing_order_bindings")
@@ -1996,7 +2026,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
                 "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request. If an order key is only a tie-break, user_request still needs natural visible tie-break wording before that key can be bound; otherwise rerun query without that order key or return tied rows."  # noqa: E501
-                " Display-only output wording is not enough for an order binding. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
+                " Each returned output field also needs its own natural role phrase; do not reuse one broad output phrase for multiple returned concepts. Display-only output wording is not enough for an order binding. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata."  # noqa: E501

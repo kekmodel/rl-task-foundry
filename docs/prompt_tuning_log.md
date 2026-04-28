@@ -5540,6 +5540,59 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 141 — Output bindings need distinct request roles
+
+- **질문**:
+  Iteration 140의 baseline feedback 보강 뒤 단일 smoke가 accepted되는가, 그리고 accepted data가
+  정말 좋은 데이터인가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_too_easy_baseline_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted됐다.
+
+  - first submit: `answer_contract_phrase_missing`
+  - second submit: accepted
+  - pass rate: `6/8 = 0.75`
+  - failed solver runs: `0`
+  - topic: `입원 중 처방된 약물 정보`
+  - request: `이번 입원 기간 동안 처방받은 약물 이름과 용량, 투여 경로, 24시간 투여 횟수를 알파벳순으로 보여주세요.`
+
+  Composer는 first feedback 뒤 phrase를 exact substring으로 고쳤고, 같은 task 안에서 submit까지
+  유지했다. provider failure는 없었다.
+- **정성 평가**:
+  accepted data: borderline/low-quality accepted. 데이터 경로 자체는 좋다. admission anchor에서
+  prescriptions로 이동해 18개 처방을 약물명 asc로 정렬하고, drug/dose/unit/route/frequency를
+  반환한다. solver도 모두 같은 경로를 찾았고 6개가 정확히 맞췄다.
+
+  하지만 request는 `용량` 하나만 말하는데 canonical label은 `dose`와 `unit`을 별도 필드로
+  반환했다. accepted answer_contract도 두 필드를 모두 같은 `requested_by_phrase: "용량"`에
+  묶었다. 실제 mismatch solver 중 하나는 `dose: "650 mg"`처럼 값과 단위를 합쳐 내면서 별도
+  `unit`도 냈다. 이는 어려운 문제라기보다 user-visible output role이 충분히 분해되지 않은
+  출력 계약 모호성이다. 따라서 accepted로 남기면 안 되는 품질 신호다.
+
+  rejected data: first submit의 `answer_contract_phrase_missing`은 정상적인 저품질 reject였다.
+- **변경**:
+  기존 prompt와 tool schema에는 이미 "one vague phrase를 multiple concepts에 재사용하지 말라"는
+  Label Contract가 있었다. Composer가 이 정책을 어겼으므로 새 durable prompt가 아니라 precision-100
+  validator로 집행한다.
+
+  - list `output_bindings`에서 서로 다른 label fields가 동일한 `requested_by_phrase`에 묶이면
+    `duplicate_output_binding_phrases` diagnostic을 기록한다.
+  - 이 diagnostic은 `answer_contract_binding_missing` feedback으로 처리한다. feedback 문구에는
+    각 returned output field가 자기 own natural role phrase를 가져야 하며 broad output phrase를
+    여러 returned concepts에 재사용하지 말라고 상기한다.
+
+  이 검사는 DB literal, token, column-name heuristic이 아니다. composer가 제출한
+  `answer_contract.output_bindings`의 구조적 중복만 보므로 precision-100 계약 검증이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_list_output_binding tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_duplicate_output_binding_phrase tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_by_query_order_count -q`
+  통과 (`4 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 140 — Too-easy retries must keep the latest strengthened baseline
 
 - **질문**:
