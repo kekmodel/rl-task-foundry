@@ -4351,3 +4351,89 @@ Solver 30/30 완료 결과:
   visible but unnatural sequence/id surface is made explicit enough to pass.
   That should not become a hard validator without 100%-precision evidence; treat
   it as prompt/schema-shape/advisory-audit input.
+
+## Iteration 107 — Natural tie-break surface prompt test
+
+- **Question**:
+  Can a prompt-first policy reduce accepted drafts that make top-k lists stable
+  by adding artificial technical sequence/id language to the user request?
+- **Change**:
+  Commit `aa4d74a` updates the composer system prompt to say the customer does
+  not know technical sequences/references, and the List Determinism Policy now
+  requires a natural visible tie-break. It explicitly says not to fix top-k
+  lists with artificial technical sequence/id wording. The
+  `AnswerOrderBinding.requested_by_phrase` schema description was narrowed from
+  "tie-break" to "natural tie-break".
+- **Why this layer**:
+  This is not a 100%-precision validator target. Whether a tie-break phrase is
+  natural customer language is a semantic/naturalness judgment, so the durable
+  rule belongs in the system prompt. The tool schema only states the local
+  binding contract.
+- **Verification**:
+  `ruff` passed for the touched prompt/tool/test files. Prompt and schema
+  surface tests passed, and full `tests/test_synthesis_prompts.py` passed.
+  The rendered composer instructions remained under the 8000-character budget
+  at `7997` characters.
+- **Trial setup**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_natural_tiebreak_kimi_no_topic_batch5_01`.
+  Five parallel no-topic-hint `mimiciv_demo` trials used composer and solver
+  `opencode_zen/kimi-k2.5`, each with a separate registry/traces config.
+- **Result**:
+  Raw accepted count was `3/5`.
+  - Trial 1 accepted `task_ICU_output_measurements_2508f080a60a3046` at
+    `14/20 = 0.70`.
+  - Trial 2 failed with provider `UserError` after one
+    `answer_contract_order_ambiguous` feedback.
+  - Trial 3 accepted `task_microbiology_lab_results_dafa8662519b0af5` at
+    `17/20 = 0.85`.
+  - Trial 4 failed with provider `UserError` after one
+    `answer_contract_hidden_filter_unanchored` feedback.
+  - Trial 5 accepted `task_pharmacy_medication_lookup_738d70999eee67ba` at
+    `16/20 = 0.80`.
+- **Accepted data audit**:
+  Trial 1 is borderline accepted. The row set is scoped to the hidden ICU stay,
+  the selected fields match the request, and no technical sequence/id
+  tie-break is used. The concern is that "recent 5 measurements in time order"
+  fixes membership but does not say clearly whether the final list should be
+  newest-first or chronological within the latest five. Current solvers mostly
+  infer newest-first, but the exact ordered label is not as clean as it could
+  be.
+
+  Trial 3 is borderline accepted, with a targeted improvement signal. The
+  composer first tried an internal event id as the same-time tie-break; feedback
+  rejected that path. The accepted draft uses a natural visible tie-break:
+  same-time microbiology rows are ordered by test name. This directly addresses
+  the artificial technical tie-break risk. The remaining weakness is sort
+  direction phrasing: "test-time order" plus "recent 3" implies a recent list
+  but does not explicitly say newest-first.
+
+  Trial 5 is clean. The task is a one-row current medication-prescription
+  lookup anchored by hidden `pharmacy_id`; the user request does not expose the
+  handle and asks for medication, status, timing, admission, and patient
+  demographic fields that are returned through direct joins. No list ordering
+  or tie-break is involved.
+- **Rejected/failed data audit**:
+  Trials 2 and 4 are provider/infra failures, not completed quality-gate
+  rejected tasks. Trial 2's only submitted draft had duplicate start-time order
+  keys and received `answer_contract_order_ambiguous`; trial 4's only submitted
+  draft filtered by a hidden subject id that was not the submitted entity and
+  received `answer_contract_hidden_filter_unanchored`. Both low-quality drafts
+  were caught before any registry commit, but the run ended because the
+  provider returned `UserError` during recovery. They should not be counted as
+  hard-good or low-quality rejected final tasks.
+- **Comparison**:
+  Against Iteration 106, raw accepted count stayed `3/5` and low-quality
+  accepted stayed `0`. Clean accepted fell from `2` to `1`; borderline
+  accepted rose from `1` to `2`; infra/provider failures rose from `0` to `2`.
+  The targeted metric improved: no accepted task used artificial technical
+  sequence/id wording as a tie-break, and Trial 3 shows recovery from an
+  internal id tie-break toward a natural visible one.
+- **Interpretation**:
+  This experiment is not a broad quality win yet. It does appear to reduce the
+  specific artificial technical tie-break pattern without adding a heuristic
+  validator, but it exposes a neighboring weakness: the composer can satisfy
+  "natural tie-break" while still leaving sort direction slightly under-specified.
+  The next prompt-level candidate is a small clarification that list order
+  direction must be natural and explicit, for example "newest-first" versus
+  "oldest-first", rather than relying on "recent" plus "time order".
