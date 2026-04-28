@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -236,6 +237,80 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
     )
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["parallel_tool_calls"] is False
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_solver_backend_enforces_episode_duration(monkeypatch):
+    episode = _sample_episode()
+    episode = SolverEpisodeInput(
+        task_bundle=episode.task_bundle.model_copy(
+            update={
+                "rollout_constraints": episode.task_bundle.rollout_constraints.model_copy(
+                    update={"max_episode_duration_ms": 1}
+                )
+            }
+        ),
+        rendered_user_prompt=episode.rendered_user_prompt,
+    )
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeAgent:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeRunner:
+        @staticmethod
+        async def run(*_args, **_kwargs):
+            await asyncio.sleep(1)
+            return SimpleNamespace(final_output=None, new_items=[])
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=lambda **_kwargs: None,
+            set_tracing_disabled=lambda *, disabled: None,
+            ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
+        ),
+    )
+
+    backend = OpenAIAgentsSolverBackend(
+        solver_config=SolverModelConfig(
+            solver_id="solver_timeout",
+            provider="openrouter",
+            model="moonshotai/kimi-k2.5",
+        ),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="https://openrouter.ai/api/v1",
+            api_key_env="MISSING_OPENROUTER_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SolverRuntimeConfig(max_turns=8),
+    )
+
+    result = await backend.run(episode)
+
+    assert result.status == "failed"
+    assert result.termination_reason == "TimeoutError"
+    assert "max_episode_duration_ms=1" in result.termination_metadata["detail"]
 
 
 @pytest.mark.asyncio

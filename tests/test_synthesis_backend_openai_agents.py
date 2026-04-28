@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -301,6 +302,85 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
     assert completion_events[0]["payload"]["reasoning_content_path"] == (
         "/tmp/reasoning_content.jsonl"
     )
+
+
+@pytest.mark.asyncio
+async def test_synthesis_backend_enforces_run_timeout(monkeypatch) -> None:
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeChatModel:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeAgent:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeRunner:
+        @staticmethod
+        async def run(*_args, **_kwargs):
+            await asyncio.sleep(2)
+            return SimpleNamespace(final_output="", new_items=[])
+
+    class FakeController:
+        accepted_draft = None
+        _terminated_too_hard = False
+
+        def __init__(self) -> None:
+            self.event_logger = _RecordingEventLogger()
+
+        def submissions_left(self) -> int:
+            return 1
+
+    monkeypatch.setattr(
+        backend_module,
+        "_shared_load_sdk_components",
+        lambda **_kwargs: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            set_tracing_disabled=lambda **_kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(backend_module, "build_submit_draft_sdk_tool", lambda _controller: object())
+
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="openrouter", model="moonshotai/kimi-k2.5"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SynthesisRuntimeConfig(max_turns=5, run_timeout_s=1),
+    )
+    controller = FakeController()
+
+    with pytest.raises(TimeoutError, match="run_timeout_s=1"):
+        await backend.run_synthesis(
+            conversation=_conversation_with_controller(controller),
+            db_id="sakila",
+            requested_topic=None,
+            domain_name="customer support",
+            task_language="en",
+            scenario_description="end user support",
+            schema_summary={},
+            tool_surface_summary={},
+            max_turns=5,
+        )
+
+    event = controller.event_logger.events[-1]
+    assert event["event_type"] == "synthesis_failed"
+    assert event["payload"]["error_type"] == "TimeoutError"
 
 
 @pytest.mark.asyncio

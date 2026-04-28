@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -494,6 +495,8 @@ class OpenAIAgentsSolverBackend:
         session = self._build_session(sdk, task_id)
 
         started_at = perf_counter()
+        episode_timeout_s = episode.task_bundle.rollout_constraints.max_episode_duration_ms / 1000
+        deadline = started_at + episode_timeout_s
         run_input: str | list[object] = rendered_user_prompt
         run_result: Any | None = None
         total_turn_count = 0
@@ -502,13 +505,28 @@ class OpenAIAgentsSolverBackend:
         protocol_feedback_events = 0
         try:
             while True:
+                remaining_timeout_s = deadline - perf_counter()
+                if remaining_timeout_s <= 0:
+                    raise TimeoutError(
+                        "solver episode exceeded max_episode_duration_ms="
+                        f"{episode.task_bundle.rollout_constraints.max_episode_duration_ms}"
+                    )
                 turns_left = max(1, self.runtime_config.max_turns - total_turn_count)
-                run_result = await sdk.Runner.run(
-                    agent,
-                    run_input,
-                    max_turns=turns_left,
-                    session=session,
-                )
+                try:
+                    run_result = await asyncio.wait_for(
+                        sdk.Runner.run(
+                            agent,
+                            run_input,
+                            max_turns=turns_left,
+                            session=session,
+                        ),
+                        timeout=remaining_timeout_s,
+                    )
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        "solver episode exceeded max_episode_duration_ms="
+                        f"{episode.task_bundle.rollout_constraints.max_episode_duration_ms}"
+                    ) from exc
                 total_turn_count += max(1, _extract_turn_count(run_result))
                 _add_token_usage(token_usage, _extract_token_usage(run_result))
                 run_items.extend(getattr(run_result, "new_items", []) or [])

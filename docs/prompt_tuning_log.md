@@ -5540,6 +5540,60 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 149 — Composer/solver wall-clock timeout guard
+
+- **질문**:
+  single smoke 반복 중 provider/SDK call이 새 이벤트 없이 오래 멈추면 실험 루프를
+  어떻게 보호해야 하는가?
+- **실험**:
+  Iteration 148 변경 후 `mimiciv_demo` no-topic Kimi smoke를 재실행했다.
+
+  - `artifacts/trial_20260429_mimiciv_demo_list_limit_guard_kimi_8solver_no_topic_smoke_01/trial_01`
+  - `artifacts/trial_20260429_mimiciv_demo_episode_timeout_guard_kimi_4solver_no_topic_smoke_01/trial_01`
+
+  첫 실행에서는 `answer_contract_list_limit_too_wide`가 의도대로 작동해 11-row
+  diagnosis draft를 solver rollout 전에 막았다. 이후 5-row diagnosis draft까지
+  줄었지만 solver batch가 provider 대기 상태로 15분 이상 멈춰 중단했다.
+
+  두 번째 실행에서는 composer가 `icustays` 단일 row 속성 문제를 만들었다.
+  첫 시도는 `submit_draft` 없이 종료되어 기존 missing-submit feedback이 작동했고,
+  이후 시도들은 단일 row 속성 묶음을 `kind=list`/단일 원소 배열로 제출해
+  `answer_contract_phrase_missing`, `answer_contract_binding_missing`에서 거절됐다.
+  네 번째 feedback 이후 composer call도 새 이벤트 없이 멈춰 중단했다.
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+
+  - 11-row diagnosis list: low-quality rejected. row count로 난이도를 올리는 draft라
+    Iteration 148 validator가 정확히 막았다.
+  - 5-row diagnosis list: borderline/hard-good 후보. 단, 일부 solver가 전체 테이블을
+    먼저 materialize하고 placeholder resource id를 오용해 tool budget을 낭비했다.
+    이건 데이터 자체보다 solver 도구 사용성/프로토콜 문제다.
+  - ICU stay 속성 묶음: hard-good 후보이나 contract shape가 틀렸다. 단일 entity facts는
+    list가 아니라 object/scalar answer로 제출해야 한다.
+- **변경**:
+  solver backend가 task bundle의 `rollout_constraints.max_episode_duration_ms`를
+  실제 wall-clock timeout으로 적용한다. timeout은 `TimeoutError`로 기록되어
+  solver pass-rate denominator에서 제외되는 infra failure로 처리된다.
+
+  synthesis backend에는 `synthesis.runtime.run_timeout_s`를 추가하고, composer
+  `Runner.run` segment 전체에 wall-clock timeout을 적용했다. 기본 config는
+  `300s`다. 이는 품질 정책이 아니라 실험 파이프라인 안정성 장치다.
+- **원칙 준수**:
+  데이터/문자열 휴리스틱은 추가하지 않았다. timeout은 actor 품질 검증이 아니라
+  provider/SDK stall을 실험 실패로 닫기 위한 infra guard다.
+- **다음 개선 후보**:
+  단일 row 속성 묶음을 `kind=object`로 제출하도록 prompt/계약 예시를 최소 추가한다.
+  이것은 DB 특화 예시가 아니라 “one entity, multiple fields -> object; multiple
+  records -> ordered list”라는 범용 answer-shape 정책으로 다뤄야 한다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_backend_openai_agents.py::test_synthesis_backend_enforces_run_timeout tests/test_solver_backend_openai_agents.py::test_openai_agents_solver_backend_enforces_episode_duration tests/test_config_load.py::test_load_config_uses_solver_run_count_source_of_truth -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/solver/backend_openai_agents.py src/rl_task_foundry/config/models.py tests/test_synthesis_backend_openai_agents.py tests/test_solver_backend_openai_agents.py tests/test_config_load.py`
+  통과.
+
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows
 
 - **질문**:

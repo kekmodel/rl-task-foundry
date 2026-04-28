@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from time import perf_counter
 from types import SimpleNamespace
@@ -300,6 +301,7 @@ class OpenAIAgentsSynthesisBackend:
             affordance_map=affordance_map,
         )
         started_at = perf_counter()
+        deadline = started_at + self.runtime_config.run_timeout_s
         run_input: str | list[object] = request_input
         total_turn_count = 0
         token_usage: dict[str, int] = {}
@@ -314,12 +316,27 @@ class OpenAIAgentsSynthesisBackend:
             segment_index += 1
             turns_left = max(1, max_turns - total_turn_count)
             try:
-                run_result = await sdk.Runner.run(
-                    agent,
-                    run_input,
-                    max_turns=turns_left,
-                    session=None,
-                )
+                remaining_timeout_s = deadline - perf_counter()
+                if remaining_timeout_s <= 0:
+                    raise TimeoutError(
+                        "synthesis run exceeded run_timeout_s="
+                        f"{self.runtime_config.run_timeout_s}"
+                    )
+                try:
+                    run_result = await asyncio.wait_for(
+                        sdk.Runner.run(
+                            agent,
+                            run_input,
+                            max_turns=turns_left,
+                            session=None,
+                        ),
+                        timeout=remaining_timeout_s,
+                    )
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        "synthesis run exceeded run_timeout_s="
+                        f"{self.runtime_config.run_timeout_s}"
+                    ) from exc
             except Exception as exc:
                 latency_ms = int((perf_counter() - started_at) * 1000)
                 event_logger = getattr(conversation.controller, "event_logger", None)
