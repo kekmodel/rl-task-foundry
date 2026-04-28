@@ -608,6 +608,39 @@ async def test_query_does_not_reject_unrepresented_visible_tie_breaker():
 
 
 @pytest.mark.asyncio
+async def test_query_reports_duplicate_full_order_key_with_visible_tie_breaker():
+    session, _ = _stub_session(
+        rows=[
+            {"first_name": "ALICE", "customer_id": 1, "__rtf_order_1": 7},
+            {"first_name": "ALICE", "customer_id": 2, "__rtf_order_1": 7},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [
+                _select("c", "first_name"),
+                _select("c", "customer_id"),
+            ],
+            "order_by": [
+                _order_ref("c", "first_name", "asc"),
+                _order_ref("c", "store_id", "desc"),
+            ],
+            "limit": 2,
+        },
+    )
+
+    assert result["ordering_diagnostics"] == {
+        "order_by_outputs": ["first_name"],
+        "duplicate_order_key_in_returned_rows": True,
+        "returned_row_count": 2,
+        "limit": 2,
+    }
+
+
+@pytest.mark.asyncio
 async def test_query_does_not_reject_hidden_tie_breaker_for_identical_answers():
     session, _ = _stub_session(
         rows=[

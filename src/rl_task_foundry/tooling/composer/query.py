@@ -944,14 +944,30 @@ def _ordering_diagnostics(
         order_outputs=order_signature_outputs,
         answer_outputs=answer_outputs,
     )
+    diagnostic_returned_rows = diagnostic_rows[: len(rows)]
+    duplicate_order_key = (
+        _has_answer_distinguishable_ties(
+            diagnostic_returned_rows,
+            order_signature_outputs,
+            answer_outputs=answer_outputs,
+        )
+        if order_signature_outputs
+        else False
+    )
     if len(order_outputs) != len(parsed.order_by):
-        if not unrepresented_tie_breakers and not limit_boundary_tie:
+        if (
+            not duplicate_order_key
+            and not unrepresented_tie_breakers
+            and not limit_boundary_tie
+        ):
             return None
         diagnostics: dict[str, object] = {
             "order_by_outputs": order_outputs,
             "returned_row_count": len(rows),
             "limit": parsed.limit,
         }
+        if duplicate_order_key:
+            diagnostics["duplicate_order_key_in_returned_rows"] = True
         if unrepresented_tie_breakers:
             diagnostics["unrepresented_order_by_tie_breakers"] = (
                 unrepresented_tie_breakers
@@ -959,11 +975,6 @@ def _ordering_diagnostics(
         if limit_boundary_tie:
             diagnostics["limit_boundary_tie"] = True
         return diagnostics
-    duplicate_order_key = _has_answer_distinguishable_ties(
-        rows,
-        order_outputs,
-        answer_outputs=answer_outputs,
-    )
     diagnostics: dict[str, object] = {
         "order_by_outputs": order_outputs,
         "duplicate_order_key_in_returned_rows": duplicate_order_key,

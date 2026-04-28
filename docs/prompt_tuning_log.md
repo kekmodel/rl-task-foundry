@@ -3756,3 +3756,38 @@ Solver 30/30 완료 결과:
   as an unordered equivalence group. Avoid adding literal or text-token
   heuristics; the signal comes from query metadata and solver order-only
   mismatch patterns.
+
+## Iteration 95 — Precision-safe composite order-key tie diagnostics
+
+- **Trigger**:
+  Iteration 94 found an accepted low-quality task where a list was ordered by
+  `starttime DESC, storetime DESC`, but the returned rows still contained
+  distinct answer rows tied on the full order-key tuple. Because `storetime` was
+  a visible but unselected order key, the previous query diagnostics returned no
+  ambiguity and `submit_draft` accepted an arbitrary tied order.
+- **Change**:
+  Updated composer `query` ordering diagnostics to evaluate duplicate ties using
+  the full order-key signature, including diagnostic-only order columns that are
+  not selected into the label. Visible unselected tie-breaks remain allowed when
+  they actually disambiguate the rows. The new rejection condition is only:
+  after applying every `query.order_by` key, distinct submitted answer rows still
+  share the same full order key.
+- **Why this is precision-safe**:
+  This does not inspect request wording, column-name literals, or database
+  values. It uses the submitted query's own structured order keys and result
+  rows. If answer-distinct rows share the complete order signature, the exact
+  row order is not determined by the query spec; accepting that order would
+  depend on backend row order rather than on a requested/reproducible sort.
+- **Verification**:
+  Added a regression test that preserves the existing rule: visible unselected
+  tie-breaks are allowed when their values differ, but reported as ambiguous
+  when the full composite order key is still tied. Focused checks passed:
+  `uv run pytest tests/test_tooling_composer_query.py::test_query_does_not_reject_unrepresented_visible_tie_breaker tests/test_tooling_composer_query.py::test_query_reports_duplicate_full_order_key_with_visible_tie_breaker tests/test_tooling_composer_query.py::test_query_reports_unrepresented_order_by_tie_breaker_diagnostics tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker -q`.
+  Broader relevant checks passed:
+  `uv run pytest tests/test_tooling_composer_query.py tests/test_synthesis_runtime.py -q`
+  (`91 passed`) and `uv run ruff check ...`.
+- **Live replay**:
+  Re-ran the accepted-low-quality trial 5 final query against `mimiciv_demo`.
+  The new result includes
+  `ordering_diagnostics={"order_by_outputs":["start_time"],"returned_row_count":5,"limit":5,"duplicate_order_key_in_returned_rows":true}`,
+  so the existing `submit_draft` ambiguous-order validator would reject it.
