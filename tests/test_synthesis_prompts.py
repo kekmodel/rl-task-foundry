@@ -354,7 +354,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "multiple answer surfaces are valid" in instructions
     assert "Source-sensitive fields" in instructions
     assert "same source role used by the query path" in instructions
-    assert "Broad entity wording is not enough" in instructions
+    assert "request wording must name it" in instructions
+    assert "Broad field words are invalid" in instructions
     assert "Keep output names faithful" in instructions
     assert "do not relabel one surface as another" in instructions
     assert "Vague field words are invalid" in instructions

@@ -5540,6 +5540,67 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 135 — Source-sensitive output representation wording
+
+- **질문**:
+  Iteration 134의 multi-key order 보강 뒤 accepted 후보가 실제로 깨끗한 좋은
+  데이터인가, 아니면 solver pass band 안에 들어왔지만 여전히 request/label ambiguity가
+  남아 있는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_multikey_order_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  후보는 accepted 됐고 registry에 commit 됐다.
+
+  - request: `최근 ICU 입원 중 받은 시술 목록을 시작 시간 순서대로 알려주세요. 같은 시간에 시작한 시술은 이름 순서로 정렬해주세요. 각 시술의 이름, 종류, 시작 시간, 완료 여부를 확인하고 싶습니다.`
+  - pass rate: `5/8 = 0.625`
+  - CI low/high: `0.2892 / 0.8889`
+  - solver failed runs: `0`
+
+  긍정적인 변화는 multi-key order feedback이 의도대로 작동한 점이다. 첫 submit에서
+  `answer_contract_order_ambiguous`를 받은 뒤, composer가 "같은 시간에 시작한
+  시술은 이름 순서"라는 visible tie-break를 request에 추가했다. canonical query도
+  `start_time asc, procedure_name asc`로 고정되어 hidden order 문제는 재발하지 않았다.
+- **정성 평가**:
+  accepted data: borderline accepted, clean accepted는 아니다.
+
+  canonical answer는 `procedureevents`와 `d_items`를 사용해 5개 시술을 반환한다. 하지만
+  solver 2개가 `종류`를 `procedureevents.ordercategoryname`이 아니라 reachable related
+  surface인 `d_items.category`로 해석했다. 둘 다 시술 분류처럼 보이므로, "종류"라는
+  broad field word만으로는 source role이 충분히 고정되지 않았다.
+
+  또 다른 solver는 source status text인 `FinishedRunning`을 `완료`처럼 boolean/번역
+  표현으로 바꿨다. request의 "완료 여부"가 원천 status representation을 보존하라는
+  계약을 충분히 전달하지 못했기 때문이다.
+
+  결론적으로 low-quality accepted까지는 아니지만, 만족스러운 clean data도 아니다. 실패
+  원인은 solver가 나쁜 것이 아니라 composer가 source-sensitive output field를 너무
+  넓은 자연어로 요청한 데 있다.
+- **변경**:
+  validator는 추가하지 않았다. `종류`/`상태` 같은 field wording이 어떤 source surface를
+  의도하는지, 또는 status를 source text로 둘지 boolean으로 바꿀지는 query literal 없이
+  precision-100으로 판정할 수 없다.
+
+  대신 prompt-first/tool-local contract 원칙에 맞춰 다음을 보강했다.
+
+  - Label Contract: status/type/category/frequency/stage/route 같은 source-sensitive
+    fields는 query path가 사용한 source role을 request wording이 이름 붙여야 하며,
+    다른 reachable surface가 다른 값을 줄 수 있으면 broad field words는 invalid라고
+    명시했다.
+  - `AnswerOutputBinding.requested_by_phrase` schema description: status/type/category
+    fields는 source representation을 보존해야 하며 source status text를 boolean
+    completion wording으로 바꾸지 말라고 명시했다.
+
+  이 변경은 DB literal/token heuristic이 아니다. 특정 table/column/value를 보고 막는
+  규칙이 아니라, source-sensitive output representation을 명확히 요청하라는 범용 계약이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`7 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 134 — Multi-key order phrase must name tie-break keys
 
 - **질문**:

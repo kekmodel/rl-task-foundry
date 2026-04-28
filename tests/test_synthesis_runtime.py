@@ -1218,6 +1218,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "not a source table or SQL column" in schema_surface
     assert "names this field's distinct role" in schema_surface
     assert "do not reuse one vague phrase" in schema_surface
+    assert "preserve the source representation" in schema_surface
+    assert "do not turn source status text into boolean completion wording" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
     assert "JSON string for the canonical submit_result payload" in schema_surface

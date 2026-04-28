@@ -166,7 +166,10 @@ class AnswerOutputBinding(StrictModel):
         description=(
             "Exact contiguous substring from user_request that asks for this "
             "label field. Use wording that names this field's distinct role; "
-            "do not reuse one vague phrase for different returned concepts."
+            "do not reuse one vague phrase for different returned concepts. "
+            "For status/type/category fields, preserve the source "
+            "representation; do not turn source status text into boolean "
+            "completion wording."
         ),
     )
 
