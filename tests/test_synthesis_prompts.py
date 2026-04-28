@@ -410,7 +410,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "avoid trivial 0/1 results" in instructions
     assert "homogeneous ordered list" in instructions
     assert "Prefer natural orders needing zero or one visible tie-break" in instructions
-    assert "first/latest/top 3-5 rows" in instructions
+    assert "fixed limit of 3-5 rows" in instructions
     assert "avoid all matching when observed count exceeds 5" in instructions
     assert "at least one non-handle visible field" in instructions
     assert "Keep initial row/list labels narrow" in instructions

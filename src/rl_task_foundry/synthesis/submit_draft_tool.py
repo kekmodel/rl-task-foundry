@@ -68,6 +68,7 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS = (
         "answer_contract_duplicate_answer_rows"
     )
+    ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE = "answer_contract_list_limit_too_wide"
     ANSWER_CONTRACT_FILTER_UNBOUND = "answer_contract_filter_unbound"
     ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED = (
         "answer_contract_hidden_filter_unanchored"
@@ -105,6 +106,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
         SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND,
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
@@ -1564,6 +1566,13 @@ class SubmitDraftController:
         label_signature = canonical_json(canonical_answer, default=str)
         label_scalar_value_signature = _single_field_scalar_value_signature(canonical_answer)
         label_slot_count = _answer_slot_count(canonical_answer)
+        if (
+            payload.answer_contract.kind == "list"
+            and isinstance(canonical_answer, list)
+            and len(canonical_answer) > 5
+        ):
+            error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE)
+            invalid_diagnostics["submitted_list_row_count"] = len(canonical_answer)
         blank_paths = _blank_string_paths(canonical_answer)
         if blank_paths:
             error_codes.append(SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN)
@@ -2083,6 +2092,9 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
                 "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query and submit_draft."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE: (
+                "Rejected. Task Shapes reminder: fixed list labels must stay at 3-5 rows. Do not use 6+ rows to add difficulty; keep the same target with a smaller natural limit, or choose a harder label through visible fields, relationships, or row-preserving constraints."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND: (
                 "Rejected. Request Contract reminder: user-visible non-null row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501

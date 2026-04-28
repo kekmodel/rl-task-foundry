@@ -5540,6 +5540,53 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 148 — Fixed list labels must stay within 3-5 rows
+
+- **질문**:
+  Iteration 147의 solver `submit_result` retry 보강 뒤 같은 8-solver smoke에서 accepted
+  품질과 solver pass-rate 계측이 안정적인가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_solver_submit_retry_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted되지 않고 `calibration_inconclusive`로 종료됐다.
+
+  - first submit: `answer_contract_hidden_filter_unanchored`, `answer_contract_order_ambiguous`
+  - second submit: `answer_contract_hidden_filter_unanchored`
+  - third submit: `answer_contract_binding_missing`
+  - fourth submit: explicit medication-administration list, pass rate `0/8`
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data: low-quality rejected / overwide hard-bad. 최종 draft는 request/contract가
+  훨씬 명시적이었지만, `10 rows x 5 fields` medication administration list였다. 일부
+  solvers는 `emar`까지 제대로 찾아가고도 `list_records`/`submit_result`까지 못 갔고,
+  일부는 `prescriptions`/`inputevents`로 갈라지거나 placeholder/hallucinated rows를
+  제출했다. 이건 좋은 어려움이라기보다 composer가 초기 list를 너무 크게 만들어 solver
+  tool budget을 소모시킨 문제다.
+
+  특히 prompt의 Task Shapes에는 이미 "3-5 rows" 및 "max 5 before feedback" 원칙이
+  있었는데, composer가 처음부터 `10개`를 냈다. feedback으로 수리하기 전에 solver rollout까지
+  가면 pass-rate가 task quality 대신 tool-budget 부담을 측정하게 된다.
+- **변경**:
+  - Task Shapes prompt를 "fixed limit of 3-5 rows"로 더 직접화했다.
+  - `submit_draft` validator에 `answer_contract_list_limit_too_wide`를 추가했다.
+  - list label의 submitted row count가 5를 초과하면 solver rollout 전에 feedback한다.
+
+  이 검증은 canonical label의 list length만 보는 구조 검증이다. DB literal, table/column
+  token, 값 문자열을 보지 않으므로 precision-100 원칙을 지킨다. 난이도는 row 수를 6+로
+  늘리는 대신 visible fields, relationships, or row-preserving constraints로 올려야 한다.
+- **검증**:
+  prompt 길이 `7949`.
+
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_list_limit_above_task_shape_policy tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py`
+  통과.
+
 ## Iteration 147 — Solver text-only answers must retry through submit_result
 
 - **질문**:

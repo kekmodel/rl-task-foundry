@@ -2004,6 +2004,72 @@ async def test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_list_limit_above_task_shape_policy(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medications",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"hadm_id": 1}
+    label = [
+        {"medication": f"Drug {index}"}
+        for index in range(1, 7)
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "medications",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "이 입원의 처음 6개 약물명을 알려주세요.",
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="처음 6개 약물명",
+                constraint_phrases=["이 입원"],
+                limit_phrase="6개",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "medications",
+                "column": "medication",
+                "direction": "asc",
+            }
+        ],
+        query_params={
+            "spec": {
+                "limit": 6,
+                "where": [{"value": 1}],
+                "order_by": [{"output": "medication", "direction": "asc"}],
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "fixed list labels must stay at 3-5 rows" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_list_limit_too_wide",
+    )
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_ambiguous_limited_list_order(
     tmp_path: Path,
 ) -> None:
