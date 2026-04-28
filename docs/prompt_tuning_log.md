@@ -3933,3 +3933,61 @@ Solver 30/30 완료 결과:
   improvement should be more targeted than a broad in-prompt example, likely in
   precision-safe tool diagnostics or in feedback that reminds an already named
   policy without adding a new instruction source.
+
+## Iteration 99 — Kimi batch for prompt-reminder baseline
+
+- **Question**:
+  After `a2d7e88`, where durable policy lives in the composer prompt and
+  feedback only reminds named policies, is the current prompt better than the
+  previous Kimi batch on `mimiciv_demo` / `input_events`?
+- **Invalid OpenRouter attempt**:
+  Tried five parallel trials with `openrouter/moonshotai/kimi-k2.5`.
+  Artifact root:
+  `artifacts/trial_20260428_mimiciv_demo_kimi_batch5_prompt_reminder_01`.
+  This is not a valid quality run: the provider returned `402` errors because
+  requests were sent with an effective `max_tokens=65536`, exceeding available
+  OpenRouter credit. Some drafts reached feedback first, but the batch cannot
+  be used for acceptance comparison.
+- **Valid Kimi run**:
+  Re-ran five parallel trials with `opencode_zen/kimi-k2.5` as both composer
+  and solver. Artifact root:
+  `artifacts/trial_20260428_mimiciv_demo_kimi_opencode_batch5_prompt_reminder_01`.
+  The comparison baseline is iteration 96
+  `trial_20260428_mimiciv_demo_kimi_batch5_parallel_composite_tie_01`
+  at commit `f89a816`, which accepted `2/5`.
+- **Batch result**:
+  Current prompt-reminder batch accepted `2/5`. Trial 1 accepted at
+  `17/20 = 0.85`; trial 3 accepted at `17/20 = 0.85`. Trial 2 failed after
+  too-easy `0.95` retries and a final `0.10` draft; trial 4 hit
+  `MaxTurnsExceeded`; trial 5 failed `reject_too_hard` with `0/12`.
+- **Quality read**:
+  Trial 1 is a good sign for the prompt-reminder baseline: it recovered from
+  two list-order feedback events and produced a request that explicitly orders
+  same-time rows by medication name. The accepted label is a grounded
+  `input_events` list and the solver pass rate is high but still inside the
+  current acceptance band.
+
+  Trial 3 should not be counted as a clean `input_events` improvement. It
+  spent three submissions failing list determinism on `inputevents`, then
+  switched to an `admission_prescription_history` task over prescriptions.
+  The final task is likely good as a standalone customer task, but it is topic
+  drift from the requested batch topic and is not evidence that `input_events`
+  recovery improved.
+
+  Trials 2, 4, and 5 show the remaining issue: list-order feedback is
+  understood in form, but recovery is unstable. Trial 2 fixed tie wording then
+  overshot into too-easy/too-hard swings. Trial 4 kept adding visible sort
+  language but did not eliminate duplicate order keys before max turns. Trial
+  5 added a visible name tie-break but still produced a task solvers could not
+  solve.
+- **Interpretation**:
+  The prompt-reminder change is not clearly better than the previous Kimi
+  baseline. Raw accept count stayed `2/5`; strict clean `input_events` accept
+  is closer to `1/5` because one accepted task drifted to prescriptions. The
+  improvement over iteration 96 is narrower: one live case shows successful
+  policy-reminder recovery from order ambiguity. The remaining failures point
+  at a more specific problem: after `answer_contract_order_ambiguous`,
+  composer often cannot find a visible deterministic ordering without either
+  using hidden handles, changing topics, or making a large difficulty jump.
+  Next improvement should target that recovery path with precision-safe tool
+  diagnostics or tool affordances, not with broad prompt examples.
