@@ -52,7 +52,8 @@ rewrite 진행 중에는 아래를 확인한다.
 ## Mandatory Experiment Quality Audit
 
 프로젝트 코드가 완성될 때까지, 모든 synthesis/prompt/tool/feedback 개선
-실험 후에는 정량 결과와 별도로 아래 정성 비교를 반드시 수행한다.
+실험 분석 원칙으로 아래 정성 비교를 반드시 수행한다. 이 정성 비교는
+정량 결과와 별도로 기록한다.
 
 - Accepted data audit:
   - accepted count와 pass rate만으로 품질을 판단하지 않는다.
@@ -74,6 +75,11 @@ rewrite 진행 중에는 아래를 확인한다.
     발생한 경우는 low-quality로 분류한다.
   - failed task를 `hard-good`, `low-quality`, `infra/provider failure`,
     `inconclusive` 중 하나로 분류한다.
+  - low-quality draft가 solver pass-rate / quality gate에서 reject되면
+    필터가 정상 작동한 것으로 본다. 이것은 개선 실패의 핵심 문제가
+    아니다.
+  - 핵심 문제는 low-quality draft가 accepted/registry commit까지 통과하는
+    경우다. 이 경우는 accept rate가 좋아 보여도 품질 회귀로 간주한다.
 
 - Batch comparison:
   - 새 실험은 이전 relevant baseline과 raw accept rate뿐 아니라 clean
@@ -81,6 +87,8 @@ rewrite 진행 중에는 아래를 확인한다.
     hard-good rejected count, low-quality rejected count를 비교한다.
   - 결론에는 "숫자로는 개선처럼 보이나 품질상 개선이 아닌 경우"를 반드시
     별도로 적는다.
+  - low-quality rejected count는 필터가 막은 잡음으로 해석하고, low-quality
+    accepted count를 가장 높은 위험 신호로 본다.
   - 이 정성 비교를 생략한 실험은 개선 근거로 사용하지 않는다.
 
 ## Artifact Inspection

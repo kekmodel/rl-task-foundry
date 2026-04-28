@@ -3996,8 +3996,8 @@ Solver 30/30 완료 결과:
 
 - **Decision**:
   Until the project code is complete, every synthesis/prompt/tool/feedback
-  experiment must include a qualitative quality comparison after the quantitative
-  batch summary.
+  experiment analysis must include a qualitative quality comparison after the
+  quantitative batch summary.
 - **Rule**:
   Accepted data is not automatically good. Each accepted task must be audited
   from bundle and debug artifacts for request/topic/entity/query/label/order
@@ -4010,6 +4010,12 @@ Solver 30/30 완료 결과:
   sampled solvers failed; it is low-quality when the task definition itself is
   not well-grounded, not uniquely answerable, source-surface mismatched, hidden
   row-set/order/filter dependent, topic-drifted, or difficulty-jumped.
+- **Risk interpretation**:
+  Low-quality drafts are not the main problem when the solver pass-rate /
+  quality gate rejects them. That is the filter doing useful work. The critical
+  failure is low-quality data being accepted or committed to the registry. Future
+  comparisons must therefore separate low-quality rejected count from
+  low-quality accepted count and treat the latter as the highest-risk signal.
 - **Operational change**:
   Added this requirement to `docs/runbook.md` under
   `Mandatory Experiment Quality Audit`. Any future experiment that lacks this
