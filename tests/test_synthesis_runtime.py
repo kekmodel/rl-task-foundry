@@ -1155,6 +1155,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "Do not restate tables, columns, operators, or SQL" in schema_surface
     assert "query.order_by uses tie-break fields" in schema_surface
     assert "must visibly ask for that secondary order" in schema_surface
+    assert "natural tie-break" in schema_surface
     assert "merely selecting the field as output is not enough" in schema_surface
     assert "Optional request-to-label bindings" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface

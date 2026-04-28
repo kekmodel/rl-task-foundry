@@ -176,7 +176,7 @@ class AnswerOrderBinding(StrictModel):
         min_length=1,
         description=(
             "Exact contiguous substring from user_request that asks for the "
-            "row order, recency, ranking, or tie-break."
+            "row order, recency, ranking, or natural tie-break."
         ),
     )
     direction: Literal["asc", "desc"] | None = Field(

@@ -280,8 +280,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Source Surface Policy" in instructions
     assert "user-facing source surface" in instructions
     assert "canonical query surface" in instructions
-    assert "Bad: the request can reasonably name one source surface" in instructions
-    assert "Good: the request names the selected source surface" in instructions
+    assert "Bad: request names one surface" in instructions
+    assert "Good: request names selected surface" in instructions
     assert "If no primary key" in instructions
     assert "primary-key-backed path" in instructions
     assert "hidden path guessing" in instructions
@@ -295,7 +295,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Customer Request" in instructions
     assert "configured target language" in instructions
     assert "customer does not know DB tables" in instructions
-    assert "hidden id used in final query filters must appear in `entity`" in instructions
+    assert "technical sequences" in instructions
+    assert "Hidden filter ids go in `entity`" in instructions
     assert "Use first-person ownership only" in instructions
     assert "non-user subject" in instructions
     assert "Bad patterns" not in instructions
@@ -340,7 +341,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "should not be selected unless" in instructions
     assert "combines facts from the same event or record" in instructions
     assert "Avoid independent sibling joins" in instructions
-    assert "Do not make a raw handle the main selected answer" in instructions
+    assert "Do not make a raw handle the main answer" in instructions
     assert "current query evidence marks it user-visible" in instructions
     assert "`answer_contract` is only a request-binding surface" in instructions
     assert "bind `query.order_by` entries" in instructions
@@ -353,7 +354,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Row-set controls must be entity scope" in instructions
     assert "Match sort direction" in instructions
     assert "requested order leaves distinct-answer ties" in instructions
-    assert "ask for the visible tie-break before" in instructions
+    assert "ask for a natural visible tie-break before" in instructions
+    assert "artificial technical sequence/id wording" in instructions
     assert "choose unique ordering or return tied rows" in instructions
     assert "never use hidden handles" in instructions
     assert "Exact timestamp" in instructions
