@@ -321,6 +321,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "Do not select constraint, filter, scope" in descriptions[
         "query"
     ]["$.spec.select"]
+    assert "During specificity retries" in descriptions["query"]["$.spec.select"]
+    assert "append new requested fields instead of replacing them" in descriptions[
+        "query"
+    ]["$.spec.select"]
     assert "preserves the selected source column meaning" in descriptions[
         "query"
     ]["$.spec.select[].as"]

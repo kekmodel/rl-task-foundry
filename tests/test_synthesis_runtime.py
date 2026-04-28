@@ -1154,7 +1154,8 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
 
     assert "needs more specificity" in message
     assert "Apply the Difficulty-Up Policy from the system instructions" in message
-    assert "ask for it in user_request and answer_contract" in message
+    assert "append, do not replace, any new answer field" in message
+    assert "Ask for it in user_request and answer_contract" in message
     assert "Current answer kind: scalar" in message
     assert "smallest single structural strengthening" not in message
     assert "Replacing a field on the same path is not an escalation" not in message
@@ -1205,7 +1206,8 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
 
     assert "needs more specificity" in message
     assert "Apply the Difficulty-Up Policy from the system instructions" in message
-    assert "ask for it in user_request and answer_contract" in message
+    assert "append, do not replace, any new answer field" in message
+    assert "Ask for it in user_request and answer_contract" in message
     assert "Current answer kind: list" in message
     assert "selected-row query target" not in message
     assert "row-set-preserving" not in message
@@ -2137,7 +2139,9 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
 
     second_message = await controller.submit(second_payload)
 
-    assert "preserve prior filters/order and existing query output fields" in second_message
+    assert "restore the prior answer kind, filters/order/limit" in second_message
+    assert "query output fields/source meanings" in second_message
+    assert "appended output field" in second_message
     assert controller.accepted_draft is None
 
 
@@ -2271,7 +2275,9 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
 
     second_message = await controller.submit(weakened_payload)
 
-    assert "preserve prior filters/order and existing query output fields" in second_message
+    assert "restore the prior answer kind, filters/order/limit" in second_message
+    assert "query output fields/source meanings" in second_message
+    assert "appended output field" in second_message
     drifted_label = [
         {
             **row,

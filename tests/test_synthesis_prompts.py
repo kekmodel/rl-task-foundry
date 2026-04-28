@@ -261,11 +261,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "needs more specificity" in instructions
     assert "smallest single structural strengthening" in instructions
     assert "there is no fixed ladder" in instructions
-    assert "preserving the current row set/query path" in instructions
+    assert "Preserve kind, anchor, target, row set/query path" in instructions
     assert "keep existing filters, order, limit" in instructions
-    assert "add exactly one user-visible field" in instructions
+    assert "output fields/source meanings" in instructions
+    assert "append exactly one user-visible field" in instructions
     assert "ask for it in user_request/answer_contract" in instructions
     assert "Do not shrink the fixed list" in instructions
+    assert "remove/rename/replace fields" in instructions
     assert "or combine a row-excluding filter" in instructions
     assert "difficulty jump" in instructions
     assert "overconstrained/terminal feedback" in instructions

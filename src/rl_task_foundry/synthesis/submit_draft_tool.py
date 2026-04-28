@@ -1666,7 +1666,7 @@ class SubmitDraftController:
                 "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
-                "Rejected. After a specificity rejection, keep the same answer kind, preserve prior filters/order and existing query output fields, then add a grounded filter, order, cardinality, or output field that the current database evidence supports."  # noqa: E501
+                "Rejected. After a specificity rejection, restore the prior answer kind, filters/order/limit, row set, and query output fields/source meanings; then add exactly one DB-grounded visible filter, order, cardinality, or appended output field."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. submit_draft arguments did not match the required schema."

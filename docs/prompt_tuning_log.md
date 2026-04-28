@@ -3624,3 +3624,32 @@ Solver 30/30 완료 결과:
   query path and output source set while adding one clean visible field,
   predicate, order, or cardinality change. That should remain prompt/schema
   policy unless a precision-100 structural validator is identified.
+
+## Iteration 92 — Composer difficulty-up hygiene tightening
+
+- **Trigger**:
+  The nullable follow-up Kimi batch showed two high-pass-rate failures ending
+  after too-easy drafts. Trial 1 in particular fixed an order ambiguity, then
+  became too easy; subsequent drafts changed operation/output source shape and
+  were rejected as `answer_contract_not_incremental` instead of applying a
+  clean one-step strengthening.
+- **Change**:
+  Tightened the composer Difficulty-Up Policy to preserve the same answer kind,
+  anchor, target, row set/query path, filters, order, limit, and existing
+  output fields/source meanings. For list difficulty-up, a new answer field
+  should be appended, not substituted. The `query.select` schema description now
+  mirrors that retry behavior, and the too-easy / not-incremental feedback names
+  the exact recovery action: keep the prior query shape and answer fields, then
+  append one DB-grounded visible field or make one visible structural
+  strengthening.
+- **Principle check**:
+  No literal, token, column-name, or DB-value heuristic was added. This remains
+  prompt/tool-schema/feedback policy derived from the failed draft's own retry
+  history. The only hard rejection involved here is the existing structural
+  incremental-contract check, which compares the submitted retry against the
+  previously evaluated draft rather than predicting data literals.
+- **Verification**:
+  Prompt length stayed under the existing budget at `7989` characters. Focused
+  and related checks passed:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py -q`
+  (`69 passed`). Ruff passed on the changed source and test files.

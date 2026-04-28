@@ -130,15 +130,15 @@ def build_synthesis_agent_instructions(
         "5. Stop on accept or overconstrained/terminal feedback.",
 
         "# Difficulty-Up Policy\n"
-        "Use when feedback says the draft needs more specificity. "
-        "Preserve kind, anchor, target. "
-        "Make the smallest single structural strengthening the DB supports; "
-        "there is no fixed ladder. Prefer preserving the current "
-        "row set/query path. For lists, keep existing filters, order, limit, "
-        "row set, and fields; add exactly one user-visible field from the "
-        "same row path or direct relationship, and ask for it in "
-        "user_request/answer_contract. Do not shrink the fixed "
-        "list, remove fields, or combine a row-excluding filter with "
+        "Use when feedback says draft needs more specificity. "
+        "Preserve kind, anchor, target, row set/query path. "
+        "Make smallest single structural strengthening DB supports; "
+        "there is no fixed ladder. For lists, keep existing filters, order, "
+        "limit, row set, and output fields/source meanings; append exactly "
+        "one user-visible field from same row path/direct "
+        "relationship, and ask for it in user_request/answer_contract. Do "
+        "not shrink the fixed list, remove/rename/replace fields, or combine "
+        "a row-excluding filter with "
         "new outputs/order/cardinality. Why: same task, not a new task or "
         "difficulty jump.",
 
