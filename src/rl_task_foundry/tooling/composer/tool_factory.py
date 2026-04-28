@@ -719,7 +719,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Fixed row cap. If the task asks for N items, use the "
                     "same N in user_request and "
                     "submit_draft.answer_contract.limit_phrase. Follow the "
-                    "List Determinism Policy when a limit shapes membership."
+                    "List Determinism Policy when a limit shapes membership; "
+                    "a final list query with limit must have the same fixed "
+                    "size requested and bound before submit_draft."
                 ),
             },
             "group_by": {
@@ -782,7 +784,11 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Inspect returned diagnostics before submit_draft: ordering "
                     "diagnostics flag unstable list order, and projection "
                     "diagnostics flag answer rows that are indistinguishable "
-                    "after the selected output fields."
+                    "after the selected output fields. If ordering diagnostics "
+                    "include duplicate_order_key_in_returned_rows or "
+                    "unrepresented_order_by_tie_breakers for a list, do not "
+                    "submit that result as final label evidence; revise the "
+                    "request/order/output fields or choose another label."
                 ),
             }
         },
@@ -804,7 +810,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
             "Run a structured read-only query over aliases and FK joins. Use "
             "to produce the exact rows that will be copied into the label. "
             "Returns columns, rows, row_count, and diagnostics for list order "
-            "or duplicate projected answer rows when present."
+            "or duplicate projected answer rows when present; blocking "
+            "diagnostics must be fixed before submit_draft."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),

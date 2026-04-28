@@ -289,6 +289,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "reachable task paths" in tools["neighborhood"].description
     assert "exact rows that will be copied into the label" in tools["query"].description
     assert "duplicate projected answer rows" in tools["query"].description
+    assert "blocking diagnostics must be fixed before submit_draft" in tools[
+        "query"
+    ].description
 
     assert any(
         "Each column is scoped to the selected table" in description
@@ -343,11 +346,18 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
     assert "List Determinism Policy" in descriptions["query"]["$.spec.limit"]
+    assert "final list query with limit" in descriptions["query"]["$.spec.limit"]
+    assert "same fixed size requested and bound" in descriptions["query"]["$.spec.limit"]
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"
     ]
     assert "projection diagnostics" in descriptions["query"]["$.spec"]
     assert "indistinguishable" in descriptions["query"]["$.spec"]
+    assert "duplicate_order_key_in_returned_rows" in descriptions["query"]["$.spec"]
+    assert "unrepresented_order_by_tie_breakers" in descriptions["query"]["$.spec"]
+    assert "do not submit that result as final label evidence" in descriptions[
+        "query"
+    ]["$.spec"]
     assert {
         tool.name: _loose_schema_paths(tool.params_json_schema)
         for tool in tools.values()

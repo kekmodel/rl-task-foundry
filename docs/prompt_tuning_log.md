@@ -5633,6 +5633,51 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 151 — Query diagnostics must be treated as blocking evidence
+
+- **질문**:
+  Iteration 150 이후 no-topic MIMIC smoke에서 accepted 품질이 개선되는가?
+- **실험**:
+  `artifacts/trial_20260429_mimiciv_demo_single_row_order_guard_kimi_4solver_no_topic_smoke_01/trial_01`
+  를 실행했다. composer/solver는 OpenRouter Kimi K2.5, no topic hint, solver 4개,
+  synthesis `run_timeout_s=180`.
+- **결과**:
+  trial은 accepted 없이 `synthesis_failed`로 종료됐다. 첫 draft는 ICU stay의
+  `procedureevents` list였다.
+
+  - request: `ICU 입원 중에 수행된 절차 목록... 시간순으로 가장 먼저 수행된 것부터...`
+  - query: `limit=5`, `order_by=starttime asc, orderid asc`
+  - diagnostics: `answer_contract_phrase_missing`,
+    `answer_contract_query_mismatch`, `answer_contract_order_ambiguous`
+  - ordering diagnostics: `unrepresented_order_by_tie_breakers` on hidden
+    `orderid`; earlier query also had duplicate `start_time` order keys.
+
+  첫 feedback 이후 composer는 180초 wall-clock timeout으로 종료됐다. timeout guard는
+  의도대로 실험을 붙잡지 않았다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 절차 데이터 자체는 잠재적으로 좋은 list
+  task지만, draft는 hidden tie-break와 unbound limit로 row set/order를 몰래 결정했다.
+  validator 거절은 올바르다.
+- **변경**:
+  `query` tool schema/description을 좁게 강화했다. 반환되는 `ordering_diagnostics`
+  중 `duplicate_order_key_in_returned_rows` 또는
+  `unrepresented_order_by_tie_breakers`가 list에 있으면 final label evidence로
+  submit하지 말고 request/order/output fields를 고치거나 다른 label을 선택하라고
+  명시했다. 또한 final list query의 `limit`은 user_request와
+  `answer_contract.limit_phrase`에 같은 fixed size로 묶여야 한다고 설명했다.
+- **원칙 준수**:
+  이 변경은 durable prompt 복제가 아니라 `query` tool output 해석에 관한 tool-local
+  contract다. DB literal/token heuristic은 없고, tool diagnostics key와 query
+  metadata만 사용한다.
+- **검증**:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows
 
 - **질문**:
