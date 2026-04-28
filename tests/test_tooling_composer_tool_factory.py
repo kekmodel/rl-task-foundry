@@ -288,6 +288,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "nontrivial filters" in tools["profile"].description
     assert "reachable task paths" in tools["neighborhood"].description
     assert "exact rows that will be copied into the label" in tools["query"].description
+    assert "duplicate projected answer rows" in tools["query"].description
 
     assert any(
         "Each column is scoped to the selected table" in description
@@ -345,6 +346,8 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"
     ]
+    assert "projection diagnostics" in descriptions["query"]["$.spec"]
+    assert "indistinguishable" in descriptions["query"]["$.spec"]
     assert {
         tool.name: _loose_schema_paths(tool.params_json_schema)
         for tool in tools.values()

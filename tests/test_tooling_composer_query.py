@@ -705,6 +705,32 @@ async def test_query_does_not_reject_hidden_tie_breaker_for_identical_answers():
 
 
 @pytest.mark.asyncio
+async def test_query_reports_duplicate_projected_answer_rows():
+    session, _ = _stub_session(
+        rows=[
+            {"first_name": "ALICE"},
+            {"first_name": "ALICE"},
+            {"first_name": "BOB"},
+        ]
+    )
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "select": [_select("c", "first_name")],
+        },
+    )
+
+    assert result["projection_diagnostics"] == {
+        "duplicate_answer_rows": True,
+        "duplicate_answer_row_groups": [[0, 1]],
+        "unique_answer_row_count": 2,
+        "returned_row_count": 3,
+    }
+
+
+@pytest.mark.asyncio
 async def test_query_reports_missing_order_by_for_limited_multirow_list():
     session, _ = _stub_session(
         rows=[

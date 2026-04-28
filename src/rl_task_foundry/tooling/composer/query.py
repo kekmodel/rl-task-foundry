@@ -817,6 +817,26 @@ def _has_answer_distinguishable_ties(
     )
 
 
+def _projection_diagnostics(rows: list[dict[str, object]]) -> dict[str, object] | None:
+    if len(rows) <= 1:
+        return None
+    groups_by_signature: dict[tuple[str, ...], list[int]] = {}
+    answer_outputs = list(rows[0])
+    for index, row in enumerate(rows):
+        groups_by_signature.setdefault(_signature(row, answer_outputs), []).append(index)
+    duplicate_groups = [
+        indexes for indexes in groups_by_signature.values() if len(indexes) > 1
+    ]
+    if not duplicate_groups:
+        return None
+    return {
+        "duplicate_answer_rows": True,
+        "duplicate_answer_row_groups": duplicate_groups,
+        "unique_answer_row_count": len(groups_by_signature),
+        "returned_row_count": len(rows),
+    }
+
+
 def _order_key_splits_answer_tie(
     rows: list[dict[str, object]],
     *,
@@ -1226,6 +1246,9 @@ async def query(
     )
     if ordering_diagnostics is not None:
         result["ordering_diagnostics"] = ordering_diagnostics
+    projection_diagnostics = _projection_diagnostics(materialized)
+    if projection_diagnostics is not None:
+        result["projection_diagnostics"] = projection_diagnostics
     return result
 
 

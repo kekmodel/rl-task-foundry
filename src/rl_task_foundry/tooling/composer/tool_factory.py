@@ -778,7 +778,11 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 **spec_schema,
                 "description": (
                     "Structured read-only query spec. Use immediately before "
-                    "submit_draft; returned rows are canonical label evidence."
+                    "submit_draft; returned rows are canonical label evidence. "
+                    "Inspect returned diagnostics before submit_draft: ordering "
+                    "diagnostics flag unstable list order, and projection "
+                    "diagnostics flag answer rows that are indistinguishable "
+                    "after the selected output fields."
                 ),
             }
         },
@@ -799,7 +803,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
         description=(
             "Run a structured read-only query over aliases and FK joins. Use "
             "to produce the exact rows that will be copied into the label. "
-            "Returns columns, rows, and row_count."
+            "Returns columns, rows, row_count, and diagnostics for list order "
+            "or duplicate projected answer rows when present."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),

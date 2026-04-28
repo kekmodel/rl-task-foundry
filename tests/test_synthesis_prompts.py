@@ -305,6 +305,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "'number 38 <entity>'" not in instructions
     assert "hidden structural handle" in instructions
     assert "hidden current subject/context" in instructions
+    assert "Bind modifiers to the exact object/scope" in instructions
     assert "Match hidden scope" in instructions
     assert "whole parent-context, list, or history requests" in instructions
     assert "not one child event/record unless asked" in instructions
@@ -337,6 +338,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "multiple answer columns are plausible" in instructions
     assert "include only fields that should appear in the submitted label" in instructions
     assert "every selected field becomes part of the exact submitted answer" in instructions
+    assert "distinguishable through requested output fields" in instructions
+    assert "duplicate projected answer rows" in instructions
     assert "Constraint, filter, scope, ordering, and tie-break values" in instructions
     assert "should not be selected unless" in instructions
     assert "combines facts from the same event or record" in instructions

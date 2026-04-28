@@ -4606,3 +4606,48 @@ Solver 30/30 완료 결과:
   rows are structurally detectable, but rejecting them as low quality is still
   a policy judgment unless the contract explicitly requires distinguishable
   records.
+
+## Iteration 113 — Composer self-check for ambiguous scope and duplicate rows
+
+- **Problem**:
+  The GPT-5.5 accepted sample from Iteration 112 showed a composer-quality
+  failure, not a solver failure. The request wording let solvers read a date
+  modifier as either a parent-context anchor or a child-row filter, and the
+  accepted label contained two distinct source records that became identical
+  after projection to the requested output fields.
+- **Change**:
+  Added a DB-neutral composer prompt rule requiring modifiers to bind to the
+  exact object or scope when parent context and child rows could both match the
+  wording. Added a list-label rule that returned rows should be distinguishable
+  through requested output fields; if the latest `query` reports duplicate
+  projected answer rows, the composer should add a natural user-visible
+  distinguishing field, aggregate duplicates, or choose another task, never a
+  hidden handle.
+
+  Added `projection_diagnostics` to the composer `query` result. It reports
+  `duplicate_answer_rows`, duplicate row index groups, unique projected row
+  count, and returned row count when the selected canonical-answer fields make
+  multiple returned rows indistinguishable. The query tool description now tells
+  the composer to inspect ordering and projection diagnostics before
+  `submit_draft`.
+- **Why this layer**:
+  Ambiguous natural-language scope is not a 100%-precision validator target, so
+  it belongs in the prompt. Duplicate projected answer rows are structurally
+  detectable from exact query evidence, but treating them as always invalid is
+  still a task-quality policy decision. For now the runtime exposes the exact
+  diagnostic to the composer rather than hard-rejecting; this keeps the
+  validator conservative while giving the composer enough tool feedback to
+  avoid submitting the low-quality shape.
+- **Verification**:
+  The rendered composer instructions remain under the 8000-character budget at
+  `7998` characters. Focused tests for query diagnostics, composer tool schema
+  descriptions, synthesis prompts, and turn-budget prompts passed. Full related
+  suites for `test_tooling_composer_query.py`,
+  `test_tooling_composer_tool_factory.py`, `test_synthesis_prompts.py`, and
+  `test_turn_budget_prompt.py` passed. Ruff passed for the touched source and
+  test files.
+- **Next experiment**:
+  Re-run a single no-topic `mimiciv_demo` GPT-5.5 trial before broadening to a
+  batch. The qualitative audit should specifically check whether accepted rows
+  are distinguishable through output fields and whether parent/child modifiers
+  are unambiguous.
