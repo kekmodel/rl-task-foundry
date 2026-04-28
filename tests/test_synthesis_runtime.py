@@ -943,6 +943,48 @@ async def test_submit_draft_records_answer_contract_binding_diagnostics(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_feedbacks_missing_list_output_binding(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [{"test_time": "2024-01-02T00:00:00", "result": "positive"}]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "results",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": "최근 검사 결과 1개와 검사 시간을 보여 주세요.",
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "검사 결과",
+                "constraint_phrases": ["최근"],
+                "limit_phrase": "1개",
+                "output_bindings": [
+                    {"label_field": "result", "requested_by_phrase": "검사 결과"},
+                ],
+            },
+        }
+    )
+    _record_query_evidence(controller, payload.label)
+
+    message = await controller.submit(payload)
+
+    assert "answer_contract.output_bindings" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert controller.attempts == []
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key(
     tmp_path: Path,
 ) -> None:

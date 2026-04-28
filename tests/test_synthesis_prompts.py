@@ -257,6 +257,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert instructions.count("Why:") >= 8
     assert "the DB decides the domain" in instructions
     assert "hidden entity values must be grounded" in instructions
+    assert "Build the label first" in instructions
+    assert "interesting, unique, scoped, visible" in instructions
+    assert "Derive `user_request` and `topic`" in instructions
+    assert "naturally ask for exactly that label" in instructions
     assert "the label must be copied from the latest query evidence" in instructions
     assert "must not be a global answer with a decorative entity attached" in instructions
     assert "# Difficulty-Up Policy" in instructions
@@ -273,7 +277,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "remove/rename/replace fields" in instructions
     assert "or combine a row-excluding filter" in instructions
     assert "difficulty jump" in instructions
-    assert "overconstrained/terminal feedback" in instructions
+    assert "If `submit_draft` says the conversation is terminated" in instructions
 
     # Durable policies are named so feedback/tool descriptions can reference
     # them without restating broad strategy.
@@ -298,8 +302,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "customer does not know DB tables" in instructions
     assert "technical sequences" in instructions
     assert "Hidden filter ids go in `entity`" in instructions
-    assert "Use first-person ownership only" in instructions
-    assert "non-user subject" in instructions
+    assert "Use first-person only" in instructions
+    assert "otherwise use neutral wording" in instructions
     assert "Bad patterns" not in instructions
     assert "'<entity type> 38'" not in instructions
     assert "'<table>_id=38'" not in instructions
@@ -323,6 +327,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Label Contract" in instructions
     assert "structured result" in instructions
     assert "not final prose" in instructions
+    assert "Verifiable means final `query(spec)` exactly reproduces" in instructions
+    assert "Unique means one correct structured answer" in instructions
+    assert "never rely on hidden ids/order/filters" in instructions
     assert "Use `answer_contract.kind='scalar'` only for aggregate answers" in instructions
     assert "Use `answer_contract.kind='list'` for selected rows" in instructions
     assert "Label Grounding Policy" in instructions
@@ -330,20 +337,19 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not reformat" in instructions
     assert "unrelated global answer is invalid" in instructions
     assert "Prefer user-visible non-handle values" in instructions
-    assert "Bind answer representation explicitly" in instructions
-    assert "Do not upgrade a code/reference" in instructions
-    assert "related display value" in instructions
-    assert "must name the relationship role and representation" in instructions
+    assert "Bind answer representation exactly" in instructions
+    assert "no code/reference-to-display" in instructions
+    assert "source-field-to-related-field upgrade" in instructions
+    assert "user_request names that role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
     assert "Keep output names faithful" in instructions
     assert "note/comment/description text" in instructions
     assert "multiple answer columns are plausible" in instructions
-    assert "include only fields that should appear in the submitted label" in instructions
-    assert "every selected field becomes part of the exact submitted answer" in instructions
+    assert "include only fields for the submitted label" in instructions
+    assert "every selected field becomes exact answer" in instructions
     assert "distinguishable through requested output fields" in instructions
     assert "duplicate projected answer rows" in instructions
-    assert "Constraint, filter, scope, ordering, and tie-break values" in instructions
-    assert "should not be selected unless" in instructions
+    assert "Do not select helper values unless" in instructions
     assert "combines facts from the same event or record" in instructions
     assert "Avoid independent sibling joins" in instructions
     assert "Do not make a raw handle the main answer" in instructions
@@ -368,7 +374,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
 
     # Task shape is domain-agnostic and concise.
     assert "# Task Shapes" in instructions
-    assert "real data-service tasks" in instructions
+    assert "data-service tasks" in instructions
     assert "plan-like list" in instructions
     assert "arbitrary good DBs" in instructions
     assert "Scalar tasks" in instructions

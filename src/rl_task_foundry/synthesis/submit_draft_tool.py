@@ -820,10 +820,19 @@ def _answer_contract_binding_diagnostics(
     }
 
 
-def _answer_contract_order_binding_errors(
+def _answer_contract_binding_errors(
     diagnostics: dict[str, object],
+    *,
+    require_output_bindings: bool,
 ) -> list[str]:
     errors: list[str] = []
+    if require_output_bindings:
+        missing_outputs = diagnostics.get("missing_output_bindings")
+        if isinstance(missing_outputs, list) and missing_outputs:
+            errors.append("missing_output_bindings")
+        extra_outputs = diagnostics.get("extra_output_bindings")
+        if isinstance(extra_outputs, list) and extra_outputs:
+            errors.append("extra_output_bindings")
     missing_by_count = diagnostics.get("missing_order_binding_count")
     if isinstance(missing_by_count, int) and missing_by_count > 0:
         errors.append("missing_order_bindings")
@@ -1639,15 +1648,16 @@ class SubmitDraftController:
                 "answer_contract_binding_diagnostics"
             )
             if isinstance(binding_diagnostics, dict):
-                order_binding_errors = _answer_contract_order_binding_errors(
-                    binding_diagnostics
+                binding_errors = _answer_contract_binding_errors(
+                    binding_diagnostics,
+                    require_output_bindings=payload.answer_contract.kind == "list",
                 )
-                if order_binding_errors:
+                if binding_errors:
                     error_codes.append(
                         SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING
                     )
                     invalid_diagnostics["answer_contract_binding_errors"] = (
-                        order_binding_errors[
+                        binding_errors[
                             : self.config.synthesis.runtime.diagnostic_item_limit
                         ]
                     )
@@ -1962,7 +1972,7 @@ class SubmitDraftController:
                 "Rejected. Call query again before submit_draft; the latest query result must include field visibility evidence."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
-                "Rejected. Label Contract violation: answer_contract.order_bindings must cover each query.order_by entry in order. Add the missing request-to-order binding, using label_field when the order key is returned in label_json and null otherwise."  # noqa: E501
+                "Rejected. Label Contract violation: for list labels, answer_contract.output_bindings must cover every returned label field, and answer_contract.order_bindings must cover each query.order_by entry in order. Add only bindings whose requested_by_phrase is copied from user_request."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501

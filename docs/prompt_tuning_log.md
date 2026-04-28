@@ -4852,3 +4852,81 @@ Solver 30/30 완료 결과:
   test files. As in earlier focused runtime tests, one pytest process printed
   `3 passed` and then did not exit; it was killed after the pass result was
   visible.
+
+## Iteration 117 — Label-first workflow and list output binding guard
+
+- **Question**:
+  The intended composer behavior is label-first: inspect the DB, build an
+  interesting unique verifiable label, then derive the natural user request and
+  submitted topic from that label. Does making this explicit improve request
+  quality?
+- **Setup**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_label_first_kimi_8solver_no_topic_batch5_01`.
+  `mimiciv_demo`, no topic hint, `openrouter/moonshotai/kimi-k2.5` for composer
+  and solvers, `max_solver_runs=8`, `solver_batch_size=4`, provider concurrency
+  `1`.
+
+  The batch started after the label-first workflow prompt change, but before the
+  later explicit `Unique`/`Verifiable` definitions and list-output binding guard.
+- **Raw result**:
+  Five quality samples, no provider failures. Accepted: 5/5.
+
+  Pass rates: `trial_01=3/8 = 0.375`, `trial_02=7/8 = 0.875`,
+  `trial_03=7/8 = 0.875`, `trial_04=6/8 = 0.75`, `trial_05=6/8 = 0.75`.
+- **Accepted data audit**:
+  `trial_02` is clean accepted. The ICU output-events request asks for latest
+  five discharge/output records with time, value, and unit; the label fields,
+  query scope, ordering, and request match.
+
+  `trial_03` is clean accepted. The ICU stay-history request asks for latest
+  three stays and explicitly requests `intime`, `outtime`, first/last careunit,
+  and length of stay.
+
+  `trial_04` is clean/borderline accepted. The final lab-results request asks
+  for time, lab item, and result, and requests the sort by latest time, priority,
+  and item name. The final query matches those controls. It is slightly verbose
+  but not low-quality.
+
+  `trial_05` is low-quality accepted. The request asks for careunit names,
+  admission/discharge times, and admission type, but the accepted label also
+  includes `los`. `answer_contract_binding_diagnostics` already reported
+  `missing_output_bindings=["los"]`, but the controller did not reject it.
+
+  `trial_01` is borderline/low-quality accepted. The request asks for a
+  same-time medication tie-break by "record order" and returns
+  `administration_sequence`. The value is marked user-visible in query metadata,
+  so this is not a precision-100 hard-validator case, but qualitatively it is a
+  technical-sequence surface and should remain a prompt/tool-metadata concern.
+- **Rejected/failed data audit**:
+  None. Low-quality accepted, not rejection behavior, is the critical issue in
+  this batch.
+- **Change**:
+  Rewrote the Workflow so the composer first builds the label, then derives
+  `user_request` and `topic` that naturally ask for exactly that label.
+
+  Added explicit Label Contract definitions:
+  `Verifiable` means final `query(spec)` exactly reproduces submitted JSON and
+  every value is copied from that query. `Unique` means one correct structured
+  answer for the hidden entity/request; ties must be returned, visibly
+  distinguished, aggregated, or avoided without hidden ids/order/filters.
+
+  Moved terminal feedback wording out of Workflow and into the tool-call budget
+  protocol: stop only when `submit_draft` says the conversation is terminated.
+
+  Added a precision-100 list-label binding guard. For list labels,
+  `answer_contract.output_bindings` must cover every returned label field. This
+  would reject the `trial_05` failure mode because the submitted label contained
+  `los` while the request/contract did not ask for it.
+- **Why this follows the principles**:
+  Label-first and Unique/Verifiable definitions are durable composer policy, so
+  they belong in the system prompt. The binding guard uses only submitted
+  `label_json`, submitted `answer_contract`, and latest query evidence; it does
+  not inspect DB literals, table names, column-name tokens, or natural-language
+  guesses.
+- **Verification**:
+  Prompt instructions render at `7994` characters with `15` `Why:` markers.
+  Focused prompt test passed. Focused runtime tests for list output binding,
+  order binding, and binding diagnostics printed `3 passed`; the pytest process
+  did not exit after printing the result and was killed after the pass result was
+  visible. Ruff passed for touched source and test files.
