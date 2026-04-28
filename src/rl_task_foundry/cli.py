@@ -33,7 +33,7 @@ console = Console()
 
 def _solver_summary(config) -> str:
     return ", ".join(
-        f"{solver.solver_id}={solver.provider}/{solver.model}" for solver in config.models.solvers
+        f"{solver.provider}/{solver.model}" for solver in config.models.solvers
     )
 
 
@@ -55,7 +55,8 @@ def validate_config(
         solver_model=solver_model,
     )
     console.print(f"[green]config ok[/green]: {config_path}")
-    console.print(f"total_solver_runs={config.models.total_solver_runs}")
+    console.print(f"solver_model_candidates={config.models.solver_model_count}")
+    console.print(f"max_solver_runs={config.calibration.max_solver_runs}")
     console.print(f"run_db={config.output.run_db_path}")
     console.print(f"composer={config.models.composer.provider}/{config.models.composer.model}")
     console.print(

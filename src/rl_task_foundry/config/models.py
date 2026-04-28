@@ -65,6 +65,14 @@ class SolverModelConfig(StrictModel):
     summarization_mode: Literal["off", "explicit"] = "off"
 
 
+class SolverModelTemplate(StrictModel):
+    backend: Literal["openai_agents"] = "openai_agents"
+    provider: str
+    model: str
+    memory_mode: Literal["none", "explicit_summary", "session_only"] = "none"
+    summarization_mode: Literal["off", "explicit"] = "off"
+
+
 def derive_solver_id(model: str, index: int) -> str:
     """Derive a stable solver_id from the model name and a per-model index.
 
@@ -82,12 +90,20 @@ class ModelsConfig(StrictModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _fill_missing_solver_ids(cls, data: object) -> object:
+    def _normalize_solver_models(cls, data: object) -> object:
         if not isinstance(data, dict):
             return data
-        solvers = data.get("solvers")
+        normalized = dict(data)
+        if "solver" in normalized:
+            if "solvers" in normalized:
+                raise ValueError("models must use either solver or solvers, not both")
+            template = SolverModelTemplate.model_validate(normalized.pop("solver"))
+            normalized["solvers"] = [
+                template.model_dump(),
+            ]
+        solvers = normalized.get("solvers")
         if not isinstance(solvers, list):
-            return data
+            return normalized
         counters: dict[str, int] = {}
         filled: list[object] = []
         for entry in solvers:
@@ -104,11 +120,11 @@ class ModelsConfig(StrictModel):
             index = counters.get(model, 0)
             counters[model] = index + 1
             filled.append({**entry, "solver_id": derive_solver_id(model, index)})
-        return {**data, "solvers": filled}
+        return {**normalized, "solvers": filled}
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def total_solver_runs(self) -> int:
+    def solver_model_count(self) -> int:
         return len(self.solvers)
 
 

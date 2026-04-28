@@ -15,7 +15,12 @@ from rl_task_foundry.calibration.runner import (
     calibration_decision,
     calibration_decision_from_counts,
 )
-from rl_task_foundry.config.models import AppConfig, ProviderConfig, SolverModelConfig
+from rl_task_foundry.config.models import (
+    AppConfig,
+    ProviderConfig,
+    SolverModelConfig,
+    derive_solver_id,
+)
 from rl_task_foundry.infra.db import DatabasePools, ensure_attached_database_pools
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
 from rl_task_foundry.solver.backend_openai_agents import OpenAIAgentsSolverBackend
@@ -226,12 +231,15 @@ class SolverOrchestrator:
 
     async def run_bundle(self, bundle: TaskRolloutBundle) -> TaskRolloutSummary:
         solver_configs = list(self.config.models.solvers)
-        target_evaluable_runs = min(
-            len(solver_configs), self.config.calibration.max_solver_runs
-        )
+        if not solver_configs:
+            raise ValueError("at least one solver model must be configured")
+        target_evaluable_runs = self.config.calibration.max_solver_runs
 
         def call_for_attempt(attempt_index: int) -> TaskSolverRunFactory:
-            solver_config = solver_configs[attempt_index % len(solver_configs)]
+            template = solver_configs[attempt_index % len(solver_configs)]
+            solver_config = template.model_copy(
+                update={"solver_id": derive_solver_id(template.model, attempt_index)}
+            )
             provider_config = self.config.providers[solver_config.provider]
             return partial(
                 self._run_solver,

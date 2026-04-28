@@ -20,17 +20,23 @@ def _write_config_from_repo_default(
 
 def test_load_config_uses_solver_run_count_source_of_truth():
     config = load_config(Path("rl_task_foundry.yaml"))
-    assert config.models.total_solver_runs == 20
+    assert config.models.solver_model_count == 1
     assert config.output.run_db_path.name == "run.db"
     assert config.database.dsn == "postgresql://pagila:pagila@127.0.0.1:5433/pagila"
     assert config.budget.max_gpu_hours is None
-    assert config.models.composer.provider == "openai_api"
-    assert config.models.composer.model == "gpt-5.4-mini"
-    assert {solver.provider for solver in config.models.solvers} == {"openai_api"}
-    assert {solver.model for solver in config.models.solvers} == {"gpt-5.4-mini"}
+    assert config.models.composer.provider == "openrouter"
+    assert config.models.composer.model == "moonshotai/kimi-k2.5"
+    assert {solver.provider for solver in config.models.solvers} == {"openrouter"}
+    assert {solver.model for solver in config.models.solvers} == {
+        "moonshotai/kimi-k2.5"
+    }
     assert "openai_api" in config.providers
     assert config.providers["openai_api"].type == "openai"
     assert config.providers["openai_api"].api_key_env == "OPENAI_API_KEY"
+    assert config.providers["openrouter"].base_url == "https://openrouter.ai/api/v1"
+    assert config.providers["openrouter"].api_key_env == "OPENROUTER_API_KEY"
+    assert config.providers["openrouter"].timeout_s == 180
+    assert config.providers["openrouter"].max_retries == 3
     assert "codex_oauth" in config.providers
     assert "local_server" in config.providers
     assert config.providers["local_server"].base_url == "http://127.0.0.1:8000/v1"

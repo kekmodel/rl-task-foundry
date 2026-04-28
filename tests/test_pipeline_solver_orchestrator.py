@@ -44,7 +44,11 @@ def _config(tmp_path: Path):
             ]
         }
     )
-    return config.model_copy(update={"output": output, "models": models}, deep=True)
+    calibration = config.calibration.model_copy(update={"max_solver_runs": 1})
+    return config.model_copy(
+        update={"output": output, "models": models, "calibration": calibration},
+        deep=True,
+    )
 
 
 class _FakeRuntime:
@@ -130,11 +134,45 @@ async def test_solver_orchestrator_scores_against_canonical_answer(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_solver_orchestrator_reuses_single_solver_model_for_configured_run_count(
+    tmp_path: Path,
+) -> None:
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(update={"max_solver_runs": 3})
+    seen_solver_ids: list[str] = []
+
+    def _runtime_factory(solver_config, *_args):
+        seen_solver_ids.append(solver_config.solver_id)
+        return _FakeRuntime('{"customer":"Alice","day":"2026-04-12"}', [])
+
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=_runtime_factory,
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.planned_solver_runs == 3
+    assert summary.total_solver_runs == 3
+    assert seen_solver_ids == [
+        "gpt-5.4-mini_00",
+        "gpt-5.4-mini_01",
+        "gpt-5.4-mini_02",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_solver_orchestrator_invokes_sdk_tools_factory_per_solver_run(
     tmp_path: Path,
 ) -> None:
     draft = _sample_draft()
     config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(update={"max_solver_runs": 2})
     config.models.solvers = [
         SolverModelConfig(
             solver_id="solver_a",
@@ -374,6 +412,7 @@ async def test_solver_orchestrator_excludes_failed_runs_from_pass_rate(
 
     draft = _sample_draft()
     config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(update={"max_solver_runs": 3})
     config.models.solvers = [
         SolverModelConfig(
             solver_id=f"solver_{i}",
@@ -419,6 +458,7 @@ async def test_solver_orchestrator_counts_wrong_answers_as_evaluable_without_top
 ) -> None:
     draft = _sample_draft()
     config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(update={"max_solver_runs": 3})
     config.models.solvers = [
         SolverModelConfig(
             solver_id=f"solver_{i}",
@@ -591,6 +631,7 @@ async def test_solver_orchestrator_counts_user_error_as_evaluable_actor_failure(
 
     draft = _sample_draft()
     config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(update={"max_solver_runs": 3})
     config.models.solvers = [
         SolverModelConfig(
             solver_id=f"solver_{i}",
@@ -668,6 +709,7 @@ async def test_solver_orchestrator_counts_max_turns_as_evaluable_actor_failure(
 
     draft = _sample_draft()
     config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(update={"max_solver_runs": 3})
     config.models.solvers = [
         SolverModelConfig(
             solver_id=f"solver_{i}",

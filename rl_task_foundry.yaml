@@ -46,34 +46,17 @@ providers:
     type: "openai_compatible"
     base_url: "https://openrouter.ai/api/v1"
     api_key_env: "OPENROUTER_API_KEY"
-    max_concurrency: 16
-    timeout_s: 120
+    max_concurrency: 8
+    timeout_s: 180
+    max_retries: 3
 
 models:
   composer:
-    provider: "openai_api"
-    model: "gpt-5.4-mini"
-  solvers:
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
-    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    provider: "openrouter"
+    model: "moonshotai/kimi-k2.5"
+  solver:
+    provider: "openrouter"
+    model: "moonshotai/kimi-k2.5"
 
 provider_resilience:
   circuit_breaker_window_s: 60

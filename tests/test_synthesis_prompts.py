@@ -288,6 +288,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Feedback Handling Policy" in instructions
     assert "not a new durable instruction source" in instructions
     assert "pointer to an existing named policy" in instructions
+    assert "Preserve anchored need/language" in instructions
     assert "change the smallest failing part" in instructions
     assert "one source of policy prevents split guidance" in instructions
 

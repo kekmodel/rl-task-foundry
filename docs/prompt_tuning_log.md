@@ -4651,3 +4651,55 @@ Solver 30/30 완료 결과:
   batch. The qualitative audit should specifically check whether accepted rows
   are distinguishable through output fields and whether parent/child modifiers
   are unambiguous.
+
+## Iteration 114 — OpenRouter Kimi default route and solver model de-dup
+
+- **Provider check**:
+  `.env` contains `OPENROUTER_API_KEY`. Direct OpenRouter chat checks for
+  `moonshotai/kimi-k2.5` succeeded and resolved to
+  `moonshotai/kimi-k2.5-0127`. A minimal tool-call probe also returned a tool
+  call with valid arguments, so Kimi is usable for both text and tool-driven
+  composer/solver flows through OpenRouter.
+- **Config change**:
+  Repo default `rl_task_foundry.yaml` now routes composer and solver models to
+  `openrouter/moonshotai/kimi-k2.5`. OpenRouter provider defaults were adjusted
+  to lower concurrency, longer timeout, and three SDK retries.
+- **Solver YAML de-dup**:
+  Replaced the repeated 20-entry default solver list with a single
+  `models.solver` template. `calibration.max_solver_runs` is now the rollout
+  count source of truth; `models` only names the solver model candidates. The
+  solver orchestrator cycles configured solver model templates and derives a
+  stable per-attempt `solver_id`, so one configured solver model can still run
+  20 independent attempts without YAML repetition or verification-key
+  collisions.
+- **Smoke trial**:
+  Root:
+  `artifacts/trial_20260428_mimiciv_demo_openrouter_kimi_smoke_01/trial_01`.
+  This smoke used a temporary four-solver Kimi config to keep runtime bounded.
+  The Agents SDK/OpenRouter path worked end to end.
+
+  First draft: rejected as too easy at `4/4 = 1.0`.
+  Second draft: accepted at `3/4 = 0.75`. Three solvers submitted the canonical
+  answer; one run ended with `missing_submit_result`.
+- **Qualitative audit**:
+  The accepted second draft is structurally reasonable: it asks for the first
+  five prescriptions for the anchored admission, ordered by prescription start
+  time and then drug name, and includes drug name, product strength, start/end
+  timestamps, and route. The returned rows are distinguishable through visible
+  output fields.
+
+  It is not a clean accepted sample because the final `user_request` is in
+  English while the configured `domain.language` is `ko`. This is a
+  composer-policy miss, not a provider failure. The rejected first draft was not
+  low-quality; it was simply too easy for Kimi under the four-run smoke band.
+- **Prompt follow-up**:
+  Strengthened the existing Feedback Handling Policy with a small
+  prompt-first reminder to preserve anchored need/language when revising after
+  feedback. No language hard validator was added because exact language
+  detection would be heuristic, not precision-100.
+- **Verification**:
+  `validate-config` now reports one solver model candidate and
+  `max_solver_runs=20`. Focused config/CLI/orchestrator/prompt tests printed
+  `25 passed`; as in earlier runs, the pytest process did not exit after
+  completion and was terminated after the pass result was visible. Ruff passed
+  for the touched source and test files.
