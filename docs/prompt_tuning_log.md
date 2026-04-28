@@ -4062,3 +4062,58 @@ Solver 30/30 완료 결과:
   When a topic hint is used, the experiment log must state why the targeted
   re-experiment needed it. Ordinary batch comparisons without that approval must
   run without a topic hint.
+
+## Iteration 103 — No-topic-hint Kimi batch on MIMIC demo
+
+- **Question**:
+  After making topic composer-owned by default, does removing the `input_events`
+  hint change real MIMIC demo behavior?
+- **Trial**:
+  Ran five parallel `mimiciv_demo` trials with no `--topic-hint`. Composer and
+  solver were `opencode_zen/kimi-k2.5`, using
+  `artifacts/tmp_configs/trial_mimiciv_demo_kimi_bound_batch_01.yaml`.
+  Artifact root:
+  `artifacts/trial_20260428_mimiciv_demo_kimi_no_topic_batch5_01`.
+- **Result**:
+  Raw accept count was `1/5`. Trial 3 accepted
+  `task_ICU Output Measurements_079ee8608a48be82` at `16/20 = 0.80`.
+  Trials 1, 2, 4, and 5 failed `reject_too_hard` with `0/20`.
+- **Topic behavior**:
+  The hint-free batch did increase topic/surface diversity. The submitted topics
+  covered medication administration status, ICU medication administration,
+  output measurements, recent blood tests, and ICU medication history. Query
+  roots spanned `emar`, `outputevents`, `labevents`, and `inputevents`. This is
+  materially different from the earlier `input_events`-hinted batches, where the
+  prompt pushed most attempts toward the same surface.
+- **Accepted data audit**:
+  Trial 3 is clean. The request asks for the five most recent ICU output
+  measurements for the hidden `stay_id`; the submitted topic matches the request
+  and query path; the label fields match the request; and the tie-break is
+  visible in the request: same measurement time is ordered by later registration
+  time. Solver failures were mostly exact-format misses, not evidence that the
+  task is bad.
+- **Rejected data audit**:
+  Trial 1 is low-quality rejected: it targets a single `emar` row but asks for
+  dose/method fields from `emar_detail`, a no-primary-key table that the solver
+  tool surface cannot materialize. This is a source/tool-surface mismatch, not
+  hard-good.
+
+  Trial 2 is low-quality rejected: it recovered from an unanchored hidden
+  `hadm_id` filter, but the final label exposed `sequence_id` and used it as an
+  ordering key without a user-visible tie-break request. The task is more than
+  merely hard.
+
+  Trial 4 is low-quality rejected: the final lab-result list used test name as a
+  visible tie-break, but the user request only said "latest". The row-set order
+  is under-specified from the user's perspective.
+
+  Trial 5 is low-quality rejected: the request says "major medications" while
+  the query selects the first five input events by time and medication label; it
+  also omits the tie-break semantics that determine list membership/order.
+- **Interpretation**:
+  The topic change worked for diversity and did not create low-quality accepted
+  data in this batch. It did not improve yield: strict clean accept remains
+  `1/5`, roughly comparable to the previous prompt-reminder batch once the
+  topic-drifted accepted task is discounted. The next improvement target is not
+  topic control; it is recovery around deterministic list ordering and avoiding
+  solver-inaccessible/no-primary-key detail surfaces.
