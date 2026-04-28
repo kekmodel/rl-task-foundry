@@ -167,9 +167,10 @@ class AnswerOutputBinding(StrictModel):
             "Exact contiguous substring from user_request that asks for this "
             "label field. Use wording that names this field's distinct role; "
             "do not reuse one vague phrase for different returned concepts. "
-            "For status/type/category fields, preserve the source "
-            "representation; do not turn source status text into boolean "
-            "completion wording."
+            "For status/type/category/sequence-like fields, preserve the "
+            "source representation; do not turn source status text into "
+            "boolean completion wording, or source record sequence into "
+            "generated display rank."
         ),
     )
 
@@ -185,7 +186,8 @@ class AnswerOrderBinding(StrictModel):
         description=(
             "Exact contiguous substring from user_request that asks for the "
             "row order, recency, ranking, or natural tie-break. Each tie-break "
-            "phrase must name that specific order key; do not reuse one broad "
+            "phrase must name that specific order key and its ordering role; "
+            "display-only output wording is not enough; do not reuse one broad "
             "order phrase for multiple different keys."
         ),
     )
@@ -238,8 +240,9 @@ class AnswerContract(StrictModel):
             "request truly has no additional constraint beyond the answer "
             "target. If query.order_by uses tie-break fields, user_request "
             "must visibly ask for that secondary order here; merely selecting "
-            "the field as output is not enough. Structural evidence is derived "
-            "from the latest query."
+            "the field as output is not enough. Sequence/rank wording must "
+            "separate source record sequence from generated display rank. "
+            "Structural evidence is derived from the latest query."
         ),
     )
     limit_phrase: str | None = Field(
@@ -1977,7 +1980,7 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: the latest successful query must contain structural evidence for this answer; if a list query limit fixes membership, that fixed size must be bound in user_request and answer_contract.limit_phrase."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
-                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. Do not repair this with hidden handles or artificial id wording."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. If the tie-break is sequence/rank-like, request wording must name source record sequence instead of a generated display rank. Do not repair this with hidden handles or artificial id wording."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
                 "Rejected. Label Contract reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields."  # noqa: E501
@@ -1990,7 +1993,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
                 "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request. If an order key is only a tie-break, user_request still needs natural visible tie-break wording before that key can be bound; otherwise rerun query without that order key or return tied rows."  # noqa: E501
-                " Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
+                " Display-only output wording is not enough for an order binding. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata."  # noqa: E501

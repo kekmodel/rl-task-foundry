@@ -5540,6 +5540,69 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 136 — Sequence-like fields must not become display ranks
+
+- **질문**:
+  Iteration 135의 source-sensitive wording 보강 뒤 단일 smoke에서 accepted 후보
+  품질이 개선되는가, 아니면 새로운 request ambiguity가 남아 있는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_source_sensitive_output_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  후보는 accepted되지 않았다. calibration에서 막혔다.
+
+  - first request: `제가 가장 최근에 투여받은 약물 목록 5개를 알려주세요. 약물 이름과 투여 시간을 알고 싶습니다.`
+  - first feedback: `answer_contract_phrase_missing`, `answer_contract_hidden_filter_unanchored`, `answer_contract_order_ambiguous`
+  - final request: `제가 가장 최근에 투여받은 약물 목록 5개를 알려주세요. 약물 이름과 투여 시간을 알고 싶습니다. 시간이 겹치는 경우 순번을 함께 표시해주세요.`
+  - pass rate: `0/8 = 0.0`
+  - CI low/high: `0.0 / 0.3123`
+  - solver failed runs: `0`
+
+  protocol 관점에서는 feedback 이후 재제출과 solver rollout이 정상 수행됐다. 저품질이
+  accepted되지 않은 것도 바람직하다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. composer는 첫 draft의 duplicate timestamp
+  문제를 고치기 위해 source `seq` 값을 label에 포함하고 `admin_time desc, seq desc`로
+  정렬했다. canonical answer의 `seq`는 `851`, `850`, `849`, `848`, `847` 같은 원본
+  record sequence 값이었다.
+
+  하지만 request는 "시간이 겹치는 경우 순번을 함께 표시"라고만 말했다. solver들은 이를
+  원본 record sequence가 아니라 화면에 생성하는 순위/동점 내 순번으로 해석했다. 실제로
+  여러 solver가 `seq: 1, 2` 또는 행 번호처럼 제출했고, 모든 rollout이 mismatch 됐다.
+
+  이는 어려운 좋은 문제가 아니다. 주어진 tool로 원본 `emar_seq`를 찾을 수는 있지만,
+  자연어 요청이 "원본 기록 순번"과 "생성한 표시 순위"를 구분하지 않아 solver가 합리적으로
+  다른 답을 냈다. 즉 composer가 source-sensitive sequence-like field를 명확히 요청하지
+  못한 저품질 후보다.
+- **변경**:
+  validator는 추가하지 않았다. "순번"이 source record sequence인지 generated display
+  rank인지 semantic하게 갈리는 문제는 query literal 없이 precision-100으로 판정할 수
+  없다. label field 이름이 `seq`라는 이유로 막는 것도 token/literal heuristic이므로
+  금지 원칙에 맞지 않는다.
+
+  대신 prompt-first/tool-local contract 원칙으로 다음을 보강했다.
+
+  - Label Contract: source-sensitive fields에 sequence/rank를 포함하고, source sequence와
+    display rank를 구분하라고 명시했다.
+  - Binding phrases: returned field가 order/tie-break key도 되는 경우 request가 ordering
+    role을 말해야 하며 display-only wording만으로는 부족하다고 명시했다.
+  - List Determinism Policy: sequence/rank tie-break는 source record order 자체가
+    요청되고 source로 이름 붙은 경우에만 쓰라고 명시했다.
+  - `AnswerOutputBinding`/`AnswerOrderBinding`/`constraint_phrases` schema description:
+    source record sequence를 generated display rank로 바꾸지 말고, tie-break phrase는
+    ordering role까지 이름 붙여야 한다고 명시했다.
+  - feedback reminder: order ambiguity나 missing binding 수리 때 sequence/rank-like
+    tie-break는 source record sequence와 generated display rank를 구분하라고 상기한다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_multirow_list_without_order_by tests/test_synthesis_runtime.py::test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key -q`
+  통과 (`11 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 135 — Source-sensitive output representation wording
 
 - **질문**:

@@ -261,12 +261,12 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "interesting, unique, verifiable, scoped" in instructions
     assert "Check requestability" in instructions
     assert "realistic customer" in instructions
-    assert "without technical or awkward control wording" in instructions
+    assert "without technical or awkward controls" in instructions
     assert "choose another label" in instructions
     assert "Derive `user_request` and `topic` from that label" in instructions
     assert "exactly the label fields and row controls" in instructions
     assert "supplies copied label JSON" in instructions
-    assert "no global answer with a decorative entity" in instructions
+    assert "no decorative global answer" in instructions
     assert "Difficulty-Up Policy" in instructions
     assert "smallest single structural strengthening" in instructions
     assert "there is no fixed ladder" in instructions
@@ -286,13 +286,12 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Core Definitions" in instructions
     assert "Source surface" in instructions
     assert "user wording, label fields, and query path" in instructions
-    assert "one phrase can map to several roles/surfaces" in instructions
+    assert "one phrase can map to several surfaces" in instructions
     assert "name chosen source in request/contract" in instructions
     assert "If no primary key" in instructions
-    assert "primary-key-backed path" in instructions
+    assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
-    assert "several reachable record surfaces share the same everyday noun" in instructions
-    assert "fix the chosen lifecycle/source role" in instructions
+    assert "Shared everyday nouns need lifecycle/source role" in instructions
     assert "do not depend on output_schema field names" in instructions
     assert "# Feedback And Difficulty-Up Policy" in instructions
     assert "not a new durable instruction source" in instructions
@@ -355,12 +354,12 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Source-sensitive fields" in instructions
     assert "same source role used by the query path" in instructions
     assert "request wording must name it" in instructions
+    assert "Distinguish source sequence from display rank" in instructions
     assert "Broad field words are invalid" in instructions
     assert "Keep output names faithful" in instructions
     assert "do not relabel one surface as another" in instructions
     assert "Vague field words are invalid" in instructions
     assert "several reachable sources" in instructions
-    assert "multiple columns are plausible" in instructions
     assert "`query.select` includes only returned label fields" in instructions
     assert "every selected field becomes exact answer" in instructions
     assert "distinguishable through requested output fields" in instructions
@@ -374,9 +373,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "output/order bindings" in instructions
     assert "No tables, columns, operators, or SQL" in instructions
     assert "every phrase must be an exact substring of `user_request`" in instructions
-    assert "Binding phrases must name the returned field's role" in instructions
-    assert "each order key's role" in instructions
-    assert "multi-key order" in instructions
+    assert "Binding phrases must name returned field roles" in instructions
+    assert "order-key roles" in instructions
+    assert "display-only wording is not enough" in instructions
+    assert "order is multi-key" in instructions
     assert "do not bind one vague phrase to multiple concepts" in instructions
     assert "List Determinism Policy" in instructions
     assert "one correct structured result" in instructions
@@ -386,6 +386,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "newest-first/oldest-first" in instructions
     assert "order leaves distinct-answer ties" in instructions
     assert "ask for a natural visible tie-break before" in instructions
+    assert "Use sequence/rank only for named source record order" in instructions
+    assert "not generated rank" in instructions
     assert "artificial technical sequence/id/order wording" in instructions
     assert "choose unique ordering, or return tied rows" in instructions
     assert "never add hidden handles" in instructions

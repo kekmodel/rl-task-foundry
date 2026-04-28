@@ -1079,6 +1079,7 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
 
     assert "answer_contract.order_bindings" in message
     assert "natural visible tie-break wording" in message
+    assert "Display-only output wording is not enough" in message
     assert "Do not reuse one broad order phrase" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
@@ -1211,15 +1212,19 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "must visibly ask for that secondary order" in schema_surface
     assert "natural tie-break" in schema_surface
     assert "merely selecting the field as output is not enough" in schema_surface
+    assert "separate source record sequence from generated display rank" in schema_surface
     assert "For list labels, provide one binding for every returned label field" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "Each tie-break phrase must name that specific order key" in schema_surface
+    assert "its ordering role" in schema_surface
+    assert "display-only output wording is not enough" in schema_surface
     assert "do not reuse one broad order phrase" in schema_surface
     assert "not a source table or SQL column" in schema_surface
     assert "names this field's distinct role" in schema_surface
     assert "do not reuse one vague phrase" in schema_surface
     assert "preserve the source representation" in schema_surface
     assert "do not turn source status text into boolean completion wording" in schema_surface
+    assert "source record sequence into generated display rank" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
     assert "JSON string for the canonical submit_result payload" in schema_surface
@@ -1993,6 +1998,7 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
     assert "does not uniquely determine" in message
     assert "preserve the current anchor and target" in message
     assert "natural visible tie-break" in message
+    assert "source record sequence instead of a generated display rank" in message
     assert "hidden handles" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
