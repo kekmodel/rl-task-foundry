@@ -629,28 +629,37 @@ def _too_easy_list_payload() -> SubmitDraftPayload:
             ],
             "entity": anchor_entity,
             "user_request": "제 결제 중 5달러 이상인 최근 3건을 결제일 내림차순으로 알려 주세요.",
-            "answer_contract": _list_answer_contract(
-                phrase="알려 주세요",
-                predicates=[
+            "answer_contract": {
+                **_list_answer_contract(
+                    phrase="알려 주세요",
+                    predicates=[
+                        {
+                            "table": "payment",
+                            "column": "amount",
+                            "op": "gte",
+                            "value": 5,
+                            "phrase": "5달러 이상",
+                        }
+                    ],
+                    order_by=[
+                        {
+                            "table": "payment",
+                            "column": "payment_date",
+                            "direction": "desc",
+                            "phrase": "결제일 내림차순",
+                        }
+                    ],
+                    limit=3,
+                    limit_phrase="3건",
+                ),
+                "order_bindings": [
                     {
-                        "table": "payment",
-                        "column": "amount",
-                        "op": "gte",
-                        "value": 5,
-                        "phrase": "5달러 이상",
-                    }
-                ],
-                order_by=[
-                    {
-                        "table": "payment",
-                        "column": "payment_date",
                         "direction": "desc",
-                        "phrase": "결제일 내림차순",
+                        "label_field": "payment_date",
+                        "requested_by_phrase": "결제일 내림차순",
                     }
                 ],
-                limit=3,
-                limit_phrase="3건",
-            ),
+            },
         }
     )
 
@@ -897,7 +906,7 @@ async def test_submit_draft_records_answer_contract_binding_diagnostics(
             {
                 "requested_by_phrase": "배정된 매장",
                 "direction": None,
-                "label_field": "missing_order_field",
+                "label_field": "store_id",
             }
         ],
     }
@@ -929,10 +938,174 @@ async def test_submit_draft_records_answer_contract_binding_diagnostics(
     assert binding_diagnostics["order_reference_count"] == 1
     assert binding_diagnostics["order_binding_count"] == 1
     assert binding_diagnostics["order_output_fields"] == ["store_id"]
-    assert binding_diagnostics["extra_order_label_fields"] == [
-        "missing_order_field"
-    ]
+    assert binding_diagnostics["extra_order_label_fields"] == []
     assert binding_diagnostics["missing_requested_by_phrases"] == []
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medications",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {
+            "medication": "A",
+            "starttime": "2024-01-02T00:00:00",
+            "stoptime": "2024-01-03T00:00:00",
+        },
+        {
+            "medication": "B",
+            "starttime": "2024-01-01T00:00:00",
+            "stoptime": "2024-01-02T00:00:00",
+        },
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "medications",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": "최근 약물 2개를 시작 시간순으로 알려 주세요.",
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "약물",
+                "constraint_phrases": ["시작 시간순"],
+                "limit_phrase": "2개",
+                "output_bindings": [
+                    {"label_field": "medication", "requested_by_phrase": "약물"},
+                    {"label_field": "starttime", "requested_by_phrase": "시작 시간순"},
+                    {"label_field": "stoptime", "requested_by_phrase": "약물"},
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "desc",
+                        "label_field": "starttime",
+                        "requested_by_phrase": "시작 시간순",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "medication",
+                "column": "starttime",
+                "direction": "desc",
+            },
+            {
+                "usage": "order_by",
+                "table": "medication",
+                "column": "stoptime",
+                "direction": "desc",
+            },
+        ],
+        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 2,
+                "order_by_outputs": ["starttime", "stoptime"],
+                "returned_row_count": 2,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "answer_contract.order_bindings" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert controller.attempts == []
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_feedbacks_missing_order_binding_by_query_order_count(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {"test_time": "2024-01-02T00:00:00", "result": "negative"},
+        {"test_time": "2024-01-01T00:00:00", "result": "positive"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "results",
+            "label": label,
+            "entity": {"customer_id": 1},
+            "user_request": "최근 검사 결과 2개를 보여 주세요.",
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "검사 결과",
+                "constraint_phrases": ["최근"],
+                "limit_phrase": "2개",
+                "output_bindings": [
+                    {"label_field": "test_time", "requested_by_phrase": "최근"},
+                    {"label_field": "result", "requested_by_phrase": "검사 결과"},
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "desc",
+                        "label_field": "test_time",
+                        "requested_by_phrase": "최근",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "test",
+                "column": "test_time",
+                "direction": "desc",
+            },
+            {
+                "usage": "order_by",
+                "table": "test",
+                "column": "test_seq",
+                "direction": "asc",
+            },
+        ],
+        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 2,
+                "returned_row_count": 2,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "answer_contract.order_bindings" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert controller.attempts == []
 
 
 def _loose_json_schema_paths(value: object, *, path: str = "$") -> list[str]:
@@ -984,7 +1157,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "must visibly ask for that secondary order" in schema_surface
     assert "merely selecting the field as output is not enough" in schema_surface
     assert "Optional request-to-label bindings" in schema_surface
-    assert "Optional request-to-order bindings" in schema_surface
+    assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "not a source table or SQL column" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
@@ -2235,21 +2408,30 @@ async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
             "label": [{"first_name": "JULIA"}],
             "entity": {"film_reference": 830},
             "user_request": "배우 이름을 첫 1명만 알려 주세요.",
-            "answer_contract": _list_answer_contract(
-                phrase="배우 이름",
-                table="actor",
-                column=None,
-                order_by=[
+            "answer_contract": {
+                **_list_answer_contract(
+                    phrase="배우 이름",
+                    table="actor",
+                    column=None,
+                    order_by=[
+                        {
+                            "table": "actor",
+                            "column": "actor_id",
+                            "direction": "asc",
+                            "phrase": "첫 1명",
+                        }
+                    ],
+                    limit=1,
+                    limit_phrase="첫 1명",
+                ),
+                "order_bindings": [
                     {
-                        "table": "actor",
-                        "column": "actor_id",
                         "direction": "asc",
-                        "phrase": "첫 1명",
+                        "label_field": None,
+                        "requested_by_phrase": "첫 1명",
                     }
                 ],
-                limit=1,
-                limit_phrase="첫 1명",
-            ),
+            },
         }
     )
     _record_query_evidence(
@@ -2392,11 +2574,20 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
                 "내 최근 5건의 입원 이력을 확인해 주세요. "
                 "입원일, 퇴원일, 입원 유형, 입원 경로를 알고 싶습니다."
             ),
-            "answer_contract": _list_answer_contract(
-                phrase="입원 이력",
-                constraint_phrases=["입원일", "퇴원일", "입원 유형", "입원 경로"],
-                limit_phrase="5건",
-            ),
+            "answer_contract": {
+                **_list_answer_contract(
+                    phrase="입원 이력",
+                    constraint_phrases=["입원일", "퇴원일", "입원 유형", "입원 경로"],
+                    limit_phrase="5건",
+                ),
+                "order_bindings": [
+                    {
+                        "direction": "desc",
+                        "label_field": "admittime",
+                        "requested_by_phrase": "최근 5건",
+                    }
+                ],
+            },
         }
     )
     _record_query_evidence(

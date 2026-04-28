@@ -106,7 +106,7 @@ def build_synthesis_agent_instructions(
 ) -> str:
     return "\n\n".join([
         "# Role\n"
-        "Prepare grounded customer-facing task drafts; submit through "
+        "Prepare grounded customer-facing task drafts; use "
         "`submit_draft`.",
 
         build_tool_call_budget_instruction(
@@ -215,9 +215,9 @@ def build_synthesis_agent_instructions(
         "independent sibling joins from the same root when they can pair "
         "unrelated child rows. Why: exact labels must describe one grounded "
         "state, not an accidental combination.\n"
-        "- `answer_contract` is only a request-binding surface: provide "
+        "- `answer_contract` is only a request-binding surface: set "
         "`kind`, `answer_phrase`, `constraint_phrases`, `limit_phrase`, and "
-        "optional output/order bindings. "
+        "output/order bindings; bind `query.order_by` entries. "
         "Do not restate tables, columns, operators, or SQL; the latest query "
         "result supplies structural evidence. Every contract phrase must be "
         "an exact substring of `user_request`. Why: request meaning is checked "

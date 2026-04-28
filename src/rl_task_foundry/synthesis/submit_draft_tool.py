@@ -71,6 +71,7 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING = (
         "answer_contract_visibility_evidence_missing"
     )
+    ANSWER_CONTRACT_BINDING_MISSING = "answer_contract_binding_missing"
     LABEL_NON_USER_VISIBLE_SOURCE = "label_non_user_visible_source"
     LABEL_NO_PRIMARY_KEY_SOURCE = "label_no_primary_key_source"
     ANSWER_CONTRACT_NOT_INCREMENTAL = "answer_contract_not_incremental"
@@ -101,6 +102,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING,
         SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE,
         SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL,
@@ -246,8 +248,10 @@ class AnswerContract(StrictModel):
     order_bindings: list[AnswerOrderBinding] | None = Field(
         default=None,
         description=(
-            "Optional request-to-order bindings for list ordering, ranking, "
-            "recency, or tie-break wording. Omit or use null when not needed."
+            "For ordered lists, provide one request-to-order binding for each "
+            "query.order_by entry, in the same order. Use label_field when the "
+            "order key is returned in label_json; otherwise use null. Omit or "
+            "use null only when the query has no ordering."
         ),
     )
 
@@ -741,6 +745,7 @@ def _answer_contract_binding_diagnostics(
     label_field_set = set(label_fields)
     output_bindings = contract.output_bindings or []
     order_bindings = contract.order_bindings or []
+    order_reference_count = _query_order_reference_count(query_result)
     bound_output_fields = _ordered_unique_texts(
         [binding.label_field for binding in output_bindings]
     )
@@ -779,8 +784,12 @@ def _answer_contract_binding_diagnostics(
         "extra_output_bindings": sorted(
             set(bound_output_fields) - label_field_set
         )[:item_limit],
-        "order_reference_count": _query_order_reference_count(query_result),
+        "order_reference_count": order_reference_count,
         "order_binding_count": len(order_bindings),
+        "missing_order_binding_count": max(
+            0,
+            order_reference_count - len(order_bindings),
+        ),
         "order_output_fields": order_output_fields[:item_limit],
         "bound_order_label_fields": bound_order_label_fields[:item_limit],
         "missing_order_label_bindings": sorted(
@@ -791,6 +800,19 @@ def _answer_contract_binding_diagnostics(
         )[:item_limit],
         "missing_requested_by_phrases": missing_requested_by_phrases[:item_limit],
     }
+
+
+def _answer_contract_order_binding_errors(
+    diagnostics: dict[str, object],
+) -> list[str]:
+    errors: list[str] = []
+    missing_by_count = diagnostics.get("missing_order_binding_count")
+    if isinstance(missing_by_count, int) and missing_by_count > 0:
+        errors.append("missing_order_bindings")
+    missing_label_bindings = diagnostics.get("missing_order_label_bindings")
+    if isinstance(missing_label_bindings, list) and missing_label_bindings:
+        errors.append("missing_order_label_bindings")
+    return errors
 
 
 def _referenced_predicate_signature(ref: dict[str, object]) -> str | None:
@@ -1574,6 +1596,24 @@ class SubmitDraftController:
                     ]
                 )
 
+        if not error_codes and submission_diagnostics:
+            binding_diagnostics = submission_diagnostics.get(
+                "answer_contract_binding_diagnostics"
+            )
+            if isinstance(binding_diagnostics, dict):
+                order_binding_errors = _answer_contract_order_binding_errors(
+                    binding_diagnostics
+                )
+                if order_binding_errors:
+                    error_codes.append(
+                        SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING
+                    )
+                    invalid_diagnostics["answer_contract_binding_errors"] = (
+                        order_binding_errors[
+                            : self.config.synthesis.runtime.diagnostic_item_limit
+                        ]
+                    )
+
         if submission_diagnostics:
             invalid_diagnostics = {
                 **submission_diagnostics,
@@ -1879,6 +1919,9 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
                 "Rejected. Call query again before submit_draft; the latest query result must include field visibility evidence."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
+                "Rejected. Label Contract violation: answer_contract.order_bindings must cover each query.order_by entry in order. Add the missing request-to-order binding, using label_field when the order key is returned in label_json and null otherwise."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501
