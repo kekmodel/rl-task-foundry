@@ -4001,15 +4001,16 @@ Solver 30/30 완료 결과:
 - **Rule**:
   Accepted data is not automatically good. Each accepted task must be audited
   from bundle and debug artifacts for request/topic/entity/query/label/order
-  alignment and classified as clean, borderline, low-quality accepted, or topic
-  drift.
+  alignment and classified as clean, borderline, low-quality accepted, or
+  inconclusive.
 - **Rule**:
   Rejected data is not automatically bad. Each rejected/failed task must be
   classified as hard-good, low-quality, infra/provider failure, or inconclusive.
   A task is hard-good when it is answerable with the solver tool surface but the
   sampled solvers failed; it is low-quality when the task definition itself is
   not well-grounded, not uniquely answerable, source-surface mismatched, hidden
-  row-set/order/filter dependent, topic-drifted, or difficulty-jumped.
+  row-set/order/filter dependent, internally topic-mismatched, or
+  difficulty-jumped.
 - **Risk interpretation**:
   Low-quality drafts are not the main problem when the solver pass-rate /
   quality gate rejects them. That is the filter doing useful work. The critical
@@ -4024,3 +4025,24 @@ Solver 30/30 완료 결과:
   Added this requirement to `docs/runbook.md` under
   `Mandatory Experiment Quality Audit`. Any future experiment that lacks this
   audit is not valid evidence for a project improvement.
+
+## Iteration 101 — Composer-owned topic by default
+
+- **Decision**:
+  Normal synthesis must not receive an externally requested topic. The composer
+  chooses and submits the topic that naturally describes the grounded
+  user_request, query path, and label it built.
+- **Clarification**:
+  The previous `requested_topic` path remains only as an edge-case experiment
+  hint. It may be used to test whether a seed changes exploration, but it is not
+  a coverage contract and should be omitted from default trials.
+- **Quality-audit impact**:
+  A submitted topic that differs from an experiment hint is not low-quality by
+  itself. Low-quality topic failure means the composer-submitted topic does not
+  match the final request/query/label, or the draft changed source surface while
+  pretending it was the same task.
+- **Operational change**:
+  The LLM-facing prompt tag is now `topic_experiment_hint`, not
+  `requested_topic`, and CLI output labels it the same way. Trial generation
+  now exposes only `--topic-hint`; old `--topic` / `--category` aliases were not
+  preserved because normal generation should not look topic-targeted.

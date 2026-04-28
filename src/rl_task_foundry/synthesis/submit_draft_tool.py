@@ -1835,7 +1835,7 @@ class SubmitDraftController:
             phase="submit_draft",
             status=status,
             expected_contract={
-                "requested_topic_hint": self.requested_topic,
+                "topic_experiment_hint": self.requested_topic,
                 "max_submissions": self.max_submissions,
             },
             actual_data={

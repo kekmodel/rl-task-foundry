@@ -275,10 +275,10 @@ spec areas.
 16. Absolute rule: prompt-layer boundaries are part of the pipeline contract.
     System prompts may contain only durable, role-local policy; user prompts carry
     current-run context and tasking. Do not put database facts, schema maps,
-    anchor candidates, local examples, requested topic hints, provider quirks, or
-    trial observations into system prompts. Do not use user prompts to override
-    role isolation, validation precision, no-token-heuristic rules, or tool
-    schema contracts.
+    anchor candidates, local examples, optional edge-case topic hints, provider
+    quirks, or trial observations into system prompts. Do not use user prompts
+    to override role isolation, validation precision, no-token-heuristic rules,
+    or tool schema contracts.
 17. Pipeline state transitions are part of the correctness contract. Before
     changing synthesis feedback, submit validation, solver rollout, trial retry,
     harvest behavior, or registry acceptance, consult
@@ -342,8 +342,9 @@ Prompt placement is not a style preference; it is an interface invariant.
   tool-use invariants, customer-facing request principles, exact-label
   principles, validation/guidance hierarchy, and cross-role leak bans.
 - `user` is for the current assignment packet: domain/scenario text, target
-  language, requested topic hints, schema/affordance/profile context, tool
-  surface summary, anchor candidates, local examples, and retry/tasking context.
+  language, optional edge-case topic hints, schema/affordance/profile context,
+  tool surface summary, anchor candidates, local examples, and retry/tasking
+  context.
 - tool schema and parameter descriptions outrank prompt prose for callable
   argument contracts. If the requirement belongs beside one field, put it there.
 - hard validation remains reserved for 100%-precision violations. Prompt
@@ -354,6 +355,11 @@ This boundary protects DB-swappability and role isolation. System prompts remain
 portable across all databases; user prompts adapt to the current database without
 becoming policy; tool schemas express machine-checkable contracts; solver
 pass-rate handles the remaining uncertainty.
+
+Topic ownership follows the same boundary. Normal generation does not receive a
+topic target from outside the composer. The composer submits the topic that best
+describes the grounded draft it actually built. A topic hint may appear only as
+edge-case experiment context, never as the default generation target.
 
 ## Clean Break Policy
 

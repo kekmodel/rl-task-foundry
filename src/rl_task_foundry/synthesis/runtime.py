@@ -631,7 +631,7 @@ class SynthesisAgentRuntime:
             phase="synthesis_conversation",
             status="accepted",
             expected_contract={
-                "requested_topic": requested_topic,
+                "topic_experiment_hint": requested_topic,
                 "max_turns": self.config.synthesis.runtime.max_turns,
             },
             actual_data={

@@ -332,7 +332,14 @@ def run_proof_task_cli(
 def run_real_db_trial(
     db_id: str,
     output_dir: Path,
-    topic: str | None = None,
+    topic: str | None = typer.Option(
+        None,
+        "--topic-hint",
+        help=(
+            "Optional edge-case experiment hint. Omit for normal "
+            "composer-led topic selection."
+        ),
+    ),
     config_path: Path = Path("rl_task_foundry.yaml"),
     composer_provider: str | None = None,
     composer_model: str | None = None,
@@ -366,7 +373,7 @@ def run_real_db_trial(
         console.print(f"[green]real db trial complete[/green]: {output_dir}")
         console.print(f"trial_status={summary.trial_status}")
         console.print(f"db_id={summary.db_id}")
-        console.print(f"requested_topic={summary.requested_topic}")
+        console.print(f"topic_experiment_hint={summary.requested_topic}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:

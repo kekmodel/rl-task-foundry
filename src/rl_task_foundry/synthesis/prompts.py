@@ -70,19 +70,19 @@ def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
     ])
 
 
-def _topic_semantics_instruction(
-    requested_topic: str,
+def _topic_hint_semantics_instruction(
+    topic_hint: str,
 ) -> str | None:
-    normalized = requested_topic.strip()
+    normalized = topic_hint.strip()
     if not normalized:
         return None
     return (
-        f"Coverage hint: {normalized}. "
-        "Treat as a soft hint. Start from a grounded "
-        "label first; if the hint leads to a trivial or "
-        "id-only label, ignore it and choose a better "
-        "grounded topic. If you depart from the hint, make "
-        "submitted topic and user_request match the actual query path."
+        f"Edge-case experiment hint: {normalized}. "
+        "Normal runs omit this hint. Use it only as an optional exploration "
+        "seed; it is not a required topic or coverage target. The submitted "
+        "topic must be your own natural summary of the final grounded "
+        "user_request, query path, and label. Ignore the hint if it pulls the "
+        "draft away from a good grounded task."
     )
 
 
@@ -328,10 +328,10 @@ def build_synthesis_input(
         _render_context_value("scenario_description", scenario_description)
     )
     if requested_topic:
-        session_blocks.append(_render_context_value("requested_topic", requested_topic))
-        topic_semantics = _topic_semantics_instruction(
-            requested_topic,
+        session_blocks.append(
+            _render_context_value("topic_experiment_hint", requested_topic)
         )
+        topic_semantics = _topic_hint_semantics_instruction(requested_topic)
         if topic_semantics is not None:
             session_blocks.append(
                 _render_context_block("topic_semantics", topic_semantics)

@@ -135,8 +135,11 @@ def test_synthesis_input_does_not_mirror_sdk_tool_surface() -> None:
     assert "<scenario_description>" in prompt
     assert "end-user support" in prompt
     assert "record_history" in prompt
-    assert "soft hint" in prompt
-    assert "make submitted topic and user_request match the actual query path" in prompt
+    assert "<topic_experiment_hint>\nrecord_history\n</topic_experiment_hint>" in prompt
+    assert "<requested_topic>" not in prompt
+    assert "Edge-case experiment hint: record_history" in prompt
+    assert "not a required topic or coverage target" in prompt
+    assert "soft hint" not in prompt
     assert "Korean" in prompt
 
     # schema
@@ -479,6 +482,8 @@ def test_synthesis_input_defaults_to_schema_map_entity_selection() -> None:
 
     assert "<starting_entity>" not in prompt
     assert "<candidate_starting_points>" not in prompt
+    assert "<topic_experiment_hint>" not in prompt
+    assert "<requested_topic>" not in prompt
     assert "choose a plausible root table" in instructions
     assert "observe real entity values" in instructions
     assert "follow that tool's schema exactly" in instructions

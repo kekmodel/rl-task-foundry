@@ -225,7 +225,7 @@ class RealDbTrialRunner:
             payload={
                 "flow_id": flow_id,
                 "db_id": db_id,
-                "requested_topic": topic,
+                "topic_experiment_hint": topic,
                 "output_root": str(output_root),
             },
         )
@@ -239,7 +239,7 @@ class RealDbTrialRunner:
         phase_monitor.emit(
             phase="trial",
             status="started",
-            expected_contract={"db_id": db_id, "requested_topic": topic},
+            expected_contract={"db_id": db_id, "topic_experiment_hint": topic},
             actual_data={"output_root": output_root},
             checks={"debug_root_ready": debug_root.exists()},
             diagnostics={},
@@ -287,7 +287,7 @@ class RealDbTrialRunner:
                 phase="synthesis",
                 status="failed",
                 expected_contract={"accepted_draft_required": True},
-                actual_data={"db_id": db_id, "requested_topic": topic},
+                actual_data={"db_id": db_id, "topic_experiment_hint": topic},
                 checks={"accepted_draft_present": False},
                 diagnostics={
                     "error_type": type(exc).__name__,
@@ -325,7 +325,7 @@ class RealDbTrialRunner:
                 phase="synthesis",
                 status="failed",
                 expected_contract={"accepted_draft_required": True},
-                actual_data={"db_id": db_id, "requested_topic": topic},
+                actual_data={"db_id": db_id, "topic_experiment_hint": topic},
                 checks={"accepted_draft_present": False},
                 diagnostics={
                     "error_type": type(exc).__name__,
@@ -357,7 +357,7 @@ class RealDbTrialRunner:
                 phase="synthesis",
                 status="failed",
                 expected_contract={"accepted_draft_required": True},
-                actual_data={"db_id": db_id, "requested_topic": topic},
+                actual_data={"db_id": db_id, "topic_experiment_hint": topic},
                 checks={"accepted_draft_present": False},
                 diagnostics={
                     "error_type": type(exc).__name__,
@@ -387,7 +387,7 @@ class RealDbTrialRunner:
                 phase="synthesis",
                 status="failed",
                 expected_contract={"accepted_draft_required": True},
-                actual_data={"db_id": db_id, "requested_topic": topic},
+                actual_data={"db_id": db_id, "topic_experiment_hint": topic},
                 checks={"accepted_draft_present": False},
                 diagnostics={
                     "error_type": type(exc).__name__,

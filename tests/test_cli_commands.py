@@ -285,7 +285,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
             "run-real-db-trial",
             "sakila",
             str(output_dir),
-            "--topic",
+            "--topic-hint",
             "assignment",
             "--composer-provider",
             "opencode_zen",
@@ -303,7 +303,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert captured["topic"] == CategoryTaxonomy.ASSIGNMENT
     assert "trial_status=accepted" in result.stdout
     assert "db_id=sakila" in result.stdout
-    assert "requested_topic=assignment" in result.stdout
+    assert "topic_experiment_hint=assignment" in result.stdout
     assert "flow_id=flow_trial_test" in result.stdout
     assert "task_id=task_real_trial" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout

@@ -60,18 +60,21 @@ rewrite 진행 중에는 아래를 확인한다.
   - 각 accepted task의 `task.yaml`/`task.json`, `instance.json`,
     `canonical_answer.json`, 마지막 `phase_monitors.jsonl` submission을
     확인한다.
-  - user request, topic, entity scope, canonical query path, label fields,
-    ordering, tie-break, hidden filter가 서로 맞는지 판정한다.
-  - accepted task를 `clean`, `borderline`, `low-quality accepted`, `topic
-    drift` 중 하나로 분류한다.
+  - user request, composer-submitted topic, entity scope, canonical query path,
+    label fields, ordering, tie-break, hidden filter가 서로 맞는지 판정한다.
+  - 기본 generation에서 topic은 composer가 draft에 제출한 사후 요약이다.
+    외부 `topic_experiment_hint`와 다르다는 사실만으로 저품질 판정하지
+    않는다.
+  - accepted task를 `clean`, `borderline`, `low-quality accepted`,
+    `inconclusive` 중 하나로 분류한다.
 
 - Rejected/failed data audit:
   - `too_hard`, low pass rate, `reject_too_hard`, `MaxTurnsExceeded`를 그대로
     저품질로 단정하지 않는다.
   - solver tools로 풀 수 있는데 solver가 실패한 경우는 hard-good으로
     분류한다.
-  - request/label/query가 불일치하거나, source surface가 흔들리거나,
-    hidden row-set/order/filter에 의존하거나, topic drift/difficulty jump가
+  - request/label/query/submitted topic이 불일치하거나, source surface가
+    흔들리거나, hidden row-set/order/filter에 의존하거나, difficulty jump가
     발생한 경우는 low-quality로 분류한다.
   - failed task를 `hard-good`, `low-quality`, `infra/provider failure`,
     `inconclusive` 중 하나로 분류한다.

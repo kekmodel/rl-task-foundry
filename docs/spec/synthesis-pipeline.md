@@ -286,15 +286,15 @@ every database and every generation run:
 - bans on cross-role leaks, sample-DB priors, and semantic token heuristics
 
 Do not put run-specific facts in the system layer: current domain facts,
-requested topic hints, schema maps, table/column lists, data profiles, anchor
-candidates, local examples, provider-specific observations, or previous trial
-outcomes.
+optional edge-case topic hints, schema maps, table/column lists, data profiles,
+anchor candidates, local examples, provider-specific observations, or previous
+trial outcomes.
 
 Use the user layer for the current assignment packet:
 
 - target language for generated user-facing text
 - domain/scenario description from config
-- requested topic or coverage hint, if any
+- optional edge-case topic hint, if any
 - schema summary, DB Affordance Map, and data profile
 - current tool-surface summary
 - optional candidate starting points
@@ -306,11 +306,17 @@ context and soft tasking, not as policy that overrides the system role contract.
 If a rule belongs beside a callable argument, prefer tool schema or parameter
 description over either prompt layer.
 
+Normal synthesis does not inject a topic target. The composer must choose and
+submit the topic that naturally summarizes its grounded user request, query path,
+and label. A topic hint is reserved for edge-case experiments where the
+experimenter wants to test whether a seed changes exploration; it is not a
+coverage contract.
+
 Forbidden boundary crossings:
 
 - putting schema maps, affordance maps, data profiles, anchor candidates, local
-  examples, requested topic hints, provider quirks, or trial observations in
-  `system`
+  examples, optional edge-case topic hints, provider quirks, or trial
+  observations in `system`
 - putting role-isolation exceptions, RLVR/solver/pass-rate/training internals,
   sample-DB priors, semantic token heuristics, or hard-validator policy in
   `user`
