@@ -5540,6 +5540,71 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 137 — Non-null filters and date granularity must be explicit
+
+- **질문**:
+  Iteration 136의 sequence-like policy 뒤 단일 smoke가 accepted된다면, 그 accepted
+  후보는 정말 좋은 데이터인가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_sequence_like_order_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  후보는 accepted 됐고 registry에 commit 됐다.
+
+  - first feedback: `answer_contract_phrase_missing`, `answer_contract_order_ambiguous`
+  - second feedback: `answer_contract_binding_missing`
+  - final request: `최신 순으로 5개의 미생물 배양 검사 결과를 보여주세요. 검사일, 검체부위, 검사명, 검출된 균명, 감수성 결과, 항생제 정보를 알려주세요. 같은 검사일이면 검사 순서 번호 순으로, 같은 검사 내에서 격리 번호 순으로, 마지막으로 항생제 이름 순으로 정렬해 주세요.`
+  - pass rate: `3/8 = 0.375`
+  - CI low/high: `0.1111 / 0.7108`
+  - solver failed runs: `0`
+
+  sequence-like 개선의 일부 효과는 있었다. 두 번째 draft에서 "검사 시퀀스 번호"를
+  사용한 뒤 binding feedback을 받았고, 세 번째 draft는 order binding을 모두 채운 상태로
+  solver까지 갔다. 하지만 accepted 품질은 만족스럽지 않다.
+- **정성 평가**:
+  accepted data: low-quality accepted.
+
+  canonical query는 `subject_id`로 current patient를 고정하고, `org_itemid is not null`로
+  균이 검출된 microbiology rows만 남긴 뒤 `chartdate desc, test_seq asc, isolate_num asc,
+  ab_name asc`로 정렬했다. canonical answer는 2178-07-14 bronchial washings의
+  Pseudomonas 항생제 감수성 5개였다.
+
+  문제는 request가 row-set filter를 충분히 말하지 않는다는 점이다. "검출된 균명"과
+  "감수성 결과, 항생제 정보"는 출력 필드처럼 읽힐 수 있고, "균이 검출되고 감수성/항생제
+  정보가 있는 검사만"이라는 membership filter를 명시하지 않는다. 실제 solver 0, 5, 7은
+  더 최신 blood culture/null organism rows를 포함하거나 null organism 때문에 invalid
+  submit이 됐다. 이는 solver 실수가 아니라 request ambiguity다.
+
+  두 번째 문제는 date/time representation이다. request는 "검사일"이라고 했지만 label은
+  query timestamp string `2178-07-14T00:00:00`을 그대로 요구했다. solver 3은 같은 row set에
+  가까웠지만 날짜만 `2178-07-14`로 제출해 mismatch 됐다. "검사일"은 date-only로 해석할 수
+  있으므로, timestamp를 exact value로 요구하려면 request가 granularity를 고정해야 한다.
+
+  세 번째 문제는 자연스러움이다. "검사 순서 번호", "격리 번호"는 source order key를
+  이름 붙였지만 일반 사용자가 자연스럽게 요청할 가능성이 낮다. 다만 이번 mismatch의
+  주원인은 sequence/rank 혼동이 아니라 non-null filter와 date granularity ambiguity다.
+- **변경**:
+  validator는 추가하지 않았다. `org_itemid is not null`이 "검출된 균명"이라는 표현으로
+  충분히 전달됐는지, "검사일"이 timestamp exact value를 요구하는지는 semantic 판단이다.
+  이를 table/column/value token으로 막으면 리터럴 휴리스틱 금지 원칙을 어긴다.
+
+  대신 prompt-first/tool-local contract 원칙으로 다음을 보강했다.
+
+  - Request Contract: non-null filters는 output field name만으로는 부족하며 row-set wording이
+    필요하다고 명시했다.
+  - List Determinism Policy: date/time granularity를 맞추라고 기존 timestamp/date 원칙을
+    더 짧고 직접적인 wording으로 유지했다.
+  - `AnswerContract.constraint_phrases` schema description: non-null filters와 date/time
+    granularity는 output fields에서 추론하지 말고 explicit row-set/representation
+    constraints로 써야 한다고 명시했다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_multirow_list_without_order_by tests/test_synthesis_runtime.py::test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key -q`
+  통과 (`11 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 136 — Sequence-like fields must not become display ranks
 
 - **질문**:

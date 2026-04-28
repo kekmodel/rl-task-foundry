@@ -314,7 +314,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "'number 38 <entity>'" not in instructions
     assert "hidden handle" in instructions
     assert "hidden current subject/context" in instructions
-    assert "Bind modifiers to exact object/scope" in instructions
+    assert "Bind modifiers/filters to exact object/scope" in instructions
+    assert "Non-null filters need row-set wording" in instructions
+    assert "not output names" in instructions
     assert "Match hidden scope" in instructions
     assert "parent/list/history requests query that scope" in instructions
     assert "not one child event/record unless asked" in instructions
@@ -349,7 +351,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Bind answer representation exactly" in instructions
     assert "no code/reference-to-display" in instructions
     assert "source-field-to-related-field upgrade" in instructions
-    assert "user_request names that role/representation" in instructions
+    assert "user_request names role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
     assert "Source-sensitive fields" in instructions
     assert "same source role used by the query path" in instructions
@@ -391,13 +393,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "artificial technical sequence/id/order wording" in instructions
     assert "choose unique ordering, or return tied rows" in instructions
     assert "never add hidden handles" in instructions
-    assert "timestamp/date granularity" in instructions
+    assert "date/time granularity" in instructions
 
     # Task shape is domain-agnostic and concise.
     assert "# Task Shapes" in instructions
     assert "data-service tasks" in instructions
     assert "plan-like list" in instructions
-    assert "arbitrary good DBs" in instructions
+    assert "eligibility check" in instructions
     assert "Scalar tasks" in instructions
     assert "List tasks" in instructions
     assert "avoid trivial 0/1 results" in instructions

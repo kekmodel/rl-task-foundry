@@ -242,6 +242,8 @@ class AnswerContract(StrictModel):
             "must visibly ask for that secondary order here; merely selecting "
             "the field as output is not enough. Sequence/rank wording must "
             "separate source record sequence from generated display rank. "
+            "Non-null filters and date/time granularity must be explicit row-set "
+            "or representation constraints, not inferred from output fields. "
             "Structural evidence is derived from the latest query."
         ),
     )

@@ -1213,6 +1213,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "natural tie-break" in schema_surface
     assert "merely selecting the field as output is not enough" in schema_surface
     assert "separate source record sequence from generated display rank" in schema_surface
+    assert "Non-null filters and date/time granularity" in schema_surface
+    assert "explicit row-set or representation constraints" in schema_surface
     assert "For list labels, provide one binding for every returned label field" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "Each tie-break phrase must name that specific order key" in schema_surface
