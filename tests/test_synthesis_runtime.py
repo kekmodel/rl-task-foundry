@@ -2685,6 +2685,9 @@ async def test_submit_draft_rejects_label_from_table_without_primary_key(
 
     assert "table without a primary key" in message
     assert "stable records" in message
+    assert "primary-key-backed path" in message
+    assert "derived aggregate" in message
+    assert "do not resubmit the same row-value label" in message
     assert controller.last_feedback_error_codes == ("label_no_primary_key_source",)
     assert controller.accepted_draft is None
 

@@ -5678,6 +5678,43 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Iteration 152 — No-PK feedback should point back to stable surfaces
+
+- **질문**:
+  Iteration 151 이후 no-topic MIMIC smoke에서 accepted 품질이 개선되는가?
+- **실험**:
+  `artifacts/trial_20260429_mimiciv_demo_query_diag_desc_kimi_4solver_no_topic_smoke_01/trial_01`
+  를 실행했다. composer/solver는 OpenRouter Kimi K2.5, no topic hint, solver 4개,
+  synthesis `run_timeout_s=180`.
+- **결과**:
+  trial은 accepted 없이 `synthesis_failed`로 종료됐다.
+
+  첫 draft는 `chartevents` 기반 최근 생체 신호 5개 list였다. 이번에는 order/limit
+  binding과 query diagnostics는 깔끔했지만, `chartevents`가 primary key 없는 table이라
+  `label_no_primary_key_source`로 거절됐다. feedback 이후 composer는
+  `datetimeevents`, `procedureevents`, `inputevents`, `outputevents`, `emar`를 넓게
+  탐색하다 timeout으로 종료됐다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 최근 생체 신호 list 자체는 유용해 보이지만,
+  solver가 stable record로 재방문할 수 없는 no-PK row values를 label로 제출했으므로
+  거절은 맞다.
+- **변경**:
+  `label_no_primary_key_source` feedback을 Source Surface Policy reminder 역할에
+  맞춰 보강했다. no-PK table의 row values를 다시 제출하지 말고, primary-key-backed
+  path의 row values를 선택하거나 no-PK table에 대해서는 derived aggregate를 쓰라고
+  상기한다.
+- **원칙 준수**:
+  feedback은 새 지시가 아니라 기존 prompt의 “If no primary key, use a
+  primary-key-backed path/aggregate” 정책을 상기한다. DB literal heuristic은 없다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_from_table_without_primary_key tests/test_synthesis_runtime.py::test_submit_draft_allows_count_from_table_without_primary_key -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows
 
 - **질문**:

@@ -2123,7 +2123,7 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE: (
-                "Rejected. Source Surface Policy reminder: the latest query exposes label values from a table without a primary key, so those rows cannot be revisited as stable records."  # noqa: E501
+                "Rejected. Source Surface Policy reminder: the latest query exposes label values from a table without a primary key, so those rows cannot be revisited as stable records. Choose a primary-key-backed path for row values, or use a derived aggregate over the no-primary-key table; do not resubmit the same row-value label from that surface."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
