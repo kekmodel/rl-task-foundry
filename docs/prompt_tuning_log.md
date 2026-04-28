@@ -5108,3 +5108,32 @@ Solver 30/30 완료 결과:
   passed.
 
   `git diff --check` passed.
+
+## Iteration 120 — Remove flag-like rationale markers
+
+- **Question**:
+  The inline `Why:` markers preserve rationale, but do they make the composer
+  prompt feel like an artificial flag format?
+- **Change**:
+  Removed all `Why:` markers from the composer system prompt. The rationale is
+  still present as ordinary prose next to the relevant instruction, for example
+  mapping lets the DB decide the domain, hidden entity values must be grounded,
+  exact structured labels make the task verifiable, and one policy source
+  prevents split guidance.
+
+  Updated prompt tests to assert `Why:` is absent and to verify the actual
+  rationale phrases instead of counting marker occurrences.
+- **Why this follows the principles**:
+  This is prompt-surface cleanup only. It keeps durable policy in the system
+  prompt, avoids adding a second instruction source, and does not introduce any
+  validator or DB-specific heuristic.
+- **Verification**:
+  Prompt instructions render at `7933` characters with `0` `Why:` markers.
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py`
+  passed (`12 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py`
+  passed.
+
+  `git diff --check` passed.

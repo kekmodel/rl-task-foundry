@@ -252,9 +252,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "`neighborhood(table, row_id, max_per_edge?)`" not in instructions
     assert "{as, column}" not in instructions
 
-    # Workflow is short and each major instruction includes a reason.
+    # Workflow is short and keeps rationale in prose, not flag-like markers.
     assert "# Workflow" in instructions
-    assert instructions.count("Why:") >= 8
+    assert "Why:" not in instructions
     assert "the DB decides the domain" in instructions
     assert "hidden entity values must be grounded" in instructions
     assert "Build a requestable label candidate" in instructions
