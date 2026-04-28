@@ -1109,6 +1109,103 @@ async def test_submit_draft_still_requires_order_binding_for_limited_single_row(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_allows_redundant_limit_for_primary_key_lookup(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medication_event",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {
+            "medication_id": "10021118-149",
+            "medication_name": "Sodium Chloride 0.9% Flush",
+            "event_type": "Flushed",
+            "recorded_time": "2161-11-20T15:36:00",
+        }
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "medication_event",
+            "label": label,
+            "entity": {"medication_id": "10021118-149"},
+            "user_request": (
+                "Sodium Chloride 0.9% Flush 투약 이벤트의 투약 ID, "
+                "투약명, 이벤트 유형, 기록시간을 보여주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "투약 ID, 투약명, 이벤트 유형, 기록시간",
+                "constraint_phrases": ["Sodium Chloride 0.9% Flush 투약 이벤트"],
+                "limit_phrase": None,
+                "output_bindings": [
+                    {
+                        "label_field": "medication_id",
+                        "requested_by_phrase": "투약 ID",
+                    },
+                    {
+                        "label_field": "medication_name",
+                        "requested_by_phrase": "투약명",
+                    },
+                    {"label_field": "event_type", "requested_by_phrase": "이벤트 유형"},
+                    {"label_field": "recorded_time", "requested_by_phrase": "기록시간"},
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        query_params={"spec": {"limit": 1}},
+        column_sources=[
+            {
+                "output": field,
+                "kind": "select",
+                "table": "medication_events",
+                "column": field,
+                "visibility": "user_visible",
+                "is_handle": field == "medication_id",
+                "is_primary_key": field == "medication_id",
+                "table_primary_key": ["medication_id"],
+                "table_has_primary_key": True,
+                "value_exposes_source": True,
+            }
+            for field in (
+                "medication_id",
+                "medication_name",
+                "event_type",
+                "recorded_time",
+            )
+        ],
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "medication_events",
+                "column": "medication_id",
+                "visibility": "user_visible",
+                "is_handle": True,
+                "is_primary_key": True,
+                "table_primary_key": ["medication_id"],
+                "op": "eq",
+                "value": "10021118-149",
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_feedbacks_missing_list_output_binding(
     tmp_path: Path,
 ) -> None:

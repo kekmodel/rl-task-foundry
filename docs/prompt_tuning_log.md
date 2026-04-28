@@ -5715,6 +5715,52 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 153 — Redundant limit on primary-key lookup is not a list size request
+
+- **질문**:
+  `label_no_primary_key_source` feedback 보강 후 no-topic MIMIC smoke가 accepted까지
+  가는가?
+- **실험**:
+  `artifacts/trial_20260429_mimiciv_demo_no_pk_feedback_kimi_4solver_no_topic_smoke_02/trial_01`
+  를 실행했다. composer/solver는 OpenRouter Kimi K2.5, no topic hint, solver 4개,
+  synthesis `run_timeout_s=300`.
+- **결과**:
+  trial은 accepted 없이 feedback 3회 후 진행 중이었다. 새로 드러난 반복 오류는 EMAR
+  단일 투약 이벤트 lookup이다.
+
+  composer는 `emar_id = "10021118-149"`로 primary-key row를 정확히 필터링했고,
+  label은 단일 row의 `emar_id`, medication, event text, schedule/chart time이었다.
+  그러나 query에 `limit=1`이 남아 있었고, validator가 이를 “list membership을 limit가
+  결정한다”고 보고 `answer_contract_query_mismatch`를 반복했다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: borderline/hard-good 후보. 단일 EMAR 이벤트 상세 조회는 primary-key로
+  안정적으로 재방문 가능하고 request도 자연스럽다. 다만 `투약 ID`를 user-visible
+  handle로 노출하는 것이 좋은 label surface인지는 별도 정성 검토가 필요하다.
+
+  핵심 오류는 데이터 저품질이 아니라 validator over-rejection이다. full primary-key
+  equality가 이미 one row를 고정하면 `LIMIT 1`은 membership을 바꾸지 않는다.
+- **변경**:
+  composer `query` result의 `column_sources`와 `referenced_columns`에
+  `is_primary_key`와 `table_primary_key` provenance를 추가했다.
+
+  `submit_draft`의 missing `limit_phrase` 검증을 effect-aware로 바꿨다. list query가
+  `limit=1`이고, 모든 value-exposing label source table이 full primary-key equality로
+  constrained되어 있으면 limit은 redundant로 보고 `limit_phrase`를 요구하지 않는다.
+  그 외 limit이 returned row count를 채우는 경우에는 기존대로 fixed size phrase를
+  요구한다.
+- **원칙 준수**:
+  DB literal/token heuristic은 없다. 판단 근거는 query metadata, PK provenance, canonical
+  answer row count뿐이다. `LIMIT 1`을 무조건 허용하지 않고, full primary-key constraint가
+  label source table을 고정하는 경우에만 완화한다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_allows_redundant_limit_for_primary_key_lookup tests/test_synthesis_runtime.py::test_submit_draft_still_requires_order_binding_for_limited_single_row tests/test_synthesis_runtime.py::test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list tests/test_tooling_composer_query.py::test_query_returns_visibility_provenance_for_outputs_and_refs tests/test_tooling_composer_query.py::test_query_marks_label_sources_without_primary_key tests/test_tooling_composer_query.py::test_query_select_spans_from_and_joined_tables tests/test_tooling_composer_query.py::test_query_order_by_output_reports_source_column_provenance -q`
+  통과 (`7 passed`).
+
+  `uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py tests/test_tooling_composer_query.py`
+  통과.
+
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows
 
 - **질문**:

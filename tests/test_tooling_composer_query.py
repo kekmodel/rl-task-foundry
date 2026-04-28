@@ -360,6 +360,8 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "column": "email",
             "visibility": "internal",
             "is_handle": False,
+            "is_primary_key": False,
+            "table_primary_key": ["customer_id"],
             "table_has_primary_key": True,
             "value_exposes_source": True,
         }
@@ -371,6 +373,8 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "column": "email",
             "visibility": "internal",
             "is_handle": False,
+            "is_primary_key": False,
+            "table_primary_key": ["customer_id"],
             "op": "is_not_null",
             "value": None,
         },
@@ -380,6 +384,8 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "column": "email",
             "visibility": "internal",
             "is_handle": False,
+            "is_primary_key": False,
+            "table_primary_key": ["customer_id"],
             "direction": "asc",
         },
     ]
@@ -417,6 +423,8 @@ async def test_query_marks_label_sources_without_primary_key():
             "column": "detail_text",
             "visibility": "user_visible",
             "is_handle": False,
+            "is_primary_key": False,
+            "table_primary_key": [],
             "table_has_primary_key": False,
             "value_exposes_source": True,
         }
@@ -1011,6 +1019,8 @@ async def test_query_join_chain_uses_schema_handles_for_duplicate_tables():
             "column": "name",
             "visibility": "user_visible",
             "is_handle": False,
+            "is_primary_key": False,
+            "table_primary_key": ["id"],
             "table_has_primary_key": True,
             "value_exposes_source": True,
         }
@@ -1114,6 +1124,8 @@ async def test_query_order_by_output_reports_source_column_provenance():
             "column": "first_name",
             "visibility": "user_visible",
             "is_handle": False,
+            "is_primary_key": False,
+            "table_primary_key": ["customer_id"],
             "direction": "asc",
             "output": "customer_name",
         }

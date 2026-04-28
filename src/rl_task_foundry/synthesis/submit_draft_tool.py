@@ -1097,6 +1097,63 @@ def _query_limit_from_params(params: object) -> int | None:
     return None
 
 
+def _query_limit_shapes_membership(
+    query_result: dict[str, object],
+    *,
+    query_limit: int | None,
+) -> bool:
+    if query_limit is None:
+        return False
+    rows = query_result.get("rows")
+    if not isinstance(rows, list) or len(rows) != query_limit:
+        return False
+    if query_limit != 1:
+        return True
+    return not _query_sources_are_primary_key_constrained(query_result)
+
+
+def _query_sources_are_primary_key_constrained(query_result: dict[str, object]) -> bool:
+    referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
+    constrained_pk_columns_by_table: dict[str, set[str]] = {}
+    primary_key_by_table: dict[str, tuple[str, ...]] = {}
+    for ref in referenced_columns:
+        if (
+            ref.get("usage") != "where"
+            or ref.get("op") != "eq"
+            or ref.get("is_primary_key") is not True
+        ):
+            continue
+        table = ref.get("table")
+        column = ref.get("column")
+        primary_key = ref.get("table_primary_key")
+        if not isinstance(table, str) or not isinstance(column, str):
+            continue
+        if not isinstance(primary_key, list) or not all(
+            isinstance(item, str) for item in primary_key
+        ):
+            continue
+        constrained_pk_columns_by_table.setdefault(table, set()).add(column)
+        primary_key_by_table[table] = tuple(primary_key)
+
+    label_sources = _as_object_list(query_result.get("column_sources")) or []
+    label_tables: set[str] = set()
+    for source in label_sources:
+        if source.get("value_exposes_source") is False:
+            continue
+        table = source.get("table")
+        if isinstance(table, str):
+            label_tables.add(table)
+    if not label_tables:
+        return False
+    for table in label_tables:
+        primary_key = primary_key_by_table.get(table)
+        if not primary_key:
+            return False
+        if not set(primary_key).issubset(constrained_pk_columns_by_table.get(table, set())):
+            return False
+    return True
+
+
 def _query_ordering_is_ambiguous(query_result: dict[str, object]) -> bool:
     rows = query_result.get("rows")
     if isinstance(rows, list) and len(rows) > 1:
@@ -1703,13 +1760,13 @@ class SubmitDraftController:
                         : self.config.synthesis.runtime.diagnostic_item_limit
                     ]
                 )
-            latest_rows = latest_query_result.get("rows")
             if (
                 payload.answer_contract.kind == "list"
                 and payload.answer_contract.limit_phrase is None
-                and query_limit is not None
-                and isinstance(latest_rows, list)
-                and len(latest_rows) == query_limit
+                and _query_limit_shapes_membership(
+                    latest_query_result,
+                    query_limit=query_limit,
+                )
             ):
                 error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH)
                 invalid_diagnostics["missing_limit_phrase_for_query_limit"] = query_limit

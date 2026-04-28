@@ -656,6 +656,8 @@ def _column_source_payload(
             "column": resolved.column,
             "visibility": column.visibility,
             "is_handle": column.is_handle_column,
+            "is_primary_key": resolved.column in resolved.table.primary_key,
+            "table_primary_key": list(resolved.table.primary_key),
             "table_has_primary_key": bool(resolved.table.primary_key),
         }
     )
@@ -678,6 +680,8 @@ def _referenced_column_payload(
         "column": resolved.column,
         "visibility": column.visibility,
         "is_handle": column.is_handle_column,
+        "is_primary_key": resolved.column in resolved.table.primary_key,
+        "table_primary_key": list(resolved.table.primary_key),
     }
     if op is not None:
         payload["op"] = op
@@ -1182,6 +1186,8 @@ async def query(
                         "column": source["column"],
                         "visibility": source.get("visibility"),
                         "is_handle": source.get("is_handle"),
+                        "is_primary_key": source.get("is_primary_key"),
+                        "table_primary_key": source.get("table_primary_key"),
                         "direction": clause.direction,
                         "output": clause.output_name,
                     }
