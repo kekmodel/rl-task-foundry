@@ -1078,6 +1078,7 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
     message = await controller.submit(payload)
 
     assert "answer_contract.order_bindings" in message
+    assert "natural visible tie-break wording" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 
@@ -1694,6 +1695,7 @@ async def test_submit_draft_rejects_label_that_does_not_match_latest_query(
     assert "label must exactly match the latest successful query result" in message
     assert "list uses the query rows array" in message
     assert "helper/context fields are not label fields unless requested" in message
+    assert "rerun the exact label query immediately before submit_draft" in message
     assert controller.accepted_draft is None
 
 

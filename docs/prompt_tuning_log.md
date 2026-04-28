@@ -5540,6 +5540,66 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 130 — Evidence and tie-break binding reminders
+
+- **질문**:
+  Iteration 129에서 order feedback이 task reset을 허용하지 않도록 고친 뒤, 다음
+  smoke에서 composer가 같은 task 안에서 회복하는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_order_feedback_current_task_kimi_8solver_no_topic_smoke_01/trial_01`.
+
+  trial은 solver 실행 전 `synthesis_failed`로 종료됐다. provider failure는 없고,
+  feedback event 5개를 모두 사용했다.
+- **결과**:
+  개선은 일부 확인됐다. composer는 admission anchor `hadm_id=28613200`에서 시작해
+  pharmacy list task를 만들었고, 첫 order feedback 뒤에도 같은 admission/pharmacy
+  target을 유지했다. 이전처럼 완전히 다른 microbiology task로 reset하지 않았다.
+
+  하지만 회복 과정에서 protocol 오류가 이어졌다.
+
+  1. 첫 submit은 query limit 5를 request/contract에 고정하지 않았고, `start_time`
+     order key 동점도 있었다.
+  2. composer가 `start_time + medication_name` visible tie-break query를 만들었지만,
+     final list query 뒤에 count aggregate를 추가 호출해서 latest evidence가
+     label과 달라졌다.
+  3. 이후 limit phrase를 넣지 않아 `query_mismatch`가 반복됐다.
+  4. limit phrase는 넣었지만 answer phrase exact substring이 맞지 않았다.
+  5. 마지막에는 `medication_name` tie-break order key를 request/order_bindings에
+     자연스럽게 묶지 못해 `answer_contract_binding_missing`으로 budget이 끝났다.
+- **reasoning 감사**:
+  reasoning은 모델이 핵심 수리 방향을 일부 이해했음을 보여준다. "same start_time
+  tie를 medication name으로 풀자"는 방향은 DB-neutral하고 user-visible이다. 문제는
+  그 tie-break를 request에 "같은 시작시각이면 약물명 순"처럼 자연어로 고정하지
+  못했고, final evidence 바로 뒤 submit해야 한다는 protocol도 중간 count query로
+  어겼다는 점이다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: recovery failure, borderline low-quality rejected. 후보 자체는
+  좋은 입원 약물 목록 task가 될 수 있었지만, query limit/order/tie-break가
+  request/contract에 완전히 고정되지 않아 제출하면 저품질이 된다. rejection은
+  바람직했고, low-quality accepted는 발생하지 않았다.
+- **변경**:
+  durable prompt는 유지하고 feedback reminder만 보강했다.
+
+  - `answer_contract_evidence_mismatch`: final label evidence 뒤에 helper/profile/count
+    query를 실행하지 말고, 이미 실행했다면 exact label query를 다시 실행한 직후
+    submit하라고 상기한다.
+  - `answer_contract_binding_missing`: list order key가 tie-break일 때도
+    user_request에 natural visible tie-break wording이 있어야 bind할 수 있으며,
+    그렇지 않으면 해당 order key를 제거하거나 tied rows를 반환하라고 상기한다.
+
+  둘 다 기존 Label Contract/List Determinism Policy의 feedback reminder이며, DB
+  literal/token heuristic은 추가하지 않았다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_by_query_order_count tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_that_does_not_match_latest_query -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 129 — Order feedback must not license task reset
 
 - **질문**:

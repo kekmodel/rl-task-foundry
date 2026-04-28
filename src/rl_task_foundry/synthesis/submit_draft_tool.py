@@ -1966,7 +1966,7 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: final query evidence must immediately precede submit_draft, and the canonical label is copied from the latest successful query result."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISMATCH: (
-                "Rejected. Label Contract reminder: label must exactly match the latest successful query result; scalar uses the one aggregate row object, list uses the query rows array, and helper/context fields are not label fields unless requested."  # noqa: E501
+                "Rejected. Label Contract reminder: label must exactly match the latest successful query result; scalar uses the one aggregate row object, list uses the query rows array, and helper/context fields are not label fields unless requested. Do not run helper/profile/count queries after final label evidence; if that happened, rerun the exact label query immediately before submit_draft."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH: (
                 "Rejected. Label Contract reminder: the latest successful query must contain structural evidence for this answer; if a list query limit fixes membership, that fixed size must be bound in user_request and answer_contract.limit_phrase."  # noqa: E501
@@ -1984,7 +1984,7 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: latest query evidence must include field visibility evidence before submit_draft."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
-                "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request."  # noqa: E501
+                "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request. If an order key is only a tie-break, user_request still needs natural visible tie-break wording before that key can be bound; otherwise rerun query without that order key or return tied rows."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata."  # noqa: E501
