@@ -4280,3 +4280,74 @@ Solver 30/30 완료 결과:
   order-binding drift in a structured way. The next candidate is Experiment 2:
   feedback-only repair for exact missing binding facts, while still avoiding
   phrase-to-field semantic judgment and DB literal heuristics.
+
+## Iteration 106 — Binding-feedback Kimi trial qualitative audit
+
+- **Question**:
+  Did feedback-only missing order binding repair improve final data quality in
+  a no-topic `mimiciv_demo` Kimi batch, without admitting low-quality accepted
+  tasks?
+- **Trial setup**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_order_binding_feedback_kimi_no_topic_batch5_01`.
+  Five parallel trials used separate registry/traces configs. Composer and
+  solver were both `opencode_zen/kimi-k2.5`; no `topic_experiment_hint` was
+  injected.
+- **Result**:
+  Raw accept count was `3/5`.
+  - Trial 1 accepted `task_hospital_admission_summary_with_demographics_11d07e024aa20407`
+    at `18/20 = 0.90`.
+  - Trial 2 failed `reject_too_hard` at `5/20 = 0.25`.
+  - Trial 3 accepted `task_patient_admissions_history_fe72baaca88c89eb` at
+    `17/20 = 0.85`.
+  - Trial 4 accepted `task_medication_history_eaec0d5683f3a2e3` at
+    `13/20 = 0.65`.
+  - Trial 5 failed `reject_too_hard` at `1/20 = 0.05`.
+- **Accepted data audit**:
+  Trial 1 is clean. The final task remains anchored on one admission, joins the
+  directly related patient row, and asks for exactly the admission and
+  demographics fields returned in the label. The too-easy retry strengthened a
+  one-row admission summary by adding direct demographics; it did not introduce
+  a hidden row set, hidden order, or output-contract drift.
+
+  Trial 3 is clean. The final request asks for the patient's admission history
+  in recent order. The query anchors on `subject_id`, orders by admission time,
+  and returns only admission-history fields requested by the broad phrase
+  "입원 이력". Earlier hidden admission id exposure was removed before accept.
+
+  Trial 4 is borderline accepted. Structurally, the final query is answerable:
+  it asks for five medication records, exposes the same-time tie-break as
+  "투약 순번", and binds both order keys. The concern is user-facing naturalness:
+  the tie-break is a sequence field used only for ordering and not returned in
+  the label, and "최근 5개" plus "시간 순서" is slightly ambiguous. This is not
+  low-quality accepted because the row set/order/filter are stated and
+  solver-visible, but it is not clean.
+- **Rejected data audit**:
+  Trial 2 is hard-good rejected. The final task asks for the five most recent
+  ICU datetime/procedure rows with a procedure-name tie-break. The row set is
+  scoped by the hidden ICU stay, both order keys are bound and visible, and the
+  output fields are present in the request surface. The low pass rate looks like
+  solver difficulty on an awkward but tool-solvable surface, not a hidden-order
+  or query/request mismatch.
+
+  Trial 5 is hard-good rejected, with an awkward user-facing surface. The final
+  task asks for not-given medication rows in an admission, orders by
+  administration time and record id, and returns the record id it uses as the
+  tie-break. The record id surface is artificial, but it is explicit,
+  solver-visible, and no longer a hidden row-set control. The sampled solvers
+  mostly failed; the artifact does not show an impossible task definition.
+- **Comparison**:
+  Against Iteration 105, raw accept improved from `1/5` to `3/5`; clean accepted
+  improved from `1` to `2`; borderline accepted increased from `0` to `1`; and
+  low-quality accepted stayed `0`. Low-quality rejected fell from `2` to `0` in
+  this batch under the artifact-based read, while hard-good rejected stayed at
+  `2`.
+- **Interpretation**:
+  The result is a quality improvement, not only a pass-rate improvement, because
+  no low-quality draft reached registry commit. The improvement is not a proof
+  that the new `ANSWER_CONTRACT_BINDING_MISSING` feedback fired frequently:
+  most repairs still came through existing order-ambiguity feedback and the
+  stricter binding shape. The remaining risk is borderline accepted data where a
+  visible but unnatural sequence/id surface is made explicit enough to pass.
+  That should not become a hard validator without 100%-precision evidence; treat
+  it as prompt/schema-shape/advisory-audit input.
