@@ -5540,6 +5540,60 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 134 — Multi-key order phrase must name tie-break keys
+
+- **질문**:
+  Iteration 133의 backend protocol 보정 뒤, feedback 이후 재제출이 실제로 이어지고
+  accepted candidate 품질은 충분한가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_resubmit_feedback_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  protocol 보정 효과는 확인됐다. 첫 submit 이후 `query_mismatch`/`binding_missing`
+  feedback을 받고도 composer가 재제출을 계속했다. 이전처럼 feedback 후 final text로
+  멈추지 않았다.
+
+  최종 후보는 solver 8개까지 갔지만 calibration에서 거절됐다.
+
+  - final request: `이번 중환자실 입원 중에 받은 투약 기록 중 시간 순서대로 먼저 기록된 10개 약물 이름, 투여 시작 시간, 종료 시간, 용량, 단위, 상태를 알려주세요.`
+  - pass rate: `0/8 = 0.0`
+  - CI low/high: `0.0 / 0.3123`
+  - solver failed runs: `0`
+  - final error: `calibration_inconclusive`
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 최종 query는 `inputevents`를
+  `start_time asc, end_time asc, amount asc`로 정렬했다. 하지만 request는 이를
+  모두 "시간 순서대로 먼저"라는 하나의 문구에 묶었다. `amount asc`는 natural
+  tie-break로 명시되지 않았고, solver들은 합리적으로 `start_time`만 쓰거나
+  prescriptions surface를 골랐다. 0/8은 단순히 어려운 좋은 문제가 아니라, request가
+  source/order contract를 충분히 고정하지 못한 저품질 후보라는 증거다.
+
+  다행히 low-quality accepted는 발생하지 않았다. calibration에서 막혔다.
+- **변경**:
+  validator는 추가하지 않았다. "시간 순서"가 어떤 semantic tie-break를 자연스럽게
+  포함하는지 precision-100으로 판정할 수 없기 때문이다.
+
+  대신 prompt-first 원칙과 tool-local contract 원칙에 맞춰 보강했다.
+
+  - Label Contract: binding phrase는 returned field뿐 아니라 각 order key의 role도
+    이름 붙여야 하며, multi-key order에서 하나의 vague phrase를 여러 order key에
+    재사용하지 말라고 명시했다.
+  - `AnswerOrderBinding` schema description: tie-break phrase가 해당 order key를
+    구체적으로 이름 붙여야 하며 broad order phrase 재사용을 금지한다고 명시했다.
+  - `answer_contract_binding_missing` feedback: 같은 원칙을 reminder로 추가했다.
+
+  이 변경은 DB literal/token heuristic이 아니다. 특정 table/column/value를 보지 않고,
+  answer contract의 일반 구조와 역할 설명을 강화한 것이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`8 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 133 — Resubmit reminder after feedback-side final output
 
 - **질문**:

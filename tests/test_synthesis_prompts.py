@@ -374,6 +374,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "No tables, columns, operators, or SQL" in instructions
     assert "every phrase must be an exact substring of `user_request`" in instructions
     assert "Binding phrases must name the returned field's role" in instructions
+    assert "each order key's role" in instructions
+    assert "multi-key order" in instructions
     assert "do not bind one vague phrase to multiple concepts" in instructions
     assert "List Determinism Policy" in instructions
     assert "one correct structured result" in instructions

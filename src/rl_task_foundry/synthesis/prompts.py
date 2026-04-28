@@ -199,10 +199,10 @@ def build_synthesis_agent_instructions(
         "answer_phrase, constraints, limit, output/order "
         "bindings. No tables, columns, operators, or SQL; every phrase must be "
         "an exact substring of `user_request`; no duplicated evidence.\n"
-        "- Binding phrases must name the returned field's role. If fields come "
-        "from different roles/surfaces, user_request must distinguish roles "
-        "before labeling; do not bind one vague phrase to "
-        "multiple concepts.",
+        "- Binding phrases must name the returned field's role and each order "
+        "key's role. If fields come from different roles/surfaces or "
+        "multi-key order, user_request must distinguish roles before "
+        "labeling; do not bind one vague phrase to multiple concepts.",
 
         "# List Determinism Policy\n"
         "Lists require one correct structured result: membership, order "

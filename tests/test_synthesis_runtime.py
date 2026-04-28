@@ -1079,6 +1079,7 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
 
     assert "answer_contract.order_bindings" in message
     assert "natural visible tie-break wording" in message
+    assert "Do not reuse one broad order phrase" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 
@@ -1212,6 +1213,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "merely selecting the field as output is not enough" in schema_surface
     assert "For list labels, provide one binding for every returned label field" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
+    assert "Each tie-break phrase must name that specific order key" in schema_surface
+    assert "do not reuse one broad order phrase" in schema_surface
     assert "not a source table or SQL column" in schema_surface
     assert "names this field's distinct role" in schema_surface
     assert "do not reuse one vague phrase" in schema_surface
