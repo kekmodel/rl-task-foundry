@@ -4190,3 +4190,93 @@ Solver 30/30 완료 결과:
   beyond the final user request. That pattern is not a 100%-precision validator
   target unless represented by explicit structured bindings; treat it as
   prompt/tool-description/example work, not a literal/token heuristic.
+
+## Iteration 105 — Advisory answer-contract bindings
+
+- **Question**:
+  Can optional `answer_contract.output_bindings` and `order_bindings` reduce
+  output/order drift by making the composer expose request-to-label claims
+  without adding a new hard validator?
+- **Change**:
+  Commit `7a43783` added optional advisory binding fields to
+  `answer_contract`, logs binding coverage in `submit_draft` phase diagnostics,
+  and minimally updated prompt/tool descriptions. The fields are not enforced;
+  this follows Experiment 1 from
+  `docs/composer_low_quality_reduction_plan.md`.
+- **Verification**:
+  `ruff` passed for touched code/tests. Focused pytest passed:
+  `7 passed` across submit schema, binding diagnostics, prompt length/surface,
+  and budget prompt tests.
+- **Trial setup**:
+  The first manual parallel attempt at
+  `artifacts/trial_20260428_mimiciv_demo_answer_bindings_kimi_no_topic_batch5_01`
+  is discarded as infra-only: all workers shared one global SQLite registry and
+  trial 1 hit `OperationalError: database is locked`.
+
+  The valid batch is
+  `artifacts/trial_20260428_mimiciv_demo_answer_bindings_kimi_no_topic_batch5_02`.
+  It ran five parallel no-topic-hint `mimiciv_demo` trials with composer and
+  solver both set to `opencode_zen/kimi-k2.5`. Each trial used a separate
+  registry/traces config to avoid SQLite lock contamination.
+- **Result**:
+  Raw accept count was `1/5`.
+  - Trial 1 failed `reject_too_hard` at `1/20 = 0.05`.
+  - Trial 2 failed `reject_too_hard` at `0/20`.
+  - Trial 3 accepted `task_ICU 배출 기록 조회_092243850cbb588c` at
+    `18/20 = 0.90`.
+  - Trial 4 failed `reject_too_hard` at `5/20 = 0.25`.
+  - Trial 5 failed `reject_too_hard` at `3/20 = 0.15`.
+- **Binding behavior**:
+  All five final submissions included `output_bindings` and `order_bindings`.
+  Binding coverage diagnostics reported no missing output bindings in the final
+  submissions. Trial 5's final diagnostics correctly surfaced
+  `missing_order_label_bindings=["stoptime"]`, because the final query used
+  `stoptime` as an order key that the final request/order bindings did not
+  ask for.
+
+  Trial 2 exposes a limitation of Experiment 1 diagnostics: the final query
+  used extra order keys (`test_seq`, `test_name`) after an ambiguous-order
+  feedback, but the request still only said latest five. Because no
+  `ordering_diagnostics.order_by_outputs` entry existed after the query became
+  structurally deterministic, the advisory coverage did not flag the unbound
+  order references. This is evidence for Experiment 2, not a reason to add a
+  semantic or literal heuristic.
+- **Accepted data audit**:
+  Trial 3 is clean. The request asks for five ICU output records for the hidden
+  stay, ordered by latest measurement time with same-time rows ordered by output
+  type. The query anchors on `outputevents.stay_id`, joins to `d_items` for the
+  visible output type, returns exactly the requested fields
+  (`measurement_time`, `output_type`, `value`, `unit`), and the tie-break is
+  visible in both request and label. The accepted pass rate is high, but the
+  qualitative read is still clean rather than merely easy.
+- **Rejected data audit**:
+  Trial 1 is hard-good rejected. The final task asks for the five most recent
+  medication records during the hidden admission, then adds the visible
+  same-time medication-name tie-break after feedback. The final label fields are
+  explicitly requested and the final order diagnostics clear. The low pass rate
+  is solver difficulty, not a row-set or output-contract defect.
+
+  Trial 2 is low-quality rejected. The final request asks only for the latest
+  five microbiology results, while the final query relies on additional
+  same-time order keys. One of those keys is not selected into the label, and
+  the user request/order bindings do not expose the tie-break. The quality gate
+  rejected it, so this is not low-quality accepted.
+
+  Trial 4 is hard-good rejected. The hidden entity is a medication item
+  (`itemid`) and the visible request names Doxycycline. The final query returns
+  the available Doxycycline administration rows ordered by administration time;
+  no hidden extra order key or output drift is apparent. The `5/20` result looks
+  like a difficult but tool-solvable task.
+
+  Trial 5 is low-quality rejected. The final request asks for medication records
+  ordered by start time and same-time medication name, but the final query also
+  orders by stop time. The new advisory diagnostic caught this as an unbound
+  order label field. The rejection prevented low-quality accepted data.
+- **Interpretation**:
+  Compared with the no-PK-guard baseline, raw accept rate stayed `1/5` and
+  low-quality accepted stayed `0`. The experiment did not improve yield yet,
+  but it proved the composer can usually fill DB-neutral bindings without
+  schema repair loops. More importantly, the diagnostics now expose repeated
+  order-binding drift in a structured way. The next candidate is Experiment 2:
+  feedback-only repair for exact missing binding facts, while still avoiding
+  phrase-to-field semantic judgment and DB literal heuristics.
