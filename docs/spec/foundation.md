@@ -260,7 +260,9 @@ spec areas.
 13. Shared prompts should be minimal, general, and reasoned. A short good/bad
     example block is acceptable when it teaches a cross-domain output pattern,
     but examples must stay abstract and must not smuggle in one database's
-    schema, values, or business story.
+    schema, values, or business story. Trial-specific observations may be
+    recorded in experiment logs, but they must be translated into
+    schema-neutral structural patterns before entering shared prompts.
 14. Schema descriptions are the first line of control for LLM-facing contracts.
     Prefer precise tool/input schema descriptions over retry feedback, and
     prefer retry feedback over hard validation unless the runtime can prove a

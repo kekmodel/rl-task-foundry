@@ -3851,8 +3851,9 @@ Solver 30/30 완료 결과:
   accepted arbitrary-order pattern from reappearing. The lower accept rate is
   not evidence of over-rejection by that validator; the rejected drafts expose
   real ambiguity or composer recovery problems. The next improvement should be
-  prompt/tool-contract work that keeps topic surface and canonical table
-  surface aligned after feedback, especially for MIMIC concepts where
-  "medication" can mean `prescriptions` or `inputevents`. Keep hard validators
-  limited to precision-100 structural checks; do not add literal, token, or
-  column-name heuristics.
+  prompt/tool-contract work that keeps the user-facing source surface and
+  canonical query surface aligned after feedback. The concrete MIMIC table
+  mismatch in this experiment is evidence for that structural pattern only; it
+  must not become a shared prompt example or DB-specific common policy. Keep
+  hard validators limited to precision-100 structural checks; do not add
+  literal, token, or column-name heuristics.
