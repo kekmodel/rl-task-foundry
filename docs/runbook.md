@@ -76,6 +76,10 @@ rewrite 진행 중에는 아래를 확인한다.
     `inconclusive` 중 하나로 분류한다.
 
 - Rejected/failed data audit:
+  - Provider/infra failure is not a quality sample. Retry provider failures
+    before drawing experiment conclusions; if they still fail, classify them as
+    `infra/provider failure` and keep them separate from hard-good or
+    low-quality counts.
   - `too_hard`, low pass rate, `reject_too_hard`, `MaxTurnsExceeded`를 그대로
     저품질로 단정하지 않는다.
   - solver tools로 풀 수 있는데 solver가 실패한 경우는 hard-good으로

@@ -349,16 +349,17 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "latest query result supplies structural evidence" in instructions
     assert "Every contract phrase must be an exact substring of `user_request`" in instructions
     assert "List Determinism Policy" in instructions
-    assert "single correct structured result" in instructions
-    assert "fix membership, order, limit, and tie-breaks" in instructions
+    assert "one correct structured result" in instructions
+    assert "fix membership, order direction" in instructions
     assert "Row-set controls must be entity scope" in instructions
-    assert "Match sort direction" in instructions
-    assert "requested order leaves distinct-answer ties" in instructions
+    assert "State direction explicitly" in instructions
+    assert "newest-first/oldest-first" in instructions
+    assert "order leaves distinct-answer ties" in instructions
     assert "ask for a natural visible tie-break before" in instructions
     assert "artificial technical sequence/id wording" in instructions
     assert "choose unique ordering or return tied rows" in instructions
     assert "never use hidden handles" in instructions
-    assert "Exact timestamp" in instructions
+    assert "timestamp/date granularity" in instructions
 
     # Task shape is domain-agnostic and concise.
     assert "# Task Shapes" in instructions
