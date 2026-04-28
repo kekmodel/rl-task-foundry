@@ -4016,6 +4016,10 @@ Solver 30/30 완료 결과:
   failure is low-quality data being accepted or committed to the registry. Future
   comparisons must therefore separate low-quality rejected count from
   low-quality accepted count and treat the latter as the highest-risk signal.
+  This does not make rejected-data review optional: accepted data must still
+  answer "is this truly good data?", and rejected data must still answer "is
+  this hard-good or low-quality?" Repeated low-quality rejected patterns remain
+  useful evidence for composer/prompt/tool recovery improvements.
 - **Operational change**:
   Added this requirement to `docs/runbook.md` under
   `Mandatory Experiment Quality Audit`. Any future experiment that lacks this

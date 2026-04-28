@@ -75,6 +75,8 @@ rewrite 진행 중에는 아래를 확인한다.
     발생한 경우는 low-quality로 분류한다.
   - failed task를 `hard-good`, `low-quality`, `infra/provider failure`,
     `inconclusive` 중 하나로 분류한다.
+  - low-quality rejected라도 원인 분석은 여전히 중요하다. 반복되는
+    low-quality rejected 패턴은 composer/prompt/tool recovery 개선의 입력이다.
   - low-quality draft가 solver pass-rate / quality gate에서 reject되면
     필터가 정상 작동한 것으로 본다. 이것은 개선 실패의 핵심 문제가
     아니다.
@@ -85,6 +87,9 @@ rewrite 진행 중에는 아래를 확인한다.
   - 새 실험은 이전 relevant baseline과 raw accept rate뿐 아니라 clean
     accepted count, borderline accepted count, low-quality accepted count,
     hard-good rejected count, low-quality rejected count를 비교한다.
+  - 승인 데이터는 "정말 좋은 데이터인가"를, 거절 데이터는 "어려운
+    데이터인가 저품질 데이터인가"를 반드시 답한다. 이 질문은 필터가
+    저품질을 잘 거절했는지 여부와 별개로 항상 수행한다.
   - 결론에는 "숫자로는 개선처럼 보이나 품질상 개선이 아닌 경우"를 반드시
     별도로 적는다.
   - low-quality rejected count는 필터가 막은 잡음으로 해석하고, low-quality
