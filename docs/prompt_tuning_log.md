@@ -5540,6 +5540,59 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 140 — Too-easy retries must keep the latest strengthened baseline
+
+- **질문**:
+  Iteration 139의 too-easy feedback 보강 뒤, composer가 기존 task 안에서 난이도를 올리는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_too_easy_preserve_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted되지 않았다.
+
+  - first feedback: `answer_contract_hidden_filter_unanchored`
+  - second submit: patient anchor로 수리, pass rate `8/8 = 1.0`, too easy
+  - third submit: 같은 약물 투여 task에 `scheduled_time` 추가, pass rate `8/8 = 1.0`, still too easy
+  - fourth submit: `answer_contract_phrase_missing`, `answer_contract_not_incremental`
+  - fifth submit: `label_not_strengthened`, `answer_contract_not_incremental`
+  - final failure: `calibration_inconclusive`
+
+  Iteration 139 보강의 효과는 확인됐다. 이전처럼 diagnosis/pharmacy 같은 다른 topic family로
+  도망가지 않았고, 같은 eMAR medication administration task 안에서 예정 시간을 추가했다.
+  하지만 이후 실패 수리에서 baseline을 마지막 strengthened label이 아니라 더 이전 label로 되돌리는
+  문제가 남았다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: hard-good rejected because too easy, then recovery failure. 두 번째/세 번째
+  후보는 request/label alignment가 깨끗했고 solver 8/8이 맞췄다. source status text도 잘
+  보존됐다. 거절 이유는 저품질이 아니라 pass rate 1.0으로 너무 쉬운 문제였기 때문이다.
+
+  네 번째 submit은 `care_setting`/`administration_outcome`으로 field/source meaning을 바꿔
+  `answer_contract_not_incremental`에 걸렸고, 다섯 번째 submit은 다시 `scheduled_time`까지만
+  있는 이전 too-easy label로 돌아와 `label_not_strengthened`가 났다. 즉 composer가 "마지막으로
+  평가된 too-easy label을 baseline으로 삼아 그 위에 한 단계 추가"해야 한다는 점을 충분히
+  유지하지 못했다.
+- **변경**:
+  validator는 이미 올바르게 작동했다. `answer_contract_not_incremental`과
+  `label_not_strengthened`가 저품질 recovery를 막았다. 따라서 새 validator가 아니라 feedback
+  reminder를 보강한다.
+
+  - `LABEL_NOT_STRENGTHENED` feedback: last evaluated too-easy label을 baseline으로 삼고,
+    이미 추가한 fields를 유지한 뒤 새 grounded field/relationship/constraint를 추가하라고
+    명시했다.
+  - `ANSWER_CONTRACT_NOT_INCREMENTAL` feedback: earlier too-easy retries에서 이미 추가한
+    fields도 모두 유지해야 하며 earlier label로 rollback하지 말라고 명시했다.
+
+  이 역시 기존 Difficulty-Up Policy의 baseline 보존 원칙을 feedback에서 더 정확히 상기하는 변경이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract tests/test_synthesis_runtime.py::test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline tests/test_synthesis_runtime.py::test_submit_draft_too_easy_rejects_renamed_same_scalar_value tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_preserves_readable_path tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_is_list_aware -q`
+  통과 (`5 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 139 — Too-easy feedback must preserve the evaluated task
 
 - **질문**:

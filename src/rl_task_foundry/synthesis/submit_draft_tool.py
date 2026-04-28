@@ -1962,7 +1962,7 @@ class SubmitDraftController:
                 "Rejected. Label Grounding Policy reminder: some label values were not directly grounded in observed tool results, or were reformatted from observed values."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED: (
-                "Rejected. Difficulty-Up Policy reminder: after specificity feedback, the canonical answer itself must change through a grounded strengthening step."  # noqa: E501
+                "Rejected. Difficulty-Up Policy reminder: after specificity feedback, the canonical answer itself must change through a grounded strengthening step. Use the last evaluated too-easy label as the baseline; keep fields already added and add one new grounded field, relationship, or coherent constraint."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_REQUIRED: (
                 "Rejected. Tool schema reminder: answer_contract is required."
@@ -2006,7 +2006,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
-                " For list retries, keep every prior output field/source and prior order binding, then append exactly one grounded user-visible field or tie-break."  # noqa: E501
+                " For list retries, keep every prior output field/source and prior order binding, including fields already added by earlier too-easy retries, then append exactly one grounded user-visible field or tie-break. Do not roll back to an earlier label."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. Tool schema reminder: submit_draft arguments did "
