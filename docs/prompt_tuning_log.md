@@ -5539,3 +5539,56 @@ Solver 30/30 완료 결과:
 
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
+
+## Iteration 129 — Order feedback must not license task reset
+
+- **질문**:
+  Iteration 128의 hidden scope/order feedback 보정 후 다음 smoke에서 composer가
+  더 나은 recovery를 보이는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_hidden_scope_feedback_kimi_8solver_no_topic_smoke_01/trial_01`.
+
+  trial은 solver 실행 전 `synthesis_failed`로 종료됐다. 원인은 provider failure가
+  아니라 `MaxTurnsExceeded`였다.
+- **결과**:
+  첫 draft는 patient anchor `subject_id=10022880`에 대해 약물 처방 목록을
+  만들었다. hidden scope 자체는 올바르게 고정됐다. 하지만 pharmacy rows가 같은
+  `starttime`/`stoptime` order key를 공유해 `answer_contract_order_ambiguous`가
+  발생했다.
+
+  이후 composer는 기존 pharmacy task를 고치는 대신 microbiology task로 리셋했다.
+  이 두 번째 draft는 `microevent_id`를 `test_id`/`검사번호`처럼 노출해 order
+  tie-break를 해결하려 했다. `answer_contract_binding_missing` feedback 뒤에는
+  request에 `검사번호로 구분`까지 넣었지만, 다음 query는 다시 `test_date`만
+  order key로 남아 `answer_contract_order_ambiguous`가 발생했다. 이후 다른
+  task를 더 탐색하다가 max turns를 넘겼다.
+- **reasoning 감사**:
+  저장된 reasoning을 보면 composer는 feedback을 "기존 task를 최소 수정"으로
+  해석하지 못했다. 특히 Iteration 128에서 내가 추가한 order feedback 문구의
+  "choose another label"이 기존 Feedback Policy의 "preserve anchored need/language"
+  와 충돌했고, 모델에게 task reset을 허용하는 신호로 작동했다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected / recovery failure. 첫 pharmacy task는 좋은
+  방향이었지만 deterministic ordering을 만들지 못했고, 이후 microbiology task는
+  technical handle을 자연스러운 검사번호처럼 사용하려는 저품질 방향이었다. 다만
+  합성 단계에서 멈췄기 때문에 low-quality accepted는 발생하지 않았다.
+- **변경**:
+  `answer_contract_order_ambiguous` feedback reminder를 다시 원칙에 맞게 고쳤다.
+  "choose another label"을 제거하고, feedback retry에서는 현재 anchor/target을
+  보존한 채 natural visible tie-break, unique ordering, tied rows 중 하나로
+  ordering만 수리하라고 상기한다. hidden handles/artificial id wording으로
+  수리하지 말라는 문구는 유지했다.
+
+  이 변경은 durable policy를 새로 만들지 않는다. 기존 `Feedback And
+  Difficulty-Up Policy`와 `List Determinism Policy`를 feedback에서 일관되게
+  상기하도록 되돌린 것이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_multirow_list_without_order_by tests/test_synthesis_runtime.py::test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.

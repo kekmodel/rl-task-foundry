@@ -1984,6 +1984,7 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
 
     assert "List Determinism Policy reminder" in message
     assert "does not uniquely determine" in message
+    assert "preserve the current anchor and target" in message
     assert "natural visible tie-break" in message
     assert "hidden handles" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
