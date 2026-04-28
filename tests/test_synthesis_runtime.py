@@ -1984,6 +1984,8 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
 
     assert "List Determinism Policy reminder" in message
     assert "does not uniquely determine" in message
+    assert "natural visible tie-break" in message
+    assert "hidden handles" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
@@ -2269,6 +2271,7 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
 
     assert "hidden row-scope handles" in message
     assert "must be anchored in entity" in message
+    assert "parent/current-subject handle" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_hidden_filter_unanchored",
     )

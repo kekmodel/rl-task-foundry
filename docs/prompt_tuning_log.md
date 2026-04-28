@@ -5471,3 +5471,71 @@ Solver 30/30 완료 결과:
 
   `uv run ruff check src/rl_task_foundry/infra/event_log.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_logging.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
   통과.
+
+## Iteration 128 — Hidden scope recovery feedback
+
+- **질문**:
+  Iteration 127의 incremental feedback reminder 이후 다음 no-topic MIMIC smoke를
+  돌리면 composer가 문제를 올바르게 회복하는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_incremental_feedback_kimi_8solver_no_topic_smoke_01/trial_01`.
+
+  trial은 solver 실행 전 `synthesis_failed`로 종료됐다. feedback event는 5개였고,
+  provider failure는 없었다.
+- **결과**:
+  composer는 `labevents`의 단일 `labevent_id=242873`를 anchor로 잡은 뒤
+  `내 최근 혈액 검사 결과를 최신순으로 5개 보여줘`라는 parent/history 성격의
+  요청을 만들었다. 실제 query는 같은 환자의 lab history를 가져오기 위해
+  hidden `subject_id=10020306`로 필터링했다.
+
+  이 구조는 label scope와 entity scope가 맞지 않는다. 요청은 환자 범위의 최근
+  검사 이력인데, 제출 entity는 단일 lab event였다. quality gate는
+  `answer_contract_hidden_filter_unanchored`로 이 hidden row-set control을
+  잡았고, 동시간 lab rows의 order/limit 문제는 `answer_contract_order_ambiguous`
+  로 잡았다.
+
+  retry 중 composer는 `subject_id`를 entity에 추가해 hidden filter 문제를 한 번
+  해결했지만, `labevent_id`를 visible answer/order tie-break처럼 노출하려고 했다.
+  이는 자연스러운 고객 요청이 아니라 technical handle repair에 가깝다. 마지막에는
+  hidden tie-break를 제거하면서 다시 ambiguous list가 됐고 budget이 소진됐다.
+- **reasoning 감사**:
+  저장된 composer reasoning은 실패 원인을 잘 보여준다. 모델은 첫 feedback 뒤
+  `subject_id`가 entity에 있어야 한다는 점은 이해했지만, "최근순 5개" list의
+  동점 문제를 hidden `labevent_id` tie-break로 고쳐도 된다고 잘못 판단했다.
+  이후에는 handle을 label에서 빼야 한다는 점과 deterministic order 필요성을
+  동시에 만족시키지 못했다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 데이터가 어려워서 좋은 문제가 된 것이
+  아니라, 단일 child record anchor에서 parent/history request로 넓히는 과정에서
+  hidden parent filter와 hidden/id tie-break가 request/label에 자연스럽게
+  고정되지 않았다. rejection은 바람직했고, low-quality accepted는 관측되지 않았다.
+- **변경**:
+  durable prompt 정책은 이미 충분히 있었다.
+
+  - Request Contract: parent/list/history requests query that scope.
+  - List Determinism Policy: hidden handles/artificial id wording으로 tie-break를
+    만들지 않는다.
+
+  따라서 prompt를 새로 늘리지 않고, feedback reminder만 정책 상기 역할에 맞게
+  좁게 강화했다.
+
+  - `answer_contract_hidden_filter_unanchored`: child record에서
+    parent/list/history request로 넓힐 때 parent/current-subject handle을 entity에
+    유지하거나 existing entity에 맞는 label을 택하라고 상기한다.
+  - `answer_contract_order_ambiguous`: natural visible tie-break, tied rows,
+    unique ordering, or another label을 택하라고 상기하고 hidden handles/artificial
+    id wording으로 repair하지 말라고 상기한다.
+
+  이 변경은 DB literal/token heuristic이 아니다. validator trigger는 latest query
+  evidence의 hidden filter/order diagnostics에 기반하므로 precision-100 feedback
+  조건을 유지한다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_multirow_list_without_order_by tests/test_synthesis_runtime.py::test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker tests/test_synthesis_runtime.py::test_submit_draft_rejects_hidden_filter_missing_from_entity -q`
+  통과 (`4 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.

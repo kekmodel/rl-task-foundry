@@ -1972,13 +1972,13 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: the latest successful query must contain structural evidence for this answer; if a list query limit fixes membership, that fixed size must be bound in user_request and answer_contract.limit_phrase."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
-                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. Use a natural visible tie-break, return tied rows, choose unique ordering, or choose another label; do not repair this with hidden handles or artificial id wording."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
                 "Rejected. Label Contract reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
-                "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters."  # noqa: E501
+                "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If a parent/list/history request broadens from a child record, keep that parent/current-subject handle in entity or choose a label scoped to the existing entity."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
                 "Rejected. Label Contract reminder: latest query evidence must include field visibility evidence before submit_draft."  # noqa: E501
