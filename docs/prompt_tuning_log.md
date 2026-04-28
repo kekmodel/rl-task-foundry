@@ -5361,113 +5361,113 @@ Solver 30/30 완료 결과:
   `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
   passed (`12 passed`).
 
-## Iteration 126 — Keep DB aliases out of customer requests
+## Iteration 126 — 고객 요청에서 DB alias 제거
 
-- **Question**:
-  After source ambiguity policy, does a single MIMIC demo smoke reveal remaining
-  composer-quality failures that are not solver failures?
-- **Experiment**:
-  Ran one no-topic MIMIC demo smoke with OpenRouter Kimi K2.5 composer/solver,
-  eight solver rollouts, and solver batch size four:
+- **질문**:
+  source ambiguity 정책 이후에도 단일 MIMIC demo smoke에서 solver 문제가
+  아닌 composer 품질 문제가 남아 있는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
   `artifacts/trial_20260429_mimiciv_demo_source_ambiguity_kimi_8solver_no_topic_smoke_02`.
 
-  The trial accepted at `7/8 = 0.875` pass rate. The first draft was correctly
-  rejected for an unrepresented hidden order tie-break. Composer then replaced
-  hidden `orderid` ordering with visible `endtime` and `ordercategoryname`
-  controls, so list determinism was not the remaining issue.
-- **Reasoning audit**:
-  Preserved composer reasoning showed the model found a plausible ICU procedure
-  row set and noticed duplicate projected rows. It then made the rows
-  distinguishable by adding visible fields and, after feedback, repaired hidden
-  ordering.
+  trial은 pass rate `7/8 = 0.875`로 accepted 됐다. 첫 draft는 request/label에
+  표현되지 않은 hidden order tie-break 때문에 올바르게 reject됐다. composer는
+  이후 hidden `orderid` ordering을 visible `endtime`, `ordercategoryname`
+  control로 바꿨기 때문에 list determinism 자체는 남은 문제가 아니었다.
+- **reasoning 감사**:
+  저장된 composer reasoning을 보면 모델은 타당한 ICU procedure row set을
+  찾았고, projected row 중복도 인지했다. 이후 visible field를 추가해 row를
+  구분 가능하게 만들었고, feedback 뒤에는 hidden ordering도 고쳤다.
 
-  The remaining quality flaw was in the customer/request surface: the accepted
-  Korean request leaked schema-like aliases such as `Duration` and `Location`
-  in parentheses, and the label used raw-source-style field keys where natural
-  semantic output names were available. This is a composer request/label surface
-  problem, not a solver-tool problem.
-- **Change**:
-  Tightened the prompt only:
+  남은 품질 문제는 고객 요청/label surface였다. accepted 된 한국어 요청에
+  `Duration`, `Location` 같은 schema-like alias가 괄호 안에 새어 나왔고,
+  자연스러운 semantic output name을 만들 수 있는데도 label이 raw-source
+  field key에 가까웠다. 즉 solver tool 문제가 아니라 composer의
+  request/label surface 문제다.
+- **변경**:
+  prompt만 좁게 수정했다.
 
-  - Request Contract: field keys stay in JSON, not request text; avoid
-    schema-like aliases in parentheses.
-  - Label Contract: use semantic API-style field names, not raw DB aliases.
+  - Request Contract: field key는 JSON에만 두고 request text에는 넣지 않는다.
+    괄호 안 schema-like alias를 피한다.
+  - Label Contract: raw DB alias가 아니라 semantic API-style field name을 쓴다.
 
-  This stays within the prompt-first principle. No hard validator was added
-  because identifying "DB-ish" wording is qualitative and not precision-100
-  without forbidden literal heuristics.
-- **Verification**:
+  prompt-first 원칙을 지켰다. "DB-ish wording" 판정은 정성적이라 forbidden
+  literal heuristic 없이 precision-100 validator로 만들 수 없으므로 hard
+  validator는 추가하지 않았다.
+- **검증**:
   `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
-  passed (`12 passed`).
+  통과 (`12 passed`).
 
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py`
-  passed.
+  통과.
 
-## Iteration 127 — Alias-surface smoke and incremental feedback reminder
+## Iteration 127 — Alias surface smoke와 incremental feedback reminder
 
-- **Question**:
-  Does the request/field-surface prompt cleanup make the next no-topic MIMIC
-  smoke produce more natural user text and semantic label fields?
-- **Experiment**:
-  Ran one no-topic MIMIC demo smoke with OpenRouter Kimi K2.5 composer/solver,
-  eight solver rollouts, and solver batch size four:
+- **질문**:
+  request/field surface prompt cleanup 이후, 다음 no-topic MIMIC smoke에서
+  더 자연스러운 user text와 semantic label field가 나오는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
   `artifacts/trial_20260429_mimiciv_demo_alias_surface_kimi_8solver_no_topic_smoke_01`.
 
-  The first draft used a natural Korean request without schema aliases:
+  첫 draft는 schema alias 없는 자연스러운 한국어 요청을 만들었다:
   `내 중환자실 입원 기간 동안 기록된 배출량 5건을 최신순으로 보여주세요.`
-  Its label fields were semantic API-style names:
+
+  label field도 semantic API-style name이었다:
   `output_volume`, `unit`, `recorded_time`, `stored_time`.
 
-  This confirms the Iteration 126 prompt direction for the sampled case.
-- **Outcome**:
-  The trial still ended `synthesis_failed`, not because the data was low
-  quality, but because every solver matched the candidate (`8/8 = 1.0`) and the
-  quality gate treated it as too easy / calibration-inconclusive.
+  이 sample에서는 Iteration 126 prompt 방향이 실제로 작동했다.
+- **결과**:
+  trial은 여전히 `synthesis_failed`로 끝났다. 단, 데이터가 저품질이라서가
+  아니라 모든 solver가 맞췄고(`8/8 = 1.0`), quality gate가 too easy /
+  calibration-inconclusive로 처리했기 때문이다.
 
-  Retry timeline:
+  retry 흐름:
 
   - submit 1: `calibration_inconclusive`, pass rate `1.0`.
-  - submit 2: `answer_contract_not_incremental`, replaced `stored_time` with
-    an output-type field.
-  - submit 3: `answer_contract_not_incremental`, again replaced `stored_time`
-    with a measurement-name field.
-  - submit 4: `answer_contract_binding_missing`, kept more fields but omitted
-    required order binding coverage.
-  - submit 5: preserved the prior four fields and added `care_unit`, but solver
-    pass rate was still `1.0`, so the attempt exhausted on calibration.
-- **Reasoning audit**:
-  Composer reasoning after feedback showed it understood the high-level rule
-  late: it explicitly concluded it had to preserve
-  `output_volume`, `unit`, `recorded_time`, and `stored_time`, then add only
-  `care_unit`. The wasted retries happened before that realization, when it
-  interpreted "add specificity" as replacing one existing output source with a
-  different related source.
+  - submit 2: `answer_contract_not_incremental`. `stored_time`을 output-type
+    field로 대체했다.
+  - submit 3: `answer_contract_not_incremental`. 다시 `stored_time`을
+    measurement-name field로 대체했다.
+  - submit 4: `answer_contract_binding_missing`. field는 더 보존했지만
+    필요한 order binding coverage가 빠졌다.
+  - submit 5: 기존 네 field를 보존하고 `care_unit`만 추가했지만, solver pass
+    rate가 여전히 `1.0`이라 calibration에서 budget exhausted 됐다.
+- **reasoning 감사**:
+  feedback 이후 composer reasoning을 보면, 모델은 늦게나마 핵심 규칙을
+  이해했다. `output_volume`, `unit`, `recorded_time`, `stored_time`을 보존한
+  뒤 `care_unit`만 추가해야 한다고 명시적으로 결론냈다. 낭비된 retry는 그
+  결론 전에 "specificity를 추가하라"를 기존 output source 하나를 다른 관련
+  source로 교체해도 된다는 뜻으로 해석하면서 발생했다.
 
-  This is a feedback-reminder issue, not a new durable policy gap. The durable
-  prompt already says list feedback should keep filters/order/limit/row set and
-  output source meanings, then append exactly one user-visible field.
-- **Change**:
-  Tightened the `answer_contract_not_incremental` feedback reminder so it points
-  back to the existing Difficulty-Up Policy more concretely: list retries must
-  keep every prior output field/source and prior order binding, then append
-  exactly one grounded user-visible field or tie-break.
+  이건 새로운 durable policy gap이 아니라 feedback reminder 문제다. durable
+  prompt에는 이미 list feedback 때 filters/order/limit/row set과 output source
+  meaning을 보존하고, user-visible field 하나만 append하라고 되어 있다.
+- **변경**:
+  `answer_contract_not_incremental` feedback reminder를 더 구체화했다. 기존
+  Difficulty-Up Policy를 다시 지시로 복제하지 않고, 그 정책을 정확히
+  상기시키도록 했다: list retry는 모든 prior output field/source와 prior order
+  binding을 유지한 뒤, grounded user-visible field 또는 tie-break 하나만
+  append해야 한다.
 
-  Also made `TrialEventLogger.write_sidecar_jsonl` explicitly flush sidecar
-  writes. This does not make composer reasoning available before an Agents SDK
-  run segment returns, but it prevents sidecar buffering once reasoning records
-  are handed to our logger.
-- **Qualitative audit**:
-  Accepted data: none.
+  또한 `TrialEventLogger.write_sidecar_jsonl`이 sidecar write 뒤 명시적으로
+  flush하도록 했다. 이 변경이 Agents SDK run segment가 끝나기 전 composer
+  reasoning을 볼 수 있게 하지는 않는다. 다만 reasoning record가 logger에
+  넘어온 뒤 sidecar buffering 때문에 늦게 보이는 문제는 막는다.
+- **정성 평가**:
+  accepted data: 없음.
 
-  Rejected/failed data: hard-good but too easy. Solvers could solve it reliably
-  with the available tools; the final draft was clean and naturally phrased, but
-  below the intended difficulty band. This is not low-quality accepted data.
-- **Verification**:
+  rejected/failed data: hard-good but too easy. solver는 주어진 tool로 안정적으로
+  풀 수 있었고, 최종 draft는 깨끗하고 자연스러웠지만 의도한 difficulty band
+  아래였다. low-quality accepted data가 아니다.
+- **검증**:
   `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract tests/test_synthesis_runtime.py::test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline tests/test_synthesis_logging.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
-  passed (`17 passed`).
+  통과 (`17 passed`).
 
   `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_too_easy_rejects_renamed_same_scalar_value -q`
-  passed.
+  통과.
 
   `uv run ruff check src/rl_task_foundry/infra/event_log.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_logging.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
-  passed.
+  통과.
