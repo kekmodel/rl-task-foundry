@@ -5540,6 +5540,63 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 131 — Accepted admission-history smoke
+
+- **질문**:
+  Iteration 130의 final evidence/tie-break feedback 보강 뒤 다음 no-topic smoke에서
+  accepted data가 나오는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_evidence_tiebreak_feedback_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted 됐다.
+
+  - task: `환자 입원 이력 조회`
+  - request: `내 입원 기록을 최근 입원 순서로 알려줘`
+  - anchor: `subject_id=10005348`
+  - row set: 해당 환자의 admission 3건 전체
+  - order: `admission_time` desc, duplicate order key 없음
+  - pass rate: `7/8 = 0.875`
+  - CI low/high: `0.5293 / 0.9936`
+  - solver failed runs: `0`
+  - registry: committed
+
+  첫 submit은 output binding phrase가 request substring과 맞지 않아
+  `answer_contract_phrase_missing`으로 reject됐다. 두 번째 submit은 같은
+  admission-history task를 유지했고, output binding phrase를 request 안의
+  `내 입원 기록을`로 맞춰 accepted 됐다.
+- **정성 평가**:
+  accepted data: borderline-clean.
+
+  좋은 점:
+
+  - hidden scope가 자연스럽다. `subject_id`는 "내 입원 기록"의 hidden requester
+    context로 쓰였고, label은 해당 환자의 admission rows에 정확히 scoped 됐다.
+  - row set이 전체 3건이라 hidden limit membership 문제가 없다.
+  - order가 `admission_time desc`로 명시되고, query diagnostics상 동점이 없다.
+  - label values는 latest query result와 일치한다.
+  - 7/8 solver가 같은 정답을 제출했다.
+
+  남은 찜찜함:
+
+  - request가 `입원 기록`이라고만 말하고 입원일시/퇴원일시/입원유형/입원장소/퇴원장소를
+    명시적으로 열거하지 않는다. 환자 포털에서 "입원 기록"에 자연스럽게 포함될 수
+    있는 필드들이라 low-quality accepted로 보지는 않지만, label surface가 아주
+    선명한 clean sample은 아니다.
+  - 실패한 solver 1개는 두 번째 row의 `discharge_location` null을 문자열
+    `"null"`로 제출했다. 이는 task row-set/ordering 문제가 아니라 solver-side
+    exact-value handling 오류다.
+
+  결론: low-quality accepted는 아니다. 다만 향후 더 좋은 clean sample을 목표로
+  하려면 composer가 "입원일시, 퇴원일시, 입원유형, 입원/퇴원 장소"처럼 returned
+  fields를 request에 자연스럽게 포함하도록 만드는 prompt/feedback 개선 여지가 있다.
+  이 판단은 semantic quality 문제라 precision-100 hard validator로 만들지는 않는다.
+- **다음 반복 후보**:
+  이번 sample은 합격이지만 borderline-clean이므로, 다음 smoke에서 더 explicit한
+  output surface가 자연스럽게 생성되는지 한 번 더 확인한다. accepted sample이 계속
+  broad request에 기대면 prompt example/policy 쪽에서 DB-neutral하게 보강할지 검토한다.
+
 ## Iteration 130 — Evidence and tie-break binding reminders
 
 - **질문**:
