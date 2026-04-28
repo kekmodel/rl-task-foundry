@@ -78,6 +78,6 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
         kind_note = f" Current answer kind: {answer_kind}."
     return (
         " This draft failed specificity."
-        f"{kind_note} Apply the Difficulty-Up Policy from the system "
-        "instructions to the current draft before resubmitting."
+        f"{kind_note} Policy reminder: Difficulty-Up Policy is the repair "
+        "source for specificity feedback on the current draft."
     )

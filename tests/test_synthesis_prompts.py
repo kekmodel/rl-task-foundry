@@ -258,18 +258,16 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "the DB decides the domain" in instructions
     assert "hidden entity values must be grounded" in instructions
     assert "Build the label first" in instructions
-    assert "interesting, unique, scoped, visible" in instructions
-    assert "Derive `user_request` and `topic`" in instructions
-    assert "naturally ask for exactly that label" in instructions
-    assert "the label must be copied from the latest query evidence" in instructions
-    assert "must not be a global answer with a decorative entity attached" in instructions
-    assert "# Difficulty-Up Policy" in instructions
+    assert "interesting, unique, verifiable, scoped" in instructions
+    assert "Derive `user_request` and `topic` from the label" in instructions
+    assert "exactly the label fields and row controls" in instructions
+    assert "supplies copied label JSON" in instructions
+    assert "no global answer with a decorative entity" in instructions
     assert "Difficulty-Up Policy" in instructions
-    assert "needs more specificity" in instructions
     assert "smallest single structural strengthening" in instructions
     assert "there is no fixed ladder" in instructions
-    assert "Preserve kind, anchor, target, row set/query path" in instructions
-    assert "keep existing filters, order, limit" in instructions
+    assert "preserve kind, anchor, target, row set/query path" in instructions
+    assert "keep filters, order, limit" in instructions
     assert "output fields/source meanings" in instructions
     assert "append exactly one user-visible field" in instructions
     assert "ask for it in user_request/answer_contract" in instructions
@@ -281,15 +279,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
 
     # Durable policies are named so feedback/tool descriptions can reference
     # them without restating broad strategy.
-    assert "# Source Surface Policy" in instructions
-    assert "user-facing source surface" in instructions
-    assert "canonical query surface" in instructions
-    assert "Bad: request names one surface" in instructions
-    assert "Good: request names selected surface" in instructions
+    assert "# Core Definitions" in instructions
+    assert "Source surface" in instructions
+    assert "user wording, label fields, and query path" in instructions
     assert "If no primary key" in instructions
     assert "primary-key-backed path" in instructions
     assert "hidden path guessing" in instructions
-    assert "# Feedback Handling Policy" in instructions
+    assert "# Feedback And Difficulty-Up Policy" in instructions
     assert "not a new durable instruction source" in instructions
     assert "pointer to an existing named policy" in instructions
     assert "Preserve anchored need/language" in instructions
@@ -297,7 +293,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "one source of policy prevents split guidance" in instructions
 
     # User-facing language and ID guidance stay general and English.
-    assert "# Customer Request" in instructions
+    assert "# Request Contract" in instructions
     assert "configured target language" in instructions
     assert "customer does not know DB tables" in instructions
     assert "technical sequences" in instructions
@@ -308,35 +304,34 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "'<entity type> 38'" not in instructions
     assert "'<table>_id=38'" not in instructions
     assert "'number 38 <entity>'" not in instructions
-    assert "hidden structural handle" in instructions
+    assert "hidden handle" in instructions
     assert "hidden current subject/context" in instructions
-    assert "Bind modifiers to the exact object/scope" in instructions
+    assert "Bind modifiers to exact object/scope" in instructions
     assert "Match hidden scope" in instructions
-    assert "whole parent-context, list, or history requests" in instructions
+    assert "parent/list/history requests query that scope" in instructions
     assert "not one child event/record unless asked" in instructions
     assert "Do not attach `entity` to a global report" in instructions
-    assert "Never invent visible context values" in instructions
+    assert "Copy visible context values" in instructions
     assert "latest scoped query evidence" in instructions
-    assert "do not expose that handle" in instructions
-    assert "multiple relationship roles" in instructions
-    assert "sibling tables" in instructions
-    assert "selected source role" in instructions
+    assert "do not expose it" in instructions
+    assert "several roles or sibling surfaces" in instructions
+    assert "selected role" in instructions
     assert not re.search(r"[가-힣]", instructions)
 
     # Label and contract rules preserve exact verifiability.
     assert "# Label Contract" in instructions
     assert "structured result" in instructions
     assert "not final prose" in instructions
-    assert "Verifiable means final `query(spec)` exactly reproduces" in instructions
-    assert "Unique means one correct structured answer" in instructions
+    assert "Verifiable label: final `query(spec)` exactly reproduces" in instructions
+    assert "Unique label: one correct structured answer" in instructions
     assert "never rely on hidden ids/order/filters" in instructions
-    assert "Use `answer_contract.kind='scalar'` only for aggregate answers" in instructions
-    assert "Use `answer_contract.kind='list'` for selected rows" in instructions
+    assert "`answer_contract.kind='scalar'` only for aggregate answers" in instructions
+    assert "`list` for selected rows" in instructions
     assert "Label Grounding Policy" in instructions
-    assert "copy label values from the latest successful `query(spec)` result" in instructions
+    assert "copy label values from latest successful `query(spec)` result" in instructions
     assert "Do not reformat" in instructions
     assert "unrelated global answer is invalid" in instructions
-    assert "Prefer user-visible non-handle values" in instructions
+    assert "user-visible non-handle values" in instructions
     assert "Bind answer representation exactly" in instructions
     assert "no code/reference-to-display" in instructions
     assert "source-field-to-related-field upgrade" in instructions
@@ -345,31 +340,32 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Keep output names faithful" in instructions
     assert "note/comment/description text" in instructions
     assert "multiple answer columns are plausible" in instructions
-    assert "include only fields for the submitted label" in instructions
+    assert "`query.select` includes only returned label fields" in instructions
     assert "every selected field becomes exact answer" in instructions
     assert "distinguishable through requested output fields" in instructions
     assert "duplicate projected answer rows" in instructions
     assert "Do not select helper values unless" in instructions
-    assert "combines facts from the same event or record" in instructions
+    assert "answer item combines facts from the same event/record" in instructions
     assert "Avoid independent sibling joins" in instructions
-    assert "Do not make a raw handle the main answer" in instructions
-    assert "current query evidence marks it user-visible" in instructions
-    assert "`answer_contract` is only a request-binding surface" in instructions
-    assert "bind `query.order_by` entries" in instructions
-    assert "Do not restate tables, columns, operators, or SQL" in instructions
-    assert "latest query result supplies structural evidence" in instructions
-    assert "Every contract phrase must be an exact substring of `user_request`" in instructions
+    assert "never make a raw handle the main answer" in instructions
+    assert "query marks them user-visible" in instructions
+    assert "`answer_contract` only binds request phrases" in instructions
+    assert "output/order bindings" in instructions
+    assert "No tables, columns, operators, or SQL" in instructions
+    assert "every phrase must be an exact substring of `user_request`" in instructions
+    assert "Binding phrases must name the returned field's role" in instructions
+    assert "do not bind one vague phrase to multiple concepts" in instructions
     assert "List Determinism Policy" in instructions
     assert "one correct structured result" in instructions
-    assert "fix membership, order direction" in instructions
+    assert "membership, order direction, limit, and tie-breaks" in instructions
     assert "Row-set controls must be entity scope" in instructions
-    assert "State direction explicitly" in instructions
+    assert "state direction explicitly" in instructions
     assert "newest-first/oldest-first" in instructions
     assert "order leaves distinct-answer ties" in instructions
     assert "ask for a natural visible tie-break before" in instructions
-    assert "artificial technical sequence/id wording" in instructions
-    assert "choose unique ordering or return tied rows" in instructions
-    assert "never use hidden handles" in instructions
+    assert "artificial technical sequence/id/order wording" in instructions
+    assert "choose unique ordering, or return tied rows" in instructions
+    assert "never add hidden handles" in instructions
     assert "timestamp/date granularity" in instructions
 
     # Task shape is domain-agnostic and concise.
@@ -501,6 +497,6 @@ def test_synthesis_input_defaults_to_schema_map_entity_selection() -> None:
     assert "<candidate_starting_points>" not in prompt
     assert "<topic_experiment_hint>" not in prompt
     assert "<requested_topic>" not in prompt
-    assert "choose a plausible root table" in instructions
-    assert "observe real entity values" in instructions
+    assert "choose a plausible root" in instructions
+    assert "hidden entity values must be grounded" in instructions
     assert "follow that tool's schema exactly" in instructions

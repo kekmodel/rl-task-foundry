@@ -165,7 +165,8 @@ class AnswerOutputBinding(StrictModel):
         min_length=1,
         description=(
             "Exact contiguous substring from user_request that asks for this "
-            "label field."
+            "label field. Use wording that names this field's distinct role; "
+            "do not reuse one vague phrase for different returned concepts."
         ),
     )
 
@@ -1397,16 +1398,15 @@ class SubmitDraftController:
 
         attempts_left_after = self.submissions_left() - 1
         primary = (
-            "Plain final output is invalid for this role; the synthesis composer "
-            "Workflow requires submit_draft, not a text-only final answer."
+            "Protocol reminder: Plain final output is invalid for this role; "
+            "the synthesis composer Workflow requires submit_draft."
         )
         message = _render_structured_message(
             kind="FeedbackError",
             primary=primary,
             next_step=(
-                "Continue with data tools if more evidence is needed; call "
-                "submit_draft when the task draft is valid. Do not end the "
-                "run with text only."
+                "Use data tools if more evidence is missing, then call "
+                "submit_draft. Do not end the run with text only."
             ),
             attempts_left=max(0, attempts_left_after),
         )
@@ -1909,84 +1909,98 @@ class SubmitDraftController:
     ) -> str:
         message_map = {
             SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION: (
-                "Rejected. Observe more real database facts with data tools before resubmitting."
+                "Rejected. Policy reminder: Label Grounding Policy requires "
+                "real database facts observed through data tools before "
+                "resubmission."
             ),
-            SubmitDraftErrorCode.TOPIC_REQUIRED: "Rejected. topic is required.",
-            SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED: "Rejected. entity must contain at least one primary-key value.",  # noqa: E501
+            SubmitDraftErrorCode.TOPIC_REQUIRED: (
+                "Rejected. Tool schema reminder: topic is required."
+            ),
+            SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED: (
+                "Rejected. Tool schema reminder: entity must contain at least "
+                "one primary-key value."
+            ),
             SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED: (
-                'Rejected. entity must be a flat JSON object mapping observed primary-key field names to scalar values, for example {"<pk_column>": 123} or {"<pk_part_1>": 7, "<pk_part_2>": 1}. Use field names from the observed table metadata. Do not nest it under entity_type, primary_key, or primary_keys.'  # noqa: E501
+                'Rejected. Tool schema reminder: entity is a flat JSON object mapping observed primary-key field names to scalar values, for example {"<pk_column>": 123} or {"<pk_part_1>": 7, "<pk_part_2>": 1}; it is not nested under entity_type, primary_key, or primary_keys.'  # noqa: E501
             ),
-            SubmitDraftErrorCode.QUESTION_REQUIRED: "Rejected. user_request is required.",
+            SubmitDraftErrorCode.QUESTION_REQUIRED: (
+                "Rejected. Tool schema reminder: user_request is required."
+            ),
             SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED: (
-                "Rejected. user_request should contain only the natural user request body. Do not include the hidden entity block."  # noqa: E501
+                "Rejected. Request Contract reminder: user_request is only the natural request body; hidden entity context belongs in entity."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON: (
-                "Rejected. The <entity> block must contain a valid flat JSON object with one or more primary-key fields."  # noqa: E501
+                "Rejected. Tool schema reminder: the hidden <entity> block requires a valid flat JSON object with one or more primary-key fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH: (
-                "Rejected. The JSON inside the <entity> block must exactly match entity."
+                "Rejected. Tool schema reminder: the JSON inside the <entity> "
+                "block must exactly match entity."
             ),
             SubmitDraftErrorCode.QUESTION_BODY_REQUIRED: (
-                "Rejected. Include a natural user request body in user_request."
+                "Rejected. Request Contract reminder: user_request needs a natural request body."
             ),
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
-                "Rejected. label must be a valid JSON string."
+                "Rejected. Tool schema reminder: label must be a valid JSON string."
             ),
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
-                "Rejected. Label Grounding Policy violation: the canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value observed in tool results."  # noqa: E501
+                "Rejected. Label Grounding Policy reminder: the canonical answer contains blank string fields; answer fields require grounded, non-empty values observed in tool results."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
-                "Rejected. Label Grounding Policy violation: some label values were not directly grounded in observed tool results, or were reformatted from observed values. Apply the policy to the current evidence and copy grounded values exactly."  # noqa: E501
+                "Rejected. Label Grounding Policy reminder: some label values were not directly grounded in observed tool results, or were reformatted from observed values."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED: (
-                "Rejected. Difficulty-Up Policy violation: after a specificity rejection, the canonical answer itself must change through a grounded strengthening step."  # noqa: E501
+                "Rejected. Difficulty-Up Policy reminder: after specificity feedback, the canonical answer itself must change through a grounded strengthening step."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_REQUIRED: (
-                "Rejected. answer_contract is required."
+                "Rejected. Tool schema reminder: answer_contract is required."
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_JSON_INVALID: (
-                "Rejected. answer_contract must be a valid JSON object with kind, answer_phrase, constraint_phrases, and limit_phrase. Do not paste query result JSON or SQL structure into answer_contract. Do not pass a malformed JSON string; pass a complete object whose brackets and list items are closed."  # noqa: E501
+                "Rejected. Tool schema reminder: answer_contract is a valid JSON object with kind, answer_phrase, constraint_phrases, and limit_phrase; it is not query result JSON, SQL structure, or a malformed JSON string."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING: (
-                "Rejected. Every answer_contract phrase must be an exact contiguous substring copied from user_request. Write the user_request wording first, then paste the exact same words into answer_phrase, constraint_phrases, limit_phrase, output_bindings, and order_bindings."  # noqa: E501
+                "Rejected. Label Contract reminder: every answer_contract phrase must be an exact contiguous substring copied from user_request."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING: (
-                "Rejected. Call query immediately before submit_draft; the canonical label must be copied from the latest successful query result."  # noqa: E501
+                "Rejected. Label Contract reminder: final query evidence must immediately precede submit_draft, and the canonical label is copied from the latest successful query result."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISMATCH: (
-                "Rejected. label must exactly match the latest successful query result. For kind='scalar', copy the one aggregate row as the label object. For kind='list', copy the query rows array as the label list, even when the query returned one row. If the latest query selected helper/context fields that the user did not ask to receive, rerun query with only the intended label fields instead of adding extras to label."  # noqa: E501
+                "Rejected. Label Contract reminder: label must exactly match the latest successful query result; scalar uses the one aggregate row object, list uses the query rows array, and helper/context fields are not label fields unless requested."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH: (
-                "Rejected. The latest successful query does not contain the required structural evidence for this answer. If a list query limit fixes the returned rows, include that exact fixed size in user_request and answer_contract.limit_phrase, or rerun query without limit when entity/filter evidence already fixes the row set."  # noqa: E501
+                "Rejected. Label Contract reminder: the latest successful query must contain structural evidence for this answer; if a list query limit fixes membership, that fixed size must be bound in user_request and answer_contract.limit_phrase."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
-                "Rejected. List Determinism Policy violation: the latest list query does not uniquely determine the submitted order or limited row membership for exact verification. Apply that policy to the current query/order evidence before resubmitting."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
-                "Rejected. Label Contract violation: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Add a natural user-visible distinguishing field, aggregate duplicates, or choose another grounded task; never add hidden handles."  # noqa: E501
+                "Rejected. Label Contract reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
-                "Rejected. The latest query filters on a blocked handle value that is not present in entity. Put required hidden scope handles in entity or rerun the query using the submitted entity's handle."  # noqa: E501
+                "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
-                "Rejected. Call query again before submit_draft; the latest query result must include field visibility evidence."  # noqa: E501
+                "Rejected. Label Contract reminder: latest query evidence must include field visibility evidence before submit_draft."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
-                "Rejected. Label Contract violation: for list labels, answer_contract.output_bindings must cover every returned label field, and answer_contract.order_bindings must cover each query.order_by entry in order. Add only bindings whose requested_by_phrase is copied from user_request."  # noqa: E501
+                "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
-                "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501
+                "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE: (
-                "Rejected. Source Surface Policy violation: the latest query exposes label values from a table without a primary key. Rows from that table cannot be revisited as stable records; choose a primary-key-backed source path or use a derived aggregate that does not expose those row values."  # noqa: E501
+                "Rejected. Source Surface Policy reminder: the latest query exposes label values from a table without a primary key, so those rows cannot be revisited as stable records."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
-                "Rejected. Difficulty-Up Policy violation: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
+                "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
-                "Rejected. submit_draft arguments did not match the required schema."
+                "Rejected. Tool schema reminder: submit_draft arguments did "
+                "not match the required schema."
             ),
-            SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED: "Rejected. The submitted draft could not be validated.",  # noqa: E501
+            SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED: (
+                "Rejected. Tool schema reminder: the submitted draft could not "
+                "be validated."
+            ),
         }
         primary = message_map.get(error_codes[0], "Rejected. Fix the draft and resubmit.")
         if error_codes and error_codes[0] is SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED:
@@ -1995,7 +2009,7 @@ class SubmitDraftController:
                 and diagnostics.get("anchor_path_has_readable_strings") is False
             ):
                 primary = (
-                    "Rejected. Label Grounding Policy violation: the current anchored evidence path does not expose readable text fields in real tool outputs. Apply the policy to a grounded answer surface observed through data tools."  # noqa: E501
+                    "Rejected. Label Grounding Policy reminder: the current anchored evidence path does not expose readable text fields in real tool outputs."  # noqa: E501
                 )
             else:
                 primary += _format_ungrounded_value_guidance(diagnostics)
@@ -2010,7 +2024,7 @@ class SubmitDraftController:
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (
-                "Apply the Feedback Handling Policy: keep the same anchored user need and fix only the failing part when possible."  # noqa: E501
+                "Policy reminder: Feedback Handling Policy preserves the same anchored user need and changes only the failing part when possible."  # noqa: E501
             )
         additional_messages: list[str] = []
         for error_code in error_codes[1:3]:
@@ -2028,8 +2042,9 @@ class SubmitDraftController:
                 important=preserve_guidance or None,
                 also_fix=additional_messages,
                 next_step=(
-                    "Follow the referenced policy, make another data-tool call if needed, "
-                    "then call submit_draft again. Do not stop with plain text."
+                    "Use the referenced policy/tool contract as the repair source; "
+                    "call data tools if evidence is missing, then call submit_draft again. "
+                    "Do not stop with plain text."
                 ),
                 attempts_left=max(0, attempts_left_after),
             )

@@ -4930,3 +4930,101 @@ Solver 30/30 완료 결과:
   order binding, and binding diagnostics printed `3 passed`; the pytest process
   did not exit after printing the result and was killed after the pass result was
   visible. Ruff passed for touched source and test files.
+
+## Iteration 118 — Structured composer prompt and feedback reminders
+
+- **Question**:
+  Can the composer prompt be compressed and structured, using the Claude Code
+  prompt examples as style references, without weakening prompt-first policy or
+  turning feedback into a second instruction source?
+- **Reference read**:
+  Reviewed the structured prompt examples under
+  `/Users/jd/workspace/claude-code-system-prompts`, especially the general
+  agent, explorer, subagent-writing, tool-usage, communication, task-management,
+  and verification-specialist examples. The reusable pattern is short role,
+  high-salience named policies, execution flow separated from contracts, direct
+  bullets, and no duplication of tool/API shape that SDK tool schemas already
+  provide.
+- **Change**:
+  Reworked the composer system prompt into:
+  `Workflow`, `Core Definitions`, `Request Contract`, `Label Contract`,
+  `List Determinism Policy`, `Feedback And Difficulty-Up Policy`, and
+  `Task Shapes`.
+
+  Preserved the label-first workflow and explicit `Unique`/`Verifiable`
+  definitions, but compressed duplicated prose. Rendered prompt length is now
+  `7559` characters with `16` `Why:` markers, down from `7994`.
+
+  Tightened feedback philosophy in code: feedback messages now read as
+  `Policy reminder`, `Label Contract reminder`, `Request Contract reminder`, or
+  `Tool schema reminder`, and the tool-budget prompt says specificity feedback
+  is a reminder for Difficulty-Up Policy. Feedback still carries precise
+  failure evidence, but it is not framed as a new durable instruction source.
+
+  After the retry audit found a role-binding accepted defect, added one
+  DB-neutral prompt rule and matching `submit_draft.answer_contract` schema
+  description: binding phrases must name the returned field's distinct role and
+  must not reuse one vague phrase for different returned concepts.
+- **Setup**:
+  Batch root:
+  `artifacts/trial_20260428_mimiciv_demo_prompt_structure_kimi_8solver_no_topic_batch5_01`.
+  `mimiciv_demo`, no topic hint, `openrouter/moonshotai/kimi-k2.5` for composer
+  and solvers, `max_solver_runs=8`, `solver_batch_size=4`, provider concurrency
+  `1`.
+- **Raw result**:
+  Original batch: accepted `2/5`, failed `3/5`.
+
+  `trial_01` accepted at `7/8 = 0.875`.
+  `trial_02` accepted at `7/8 = 0.875`.
+  `trial_03` failed with `MaxTurnsExceeded` after a too-easy `8/8` draft and
+  later `answer_contract_not_incremental`.
+  `trial_04` failed with provider/model protocol error
+  `Tool probe not found in agent synthesis`; excluded from quality statistics
+  and retried.
+  `trial_05` failed after repeated `answer_contract_phrase_missing`.
+
+  Provider retry `trial_04_retry_01` accepted at `7/8 = 0.875`.
+- **Accepted data audit**:
+  `trial_01` is clean accepted. It asks for all procedures during the hidden
+  admission, sorted by procedure start time, and returns the four scoped
+  procedure rows with requested start/end/category/name/status fields. Query
+  scope, ordering, and requested outputs match.
+
+  `trial_02` is clean/borderline accepted. It asks for the hidden specific
+  microbiology test result and returns specimen type, date, test, organism,
+  antibiotic, and sensitivity. The task relies on the hidden `microevent_id`
+  rather than visible contextual wording, but the request/label/query are
+  aligned and solver pass rate is high.
+
+  `trial_04_retry_01` is low-quality accepted. The request says "입원 시진" and
+  "퇴원 시진" while the label contains both ICU stay times (`intime/outtime`) and
+  hospital admission times (`admittime/dischtime`). The answer contract bound
+  the same vague phrase to different source roles. This is exactly a Source
+  Surface / binding-role failure, but not a precision-100 hard-validator case:
+  some broad phrases can legitimately request a pair of fields. The fix belongs
+  in prompt/schema guidance, not a literal or token heuristic.
+- **Rejected/failed data audit**:
+  `trial_03` is low-quality rejected / recovery failure. The first medication
+  draft was too easy at `8/8`; the retry changed the row set and ordering in a
+  non-incremental way; a later retry switched to an admission/ICU summary and
+  exhausted turns. This is not a solver/tool failure.
+
+  `trial_05` is contract-repair failure, not bad accepted data. The underlying
+  medication-list candidate was plausible and deterministic after a visible
+  medication-name tie-break, but the composer repeatedly failed exact phrase
+  binding for `answer_contract.answer_phrase` and never reached calibration.
+
+  Original `trial_04` is infra/provider failure, not a quality sample.
+- **Why this follows the principles**:
+  Durable behavior remains in the system prompt. Feedback now explicitly
+  references named policies or tool-local schema contracts, so it reminds rather
+  than becoming parallel policy. The role-binding improvement is DB-neutral and
+  derived from a qualitative accepted-task audit. No validator was added because
+  duplicate or broad binding phrases are not precision-100 invalid in every
+  database/task shape.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_is_list_aware tests/test_synthesis_runtime.py::test_submit_draft_schema_feedback_reports_entity_and_evidence_fixes tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_that_does_not_match_latest_query tests/test_synthesis_runtime.py::test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_list_output_binding tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key tests/test_synthesis_runtime.py::test_submit_draft_records_answer_contract_binding_diagnostics`
+  passed (`21 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  passed.

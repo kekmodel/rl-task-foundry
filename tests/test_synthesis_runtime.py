@@ -659,6 +659,16 @@ def _too_easy_list_payload() -> SubmitDraftPayload:
                         "requested_by_phrase": "결제일 내림차순",
                     }
                 ],
+                "output_bindings": [
+                    {
+                        "label_field": "amount",
+                        "requested_by_phrase": "결제",
+                    },
+                    {
+                        "label_field": "payment_date",
+                        "requested_by_phrase": "결제일",
+                    },
+                ],
             },
         }
     )
@@ -1202,6 +1212,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "Optional request-to-label bindings" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "not a source table or SQL column" in schema_surface
+    assert "names this field's distinct role" in schema_surface
+    assert "do not reuse one vague phrase" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
     assert "JSON string for the canonical submit_result payload" in schema_surface
@@ -1325,8 +1337,8 @@ async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings
     message = await controller.submit(_ungrounded_text_payload())
 
     assert "does not expose readable text fields" in message
-    assert "Label Grounding Policy violation" in message
-    assert "grounded answer surface observed through data tools" in message
+    assert "Label Grounding Policy reminder" in message
+    assert "data tools if evidence is missing" in message
 
 @pytest.mark.asyncio
 async def test_submit_draft_requires_exact_observed_string_values(
@@ -1448,8 +1460,8 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     message = await controller.submit(_too_easy_readable_payload())
 
     assert "needs more specificity" in message
-    assert "Apply the Difficulty-Up Policy from the system instructions" in message
-    assert "current draft before resubmitting" in message
+    assert "Policy reminder: Difficulty-Up Policy" in message
+    assert "specificity feedback on the current draft" in message
     assert "Current answer kind: scalar" in message
     assert "append, do not replace, any new answer field" not in message
     assert "Ask for it in user_request and answer_contract" not in message
@@ -1501,8 +1513,8 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     message = await controller.submit(payload)
 
     assert "needs more specificity" in message
-    assert "Apply the Difficulty-Up Policy from the system instructions" in message
-    assert "current draft before resubmitting" in message
+    assert "Policy reminder: Difficulty-Up Policy" in message
+    assert "specificity feedback on the current draft" in message
     assert "Current answer kind: list" in message
     assert "append, do not replace, any new answer field" not in message
     assert "Ask for it in user_request and answer_contract" not in message
@@ -1646,7 +1658,8 @@ def test_submit_draft_schema_feedback_reports_entity_and_evidence_fixes(
     )
 
     assert "entity must contain at least one primary-key value" in message
-    assert "Do not paste query result JSON or SQL structure" in message
+    assert "Tool schema reminder" in message
+    assert "not query result JSON, SQL structure" in message
     assert controller.attempts == []
     assert controller.submissions_left() == 2
 
@@ -1675,8 +1688,8 @@ async def test_submit_draft_rejects_label_that_does_not_match_latest_query(
     message = await controller.submit(payload)
 
     assert "label must exactly match the latest successful query result" in message
-    assert "For kind='list', copy the query rows array" in message
-    assert "rerun query with only the intended label fields" in message
+    assert "list uses the query rows array" in message
+    assert "helper/context fields are not label fields unless requested" in message
     assert controller.accepted_draft is None
 
 
@@ -1884,9 +1897,9 @@ async def test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list(
 
     message = await controller.submit(payload)
 
-    assert "list query limit fixes the returned rows" in message
+    assert "list query limit fixes membership" in message
     assert "answer_contract.limit_phrase" in message
-    assert "or rerun query without limit" in message
+    assert "Label Contract reminder" in message
     assert controller.last_feedback_error_codes == ("answer_contract_query_mismatch",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
