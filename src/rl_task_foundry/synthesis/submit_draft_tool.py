@@ -246,8 +246,10 @@ class AnswerContract(StrictModel):
     output_bindings: list[AnswerOutputBinding] | None = Field(
         default=None,
         description=(
-            "Optional request-to-label bindings for fields returned in "
-            "label_json. Omit or use null when not needed."
+            "Request-to-label bindings for fields returned in label_json. "
+            "For list labels, provide one binding for every returned label "
+            "field. For scalar labels, omit or use null when the answer phrase "
+            "already binds the result."
         ),
     )
     order_bindings: list[AnswerOrderBinding] | None = Field(

@@ -89,7 +89,8 @@ PROOF_CANONICAL_ANSWER: list[dict[str, object]] = [
 
 
 PROOF_QUESTION_BODY = (
-    "봄 시즌 3일 출장 일정표를 만들어 주세요. 각 day는 하나의 city를 방문해야 하고 "
+    "봄 시즌 3일 출장 일정표를 만들어 주세요. 각 day의 city, lodging, "
+    "activity, total_cost를 포함해야 하고 각 day는 하나의 city를 방문해야 하며 "
     "전체 itinerary에서 city는 중복되면 안 됩니다. day별 total_cost는 250 이하여야 "
     "하며, 연속된 day의 city는 인접한 지역이어야 합니다. 가능한 일정이 여러 개면 "
     "day 1의 city 이름, 그다음 day 2의 city 이름, 그다음 day 3의 city 이름의 "
@@ -678,6 +679,35 @@ def build_proof_composer_script() -> ScriptedComposerScript:
                     "사전순이 가장 앞서는",
                 ],
                 "limit_phrase": "3일",
+                "output_bindings": [
+                    {
+                        "label_field": "day",
+                        "requested_by_phrase": "day",
+                    },
+                    {
+                        "label_field": "city",
+                        "requested_by_phrase": "city",
+                    },
+                    {
+                        "label_field": "lodging",
+                        "requested_by_phrase": "lodging",
+                    },
+                    {
+                        "label_field": "activity",
+                        "requested_by_phrase": "activity",
+                    },
+                    {
+                        "label_field": "total_cost",
+                        "requested_by_phrase": "total_cost",
+                    },
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "asc",
+                        "label_field": "city",
+                        "requested_by_phrase": "사전순이 가장 앞서는",
+                    }
+                ],
             },
         }
     )

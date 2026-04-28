@@ -1209,7 +1209,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "must visibly ask for that secondary order" in schema_surface
     assert "natural tie-break" in schema_surface
     assert "merely selecting the field as output is not enough" in schema_surface
-    assert "Optional request-to-label bindings" in schema_surface
+    assert "For list labels, provide one binding for every returned label field" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "not a source table or SQL column" in schema_surface
     assert "names this field's distinct role" in schema_surface
@@ -1381,11 +1381,14 @@ async def test_submit_draft_requires_exact_observed_string_values(
 
     message = await controller.submit(_partially_rewritten_string_payload())
 
-    assert "Label Grounding Policy violation" in message
-    assert "copy grounded values exactly" in message
+    assert "Label Grounding Policy reminder" in message
     assert "Do not shorten names" not in message
     assert "exact raw value from the chosen tool response row" not in message
     assert "Ungrounded values included" in message
+    assert controller.last_feedback_error_codes == (
+        "label_values_not_grounded",
+        "answer_contract_evidence_missing",
+    )
 
 @pytest.mark.asyncio
 async def test_submit_draft_too_easy_feedback_preserves_readable_path(
@@ -1557,7 +1560,8 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
 
     message = await controller.submit(payload)
 
-    assert "Every answer_contract phrase" in message
+    assert "every answer_contract phrase" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None
 
 
@@ -1596,7 +1600,7 @@ async def test_submit_draft_rejects_binding_phrase_absent_from_request(
 
     message = await controller.submit(payload)
 
-    assert "Every answer_contract phrase" in message
+    assert "every answer_contract phrase" in message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None
 
@@ -1627,7 +1631,7 @@ def test_submit_draft_reports_malformed_answer_contract_as_feedback(
         error=exc_info.value,
     )
 
-    assert "answer_contract must be a valid JSON object" in message
+    assert "answer_contract is a valid JSON object" in message
     assert "malformed JSON string" in message
     assert controller.attempts == []
     assert controller.submissions_left() == 2
@@ -1825,6 +1829,21 @@ async def test_submit_draft_treats_list_limit_one_as_rows_array(
             ),
         }
     )
+    raw_payload = payload.model_dump(mode="json")
+    raw_payload["answer_contract"] = {
+        **raw_payload["answer_contract"],
+        "output_bindings": [
+            {
+                "label_field": "대여일",
+                "requested_by_phrase": "대여 일자",
+            },
+            {
+                "label_field": "반납예정일",
+                "requested_by_phrase": "반납 예정일",
+            },
+        ],
+    }
+    payload = SubmitDraftPayload.model_validate(raw_payload)
     _record_query_evidence(
         controller,
         payload.label,
@@ -1963,7 +1982,7 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
 
     message = await controller.submit(payload)
 
-    assert "List Determinism Policy violation" in message
+    assert "List Determinism Policy reminder" in message
     assert "does not uniquely determine" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
@@ -2101,8 +2120,8 @@ async def test_submit_draft_rejects_multirow_list_without_order_by(
 
     message = await controller.submit(payload)
 
-    assert "List Determinism Policy violation" in message
-    assert "current query/order evidence" in message
+    assert "List Determinism Policy reminder" in message
+    assert "does not uniquely determine" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
@@ -2183,7 +2202,7 @@ async def test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker(
 
     message = await controller.submit(payload)
 
-    assert "List Determinism Policy violation" in message
+    assert "List Determinism Policy reminder" in message
     assert "unseen order keys" not in message
     assert "query.order_by tie-breakers" not in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
@@ -2248,8 +2267,8 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
 
     message = await controller.submit(payload)
 
-    assert "blocked handle value that is not present in entity" in message
-    assert "submitted entity's handle" in message
+    assert "hidden row-scope handles" in message
+    assert "must be anchored in entity" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_hidden_filter_unanchored",
     )
@@ -2304,7 +2323,7 @@ async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
 
     message = await controller.submit(payload)
 
-    assert "explicitly marked internal or blocked" in message
+    assert "field marked internal or blocked" in message
     assert "is_handle: true" not in message
     assert controller.accepted_draft is None
 
@@ -2604,6 +2623,12 @@ async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
                     limit=1,
                     limit_phrase="첫 1명",
                 ),
+                "output_bindings": [
+                    {
+                        "label_field": "first_name",
+                        "requested_by_phrase": "배우 이름",
+                    }
+                ],
                 "order_bindings": [
                     {
                         "direction": "asc",
@@ -2689,7 +2714,7 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
 
     second_message = await controller.submit(second_payload)
 
-    assert "Difficulty-Up Policy violation" in second_message
+    assert "Difficulty-Up Policy reminder" in second_message
     assert "preserving the evaluated task" in second_message
     assert "one grounded strengthening" in second_message
     assert controller.accepted_draft is None
@@ -2767,6 +2792,24 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
                         "requested_by_phrase": "최근 5건",
                     }
                 ],
+                "output_bindings": [
+                    {
+                        "label_field": "admittime",
+                        "requested_by_phrase": "입원일",
+                    },
+                    {
+                        "label_field": "dischtime",
+                        "requested_by_phrase": "퇴원일",
+                    },
+                    {
+                        "label_field": "admission_type",
+                        "requested_by_phrase": "입원 유형",
+                    },
+                    {
+                        "label_field": "admission_location",
+                        "requested_by_phrase": "입원 경로",
+                    },
+                ],
             },
         }
     )
@@ -2834,7 +2877,7 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
 
     second_message = await controller.submit(weakened_payload)
 
-    assert "Difficulty-Up Policy violation" in second_message
+    assert "Difficulty-Up Policy reminder" in second_message
     assert "preserving the evaluated task" in second_message
     assert "one grounded strengthening" in second_message
     drifted_label = [
@@ -2967,7 +3010,7 @@ async def test_submit_draft_too_easy_rejects_renamed_same_scalar_value(
 
     second_message = await controller.submit(second_payload)
 
-    assert "Difficulty-Up Policy violation" in second_message
+    assert "Difficulty-Up Policy reminder" in second_message
     assert "canonical answer itself must change" in second_message
     assert controller.accepted_draft is None
 

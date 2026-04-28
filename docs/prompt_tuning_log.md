@@ -5189,3 +5189,39 @@ Solver 30/30 완료 결과:
   failed`; failures are in existing `tests/test_synthesis_runtime.py`
   feedback-message expectations and `tests/test_synthesis_proof_environment.py`
   proof fixture acceptance, outside this runtime diagnostics patch.
+
+## Iteration 122 — Align tests and proof fixture with reminder/binding contracts
+
+- **Question**:
+  What caused the 15 full-suite failures after Iteration 121, and should the
+  fix change runtime behavior or test/schema surfaces?
+- **Finding**:
+  The failures were from two stale surfaces. First, after the
+  prompt/feedback-source cleanup, feedback text intentionally says policy
+  `reminder` instead of `violation`; several tests still asserted old exact
+  text. Second, list `answer_contract` validation now requires field/order
+  bindings for exact request-to-label grounding, but older list fixtures and
+  the scripted proof composer still omitted those bindings.
+- **Change**:
+  Updated tests to assert reminder text and stable `last_feedback_error_codes`
+  instead of old violation phrasing. Added list output bindings to fixtures
+  whose purpose is to reach calibration or acceptance rather than fail on
+  binding. Updated the proof scripted request and submit payload so every
+  returned list field is requested and bound. Clarified the submit_draft tool
+  schema description: list labels require one output binding per returned field;
+  scalar labels may omit it when the answer phrase already binds the result.
+- **Why this follows the principles**:
+  No new validator or heuristic was added. Tool schema description now matches
+  the tool-local validation contract, and feedback tests now reflect the
+  prompt-first/reminder-only policy rather than reintroducing "feedback as
+  instruction" wording.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_proof_environment.py::test_run_proof_task_commits_and_exports_bundle -q`
+  passed (`55 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/proof_environment.py tests/test_synthesis_runtime.py tests/test_synthesis_proof_environment.py`
+  passed.
+
+  Full `uv run pytest` passed (`466 passed`).
+
+  `git diff --check` passed.
