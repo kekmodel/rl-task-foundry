@@ -5540,6 +5540,59 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 139 — Too-easy feedback must preserve the evaluated task
+
+- **질문**:
+  Iteration 138 뒤 단일 smoke에서 source-sensitive choice 문제는 줄었는가, 그리고
+  too-easy recovery가 기존 task를 보존하며 난이도를 올리는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_source_choice_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted되지 않고 `MaxTurnsExceeded`로 끝났다.
+
+  - first feedback: `answer_contract_order_ambiguous`
+  - second feedback: `answer_contract_binding_missing`
+  - third submit request: `이번 중환자실 입원 중 가장 최근에 투여된 약물 5가지와 투여 시작 시간, 약물 이름, 투여량, 단위, 기록 시간을 알려주세요. 동일한 투여 시간에는 약물 이름 순서로 정렬해 주세요.`
+  - third submit pass rate: `8/8 = 1.0`
+  - third submit status: rejected as too easy / too direct
+  - final failure: `openrouter/moonshotai/kimi-k2.5:MaxTurnsExceeded`
+
+  중요한 점은 third submit 자체는 clean-good but too easy였다. 모든 solver가 같은 canonical
+  answer를 찾았고, source-sensitive normalized choice 문제도 없었다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: hard-good rejected because too easy. 세 번째 후보는 ICU stay의 inputevents에서
+  최신 약물 5개를 `starttime desc, medication_name asc`로 정렬했고, 투여 시작 시간, 약물명,
+  투여량, 단위, 기록 시간을 반환했다. solver 8/8이 맞췄으므로 request/label alignment는 좋다.
+  다만 pass rate 1.0이라 현재 band에서는 학습용 난이도가 너무 낮아 rejection이 맞다.
+
+  문제는 rejection 이후 recovery다. composer reasoning은 "현재 anchor/row set에 한 필드나
+  관계를 추가"해야 한다고 잠깐 인식했지만 곧 diagnosis, pharmacy status count 등 다른 topic/table
+  family로 이동했다. 이는 prompt의 Difficulty-Up Policy와 맞지 않는다. feedback 문구가
+  "canonical label을 바꿔라"를 강조하면서 기존 task 보존을 충분히 상기하지 못한 것이 원인이다.
+- **변경**:
+  durable policy는 이미 prompt에 있다. 따라서 prompt를 새로 늘리지 않고 feedback reminder를
+  정책 상기 역할에 맞게 수정했다.
+
+  - `_too_easy_retry_guidance`: current anchor, target, row set/query path, source meanings를
+    보존하라고 명시했다.
+  - same task 안에서 one grounded visible field, relationship, or coherent constraint를
+    새 evidence로 추가하라고 명시했다.
+  - topic/table family를 바꾸지 말라고 명시했다.
+
+  이 변경은 새로운 정책을 feedback에만 추가한 것이 아니다. 기존 Difficulty-Up Policy의
+  "preserve kind, anchor, target, row set/query path"와 "add one coherent field/relationship"
+  원칙을 feedback에서 상기하도록 한 것이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_preserves_readable_path tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_is_list_aware tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract tests/test_synthesis_runtime.py::test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline tests/test_synthesis_runtime.py::test_submit_draft_too_easy_rejects_renamed_same_scalar_value -q`
+  통과 (`5 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_messages.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 138 — Source-sensitive fields must not add normalized choices
 
 - **질문**:

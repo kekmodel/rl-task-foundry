@@ -1479,6 +1479,9 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "needs more specificity" in message
     assert "Policy reminder: Difficulty-Up Policy" in message
     assert "specificity feedback on the current draft" in message
+    assert "Preserve the current anchor, target, row set/query path" in message
+    assert "source meanings" in message
+    assert "Do not switch topic or table family" in message
     assert "Current answer kind: scalar" in message
     assert "append, do not replace, any new answer field" not in message
     assert "Ask for it in user_request and answer_contract" not in message
@@ -1532,6 +1535,9 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "needs more specificity" in message
     assert "Policy reminder: Difficulty-Up Policy" in message
     assert "specificity feedback on the current draft" in message
+    assert "Preserve the current anchor, target, row set/query path" in message
+    assert "one grounded visible field, relationship, or coherent constraint" in message
+    assert "Do not switch topic or table family" in message
     assert "Current answer kind: list" in message
     assert "append, do not replace, any new answer field" not in message
     assert "Ask for it in user_request and answer_contract" not in message
