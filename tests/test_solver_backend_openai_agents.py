@@ -559,7 +559,8 @@ def test_submit_result_tool_uses_task_specific_object_schema() -> None:
     )
     assert "Preserve capitalization" in schema["properties"]["delivery_status"]["description"]
     assert schema["additionalProperties"] is False
-    assert tool.description == "Submit the final structured result."
+    assert "Submit the final structured result" in tool.description
+    assert "Plain text final answers are invalid" in tool.description
 
 
 def test_submit_result_tool_wraps_non_object_roots() -> None:
@@ -816,7 +817,7 @@ def test_extract_submission_output_rejects_python_repr_success_payload():
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_solver_backend_records_missing_submit_in_metadata(
+async def test_openai_agents_solver_backend_continues_after_missing_submit_result(
     monkeypatch,
 ):
     episode = _sample_episode()
@@ -839,11 +840,42 @@ async def test_openai_agents_solver_backend_records_missing_submit_in_metadata(
             self.kwargs = kwargs
 
     class FakeRunner:
-        @staticmethod
-        async def run(agent, input, max_turns, session=None):
+        calls: list[dict[str, object]] = []
+
+        @classmethod
+        async def run(cls, agent, input, max_turns, session=None):
             del agent, max_turns, session
+            cls.calls.append({"input": input})
+            if len(cls.calls) == 1:
+                return SimpleNamespace(
+                    final_output='{"delivery_status":"IN_TRANSIT"}',
+                    _current_turn=1,
+                    context_wrapper=SimpleNamespace(
+                        usage=SimpleNamespace(
+                            requests=1,
+                            input_tokens=5,
+                            output_tokens=3,
+                            total_tokens=8,
+                        )
+                    ),
+                    to_input_list=lambda mode="preserve_all": [
+                        {"role": "user", "content": input},
+                        {
+                            "role": "assistant",
+                            "content": '{"delivery_status":"IN_TRANSIT"}',
+                        },
+                    ],
+                    new_items=["tool-call(delivery_lookup)"],
+                )
+            assert isinstance(input, list)
+            assert input[-1]["role"] == "user"
+            assert "plain text final answers are invalid" in input[-1]["content"]
+            assert "submit_result" in input[-1]["content"]
             return SimpleNamespace(
-                final_output='{"delivery_status":"IN_TRANSIT"}',
+                final_output={
+                    "submitted": True,
+                    "answer": {"delivery_status": "IN_TRANSIT"},
+                },
                 _current_turn=1,
                 context_wrapper=SimpleNamespace(
                     usage=SimpleNamespace(
@@ -853,8 +885,8 @@ async def test_openai_agents_solver_backend_records_missing_submit_in_metadata(
                         total_tokens=8,
                     )
                 ),
-                to_input_list=lambda mode="preserve_all": [{"role": "user", "content": input}],
-                new_items=["tool-call(delivery_lookup)"],
+                to_input_list=lambda mode="preserve_all": input,
+                new_items=["tool-call(submit_result)"],
             )
 
     monkeypatch.setattr(
@@ -891,13 +923,20 @@ async def test_openai_agents_solver_backend_records_missing_submit_in_metadata(
 
     result = await backend.run(episode)
 
-    assert result.status == "invalid_submit"
-    assert result.termination_reason == "missing_submit_result"
-    assert result.raw_output_text == ""
-    assert result.structured_output is None
-    assert result.termination_metadata["final_output_preview"] == (
-        '{"delivery_status":"IN_TRANSIT"}'
-    )
+    assert len(FakeRunner.calls) == 2
+    assert result.status == "completed"
+    assert result.termination_reason == "submitted"
+    assert result.raw_output_text == '{"delivery_status":"IN_TRANSIT"}'
+    assert result.structured_output == {"delivery_status": "IN_TRANSIT"}
+    assert result.turn_count == 2
+    assert result.token_usage == {
+        "requests": 2,
+        "input_tokens": 10,
+        "output_tokens": 6,
+        "total_tokens": 16,
+    }
+    assert result.termination_metadata["protocol_feedback_events"] == 1
     assert result.termination_metadata["run_items"] == [
-        {"type": "str", "text_preview": "tool-call(delivery_lookup)"}
+        {"type": "str", "text_preview": "tool-call(delivery_lookup)"},
+        {"type": "str", "text_preview": "tool-call(submit_result)"},
     ]

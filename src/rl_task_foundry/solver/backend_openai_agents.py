@@ -98,6 +98,32 @@ def _extract_tool_calls(run_result: Any) -> list[dict[str, Any]]:
     return tool_calls
 
 
+def _add_token_usage(
+    total: dict[str, int],
+    usage: dict[str, int],
+) -> None:
+    for key, value in usage.items():
+        total[key] = total.get(key, 0) + int(value)
+
+
+def _append_missing_submit_feedback_input(run_result: Any) -> list[object] | None:
+    to_input_list = getattr(run_result, "to_input_list", None)
+    if not callable(to_input_list):
+        return None
+    continuation = list(to_input_list(mode="preserve_all"))
+    continuation.append(
+        {
+            "role": "user",
+            "content": (
+                "Tool schema reminder: plain text final answers are invalid. "
+                "Call submit_result with the final structured answer matching "
+                "its schema. Do not end with text only."
+            ),
+        }
+    )
+    return continuation
+
+
 def _persist_reasoning_records(
     *,
     event_logger: object | None,
@@ -225,7 +251,10 @@ def _make_submit_result_tool(output_schema: OutputSchemaContract) -> object:
 
     return FunctionTool(
         name="submit_result",
-        description="Submit the final structured result.",
+        description=(
+            "Submit the final structured result. Plain text final answers are "
+            "invalid; call this tool once the answer is ready."
+        ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
         strict_json_schema=True,
@@ -465,13 +494,40 @@ class OpenAIAgentsSolverBackend:
         session = self._build_session(sdk, task_id)
 
         started_at = perf_counter()
+        run_input: str | list[object] = rendered_user_prompt
+        run_result: Any | None = None
+        total_turn_count = 0
+        token_usage: dict[str, int] = {}
+        run_items: list[Any] = []
+        protocol_feedback_events = 0
         try:
-            run_result = await sdk.Runner.run(
-                agent,
-                rendered_user_prompt,
-                max_turns=self.runtime_config.max_turns,
-                session=session,
-            )
+            while True:
+                turns_left = max(1, self.runtime_config.max_turns - total_turn_count)
+                run_result = await sdk.Runner.run(
+                    agent,
+                    run_input,
+                    max_turns=turns_left,
+                    session=session,
+                )
+                total_turn_count += max(1, _extract_turn_count(run_result))
+                _add_token_usage(token_usage, _extract_token_usage(run_result))
+                run_items.extend(getattr(run_result, "new_items", []) or [])
+
+                submitted_answer_text, _, status, _, _ = _extract_submission_output(
+                    run_result.final_output
+                )
+                missing_submit = submitted_answer_text is None and status == "completed"
+                if not missing_submit:
+                    break
+                if protocol_feedback_events >= 1:
+                    break
+                if total_turn_count >= self.runtime_config.max_turns:
+                    break
+                continuation_input = _append_missing_submit_feedback_input(run_result)
+                if continuation_input is None:
+                    break
+                protocol_feedback_events += 1
+                run_input = continuation_input
         except Exception as exc:
             latency_ms = int((perf_counter() - started_at) * 1000)
             raw_output_text = _failure_raw_output_text(exc)
@@ -508,6 +564,7 @@ class OpenAIAgentsSolverBackend:
                 termination_reason=exc.__class__.__name__,
                 termination_metadata=termination_metadata,
             )
+        assert run_result is not None
         latency_ms = int((perf_counter() - started_at) * 1000)
 
         (
@@ -522,12 +579,14 @@ class OpenAIAgentsSolverBackend:
         # orchestrator can include it in the solver_run_completed event.
         metadata = dict(termination_metadata)
         metadata["run_items"] = [
-            _summarize_run_item(item) for item in getattr(run_result, "new_items", [])
+            _summarize_run_item(item) for item in run_items
         ]
+        if protocol_feedback_events:
+            metadata["protocol_feedback_events"] = protocol_feedback_events
         reasoning_path, reasoning_items = _persist_reasoning_records(
             event_logger=self.event_logger,
             records=_extract_raw_reasoning_records(
-                getattr(run_result, "new_items", []) or []
+                run_items
             ),
             provider=self.solver_config.provider,
             model=self.solver_config.model,
@@ -549,9 +608,9 @@ class OpenAIAgentsSolverBackend:
                 raw_output_text="",
                 structured_output=None,
                 explicit_memory_events=[],
-                token_usage=_extract_token_usage(run_result),
+                token_usage=token_usage,
                 latency_ms=latency_ms,
-                turn_count=_extract_turn_count(run_result),
+                turn_count=total_turn_count,
                 status="invalid_submit",
                 termination_reason="missing_submit_result",
                 termination_metadata=metadata,
@@ -567,9 +626,9 @@ class OpenAIAgentsSolverBackend:
             raw_output_text=raw_output_text,
             structured_output=structured_output,
             explicit_memory_events=[],
-            token_usage=_extract_token_usage(run_result),
+            token_usage=token_usage,
             latency_ms=latency_ms,
-            turn_count=_extract_turn_count(run_result),
+            turn_count=total_turn_count,
             status=status,
             termination_reason=termination_reason,
             termination_metadata=metadata,

@@ -5540,6 +5540,59 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 147 — Solver text-only answers must retry through submit_result
+
+- **질문**:
+  Iteration 146의 Kimi required tool choice 변경 뒤 composer no-tool-call 문제가 사라지고,
+  accepted/rejected 데이터 품질은 어떤가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_kimi_required_tool_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted됐다.
+
+  - 첫 submit: ICU outputevents 최근 5건, `answer_contract_order_ambiguous`
+  - 두 번째 submit: itemid hidden tie-break를 사용해 `answer_contract_order_ambiguous`
+  - 세 번째 submit: `charttime desc`, `d_items.label asc`로 자연 visible tie-break 수리
+  - pass rate: `7/8 = 0.875`, CI low `0.529`, CI high `0.994`
+
+  Iteration 146의 목표였던 composer no-tool-call 문제는 사라졌다. 첫 composer turn에서
+  실제 `neighborhood` tool call이 발생했고, 총 10개 composer data/query call 뒤
+  `submit_draft` accepted까지 도달했다.
+- **정성 평가**:
+  accepted data: clean but high-pass. ICU stay hidden context에서 outputevents를 조회하고,
+  최신 측정 시간 내림차순 및 같은 측정 시간에서 항목 이름 오름차순 tie-break가
+  request/contract/query에 모두 일치한다. label fields도 `output_time`, `item_name`,
+  `value`, `unit`로 사용자에게 자연스럽고, hidden handle을 노출하지 않는다.
+
+  rejected data: low-quality rejected. 첫 draft는 시간 동점이 있어 list membership/order가
+  유일하지 않았고, 두 번째 draft는 request에는 항목 이름 tie-break를 썼지만 실제 query는
+  blocked `itemid`로 tie-break했다. 두 rejection 모두 정확히 막혔다.
+
+  다만 solver 1개는 정답을 텍스트/표로 정확히 작성했지만 `submit_result`를 호출하지 않아
+  `invalid_submit`으로 카운트됐다. 이건 좋은 어려움도 저품질 데이터도 아니고 solver protocol
+  실패다. 따라서 현재 `0.875`는 실제 난이도보다 낮게 측정됐을 가능성이 있다. 이 상태로
+  accepted를 신뢰하면 too-easy task를 band 안으로 잘못 넣을 수 있다.
+- **변경**:
+  solver tool schema와 backend를 보강했다.
+
+  - `submit_result` tool description에 plain text final answer는 invalid이며 답이 준비되면
+    이 tool을 호출해야 한다고 명시했다.
+  - solver backend가 final output text만 받고 `submit_result`가 없으면, 한 번만 continuation
+    feedback을 넣어 같은 답을 `submit_result`로 제출하게 한다.
+  - feedback은 tool-local contract reminder다. 정답 내용이나 DB literal을 주입하지 않으므로
+    precision-100 protocol recovery로 본다.
+
+  이 변경은 solver를 쉽게 만드는 것이 아니라 평가 계측을 바로잡는 변경이다. solver가 틀린
+  값을 `submit_result`하면 그대로 오답으로 평가된다.
+- **검증**:
+  `uv run pytest tests/test_solver_backend_openai_agents.py::test_submit_result_tool_uses_task_specific_object_schema tests/test_solver_backend_openai_agents.py::test_openai_agents_solver_backend_continues_after_missing_submit_result tests/test_solver_backend_openai_agents.py::test_openai_agents_solver_backend_returns_solver_result -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/solver/backend_openai_agents.py tests/test_solver_backend_openai_agents.py`
+  통과.
+
 ## Iteration 146 — Kimi must use required tool choice
 
 - **질문**:
