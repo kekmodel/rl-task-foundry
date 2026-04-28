@@ -273,7 +273,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "preserve kind, anchor, target, row set/query path" in instructions
     assert "keep filters, order, limit" in instructions
     assert "output fields/source meanings" in instructions
-    assert "append exactly one user-visible field" in instructions
+    assert "append exactly one grounded visible field" in instructions
+    assert "direct-relationship field/aggregate" in instructions
+    assert "row-preserving constraint" in instructions
     assert "ask for it in user_request/answer_contract" in instructions
     assert "Do not shrink the fixed list" in instructions
     assert "remove/rename/replace fields" in instructions
@@ -298,7 +300,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "pointer to an existing named policy" in instructions
     assert "Preserve anchored need/language" in instructions
     assert "change the smallest failing part" in instructions
-    assert "one source of policy prevents split guidance" in instructions
+    assert "one policy source prevents split guidance" in instructions
 
     # User-facing language and ID guidance stay general and English.
     assert "# Request Contract" in instructions

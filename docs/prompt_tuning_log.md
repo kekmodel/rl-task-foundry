@@ -5540,6 +5540,54 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
+
+- **질문**:
+  Iteration 143의 non-null filter validator 뒤 단일 smoke에서 저품질 accepted가 사라지고,
+  too-easy recovery가 안정적으로 band에 들어가는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_non_null_binding_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 accepted되지 않고 `MaxTurnsExceeded`로 끝났다.
+
+  - first submit: admission history, pass rate `8/8 = 1.0`, too easy
+  - second submit: prescription list로 topic/table family 변경, `answer_contract_not_incremental`
+  - third submit: admission history + insurance, pass rate `8/8 = 1.0`, too easy
+  - fourth submit: admission history + insurance + marital status, pass rate `8/8 = 1.0`, too easy
+  - final failure: `MaxTurnsExceeded`
+
+- **정성 평가**:
+  accepted data: 없음. 저품질 accepted도 없음.
+
+  rejected data: first/third/fourth는 clean-good but too easy. admissions row list의
+  visible fields를 하나씩 늘렸고 request/label alignment는 깨끗했다. 그러나 강한 solver 8명이
+  계속 모두 맞췄으므로 학습 데이터로는 너무 쉽다. second submit은 입원 기록에서 처방약 목록으로
+  task family를 바꾼 저품질 recovery였고 validator가 `answer_contract_not_incremental`로 잘 막았다.
+
+  핵심 병목은 list Difficulty-Up Policy의 prompt 문구다. feedback은 "field, relationship, or
+  coherent constraint"를 허용하지만 prompt의 list 전용 문장은 "append exactly one user-visible
+  field"로 좁게 읽힌다. 이 때문에 composer가 보험 정보, 결혼 여부처럼 같은 row의 쉬운 field만
+  계속 추가했다.
+- **변경**:
+  지침 이원화를 줄이기 위해 prompt를 feedback과 맞췄다.
+
+  - list retry는 기존 filters/order/limit/row set/output source meanings를 보존한다.
+  - 추가 난이도는 exactly one grounded visible field, direct-relationship field/aggregate, 또는
+    row-preserving constraint 중 하나로 올릴 수 있다.
+  - row-excluding filter와 output/order/cardinality 변경을 섞지 말라는 금지는 유지한다.
+  - 길이 예산을 지키기 위해 인접 문구를 압축했다. 최종 prompt 길이: `7983`.
+
+  이 변경은 prompt-first 원칙에 따른 durable policy 정렬이다. feedback은 이미 같은 정책을
+  상기하고 있었고, 이번 변경으로 source of truth를 맞췄다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+  통과 (`1 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py`
+  통과.
+
 ## Iteration 143 — Non-null row-set filters need a dedicated constraint phrase
 
 - **질문**:
