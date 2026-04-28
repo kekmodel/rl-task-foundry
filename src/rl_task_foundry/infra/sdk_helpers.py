@@ -84,8 +84,6 @@ _AUTO_TOOL_CHOICE_MODEL_MARKERS: tuple[str, ...] = (
     "deepseek-r",
     "reasoning",
     "minimax",
-    "kimi",
-    "moonshot",
 )
 
 
@@ -95,7 +93,8 @@ def tool_choice_for_model(model: str) -> str:
     Some OpenAI-compatible gateways reject or mishandle
     `tool_choice="required"` and tool-object forms. Relax to `"auto"` for
     those; keep `"required"` for models where the endpoint supports
-    SDK-enforced tool-use each turn.
+    SDK-enforced tool-use each turn. Kimi/Moonshot is kept required because
+    OpenRouter accepts it and synthesis depends on strict tool-only turns.
     """
 
     lowered = model.lower()

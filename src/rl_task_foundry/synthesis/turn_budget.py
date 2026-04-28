@@ -15,5 +15,5 @@ def build_tool_call_budget_instruction(*, max_tool_calls: int) -> str:
         "- Max 3 data tools before first `submit_draft`.\n"
         "- Specificity feedback reminds Difficulty-Up Policy.\n"
         "- If `submit_draft` says the conversation is terminated, stop.\n"
-        "- Budget exhaustion without submission ends conversation."
+        "- Plain text is invalid; call a tool every turn."
     )

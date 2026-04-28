@@ -243,6 +243,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Draft Submission Budget" in instructions
     assert "tool calls" in instructions
     assert "submit_draft" in instructions
+    assert "Plain text is invalid" in instructions
     assert "# Tools" not in instructions
     assert "# Composer Tools" not in instructions
     assert "composer DSL" not in instructions

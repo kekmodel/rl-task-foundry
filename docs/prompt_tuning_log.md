@@ -5540,6 +5540,54 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 146 — Kimi must use required tool choice
+
+- **질문**:
+  Iteration 145의 duplicate-row repair 보강 뒤 같은 smoke를 다시 돌렸을 때, composer가
+  첫 탐색 도구도 호출하지 않고 plain text/reasoning만 반복하는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_duplicate_repair_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 `synthesis_failed`로 끝났고, error code는 `composer_no_tool_calls`였다.
+  `composer_submit_draft_missing` feedback이 5번 발생했지만 `schema_map`, `sample`,
+  `neighborhood`, `query`, `submit_draft` 중 어떤 도구도 호출되지 않았다.
+
+  reasoning sidecar를 보면 composer는 매번 "후보 entity를 고르고 schema/neighborhood를
+  보겠다"고 생각했지만, 실제 SDK tool call로 전환하지 못했다. feedback 뒤에도 동일하게
+  reasoning만 생성했다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: infra/protocol failure. 데이터가 어렵거나 저품질인 문제가 아니라,
+  composer 실행 표면이 tool-only 역할 계약을 강제하지 못한 문제다. low-quality accepted는
+  발생하지 않았지만, 실험 비용을 모두 소모하므로 우선순위가 높다.
+- **원인 분석**:
+  prompt에는 `submit_draft` 사용과 tool-call budget이 있었지만, "plain text turn은 무효"라는
+  실행 계약이 충분히 명시되지 않았다. 더 큰 원인은 `tool_choice_for_model()`이 Kimi/Moonshot을
+  `auto`로 예외 처리한 것이다. 이전 Iteration 63의 호환성 우회가 현재 OpenRouter Kimi에는
+  오히려 tool-only 실행을 약화시켰다.
+
+  최소 OpenRouter Kimi probe를 별도로 실행했고, `tool_choice="required"`에서 정상적으로
+  `ping` tool call이 반환됨을 확인했다. 따라서 이 변경은 추측이 아니라 현재 provider 표면에
+  대한 직접 검증에 기반한다.
+- **변경**:
+  - Kimi/Moonshot을 `tool_choice="required"` 대상으로 되돌렸다.
+  - Draft Submission Budget에 "Plain text is invalid; call a tool every turn."을 추가했다.
+  - 기존 ID 금지 문구는 테스트와 맞춰 "Do not invent ids"로 정리했다.
+
+  이 변경은 데이터 literal/token heuristic이 아니다. durable prompt가 tool-only 실행 계약을
+  소유하고, feedback은 그 계약 위반을 상기하는 구조를 유지한다.
+- **검증**:
+  prompt 길이 `7984`.
+
+  `uv run pytest tests/test_tool_choice_for_model.py tests/test_turn_budget_prompt.py tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_backend_openai_agents.py::test_synthesis_backend_continues_after_final_output_without_submit tests/test_synthesis_backend_openai_agents.py::test_synthesis_backend_continues_after_feedback_without_resubmit -q`
+  통과 (`15 passed`).
+
+  `uv run ruff check src/rl_task_foundry/infra/sdk_helpers.py src/rl_task_foundry/synthesis/turn_budget.py src/rl_task_foundry/synthesis/prompts.py tests/test_tool_choice_for_model.py tests/test_turn_budget_prompt.py tests/test_synthesis_prompts.py tests/test_synthesis_backend_openai_agents.py`
+  통과.
+
 ## Iteration 145 — Duplicate-row repair must not shrink the list
 
 - **질문**:

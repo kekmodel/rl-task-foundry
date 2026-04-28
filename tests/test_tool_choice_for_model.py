@@ -27,6 +27,6 @@ def test_tool_choice_is_auto_for_minimax_compatible_endpoint() -> None:
     assert tool_choice_for_model("MiniMax-M2.7") == "auto"
 
 
-def test_tool_choice_is_auto_for_kimi_compatible_endpoint() -> None:
-    assert tool_choice_for_model("moonshotai/kimi-k2.5") == "auto"
-    assert tool_choice_for_model("Kimi-K2.5") == "auto"
+def test_tool_choice_is_required_for_kimi_compatible_endpoint() -> None:
+    assert tool_choice_for_model("moonshotai/kimi-k2.5") == "required"
+    assert tool_choice_for_model("Kimi-K2.5") == "required"

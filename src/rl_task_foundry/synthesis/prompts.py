@@ -116,7 +116,7 @@ def build_synthesis_agent_instructions(
         "# Workflow\n"
         "1. Map: `schema_map`; choose a plausible root; the DB decides the domain\n"
         "2. Observe via `sample`/`profile`/`query`; use `neighborhood` for "
-        "reachability. No invented/easy ids; hidden entity values must be grounded.\n"
+        "reachability. Do not invent ids; hidden entity values must be grounded.\n"
         "3. Build a requestable label candidate: interesting, unique, "
         "verifiable, scoped, visible, deterministic, natural to ask for.\n"
         "4. Check requestability: a realistic customer can ask exact fields, "
