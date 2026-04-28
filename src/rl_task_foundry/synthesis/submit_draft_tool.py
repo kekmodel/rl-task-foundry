@@ -170,7 +170,8 @@ class AnswerOutputBinding(StrictModel):
             "For status/type/category/sequence-like fields, preserve the "
             "source representation; do not turn source status text into "
             "boolean completion wording, or source record sequence into "
-            "generated display rank."
+            "generated display rank. Do not add parenthetical normalized "
+            "choices for source type/category/status fields."
         ),
     )
 

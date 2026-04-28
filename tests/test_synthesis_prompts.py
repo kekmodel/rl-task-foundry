@@ -323,9 +323,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not attach `entity` to a global report" in instructions
     assert "Copy visible context values" in instructions
     assert "latest scoped query evidence" in instructions
-    assert "Keep request realistic/compact" in instructions
+    assert "Keep request compact" in instructions
     assert "Field keys stay in JSON" in instructions
-    assert "avoid schema-like aliases in parentheses" in instructions
+    assert "avoid aliases/choices in parentheses" in instructions
     assert "long tie-breaks" in instructions
     assert "mechanical field lists" in instructions
     assert "do not expose it" in instructions
@@ -356,6 +356,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Source-sensitive fields" in instructions
     assert "same source role used by the query path" in instructions
     assert "request wording must name it" in instructions
+    assert "no normalized choices" in instructions
     assert "Distinguish source sequence from display rank" in instructions
     assert "Broad field words are invalid" in instructions
     assert "Keep output names faithful" in instructions

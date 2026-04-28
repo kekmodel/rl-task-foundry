@@ -5540,6 +5540,60 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 138 — Source-sensitive fields must not add normalized choices
+
+- **질문**:
+  Iteration 137 뒤 단일 smoke에서 non-null/date 보강이 다른 task shape에서도
+  저품질 accepted를 막는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_non_null_filter_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  후보는 accepted되지 않았다. calibration에서 막혔다.
+
+  - first feedback: `answer_contract_phrase_missing`, `answer_contract_order_ambiguous`
+  - second feedback: `answer_contract_order_ambiguous`
+  - final request: `이 중환자실 입원 기간 동안 가장 최근에 받은 약물 및 수액 주입 기록 5개를 시간 순서대로 알려주세요. 각 기록의 약물명, 유형(약물/수액), 투여량, 단위, 투약 상태, 투여 시작 시간, 투여 종료 시간, 기록 시간을 포함해서 보여주세요. 시작 시간이 같은 경우 종료 시간이 늦은 순서로, 종료 시간도 같은 경우 기록 시간이 늦은 순서로, 모두 같은 경우 약물명 가나다순으로 정렬해주세요.`
+  - pass rate: `1/8 = 0.125`
+  - CI low/high: `0.0064 / 0.4707`
+  - solver failed runs: `0`
+
+  low-quality accepted는 발생하지 않았다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. canonical answer는 `event_type`에 source category
+  value인 `Fluids/Intake`, `Medications`를 넣었다. 하지만 request는 `유형(약물/수액)`이라고
+  써서 source category text가 아니라 사용자가 이해하기 쉬운 normalized Korean category를
+  요구하는 것처럼 보인다. 실제 solver 대부분은 `event_type`을 `수액`/`약물`로 제출했고,
+  한 solver만 source text를 그대로 제출해 match했다.
+
+  `status`도 source text `Stopped`, `FinishedRunning`을 그대로 요구하는 label인데, request의
+  "투약 상태"는 source representation 보존을 충분히 고정하지 않는다. 이 문제는 Iteration 135의
+  source-sensitive policy와 같은 계열이며, 이번에는 parenthetical choice wording이 ambiguity를
+  더 키웠다.
+
+  결론: calibration rejection은 바람직하다. 이 후보는 어려운 좋은 문제가 아니라 composer가
+  source-sensitive type/status field를 normalized category처럼 요청한 저품질 후보다.
+- **변경**:
+  validator는 추가하지 않았다. `유형(약물/수액)`이 source category를 그대로 달라는 뜻인지
+  normalized display category를 달라는 뜻인지는 semantic 판단이다. 이를 특정 단어 또는
+  value로 막으면 리터럴 휴리스틱 금지 원칙을 어긴다.
+
+  대신 prompt-first/tool-local contract 원칙으로 다음을 보강했다.
+
+  - Request Contract: parentheses 안에 aliases/choices를 넣지 말라고 일반화했다.
+  - Label Contract: source-sensitive fields는 normalized choices를 추가하지 말라고 명시했다.
+  - `AnswerOutputBinding.requested_by_phrase` schema description: source type/category/status
+    fields에 parenthetical normalized choices를 추가하지 말라고 명시했다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_multirow_list_without_order_by tests/test_synthesis_runtime.py::test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key -q`
+  통과 (`11 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 137 — Non-null filters and date granularity must be explicit
 
 - **질문**:
