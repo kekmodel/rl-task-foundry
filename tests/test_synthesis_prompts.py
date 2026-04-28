@@ -272,6 +272,20 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "difficulty jump" in instructions
     assert "overconstrained/terminal feedback" in instructions
 
+    # Durable policies are named so feedback/tool descriptions can reference
+    # them without restating broad strategy.
+    assert "# Source Surface Policy" in instructions
+    assert "user-facing source surface" in instructions
+    assert "canonical query surface" in instructions
+    assert "Bad: the request can reasonably name one source surface" in instructions
+    assert "Good: the request names the selected source surface" in instructions
+    assert "hidden path guessing" in instructions
+    assert "# Feedback Handling Policy" in instructions
+    assert "not a new durable instruction source" in instructions
+    assert "pointer to an existing named policy" in instructions
+    assert "change the smallest failing part" in instructions
+    assert "one source of policy prevents split guidance" in instructions
+
     # User-facing language and ID guidance stay general and English.
     assert "# Customer Request" in instructions
     assert "configured target language" in instructions
@@ -302,7 +316,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "not final prose" in instructions
     assert "Use `answer_contract.kind='scalar'` only for aggregate answers" in instructions
     assert "Use `answer_contract.kind='list'` for selected rows" in instructions
-    assert "Copy label values from the latest successful `query(spec)` result" in instructions
+    assert "Label Grounding Policy" in instructions
+    assert "copy label values from the latest successful `query(spec)` result" in instructions
     assert "Do not reformat" in instructions
     assert "unrelated global answer is invalid" in instructions
     assert "Prefer user-visible non-handle values" in instructions
@@ -326,6 +341,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not restate tables, columns, operators, or SQL" in instructions
     assert "latest query result supplies structural evidence" in instructions
     assert "Every contract phrase must be an exact substring of `user_request`" in instructions
+    assert "List Determinism Policy" in instructions
     assert "single correct structured result" in instructions
     assert "fix membership, order, limit, and tie-breaks" in instructions
     assert "Row-set controls must be entity scope" in instructions

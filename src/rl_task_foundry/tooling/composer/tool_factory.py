@@ -616,15 +616,11 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "type": "array",
                 "description": (
                     "Filters define row membership over from/join aliases. "
-                    "Every filter must be justified by either the hidden "
-                    "entity scope or a customer-visible constraint stated in "
-                    "user_request and submit_draft.answer_contract. Do not "
-                    "add helper filters only to make the row set unique, "
-                    "shorter, or easier. Match the requested scope "
-                    "granularity: do not narrow a whole-context/history/list "
-                    "request to one child event or record unless the request "
-                    "asks for that specific event or record. Joined-table "
-                    "filters are allowed only under the same rule."
+                    "A filter is valid when it implements hidden entity scope "
+                    "or a customer-visible constraint stated in user_request "
+                    "and submit_draft.answer_contract. Do not use filters as "
+                    "hidden helper row-set controls; keep scope aligned with "
+                    "the Source Surface Policy."
                 ),
                 "items": {
                     "type": "object",
@@ -655,16 +651,12 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Selected row fields. Every selected field becomes a "
                     "canonical label field, so select only values the "
                     "user_request asks to receive. Use where/order_by for "
-                    "context, filters, and sorting without selecting those "
-                    "helper fields. Do not select profile/scope fields merely "
-                    "to prove which entity the request is about. Do not select "
-                    "constraint, filter, scope, ordering, or tie-break values "
-                    "unless the user also asks to receive those values. During "
-                    "specificity retries, keep prior selected fields and "
-                    "append new requested fields instead of replacing them. Prefer "
-                    "user-visible non-handle values; "
-                    "expose handle-like values only when evidence marks them "
-                    "user-visible and the request asks for that reference."
+                    "helper context without selecting those helper fields. "
+                    "Preserve output source meanings under the Source Surface "
+                    "Policy and Difficulty-Up Policy. Prefer user-visible "
+                    "non-handle values; expose handle-like values only when "
+                    "evidence marks them user-visible and the request asks for "
+                    "that reference."
                 ),
                 "items": {
                     "type": "object",
@@ -688,18 +680,10 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
             "order_by": {
                 "type": "array",
                 "description": (
-                    "Deterministic ordering. If user_request states top/latest/"
-                    "earliest, mirror that wording in submit_draft phrases. "
-                    "If user_request states a direction or ranking, such as "
-                    "larger/smaller first or ascending/descending, make "
-                    "query.order_by.direction match that wording exactly. "
-                    "When rows can share the primary sort key, use an "
-                    "answer-visible/reproducible tie-breaker only if "
-                    "user_request and answer_contract ask for that secondary "
-                    "order; selecting the field as output is not enough, and "
-                    "returning the tied rows is safer than inventing a "
-                    "secondary order. "
-                    "Otherwise choose a row set with unique visible ordering."
+                    "Deterministic ordering. Direction must match user_request "
+                    "wording exactly. Follow the List Determinism Policy for "
+                    "ties and limited lists; order_by must not introduce "
+                    "unrequested or hidden row-order controls."
                 ),
                 "items": {
                     "type": "object",
@@ -732,9 +716,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "description": (
                     "Fixed row cap. If the task asks for N items, use the "
                     "same N in user_request and "
-                    "submit_draft.answer_contract.limit_phrase. When limit "
-                    "cuts through rows with the same requested order key, "
-                    "choose a unique visible ordering or return the tied rows."
+                    "submit_draft.answer_contract.limit_phrase. Follow the "
+                    "List Determinism Policy when a limit shapes membership."
                 ),
             },
             "group_by": {

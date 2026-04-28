@@ -301,13 +301,8 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "independent sibling joins" in descriptions["query"]["$.spec.join"]
     assert "Filters define row membership" in descriptions["query"]["$.spec.where"]
     assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
-    assert "Do not add helper filters" in descriptions["query"]["$.spec.where"]
-    assert "Match the requested scope granularity" in descriptions["query"][
-        "$.spec.where"
-    ]
-    assert "do not narrow a whole-context/history/list request" in descriptions[
-        "query"
-    ]["$.spec.where"]
+    assert "hidden helper row-set controls" in descriptions["query"]["$.spec.where"]
+    assert "Source Surface Policy" in descriptions["query"]["$.spec.where"]
     assert "Blocked or internal handle values" in descriptions["query"][
         "$.spec.where[].value"
     ]
@@ -317,14 +312,11 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "select only values the user_request asks to receive" in descriptions[
         "query"
     ]["$.spec.select"]
-    assert "Do not select profile/scope fields" in descriptions["query"]["$.spec.select"]
-    assert "Do not select constraint, filter, scope" in descriptions[
-        "query"
-    ]["$.spec.select"]
-    assert "During specificity retries" in descriptions["query"]["$.spec.select"]
-    assert "append new requested fields instead of replacing them" in descriptions[
-        "query"
-    ]["$.spec.select"]
+    assert "Use where/order_by for helper context" in descriptions["query"][
+        "$.spec.select"
+    ]
+    assert "Source Surface Policy" in descriptions["query"]["$.spec.select"]
+    assert "Difficulty-Up Policy" in descriptions["query"]["$.spec.select"]
     assert "preserves the selected source column meaning" in descriptions[
         "query"
     ]["$.spec.select[].as"]
@@ -333,16 +325,13 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]["$.spec.select[].as"]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
-    assert "use an answer-visible/reproducible tie-breaker only if" in descriptions[
+    assert "Direction must match user_request wording exactly" in descriptions[
         "query"
     ]["$.spec.order_by"]
-    assert "query.order_by.direction match that wording exactly" in descriptions[
-        "query"
-    ]["$.spec.order_by"]
-    assert "selecting the field as output is not enough" in descriptions["query"][
+    assert "List Determinism Policy" in descriptions["query"][
         "$.spec.order_by"
     ]
-    assert "returning the tied rows is safer" in descriptions["query"][
+    assert "unrequested or hidden row-order controls" in descriptions["query"][
         "$.spec.order_by"
     ]
     assert "Match the direction or ranking stated in user_request" in descriptions[
@@ -350,11 +339,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]["$.spec.order_by[].direction"]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
-    assert "cuts through rows with the same requested order key" in descriptions[
-        "query"
-    ]["$.spec.limit"]
-    assert "answer-visible/reproducible" in descriptions["query"]["$.spec.order_by"]
-    assert "unique visible ordering" in descriptions["query"]["$.spec.order_by"]
+    assert "List Determinism Policy" in descriptions["query"]["$.spec.limit"]
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"
     ]

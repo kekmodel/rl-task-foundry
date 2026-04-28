@@ -3857,3 +3857,39 @@ Solver 30/30 완료 결과:
   must not become a shared prompt example or DB-specific common policy. Keep
   hard validators limited to precision-100 structural checks; do not add
   literal, token, or column-name heuristics.
+
+## Iteration 97 — Prompt as policy source, feedback as policy reminder
+
+- **Question**:
+  Apply the surface-ownership principle to the current composer guidance:
+  durable policy should live in the composer system instructions, tool
+  descriptions should carry only tool-local contracts, and feedback should
+  remind the composer of an existing policy rather than restating new
+  instructions.
+- **Change**:
+  Added named, DB-neutral system policies:
+  `Source Surface Policy`, `Feedback Handling Policy`, `Label Grounding Policy`,
+  and `List Determinism Policy`. The source-surface policy is the schema-neutral
+  generalization from iteration 96: the user-facing source surface and canonical
+  query surface must match, without naming MIMIC tables or domain values.
+- **Feedback cleanup**:
+  Shortened `submit_draft` feedback for grounding, list ordering, difficulty-up
+  non-incremental retries, and missing-submit protocol errors. The new messages
+  say which named policy was violated and point at the current failure evidence;
+  they no longer carry long duplicate retry strategies such as hidden tie-break
+  recipes or field-append instructions.
+- **Tool schema cleanup**:
+  Tightened the composer `query` schema descriptions for `where`, `select`,
+  `order_by`, and `limit`. They now state argument semantics and refer to named
+  policies where broader behavior is needed, instead of duplicating the full
+  prompt policy inside the tool description.
+- **Length budget**:
+  Kept `build_synthesis_agent_instructions(...)` under the existing 8k
+  character test budget by compressing existing prose while preserving the
+  role, customer-request, label, list-determinism, and difficulty-up rules.
+- **Verification**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py -q`
+  passed (`75 passed`). Extended backend-adjacent check also passed:
+  `uv run pytest tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py -q`
+  (`82 passed`). Ruff passed on the touched prompt, feedback, tool-schema, and
+  test files.

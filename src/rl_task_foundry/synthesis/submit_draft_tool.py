@@ -1140,15 +1140,15 @@ class SubmitDraftController:
         attempts_left_after = self.submissions_left() - 1
         primary = (
             "Plain final output is invalid for this role; the synthesis composer "
-            "must finish through submit_draft, not a text-only final answer."
+            "Workflow requires submit_draft, not a text-only final answer."
         )
         message = _render_structured_message(
             kind="FeedbackError",
             primary=primary,
             next_step=(
-                "Continue with data tools if more evidence is needed; when the "
-                "task draft is valid, call submit_draft. Do not end the run "
-                "with text only."
+                "Continue with data tools if more evidence is needed; call "
+                "submit_draft when the task draft is valid. Do not end the "
+                "run with text only."
             ),
             attempts_left=max(0, attempts_left_after),
         )
@@ -1627,13 +1627,13 @@ class SubmitDraftController:
                 "Rejected. label must be a valid JSON string."
             ),
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
-                "Rejected. The canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value. Schema orientation alone is not enough; only fields you actually observed in tool results are grounded. If the chosen surface is id-only, keep the same anchored user and switch to grounded counts, dates, amounts, statuses, ordering, or make new anchored tool calls until you observe readable fields."  # noqa: E501
+                "Rejected. Label Grounding Policy violation: the canonical answer contains blank string fields. Every answer field must contain a grounded, non-empty value observed in tool results."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
-                "Rejected. Some label values were not directly grounded in the observed tool results. Schema orientation alone is not enough; only use business strings, dates, and other readable values that you actually observed in real tool outputs, and copy them exactly as they appeared there. Do not shorten names, paraphrase labels, normalize timestamp formatting, or manufacture readable labels by wrapping an id in generic words such as 'record 17' or 'item 2'. If the chosen surface is id-only, keep the same anchored user and switch to counts, dates, amounts, statuses, ordering, make new anchored tool calls until you observe readable fields, or choose a better grounded topic for the same anchored user need."  # noqa: E501
+                "Rejected. Label Grounding Policy violation: some label values were not directly grounded in observed tool results, or were reformatted from observed values. Apply the policy to the current evidence and copy grounded values exactly."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED: (
-                "Rejected. After a specificity rejection, do not resubmit the same label or the same single-field answer value under a new field name. Strengthen the canonical answer itself with a new grounded step whose submitted value changes."  # noqa: E501
+                "Rejected. Difficulty-Up Policy violation: after a specificity rejection, the canonical answer itself must change through a grounded strengthening step."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_REQUIRED: (
                 "Rejected. answer_contract is required."
@@ -1654,7 +1654,7 @@ class SubmitDraftController:
                 "Rejected. The latest successful query does not contain the required structural evidence for this answer. If a list query limit fixes the returned rows, include that exact fixed size in user_request and answer_contract.limit_phrase, or rerun query without limit when entity/filter evidence already fixes the row set."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
-                "Rejected. The latest list query has ambiguous ordering for exact verification. State deterministic answer-visible query.order_by tie-breakers in user_request and answer_contract, choose a row set with unique visible ordering, or return the tied rows as the list before submit_draft. Do not rely on unseen order keys to break ties."  # noqa: E501
+                "Rejected. List Determinism Policy violation: the latest list query does not uniquely determine the submitted order or limited row membership for exact verification. Apply that policy to the current query/order evidence before resubmitting."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. The latest query filters on a blocked handle value that is not present in entity. Put required hidden scope handles in entity or rerun the query using the submitted entity's handle."  # noqa: E501
@@ -1666,7 +1666,7 @@ class SubmitDraftController:
                 "Rejected. The label directly exposes a field that is explicitly marked internal or blocked in the latest query metadata. Keep internal/blocked source values out of the submitted label; use a user-visible output value or a derived aggregate that does not expose the source value."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
-                "Rejected. After a specificity rejection, restore the prior answer kind, filters/order/limit, row set, and query output fields/source meanings; then add exactly one DB-grounded visible filter, order, cardinality, or appended output field."  # noqa: E501
+                "Rejected. Difficulty-Up Policy violation: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. submit_draft arguments did not match the required schema."
@@ -1680,8 +1680,7 @@ class SubmitDraftController:
                 and diagnostics.get("anchor_path_has_readable_strings") is False
             ):
                 primary = (
-                    "Rejected. The current anchored evidence path does not expose readable text fields in real tool outputs. "  # noqa: E501
-                    "Stop retrying names, titles, or other readable strings on this same path. Keep the same anchored user and either answer with grounded counts, dates, amounts, statuses, or ordering, or make new anchored tool calls until you actually observe readable fields."  # noqa: E501
+                    "Rejected. Label Grounding Policy violation: the current anchored evidence path does not expose readable text fields in real tool outputs. Apply the policy to a grounded answer surface observed through data tools."  # noqa: E501
                 )
             else:
                 primary += _format_ungrounded_value_guidance(diagnostics)
@@ -1696,8 +1695,7 @@ class SubmitDraftController:
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (
-                "Keep the same anchored user need and fix only the failing part when possible. "
-                "Do not reset to a different topic, a different anchor, or a simpler global count just to satisfy this feedback."  # noqa: E501
+                "Apply the Feedback Handling Policy: keep the same anchored user need and fix only the failing part when possible."  # noqa: E501
             )
         additional_messages: list[str] = []
         for error_code in error_codes[1:3]:
@@ -1715,8 +1713,8 @@ class SubmitDraftController:
                 important=preserve_guidance or None,
                 also_fix=additional_messages,
                 next_step=(
-                    "Make another data-tool call if needed, then call submit_draft again. "
-                    "Do not stop with plain text."
+                    "Follow the referenced policy, make another data-tool call if needed, "
+                    "then call submit_draft again. Do not stop with plain text."
                 ),
                 attempts_left=max(0, attempts_left_after),
             )

@@ -1032,7 +1032,8 @@ async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings
     message = await controller.submit(_ungrounded_text_payload())
 
     assert "does not expose readable text fields" in message
-    assert "Stop retrying names, titles" in message
+    assert "Label Grounding Policy violation" in message
+    assert "grounded answer surface observed through data tools" in message
 
 @pytest.mark.asyncio
 async def test_submit_draft_requires_exact_observed_string_values(
@@ -1075,8 +1076,9 @@ async def test_submit_draft_requires_exact_observed_string_values(
 
     message = await controller.submit(_partially_rewritten_string_payload())
 
-    assert "copy them exactly as they appeared there" in message
-    assert "Do not shorten names" in message
+    assert "Label Grounding Policy violation" in message
+    assert "copy grounded values exactly" in message
+    assert "Do not shorten names" not in message
     assert "exact raw value from the chosen tool response row" not in message
     assert "Ungrounded values included" in message
 
@@ -1154,9 +1156,10 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
 
     assert "needs more specificity" in message
     assert "Apply the Difficulty-Up Policy from the system instructions" in message
-    assert "append, do not replace, any new answer field" in message
-    assert "Ask for it in user_request and answer_contract" in message
+    assert "current draft before resubmitting" in message
     assert "Current answer kind: scalar" in message
+    assert "append, do not replace, any new answer field" not in message
+    assert "Ask for it in user_request and answer_contract" not in message
     assert "smallest single structural strengthening" not in message
     assert "Replacing a field on the same path is not an escalation" not in message
     assert "row-set-preserving" not in message
@@ -1206,9 +1209,10 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
 
     assert "needs more specificity" in message
     assert "Apply the Difficulty-Up Policy from the system instructions" in message
-    assert "append, do not replace, any new answer field" in message
-    assert "Ask for it in user_request and answer_contract" in message
+    assert "current draft before resubmitting" in message
     assert "Current answer kind: list" in message
+    assert "append, do not replace, any new answer field" not in message
+    assert "Ask for it in user_request and answer_contract" not in message
     assert "selected-row query target" not in message
     assert "row-set-preserving" not in message
     assert "row-excluding filter" not in message
@@ -1613,8 +1617,8 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
 
     message = await controller.submit(payload)
 
-    assert "ambiguous ordering" in message
-    assert "query.order_by tie-breakers" in message
+    assert "List Determinism Policy violation" in message
+    assert "does not uniquely determine" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
@@ -1667,8 +1671,8 @@ async def test_submit_draft_rejects_multirow_list_without_order_by(
 
     message = await controller.submit(payload)
 
-    assert "ambiguous ordering" in message
-    assert "query.order_by" in message
+    assert "List Determinism Policy violation" in message
+    assert "current query/order evidence" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
@@ -1749,8 +1753,9 @@ async def test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker(
 
     message = await controller.submit(payload)
 
-    assert "unseen order keys" in message
-    assert "answer-visible query.order_by tie-breakers" in message
+    assert "List Determinism Policy violation" in message
+    assert "unseen order keys" not in message
+    assert "query.order_by tie-breakers" not in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
@@ -2139,9 +2144,9 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
 
     second_message = await controller.submit(second_payload)
 
-    assert "restore the prior answer kind, filters/order/limit" in second_message
-    assert "query output fields/source meanings" in second_message
-    assert "appended output field" in second_message
+    assert "Difficulty-Up Policy violation" in second_message
+    assert "preserving the evaluated task" in second_message
+    assert "one grounded strengthening" in second_message
     assert controller.accepted_draft is None
 
 
@@ -2275,9 +2280,9 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
 
     second_message = await controller.submit(weakened_payload)
 
-    assert "restore the prior answer kind, filters/order/limit" in second_message
-    assert "query output fields/source meanings" in second_message
-    assert "appended output field" in second_message
+    assert "Difficulty-Up Policy violation" in second_message
+    assert "preserving the evaluated task" in second_message
+    assert "one grounded strengthening" in second_message
     drifted_label = [
         {
             **row,
@@ -2408,8 +2413,8 @@ async def test_submit_draft_too_easy_rejects_renamed_same_scalar_value(
 
     second_message = await controller.submit(second_payload)
 
-    assert "same single-field answer value" in second_message
-    assert "submitted value changes" in second_message
+    assert "Difficulty-Up Policy violation" in second_message
+    assert "canonical answer itself must change" in second_message
     assert controller.accepted_draft is None
 
 
