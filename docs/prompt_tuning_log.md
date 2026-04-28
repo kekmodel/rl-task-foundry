@@ -3991,3 +3991,26 @@ Solver 30/30 완료 결과:
   using hidden handles, changing topics, or making a large difficulty jump.
   Next improvement should target that recovery path with precision-safe tool
   diagnostics or tool affordances, not with broad prompt examples.
+
+## Iteration 100 — Mandatory qualitative audit after experiments
+
+- **Decision**:
+  Until the project code is complete, every synthesis/prompt/tool/feedback
+  experiment must include a qualitative quality comparison after the quantitative
+  batch summary.
+- **Rule**:
+  Accepted data is not automatically good. Each accepted task must be audited
+  from bundle and debug artifacts for request/topic/entity/query/label/order
+  alignment and classified as clean, borderline, low-quality accepted, or topic
+  drift.
+- **Rule**:
+  Rejected data is not automatically bad. Each rejected/failed task must be
+  classified as hard-good, low-quality, infra/provider failure, or inconclusive.
+  A task is hard-good when it is answerable with the solver tool surface but the
+  sampled solvers failed; it is low-quality when the task definition itself is
+  not well-grounded, not uniquely answerable, source-surface mismatched, hidden
+  row-set/order/filter dependent, topic-drifted, or difficulty-jumped.
+- **Operational change**:
+  Added this requirement to `docs/runbook.md` under
+  `Mandatory Experiment Quality Audit`. Any future experiment that lacks this
+  audit is not valid evidence for a project improvement.

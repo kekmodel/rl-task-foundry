@@ -49,6 +49,40 @@ rewrite 진행 중에는 아래를 확인한다.
 - qualitative review가 registry bundle과 debug traces 기준으로 수행되고 있는가
 - production acceptance / registry commit은 milestone 달성 전까지 막혀 있는가
 
+## Mandatory Experiment Quality Audit
+
+프로젝트 코드가 완성될 때까지, 모든 synthesis/prompt/tool/feedback 개선
+실험 후에는 정량 결과와 별도로 아래 정성 비교를 반드시 수행한다.
+
+- Accepted data audit:
+  - accepted count와 pass rate만으로 품질을 판단하지 않는다.
+  - 각 accepted task의 `task.yaml`/`task.json`, `instance.json`,
+    `canonical_answer.json`, 마지막 `phase_monitors.jsonl` submission을
+    확인한다.
+  - user request, topic, entity scope, canonical query path, label fields,
+    ordering, tie-break, hidden filter가 서로 맞는지 판정한다.
+  - accepted task를 `clean`, `borderline`, `low-quality accepted`, `topic
+    drift` 중 하나로 분류한다.
+
+- Rejected/failed data audit:
+  - `too_hard`, low pass rate, `reject_too_hard`, `MaxTurnsExceeded`를 그대로
+    저품질로 단정하지 않는다.
+  - solver tools로 풀 수 있는데 solver가 실패한 경우는 hard-good으로
+    분류한다.
+  - request/label/query가 불일치하거나, source surface가 흔들리거나,
+    hidden row-set/order/filter에 의존하거나, topic drift/difficulty jump가
+    발생한 경우는 low-quality로 분류한다.
+  - failed task를 `hard-good`, `low-quality`, `infra/provider failure`,
+    `inconclusive` 중 하나로 분류한다.
+
+- Batch comparison:
+  - 새 실험은 이전 relevant baseline과 raw accept rate뿐 아니라 clean
+    accepted count, borderline accepted count, low-quality accepted count,
+    hard-good rejected count, low-quality rejected count를 비교한다.
+  - 결론에는 "숫자로는 개선처럼 보이나 품질상 개선이 아닌 경우"를 반드시
+    별도로 적는다.
+  - 이 정성 비교를 생략한 실험은 개선 근거로 사용하지 않는다.
+
 ## Artifact Inspection
 
 정성 평가는 review pack이 아니라 아래 artifact를 본다.
