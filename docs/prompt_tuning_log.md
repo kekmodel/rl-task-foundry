@@ -4437,3 +4437,59 @@ Solver 30/30 완료 결과:
   The next prompt-level candidate is a small clarification that list order
   direction must be natural and explicit, for example "newest-first" versus
   "oldest-first", rather than relying on "recent" plus "time order".
+
+## Iteration 108 — Explicit sort direction prompt and provider retry rule
+
+- **Question**:
+  Can the borderline "recent + time order" accepted pattern be reduced by
+  making list sort direction explicit in the composer prompt?
+- **Change**:
+  Commit `1e23831` updates the List Determinism Policy to require explicit
+  order direction: newest-first/oldest-first, asc/desc, or equivalent. It also
+  records the experiment operations rule in `docs/runbook.md`: provider/infra
+  failures are not quality samples and must be retried before experiment
+  conclusions are drawn.
+- **Why this layer**:
+  Ambiguous direction wording is a prompt-quality issue. A hard validator would
+  require semantic judgment over natural-language direction phrases, so this
+  remains prompt-first. Provider retry is operational policy, not model
+  behavior policy.
+- **Verification**:
+  `ruff` passed for the touched prompt/test/runbook files. The focused prompt
+  workflow test and full `tests/test_synthesis_prompts.py` passed. The rendered
+  composer instructions stayed under the 8000-character budget at `7992`
+  characters.
+- **Trial attempt**:
+  Intended Kimi batch root:
+  `artifacts/trial_20260428_mimiciv_demo_explicit_sort_direction_kimi_no_topic_batch5_01`.
+  Initial five no-topic `mimiciv_demo` trials used
+  `opencode_zen/kimi-k2.5` for composer and solver. All five failed before any
+  draft because the provider returned `AuthenticationError`.
+
+  Following the new retry rule, all five were retried once with separate
+  retry configs and output roots. They failed the same way:
+  `opencode_zen/kimi-k2.5: AuthenticationError`.
+
+  A provider-fallback recovery run used `openrouter/moonshotai/kimi-k2.5` for
+  composer and solver. All five failed before quality sampling with
+  `openrouter/moonshotai/kimi-k2.5: APIStatusError`.
+
+  A lightweight nano probe used `openrouter/openai/gpt-5.4-nano` for composer
+  and solver. It also failed before quality sampling with
+  `openrouter/openai/gpt-5.4-nano: APIStatusError`.
+- **Provider diagnosis**:
+  A minimal direct health request showed `opencode_zen` returning a workspace
+  monthly spending-limit error. A minimal direct OpenRouter Kimi request
+  succeeded, so the OpenRouter trial failure appears specific to the SDK/trial
+  request path rather than a missing key. This was not used as quality evidence.
+- **Accepted data audit**:
+  None. No run reached an accepted task.
+- **Rejected/failed data audit**:
+  All attempted trials are `infra/provider failure`. They are not hard-good,
+  low-quality rejected, or low-quality accepted samples.
+- **Interpretation**:
+  The code/prompt change is verified locally, but the live experiment is
+  invalid as a quality comparison. The new provider retry rule was applied and
+  prevented these failures from being miscounted as data-quality outcomes. A
+  valid Kimi or nano batch is still needed once provider access is healthy or
+  the OpenRouter SDK failure is diagnosed.
