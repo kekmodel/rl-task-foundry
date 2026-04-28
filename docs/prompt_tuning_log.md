@@ -5225,3 +5225,85 @@ Solver 30/30 완료 결과:
   Full `uv run pytest` passed (`466 passed`).
 
   `git diff --check` passed.
+
+## Iteration 123 — Post-binding-fix Kimi batch qualitative audit
+
+- **Question**:
+  After Iteration 122 fixed the stale binding/reminder tests and proof fixture,
+  does the current no-topic MIMIC demo pipeline produce clean data with
+  `solver_batch_size=4`, eight Kimi solver rollouts, and no externally injected
+  topic?
+- **Experiment setup**:
+  Ran five parallel `mimiciv_demo` trials with no `--topic-hint`. Composer and
+  solver both used `openrouter/moonshotai/kimi-k2.5`; each trial used
+  `max_solver_runs=8`, `solver_batch_size=4`, `lower_pass_rate=0.2`,
+  `upper_pass_rate=0.9`, `safe_early_termination=true`, and OpenRouter
+  `max_concurrency=8`.
+
+  Artifact root:
+  `artifacts/trial_20260428_mimiciv_demo_post_bindingfix_kimi_8solver_no_topic_batch5_01`.
+- **Result**:
+  Raw accepted count was `2/5`.
+
+  Trial 1 failed in composer repair before solver rollout. The composer kept a
+  medication-list label ordered by prescription timing while the returned label
+  fields omitted the timing evidence. The final feedback was
+  `answer_contract_evidence_mismatch`; this is a safe rejection, not an
+  accepted-quality issue.
+
+  Trial 2 accepted. First submission was rejected as too easy at pass rate
+  `8/8`; the composer then added one requested field and the second submission
+  accepted at `7/8` (`0.875`, CI low `0.5293`). Qualitatively this is clean but
+  near the easy edge: a single anchored eMAR record asks for medication,
+  recorded/scheduled/system times, and handling status.
+
+  Trial 3 rejected after calibration at `1/8` (`0.125`, CI high `0.4707`).
+  Qualitatively this is low-quality rejected, not hard-good: the natural request
+  asked for recent medication name/start/end/status for a patient, but both
+  `prescriptions` and `pharmacy` were plausible surfaces. Most solvers used
+  `prescriptions.drug_type` as status (`MAIN`); only one discovered
+  `pharmacy.status` (`Expired`, `Discontinued`, ...). The composer did not make
+  the label source uniquely recoverable from the user request.
+
+  Trial 4 accepted at `6/8` (`0.75`, CI low `0.4003`). Qualitatively clean: the
+  request asks for ICU procedure start/end/name/status and explicitly surfaces
+  the start-time plus procedure-name ordering. The two misses were solver-side
+  output-format/path issues: one used timestamp strings with spaces instead of
+  ISO `T`, and one listed `ordercategoryname` instead of following `itemid` to
+  the item label and then failed to submit.
+
+  Trial 5 failed before draft submission. It explored an admission, made one
+  malformed JSON tool call, then repeatedly ended without `submit_draft`;
+  feedback correctly stayed on `composer_submit_draft_missing`. This is a
+  composer protocol failure, not a data-quality sample.
+- **Qualitative audit**:
+  Accepted clean data: Trial 4.
+
+  Accepted borderline-clean data: Trial 2. It is not low-quality, but it is
+  close to the upper difficulty boundary because the anchor plus date/medication
+  makes the single row highly reachable.
+
+  Rejected low-quality data: Trial 3. The rejection was desirable because the
+  label source was semantically ambiguous.
+
+  Rejected composer/protocol failures: Trials 1 and 5. Both were safely
+  rejected before producing accepted low-quality data.
+
+  Accepted low-quality data: none observed.
+- **Runtime observations**:
+  Solver batches were actually parallel after Iteration 121. Completion
+  timestamps show the first four solver calls in each rollout finishing in
+  overlapping windows with different latencies, rather than serially waiting on
+  the provider semaphore.
+
+  No `reasoning_content.jsonl` sidecar was emitted for this OpenRouter Kimi run;
+  the provider/SDK path did not expose reasoning items. Tool traces and
+  `run_items` were still enough to classify the rejected and accepted samples.
+- **Next improvement candidate**:
+  The main remaining composer-quality gap is DB-neutral semantic source
+  ambiguity. When two reachable surfaces can satisfy the same everyday wording
+  but produce different labels, the composer should make the request naturally
+  disambiguate the label source or choose another label. This belongs in the
+  composer prompt as durable policy, not in a hard validator, because deciding
+  whether natural wording uniquely implies one semantic source is qualitative
+  rather than precision-100.
