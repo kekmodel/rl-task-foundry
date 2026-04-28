@@ -4508,3 +4508,18 @@ Solver 30/30 완료 결과:
   `opencode_zen/openai/gpt-5.4-nano`. Config-load tests and the real-db trial
   CLI override summary test passed. `ruff` passed for the touched Python test
   surfaces.
+
+## Iteration 110 — Correct Opencode Zen nano model id
+
+- **Finding**:
+  Retried `.env`-loaded Opencode Zen health checks. `/models` shows
+  `gpt-5.4-nano`, not `openai/gpt-5.4-nano`, for the Opencode route. The
+  OpenRouter-prefixed model id was therefore invalid for the new default route.
+- **Change**:
+  Repo default `rl_task_foundry.yaml` composer and all 20 solver entries now use
+  `opencode_zen/gpt-5.4-nano`.
+- **Provider status**:
+  Direct Opencode chat health checks for `gpt-5.4-nano`, `gpt-5.4-mini`, and
+  `kimi-k2.5` still returned `MonthlyLimitError` for the workspace tied to the
+  current `OPENCODE_API_KEY`. This is provider/billing state, not a config-load
+  or model-id issue.
