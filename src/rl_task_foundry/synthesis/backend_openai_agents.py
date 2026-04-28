@@ -13,6 +13,9 @@ from rl_task_foundry.infra.sdk_helpers import (
     tool_choice_for_model,
 )
 from rl_task_foundry.infra.sdk_helpers import (
+    extract_raw_reasoning_records as _extract_raw_reasoning_records,
+)
+from rl_task_foundry.infra.sdk_helpers import (
     extract_run_error_items as _extract_run_error_items,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -73,6 +76,34 @@ def _add_token_usage(
 ) -> None:
     for key, value in usage.items():
         total[key] = total.get(key, 0) + int(value)
+
+
+def _persist_reasoning_records(
+    *,
+    event_logger: object | None,
+    records: list[dict[str, Any]],
+    provider: str,
+    model: str,
+    segment_index: int,
+) -> tuple[str | None, int]:
+    if not records:
+        return None, 0
+    writer = getattr(event_logger, "write_sidecar_jsonl", None)
+    if not callable(writer):
+        return None, len(records)
+    enriched = [
+        {
+            "actor": "composer",
+            "actor_id": None,
+            "provider": provider,
+            "model": model,
+            "segment_index": segment_index,
+            **record,
+        }
+        for record in records
+    ]
+    path = writer("reasoning_content.jsonl", enriched)
+    return (str(path) if path is not None else None), len(records)
 
 
 def _append_feedback_input(
@@ -273,8 +304,12 @@ class OpenAIAgentsSynthesisBackend:
         tool_calls: list[str] = []
         run_item_summaries: list[dict[str, Any]] = []
         protocol_feedback_events = 0
+        reasoning_content_path: str | None = None
+        reasoning_content_items = 0
+        segment_index = 0
         final_output_text = ""
         while True:
+            segment_index += 1
             turns_left = max(1, max_turns - total_turn_count)
             try:
                 run_result = await sdk.Runner.run(
@@ -286,6 +321,18 @@ class OpenAIAgentsSynthesisBackend:
             except Exception as exc:
                 latency_ms = int((perf_counter() - started_at) * 1000)
                 event_logger = getattr(conversation.controller, "event_logger", None)
+                error_reasoning_path, error_reasoning_items = _persist_reasoning_records(
+                    event_logger=event_logger,
+                    records=_extract_raw_reasoning_records(
+                        getattr(getattr(exc, "run_data", None), "new_items", []) or []
+                    ),
+                    provider=self.provider_name,
+                    model=self.model_name,
+                    segment_index=segment_index,
+                )
+                if error_reasoning_path is not None:
+                    reasoning_content_path = error_reasoning_path
+                reasoning_content_items += error_reasoning_items
                 if event_logger is not None:
                     event_logger.log_sync(
                         actor="composer",
@@ -299,6 +346,8 @@ class OpenAIAgentsSynthesisBackend:
                             "token_usage": token_usage,
                             "tool_calls": list(tool_calls),
                             "protocol_feedback_events": protocol_feedback_events,
+                            "reasoning_content_path": reasoning_content_path,
+                            "reasoning_content_items": reasoning_content_items,
                             "run_items": [
                                 *run_item_summaries,
                                 *_extract_run_error_items(exc),
@@ -315,6 +364,18 @@ class OpenAIAgentsSynthesisBackend:
                 _summarize_run_item(item)
                 for item in getattr(run_result, "new_items", []) or []
             )
+            segment_reasoning_path, segment_reasoning_items = _persist_reasoning_records(
+                event_logger=getattr(conversation.controller, "event_logger", None),
+                records=_extract_raw_reasoning_records(
+                    getattr(run_result, "new_items", []) or []
+                ),
+                provider=self.provider_name,
+                model=self.model_name,
+                segment_index=segment_index,
+            )
+            if segment_reasoning_path is not None:
+                reasoning_content_path = segment_reasoning_path
+            reasoning_content_items += segment_reasoning_items
             final_output_text = _final_output_text(run_result)
 
             controller = conversation.controller
@@ -358,6 +419,8 @@ class OpenAIAgentsSynthesisBackend:
                     "token_usage": token_usage,
                     "tool_calls": list(tool_calls),
                     "protocol_feedback_events": protocol_feedback_events,
+                    "reasoning_content_path": reasoning_content_path,
+                    "reasoning_content_items": reasoning_content_items,
                     "run_items": run_item_summaries,
                 },
             )

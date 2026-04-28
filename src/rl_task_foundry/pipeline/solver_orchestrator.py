@@ -172,6 +172,34 @@ def _solver_attempt_budget(target_evaluable_runs: int) -> int:
     return max(target_evaluable_runs, target_evaluable_runs * 2)
 
 
+def _required_solver_provider_parallelism(config: AppConfig) -> dict[str, int]:
+    solver_configs = list(config.models.solvers)
+    if not solver_configs:
+        return {}
+
+    target_evaluable_runs = config.calibration.max_solver_runs
+    batch_size = max(
+        1,
+        min(config.calibration.solver_batch_size, target_evaluable_runs),
+    )
+    max_attempts = _solver_attempt_budget(target_evaluable_runs)
+    required_by_provider: dict[str, int] = {}
+    for batch_start in range(0, max_attempts, batch_size):
+        batch_count = min(batch_size, max_attempts - batch_start)
+        batch_counts: dict[str, int] = {}
+        for attempt_index in range(batch_start, batch_start + batch_count):
+            solver_config = solver_configs[attempt_index % len(solver_configs)]
+            batch_counts[solver_config.provider] = (
+                batch_counts.get(solver_config.provider, 0) + 1
+            )
+        for provider_name, count in batch_counts.items():
+            required_by_provider[provider_name] = max(
+                required_by_provider.get(provider_name, 0),
+                count,
+            )
+    return required_by_provider
+
+
 class TaskQualityGateStatus(StrEnum):
     ACCEPT = "accept"
     REJECT_TOO_HARD = "reject_too_hard"
@@ -222,6 +250,18 @@ class SolverOrchestrator:
     _owns_database_pools: bool = field(default=True, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        for provider_name, required_parallelism in (
+            _required_solver_provider_parallelism(self.config).items()
+        ):
+            provider_config = self.config.providers[provider_name]
+            if provider_config.max_concurrency < required_parallelism:
+                raise ValueError(
+                    "solver_batch_size="
+                    f"{self.config.calibration.solver_batch_size} requires provider "
+                    f"{provider_name!r} max_concurrency >= {required_parallelism} "
+                    "for configured solver batch parallelism; got "
+                    f"{provider_config.max_concurrency}"
+                )
         if self.database_pools is not None:
             self._database_pools = self.database_pools
             self._owns_database_pools = False
@@ -356,6 +396,12 @@ class SolverOrchestrator:
                     "final_output_preview": termination_metadata.get(
                         "final_output_preview", ""
                     ),
+                    "reasoning_content_path": termination_metadata.get(
+                        "reasoning_content_path", ""
+                    ),
+                    "reasoning_content_items": termination_metadata.get(
+                        "reasoning_content_items", 0
+                    ),
                     "atomic_trace_version": termination_metadata.get(
                         "atomic_trace_version"
                     ),
@@ -448,6 +494,7 @@ class SolverOrchestrator:
             runtime_config=runtime_config,
             sdk_tools=sdk_tools,
             session_db_path=traces_dir / "sessions.sqlite",
+            event_logger=self.event_logger,
         )
 
     async def _schema_snapshot(self, db_id: str) -> SchemaSnapshot:

@@ -5137,3 +5137,55 @@ Solver 30/30 완료 결과:
   passed.
 
   `git diff --check` passed.
+
+## Iteration 121 — Solver batch concurrency and reasoning sidecar diagnostics
+
+- **Question**:
+  Why did Kimi batch-five experiments take so long even with
+  `solver_batch_size=4`, and can we preserve provider-exposed reasoning
+  payloads for prompt-debugging without bloating the main trial timeline?
+- **Finding**:
+  The recent MIMIC demo batch configured `solver_batch_size=4` but also set the
+  OpenRouter provider concurrency to `1`. `SolverOrchestrator` used
+  `asyncio.gather` per batch, but each solver call entered the provider
+  semaphore, so one-provider batches were effectively serialized. This made a
+  nominal four-wide solver rollout run one solver at a time. The same logs also
+  showed long feedback continuations where all context was preserved after
+  submit failures, which inflated input tokens, but the direct four-wide
+  mismatch was the provider semaphore.
+- **Change**:
+  Added a startup validation in `SolverOrchestrator`: for the configured solver
+  schedule, each provider's `max_concurrency` must be at least the maximum
+  number of solver calls that can appear for that provider inside one solver
+  batch. A single Kimi solver with `solver_batch_size=4` now requires
+  OpenRouter `max_concurrency >= 4` instead of silently serializing.
+
+  Added a `reasoning_content.jsonl` sidecar under the trial debug directory.
+  Composer and solver backends now persist raw reasoning payloads only when the
+  Agents SDK exposes them as reasoning items or explicit
+  `reasoning_content`/thinking fields. The primary `trial_events.jsonl` stores
+  only `reasoning_content_path` and `reasoning_content_items`.
+- **Why this follows the principles**:
+  This is runtime/config correctness and observability, not task-quality policy.
+  The concurrency check is precision-100 because it compares configured batch
+  shape against configured provider concurrency. The reasoning capture records
+  SDK-exposed payloads as artifacts; it does not infer hidden reasoning, parse
+  DB literals, or add prompt/feedback policy.
+- **Expected experiment impact**:
+  Four-wide single-provider solver batches should actually run four concurrent
+  solver calls when provider limits allow it. If a provider/model does not
+  expose raw reasoning content, no sidecar records are emitted and the count
+  remains zero.
+- **Verification**:
+  `uv run pytest tests/test_sdk_helpers.py tests/test_solver_backend_openai_agents.py tests/test_synthesis_backend_openai_agents.py tests/test_pipeline_solver_orchestrator.py tests/test_config_load.py`
+  passed (`54 passed`).
+
+  `uv run ruff check src/rl_task_foundry/infra/sdk_helpers.py src/rl_task_foundry/infra/event_log.py src/rl_task_foundry/solver/backend_openai_agents.py src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/pipeline/solver_orchestrator.py tests/test_sdk_helpers.py tests/test_solver_backend_openai_agents.py tests/test_synthesis_backend_openai_agents.py tests/test_pipeline_solver_orchestrator.py tests/test_config_load.py`
+  passed.
+
+  `git diff --check` passed.
+
+  Full `uv run pytest` was also run and currently reports `451 passed, 15
+  failed`; failures are in existing `tests/test_synthesis_runtime.py`
+  feedback-message expectations and `tests/test_synthesis_proof_environment.py`
+  proof fixture acceptance, outside this runtime diagnostics patch.

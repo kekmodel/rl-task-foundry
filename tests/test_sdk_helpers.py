@@ -1,10 +1,15 @@
 import json
 from datetime import date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
-from rl_task_foundry.infra.sdk_helpers import make_sdk_tool, preview_payload
+from rl_task_foundry.infra.sdk_helpers import (
+    extract_raw_reasoning_records,
+    make_sdk_tool,
+    preview_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -155,4 +160,72 @@ def test_preview_payload_marks_truncated_strings_lists_and_dicts() -> None:
             "total_keys": 4,
             "omitted_keys": ["extra"],
         },
+    }
+
+
+def test_extract_raw_reasoning_records_serializes_sdk_reasoning_items() -> None:
+    raw_reasoning = SimpleNamespace(
+        type="reasoning",
+        summary=[
+            SimpleNamespace(
+                type="summary_text",
+                text="provider-visible reasoning",
+            )
+        ],
+        encrypted_content="opaque",
+    )
+
+    records = extract_raw_reasoning_records(
+        [
+            SimpleNamespace(raw_item=SimpleNamespace(type="message", content="done")),
+            SimpleNamespace(raw_item=raw_reasoning),
+        ]
+    )
+
+    assert records == [
+        {
+            "run_item_index": 1,
+            "run_item_type": "SimpleNamespace",
+            "raw_item": {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": "provider-visible reasoning",
+                    }
+                ],
+                "encrypted_content": "opaque",
+            },
+        }
+    ]
+
+
+def test_extract_raw_reasoning_records_preserves_model_dump_strings() -> None:
+    class _FakeReasoningModel:
+        type = "reasoning"
+
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            assert mode == "json"
+            return {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": "keep trailing spaces  ",
+                    }
+                ],
+            }
+
+    records = extract_raw_reasoning_records(
+        [SimpleNamespace(raw_item=_FakeReasoningModel())]
+    )
+
+    assert records[0]["raw_item"] == {
+        "type": "reasoning",
+        "summary": [
+            {
+                "type": "summary_text",
+                "text": "keep trailing spaces  ",
+            }
+        ],
     }

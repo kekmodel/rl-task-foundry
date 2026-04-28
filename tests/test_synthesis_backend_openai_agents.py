@@ -22,9 +22,20 @@ def _conversation_with_controller(controller: object) -> SynthesisConversation:
 class _RecordingEventLogger:
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
+        self.sidecar_filenames: list[str] = []
+        self.sidecar_records: list[dict[str, object]] = []
 
     def log_sync(self, **kwargs: object) -> None:
         self.events.append(dict(kwargs))
+
+    def write_sidecar_jsonl(
+        self,
+        filename: str,
+        records: list[dict[str, object]],
+    ) -> Path:
+        self.sidecar_filenames.append(filename)
+        self.sidecar_records.extend(records)
+        return Path("/tmp/reasoning_content.jsonl")
 
 
 def test_synthesis_backend_reuses_shared_model_client(monkeypatch) -> None:
@@ -161,7 +172,20 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
             return FakeRunResult(
                 input_payload=input,
                 final_output="Accepted: Draft accepted.",
-                new_items=["tool-call(submit_draft)"],
+                new_items=[
+                    SimpleNamespace(
+                        raw_item=SimpleNamespace(
+                            type="reasoning",
+                            summary=[
+                                SimpleNamespace(
+                                    type="summary_text",
+                                    text="provider-visible composer reasoning",
+                                )
+                            ],
+                        )
+                    ),
+                    "tool-call(submit_draft)",
+                ],
                 turn_count=1,
             )
 
@@ -254,6 +278,18 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
         "total_tokens": 24,
     }
     assert result.tool_calls == ("query", "submit_draft")
+    assert controller.event_logger.sidecar_filenames == ["reasoning_content.jsonl"]
+    assert controller.event_logger.sidecar_records[0]["actor"] == "composer"
+    assert controller.event_logger.sidecar_records[0]["segment_index"] == 2
+    assert controller.event_logger.sidecar_records[0]["raw_item"] == {
+        "type": "reasoning",
+        "summary": [
+            {
+                "type": "summary_text",
+                "text": "provider-visible composer reasoning",
+            }
+        ],
+    }
     completion_events = [
         event
         for event in controller.event_logger.events
@@ -261,6 +297,10 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
     ]
     assert len(completion_events) == 1
     assert completion_events[0]["payload"]["protocol_feedback_events"] == 1
+    assert completion_events[0]["payload"]["reasoning_content_items"] == 1
+    assert completion_events[0]["payload"]["reasoning_content_path"] == (
+        "/tmp/reasoning_content.jsonl"
+    )
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -67,6 +68,22 @@ def _sample_episode() -> SolverEpisodeInput:
             "현재 배송 상태는 무엇인가요?"
         ),
     )
+
+
+class _RecordingReasoningLogger:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.filenames: list[str] = []
+        self.records: list[dict[str, object]] = []
+
+    def write_sidecar_jsonl(
+        self,
+        filename: str,
+        records: list[dict[str, object]],
+    ) -> Path:
+        self.filenames.append(filename)
+        self.records.extend(records)
+        return self.path
 
 
 @pytest.mark.asyncio
@@ -219,6 +236,112 @@ async def test_openai_agents_solver_backend_returns_solver_result(tmp_path, monk
     )
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["parallel_tool_calls"] is False
     assert FakeAgent.last_instance.kwargs["model_settings"].kwargs["tool_choice"] == "required"
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_solver_backend_persists_raw_reasoning_sidecar(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    episode = _sample_episode()
+    reasoning_item = SimpleNamespace(
+        raw_item=SimpleNamespace(
+            type="reasoning",
+            summary=[
+                SimpleNamespace(
+                    type="summary_text",
+                    text="provider-visible solver reasoning",
+                )
+            ],
+        )
+    )
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client: FakeAsyncOpenAI, **_kwargs):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeRunner:
+        @staticmethod
+        async def run(agent, input, max_turns, session=None):
+            del agent, input, max_turns, session
+            return SimpleNamespace(
+                final_output={
+                    "submitted": True,
+                    "answer": {"delivery_status": "IN_TRANSIT"},
+                },
+                _current_turn=1,
+                context_wrapper=SimpleNamespace(usage=SimpleNamespace(requests=1)),
+                new_items=[reasoning_item, "tool-call(submit_result)"],
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_load_sdk_components",
+        lambda: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            SQLiteSession=lambda **_kwargs: None,
+            set_tracing_disabled=lambda **_kwargs: None,
+            ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
+        ),
+    )
+    event_logger = _RecordingReasoningLogger(tmp_path / "reasoning_content.jsonl")
+
+    backend = OpenAIAgentsSolverBackend(
+        solver_config=SolverModelConfig(
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        ),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SolverRuntimeConfig(max_turns=8),
+        sdk_tools=[],
+        event_logger=event_logger,
+    )
+
+    result = await backend.run(episode)
+
+    assert event_logger.filenames == ["reasoning_content.jsonl"]
+    assert len(event_logger.records) == 1
+    assert event_logger.records[0]["actor"] == "solver"
+    assert event_logger.records[0]["actor_id"] == "solver_a"
+    assert event_logger.records[0]["provider"] == "codex_oauth"
+    assert event_logger.records[0]["model"] == "gpt-5.4-mini"
+    assert event_logger.records[0]["raw_item"] == {
+        "type": "reasoning",
+        "summary": [
+            {
+                "type": "summary_text",
+                "text": "provider-visible solver reasoning",
+            }
+        ],
+    }
+    assert result.termination_metadata["reasoning_content_path"] == str(
+        tmp_path / "reasoning_content.jsonl"
+    )
+    assert result.termination_metadata["reasoning_content_items"] == 1
 
 
 @pytest.mark.asyncio

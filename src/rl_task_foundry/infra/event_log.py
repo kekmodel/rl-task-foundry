@@ -94,6 +94,22 @@ class TrialEventLogger:
         self._fh.write(line + "\n")
         self._fh.flush()
 
+    def write_sidecar_jsonl(
+        self,
+        filename: str,
+        records: list[dict[str, Any]],
+    ) -> Path | None:
+        if not records:
+            return None
+        if "/" in filename or filename in {"", ".", ".."}:
+            raise ValueError("sidecar filename must be a simple relative filename")
+        path = self._path.parent / filename
+        with path.open("a", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False, default=str))
+                handle.write("\n")
+        return path
+
     def close(self) -> None:
         try:
             self._fh.flush()

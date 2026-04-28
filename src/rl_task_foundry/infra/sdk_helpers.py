@@ -369,6 +369,72 @@ def summarize_run_item(item: Any) -> dict[str, Any]:
     return summary
 
 
+def extract_raw_reasoning_records(items: list[Any] | tuple[Any, ...]) -> list[dict[str, Any]]:
+    """Return raw reasoning payloads exposed by the Agents SDK.
+
+    OpenAI Responses reasoning and OpenAI-compatible chat-completion
+    `reasoning_content` are surfaced by the SDK as `ReasoningItem` objects when
+    the provider returns them. Keep the full SDK payload out of the primary event
+    timeline; callers can persist these records to a sidecar artifact.
+    """
+
+    records: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        raw = getattr(item, "raw_item", None)
+        if not _is_reasoning_item(item, raw):
+            continue
+        raw_payload = _jsonable_sdk_payload(raw)
+        if raw_payload is None:
+            raw_payload = _jsonable_sdk_payload(item)
+        records.append(
+            {
+                "run_item_index": index,
+                "run_item_type": type(item).__name__,
+                "raw_item": raw_payload,
+            }
+        )
+    return records
+
+
+def _is_reasoning_item(item: Any, raw: Any) -> bool:
+    if type(item).__name__ == "ReasoningItem":
+        return True
+    raw_type = _dual_attr(raw, "type")
+    if raw_type == "reasoning":
+        return True
+    for attr in ("reasoning_content", "thinking_blocks", "thinking"):
+        if getattr(raw, attr, None):
+            return True
+        if isinstance(raw, dict) and raw.get(attr):
+            return True
+    return False
+
+
+def _jsonable_sdk_payload(value: Any) -> Any:
+    if value is None:
+        return None
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _jsonable_sdk_payload(model_dump(mode="json"))
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _jsonable_sdk_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_sdk_payload(item) for item in value]
+    payload = getattr(value, "__dict__", None)
+    if isinstance(payload, dict):
+        return {
+            str(key): _jsonable_sdk_payload(item)
+            for key, item in payload.items()
+            if not key.startswith("_")
+        }
+    return str(value)
+
+
 def _dual_attr(container: Any, key: str) -> Any:
     if container is None:
         return None

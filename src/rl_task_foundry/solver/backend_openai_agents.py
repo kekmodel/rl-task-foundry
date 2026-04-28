@@ -16,6 +16,9 @@ from rl_task_foundry.infra.sdk_helpers import (
     tool_choice_for_model,
 )
 from rl_task_foundry.infra.sdk_helpers import (
+    extract_raw_reasoning_records as _extract_raw_reasoning_records,
+)
+from rl_task_foundry.infra.sdk_helpers import (
     extract_run_error_items as _extract_run_error_items,
 )
 from rl_task_foundry.infra.sdk_helpers import (
@@ -92,6 +95,33 @@ def _extract_tool_calls(run_result: Any) -> list[dict[str, Any]]:
             continue
         tool_calls.append({"name": tool_name, "repr": repr(item)})
     return tool_calls
+
+
+def _persist_reasoning_records(
+    *,
+    event_logger: object | None,
+    records: list[dict[str, Any]],
+    provider: str,
+    model: str,
+    solver_id: str,
+) -> tuple[str | None, int]:
+    if not records:
+        return None, 0
+    writer = getattr(event_logger, "write_sidecar_jsonl", None)
+    if not callable(writer):
+        return None, len(records)
+    enriched = [
+        {
+            "actor": "solver",
+            "actor_id": solver_id,
+            "provider": provider,
+            "model": model,
+            **record,
+        }
+        for record in records
+    ]
+    path = writer("reasoning_content.jsonl", enriched)
+    return (str(path) if path is not None else None), len(records)
 
 
 def _is_successful_submission(output: Any) -> bool:
@@ -314,6 +344,7 @@ class OpenAIAgentsSolverBackend:
     runtime_config: SolverRuntimeConfig
     sdk_tools: list[object] = field(default_factory=list)
     session_db_path: Path | None = None
+    event_logger: object | None = None
     _sdk: SimpleNamespace | None = field(default=None, init=False, repr=False)
     _model: Any | None = field(default=None, init=False, repr=False)
     _shared_models: ClassVar[dict[tuple[int, int, str, str | None, str, float, str], Any]] = {}
@@ -443,6 +474,23 @@ class OpenAIAgentsSolverBackend:
             latency_ms = int((perf_counter() - started_at) * 1000)
             raw_output_text = _failure_raw_output_text(exc)
             recovered_items = _extract_run_error_items(exc)
+            reasoning_path, reasoning_items = _persist_reasoning_records(
+                event_logger=self.event_logger,
+                records=_extract_raw_reasoning_records(
+                    getattr(getattr(exc, "run_data", None), "new_items", []) or []
+                ),
+                provider=self.solver_config.provider,
+                model=self.solver_config.model,
+                solver_id=self.solver_config.solver_id,
+            )
+            termination_metadata: dict[str, object] = {
+                "detail": str(exc),
+                "run_items": recovered_items,
+            }
+            if reasoning_path is not None:
+                termination_metadata["reasoning_content_path"] = reasoning_path
+            if reasoning_items:
+                termination_metadata["reasoning_content_items"] = reasoning_items
             return SolverResult(
                 task_id=task_id,
                 solver_id=self.solver_config.solver_id,
@@ -456,10 +504,7 @@ class OpenAIAgentsSolverBackend:
                 turn_count=0,
                 status="failed",
                 termination_reason=exc.__class__.__name__,
-                termination_metadata={
-                    "detail": str(exc),
-                    "run_items": recovered_items,
-                },
+                termination_metadata=termination_metadata,
             )
         latency_ms = int((perf_counter() - started_at) * 1000)
 
@@ -477,6 +522,19 @@ class OpenAIAgentsSolverBackend:
         metadata["run_items"] = [
             _summarize_run_item(item) for item in getattr(run_result, "new_items", [])
         ]
+        reasoning_path, reasoning_items = _persist_reasoning_records(
+            event_logger=self.event_logger,
+            records=_extract_raw_reasoning_records(
+                getattr(run_result, "new_items", []) or []
+            ),
+            provider=self.solver_config.provider,
+            model=self.solver_config.model,
+            solver_id=self.solver_config.solver_id,
+        )
+        if reasoning_path is not None:
+            metadata["reasoning_content_path"] = reasoning_path
+        if reasoning_items:
+            metadata["reasoning_content_items"] = reasoning_items
         if submitted_answer_text is None and status == "completed":
             metadata["final_output_preview"] = _final_output_preview(
                 run_result.final_output

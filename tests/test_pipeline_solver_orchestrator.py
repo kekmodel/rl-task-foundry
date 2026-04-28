@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -107,6 +108,97 @@ class _FakeEventLogger:
 
     def log_sync(self, **event: object) -> None:
         self.events.append(event)
+
+
+def test_solver_orchestrator_rejects_provider_concurrency_below_solver_batch(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(
+        update={"solver_batch_size": 4, "max_solver_runs": 8}
+    )
+    config.providers["codex_oauth"] = config.providers["codex_oauth"].model_copy(
+        update={"max_concurrency": 1}
+    )
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id="solver_a",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+    ]
+
+    with pytest.raises(ValueError, match="max_concurrency >= 4"):
+        SolverOrchestrator(
+            config,
+            runtime_factory=lambda *_args: _FakeRuntime(
+                '{"customer":"Alice","day":"2026-04-12"}',
+                [],
+            ),
+            sdk_tools_factory=_empty_sdk_tools,
+        )
+
+
+@pytest.mark.asyncio
+async def test_solver_orchestrator_runs_solver_batch_concurrently(
+    tmp_path: Path,
+) -> None:
+    class _Tracker:
+        active = 0
+        peak = 0
+
+    class _TrackingRuntime:
+        def __init__(self, solver_id: str) -> None:
+            self.solver_id = solver_id
+
+        async def run(self, episode) -> SolverResult:
+            _Tracker.active += 1
+            _Tracker.peak = max(_Tracker.peak, _Tracker.active)
+            try:
+                await asyncio.sleep(0.01)
+                return SolverResult(
+                    task_id=episode.task_id,
+                    solver_id=self.solver_id,
+                    provider="codex_oauth",
+                    model="gpt-5.4-mini",
+                    raw_output_text='{"customer":"Alice","day":"2026-04-12"}',
+                    status="completed",
+                )
+            finally:
+                _Tracker.active -= 1
+
+    draft = _sample_draft()
+    config = _config(tmp_path)
+    config.calibration = config.calibration.model_copy(
+        update={"solver_batch_size": 4, "max_solver_runs": 4}
+    )
+    config.providers["codex_oauth"] = config.providers["codex_oauth"].model_copy(
+        update={"max_concurrency": 4}
+    )
+    config.models.solvers = [
+        SolverModelConfig(
+            solver_id=f"solver_{index}",
+            provider="codex_oauth",
+            model="gpt-5.4-mini",
+        )
+        for index in range(4)
+    ]
+
+    orchestrator = SolverOrchestrator(
+        config,
+        runtime_factory=lambda solver_config, *_args: _TrackingRuntime(
+            solver_config.solver_id
+        ),
+        sdk_tools_factory=_empty_sdk_tools,
+    )
+
+    try:
+        summary = await orchestrator.run_draft(draft)
+    finally:
+        await orchestrator.close()
+
+    assert summary.total_solver_runs == 4
+    assert _Tracker.peak == 4
 
 
 @pytest.mark.asyncio
