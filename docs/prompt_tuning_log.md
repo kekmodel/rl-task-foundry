@@ -3791,3 +3791,68 @@ Solver 30/30 완료 결과:
   The new result includes
   `ordering_diagnostics={"order_by_outputs":["start_time"],"returned_row_count":5,"limit":5,"duplicate_order_key_in_returned_rows":true}`,
   so the existing `submit_draft` ambiguous-order validator would reject it.
+
+## Iteration 96 — Live Kimi batch after composite tie diagnostics
+
+- **Question**:
+  Does the composite order-key tie diagnostic work in a fresh Kimi batch, and
+  does it improve accepted data quality without relying on literal or
+  token-based heuristics?
+- **Experiment**:
+  Ran five parallel `mimiciv_demo` / `input_events` trials with
+  `openrouter/moonshotai/kimi-k2.5` as both composer and solver from
+  `f89a816`. Artifact root:
+  `artifacts/trial_20260428_mimiciv_demo_kimi_batch5_parallel_composite_tie_01`.
+  Config used `lower_pass_rate=0.2`, `upper_pass_rate=0.9`,
+  `max_solver_runs=20`, `solver_batch_size=4`,
+  `safe_early_termination=true`, and per-trial DB pools of 8 solver / 2
+  control connections.
+- **Batch result**:
+  Accepted `2/5`, failed `3/5`, duplicate task count `0`. Trial 4 accepted at
+  `5/8 = 0.625`; trial 5 accepted at `12/16 = 0.75`. Trials 1, 2, and 3
+  failed before registry commit.
+- **Validator evidence**:
+  The new diagnostic fired on live drafts before solver rollout. Trial 2's
+  first draft returned
+  `ordering_diagnostics={"duplicate_order_key_in_returned_rows":true,"order_by_outputs":["starttime"],"returned_row_count":5,"limit":5}`;
+  trial 3's first draft returned the same structural signal for
+  `order_by_outputs=["start_time"]`. Trial 5 initially hit
+  `duplicate_order_key_in_returned_rows=true` and `limit_boundary_tie=true`,
+  then recovered by making the tie-break visible and requested. This is the
+  intended precision-safe path: the validator uses the submitted query's own
+  structured order keys and result rows, not anticipated strings, values, or
+  column-name heuristics.
+- **Accepted-trial quality read**:
+  Trial 4 is acceptable but not especially strong. The request asks for the
+  recent five input events in time order; the canonical query uses
+  `starttime DESC`, returns five deterministic rows, and solvers mostly solve
+  it. The wording "time order" is slightly loose, but "recent five" anchors
+  descending time well enough for this batch read. Trial 5 is good: after the
+  initial ambiguity feedback, the final request explicitly asks for the same
+  time to be sorted by medication name, and the canonical query orders by
+  `starttime DESC, d_items.label ASC` with both order keys exposed in the
+  answer.
+- **Failed-trial quality read**:
+  Trial 1 is a correct low-quality block. It repeatedly selected a top-five
+  boundary with `limit_boundary_tie=true`; even after adding start-time,
+  end-time, and order-reference wording, the fifth-row boundary remained tied,
+  so accepting would have depended on hidden row membership. Trial 2 is not a
+  hard-good example: after the ambiguity feedback, the request became
+  "latest five medication/fluid records by medication name descending", while
+  the canonical query used `starttime DESC, label DESC`. Solver traces split
+  between `inputevents` and `prescriptions`, and many solved a plausible but
+  different medication-record interpretation. Trial 3 is also low-quality:
+  the user-facing request says "medications", while the canonical answer comes
+  from `inputevents`; solver traces consistently chose `prescriptions` and
+  produced reasonable medication-list answers that did not match the canonical
+  input-event answer.
+- **Interpretation**:
+  The composite tie validator behaved as intended and prevented the previously
+  accepted arbitrary-order pattern from reappearing. The lower accept rate is
+  not evidence of over-rejection by that validator; the rejected drafts expose
+  real ambiguity or composer recovery problems. The next improvement should be
+  prompt/tool-contract work that keeps topic surface and canonical table
+  surface aligned after feedback, especially for MIMIC concepts where
+  "medication" can mean `prescriptions` or `inputevents`. Keep hard validators
+  limited to precision-100 structural checks; do not add literal, token, or
+  column-name heuristics.
