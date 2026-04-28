@@ -14,6 +14,11 @@ domain:
   scenario_description: "an end user asking the organization that owns the database for help or information"
 
 providers:
+  openai_api:
+    type: "openai"
+    api_key_env: "OPENAI_API_KEY"
+    max_concurrency: 16
+    timeout_s: 120
   codex_oauth:
     type: "openai_compatible"
     base_url: "http://127.0.0.1:10531/v1"
@@ -46,29 +51,29 @@ providers:
 
 models:
   composer:
-    provider: "opencode_zen"
-    model: "gpt-5.4-nano"
+    provider: "openai_api"
+    model: "gpt-5.4-mini"
   solvers:
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
-    - {provider: "opencode_zen", model: "gpt-5.4-nano"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
+    - {provider: "openai_api", model: "gpt-5.4-mini"}
 
 provider_resilience:
   circuit_breaker_window_s: 60

@@ -24,6 +24,13 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.output.run_db_path.name == "run.db"
     assert config.database.dsn == "postgresql://pagila:pagila@127.0.0.1:5433/pagila"
     assert config.budget.max_gpu_hours is None
+    assert config.models.composer.provider == "openai_api"
+    assert config.models.composer.model == "gpt-5.4-mini"
+    assert {solver.provider for solver in config.models.solvers} == {"openai_api"}
+    assert {solver.model for solver in config.models.solvers} == {"gpt-5.4-mini"}
+    assert "openai_api" in config.providers
+    assert config.providers["openai_api"].type == "openai"
+    assert config.providers["openai_api"].api_key_env == "OPENAI_API_KEY"
     assert "codex_oauth" in config.providers
     assert "local_server" in config.providers
     assert config.providers["local_server"].base_url == "http://127.0.0.1:8000/v1"

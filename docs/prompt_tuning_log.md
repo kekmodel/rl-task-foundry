@@ -4523,3 +4523,24 @@ Solver 30/30 완료 결과:
   `kimi-k2.5` still returned `MonthlyLimitError` for the workspace tied to the
   current `OPENCODE_API_KEY`. This is provider/billing state, not a config-load
   or model-id issue.
+
+## Iteration 111 — Default provider route to direct OpenAI API
+
+- **Change**:
+  Added `openai_api` as a direct OpenAI API provider using `OPENAI_API_KEY`.
+  Repo default `rl_task_foundry.yaml` composer and all 20 solver entries now use
+  `openai_api/gpt-5.4-mini`.
+- **Reason**:
+  User requested `gpt-5.4-mini` via OpenAI API after Opencode Zen continued to
+  return provider-side monthly-limit errors.
+- **Provider check**:
+  `.env` contains `OPENAI_API_KEY`. Minimal direct OpenAI Chat Completions
+  requests to `gpt-5.4-mini` succeeded with no explicit token cap and with
+  `max_completion_tokens`. A request using legacy `max_tokens` returned the
+  expected unsupported-parameter error for this model, so future direct health
+  checks should use `max_completion_tokens` or omit the cap.
+- **Verification**:
+  `load_config("rl_task_foundry.yaml")` resolves composer and all solvers to
+  `openai_api/gpt-5.4-mini`. Config-load tests now assert the default provider
+  and model. Config-load tests and the real-db trial CLI override summary test
+  passed. `ruff` passed for the touched Python test surfaces.
