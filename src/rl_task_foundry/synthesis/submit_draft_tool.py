@@ -189,7 +189,10 @@ class AnswerOutputBinding(StrictModel):
             "source representation; do not turn source status text into "
             "boolean completion wording, or source record sequence into "
             "generated display rank. Do not add parenthetical normalized "
-            "choices for source type/category/status fields."
+            "choices for source type/category/status fields. When two "
+            "reachable sources could satisfy the same broad phrase, the "
+            "phrase must name the exact source role, such as the current "
+            "record's category versus a referenced item's category."
         ),
     )
 
@@ -280,7 +283,8 @@ class AnswerContract(StrictModel):
             "Request-to-label bindings for fields returned in label_json. "
             "For list labels, provide one binding for every returned label "
             "field. For scalar labels, omit or use null when the answer phrase "
-            "already binds the result."
+            "already binds the result. Broad output words are not enough when "
+            "multiple reachable source surfaces could answer them."
         ),
     )
     order_bindings: list[AnswerOrderBinding] | None = Field(
@@ -1047,6 +1051,12 @@ class QueryEvidenceSignature:
     item_count: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class LimitRepairScope:
+    evidence: QueryEvidenceSignature
+    max_item_count: int
+
+
 def _query_evidence_signature(
     query_result: dict[str, object],
     *,
@@ -1133,6 +1143,30 @@ def _query_evidence_incremental_errors(
         or strengthened_cardinality
     ):
         errors.append("no_new_structural_constraint")
+    return list(dict.fromkeys(errors))
+
+
+def _query_evidence_limit_repair_errors(
+    *,
+    previous: LimitRepairScope,
+    current: QueryEvidenceSignature,
+) -> list[str]:
+    errors: list[str] = []
+    previous_evidence = previous.evidence
+    if current.kind != previous_evidence.kind:
+        errors.append("kind_changed")
+    if current.output_sources != previous_evidence.output_sources:
+        errors.append("operation_changed")
+    if current.predicates != previous_evidence.predicates:
+        errors.append("predicate_changed")
+    if current.order_by != previous_evidence.order_by:
+        errors.append("order_changed")
+    if current.item_count is None:
+        errors.append("list_count_missing")
+    elif current.item_count < 3 or current.item_count > 5:
+        errors.append("list_limit_not_3_to_5")
+    elif current.item_count > previous.max_item_count:
+        errors.append("list_limit_expanded")
     return list(dict.fromkeys(errors))
 
 
@@ -1268,6 +1302,13 @@ def _query_projection_has_duplicate_answer_rows(
     )
 
 
+def _query_result_has_no_rows(query_result: dict[str, object]) -> bool:
+    rows = query_result.get("rows")
+    if isinstance(rows, list):
+        return len(rows) == 0
+    return query_result.get("row_count") == 0
+
+
 def _dedicated_constraint_phrase_surfaces(contract: AnswerContract) -> set[str]:
     non_constraint_surfaces = {
         _contract_phrase_surface(contract.answer_phrase),
@@ -1347,6 +1388,140 @@ def _unanchored_hidden_filter_sources(
             }
         )
     return unanchored
+
+
+def _edge_column_names(edge_side: str) -> tuple[str, ...]:
+    if ".(" in edge_side and edge_side.endswith(")"):
+        _, columns = edge_side.split(".(", 1)
+        return tuple(column.strip() for column in columns[:-1].split(",") if column.strip())
+    if "." not in edge_side:
+        return ()
+    column = edge_side.rsplit(".", 1)[1].strip()
+    return (column,) if column else ()
+
+
+def _parse_query_edge(via_edge: object) -> dict[str, object] | None:
+    if not isinstance(via_edge, str):
+        return None
+    if "->" in via_edge:
+        left, right = via_edge.split("->", 1)
+        source_table = left.split(".", 1)[0]
+        destination_table = right.split(".", 1)[0]
+        destination_columns = _edge_column_names(right) or _edge_column_names(left)
+        return {
+            "direction": "forward",
+            "source_table": source_table,
+            "destination_table": destination_table,
+            "destination_columns": destination_columns,
+        }
+    if "<-" in via_edge:
+        left, right = via_edge.split("<-", 1)
+        return {
+            "direction": "reverse",
+            "source_table": left.split(".", 1)[0],
+            "destination_table": right.split(".", 1)[0],
+            "destination_columns": _edge_column_names(right),
+        }
+    return None
+
+
+def _hidden_scope_relay_sources(
+    query_params: dict[str, object] | None,
+    query_result: dict[str, object],
+    *,
+    anchor_entity: dict[str, object],
+) -> list[dict[str, object]]:
+    if not isinstance(query_params, dict):
+        return []
+    spec = query_params.get("spec")
+    if not isinstance(spec, dict):
+        return []
+    rows = query_result.get("rows")
+    if not isinstance(rows, list) or len(rows) <= 1:
+        return []
+    from_spec = spec.get("from")
+    if not isinstance(from_spec, dict):
+        return []
+    root_table = from_spec.get("table")
+    if not isinstance(root_table, str):
+        return []
+    root_alias = from_spec.get("as") if isinstance(from_spec.get("as"), str) else root_table
+    alias_tables: dict[str, str] = {root_alias: root_table}
+    joins = _as_object_list(spec.get("join")) or []
+    join_edges: list[dict[str, object]] = []
+    for join in joins:
+        alias = join.get("as")
+        from_alias = join.get("from")
+        edge = _parse_query_edge(join.get("via_edge"))
+        if not isinstance(alias, str) or not isinstance(from_alias, str) or edge is None:
+            continue
+        destination_table = edge.get("destination_table")
+        if not isinstance(destination_table, str):
+            continue
+        alias_tables[alias] = destination_table
+        join_edges.append({"as": alias, "from": from_alias, **edge})
+
+    anchor_values = set(anchor_entity.values())
+    hidden_where_sources: set[tuple[str, str]] = set()
+    for ref in _as_object_list(query_result.get("referenced_columns")) or []:
+        if (
+            ref.get("usage") == "where"
+            and ref.get("is_handle") is True
+            and is_blocked_visibility(ref.get("visibility"))
+            and ref.get("value") in anchor_values
+            and isinstance(ref.get("table"), str)
+            and isinstance(ref.get("column"), str)
+        ):
+            hidden_where_sources.add((ref["table"], ref["column"]))
+    hidden_filter_aliases: set[str] = set()
+    for predicate in _as_object_list(spec.get("where")) or []:
+        ref = predicate.get("ref")
+        if not isinstance(ref, dict):
+            continue
+        alias = ref.get("as")
+        column = ref.get("column")
+        if not isinstance(alias, str) or not isinstance(column, str):
+            continue
+        table = alias_tables.get(alias)
+        if table is not None and (table, column) in hidden_where_sources:
+            hidden_filter_aliases.add(alias)
+
+    if not hidden_filter_aliases:
+        return []
+    label_tables = {
+        source.get("table")
+        for source in _as_object_list(query_result.get("column_sources")) or []
+        if source.get("value_exposes_source") is True and isinstance(source.get("table"), str)
+    }
+    relays: list[dict[str, object]] = []
+    anchor_keys = set(anchor_entity)
+    for first_edge in join_edges:
+        if (
+            first_edge.get("direction") != "forward"
+            or first_edge.get("from") not in hidden_filter_aliases
+        ):
+            continue
+        parent_alias = first_edge.get("as")
+        parent_columns = first_edge.get("destination_columns")
+        if not isinstance(parent_alias, str) or not isinstance(parent_columns, tuple):
+            continue
+        if parent_columns and set(parent_columns).issubset(anchor_keys):
+            continue
+        for second_edge in join_edges:
+            if (
+                second_edge.get("direction") == "reverse"
+                and second_edge.get("from") == parent_alias
+                and second_edge.get("destination_table") in label_tables
+            ):
+                relays.append(
+                    {
+                        "hidden_anchor_alias": first_edge.get("from"),
+                        "parent_alias": parent_alias,
+                        "answer_alias": second_edge.get("as"),
+                        "parent_columns": list(parent_columns),
+                    }
+                )
+    return relays
 
 
 def _as_object_list(value: object) -> list[dict[str, object]] | None:
@@ -1461,6 +1636,7 @@ class SubmitDraftController:
     _last_monitored_label_data: dict[str, object] | None = field(default=None, init=False)
     _last_evaluated_label_data: dict[str, object] | None = field(default=None, init=False)
     _repair_locked_label_signature: str | None = field(default=None, init=False)
+    _limit_repair_scope: LimitRepairScope | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
     _last_feedback_error_codes: tuple[str, ...] = field(default=(), init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
@@ -1535,7 +1711,8 @@ class SubmitDraftController:
             latest_query_call.get("result") if latest_query_call is not None else None
         )
         query_needs_repair = isinstance(latest_query_result, dict) and (
-            _query_ordering_is_ambiguous(latest_query_result)
+            _query_result_has_no_rows(latest_query_result)
+            or _query_ordering_is_ambiguous(latest_query_result)
             or _query_projection_has_duplicate_answer_rows(latest_query_result)
         )
         if tool_name == "query" and (
@@ -1896,6 +2073,12 @@ class SubmitDraftController:
                     latest_query_result,
                     anchor_entity=parsed_anchor,
                 )
+                unanchored_hidden_relays = _hidden_scope_relay_sources(
+                    latest_query_params if isinstance(latest_query_params, dict) else None,
+                    latest_query_result,
+                    anchor_entity=parsed_anchor,
+                )
+                unanchored_hidden_filters.extend(unanchored_hidden_relays)
                 if unanchored_hidden_filters:
                     error_codes.append(
                         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED
@@ -1990,6 +2173,22 @@ class SubmitDraftController:
         ):
             error_codes.append(SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR)
             invalid_diagnostics["repair_locked_label_changed"] = True
+        if (
+            not self._needs_label_change
+            and self._limit_repair_scope is not None
+            and current_query_evidence_signature is not None
+        ):
+            limit_repair_errors = _query_evidence_limit_repair_errors(
+                previous=self._limit_repair_scope,
+                current=current_query_evidence_signature,
+            )
+            if limit_repair_errors:
+                error_codes.append(SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR)
+                invalid_diagnostics["limit_repair_scope_errors"] = (
+                    limit_repair_errors[
+                        : self.config.synthesis.runtime.diagnostic_item_limit
+                    ]
+                )
 
         if not error_codes and submission_diagnostics:
             binding_diagnostics = submission_diagnostics.get(
@@ -2019,6 +2218,16 @@ class SubmitDraftController:
         if error_codes:
             deduped_error_codes = list(dict.fromkeys(error_codes))
             if all(error_code in _FEEDBACK_ONLY_ERROR_CODES for error_code in deduped_error_codes):
+                if (
+                    deduped_error_codes
+                    == [SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE]
+                    and current_query_evidence_signature is not None
+                    and isinstance(canonical_answer, list)
+                ):
+                    self._limit_repair_scope = LimitRepairScope(
+                        evidence=current_query_evidence_signature,
+                        max_item_count=len(canonical_answer),
+                    )
                 return self._record_feedback(
                     message=self._invalid_submission_message(
                         deduped_error_codes,
@@ -2054,6 +2263,8 @@ class SubmitDraftController:
                 diagnostics=submission_diagnostics,
             )
 
+        self._limit_repair_scope = None
+        self._repair_locked_label_signature = None
         rollout_summary = await self.solver_orchestrator.run_draft(draft)
         from rl_task_foundry.pipeline.solver_orchestrator import (
             TaskQualityGateStatus,
@@ -2327,7 +2538,7 @@ class SubmitDraftController:
                 "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query and submit_draft."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE: (
-                "Rejected. Task Shapes reminder: fixed list labels must stay at 3-5 rows. Do not use 6+ rows to add difficulty; keep the same target with a smaller natural limit, or choose a harder label through visible fields, relationships, or row-preserving constraints."  # noqa: E501
+                "Rejected. Task Shapes reminder: fixed list labels must stay at 3-5 rows. Do not use 6+ rows to add difficulty; keep the same target/query scope and resubmit a smaller natural 3-5 row limit."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND: (
                 "Rejected. Request Contract reminder: user-visible row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501
@@ -2426,7 +2637,8 @@ class SubmitDraftController:
         diagnostics: dict[str, object] | None = None,
     ) -> str:
         self._feedback_events += 1
-        self._last_feedback_error_codes = tuple(_error_code_values(error_codes))
+        error_code_values = tuple(_error_code_values(error_codes))
+        self._last_feedback_error_codes = error_code_values
         if self._feedback_codes_lock_label(error_codes) and isinstance(
             payload,
             SubmitDraftPayload,
@@ -2437,9 +2649,13 @@ class SubmitDraftController:
             )
         elif (
             SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR.value
-            not in _error_code_values(error_codes)
+            not in error_code_values
         ):
             self._repair_locked_label_signature = None
+        if error_code_values != (
+            SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE.value,
+        ):
+            self._limit_repair_scope = None
         self._tool_call_count_at_last_protocol_boundary = len(self._raw_atomic_tool_calls)
         attempts_left_after = self.submissions_left()
         self._emit_monitor(

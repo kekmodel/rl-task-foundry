@@ -1008,6 +1008,35 @@ def test_data_tool_budget_feedback_allows_query_repair_for_ambiguous_query(
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 
+def test_data_tool_budget_feedback_allows_query_repair_for_empty_query(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    for index in range(FIRST_SUBMIT_MAX_DATA_TOOLS):
+        controller.record_atomic_tool_call(
+            tool_name="sample",
+            params={"index": index},
+            result={"rows": [{"value": index}]},
+        )
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {}},
+        result={"rows": [], "row_count": 0},
+    )
+
+    assert controller.data_tool_budget_feedback(tool_name="query") is None
+    assert controller.data_tool_budget_feedback(tool_name="sample") is not None
+
+
 def test_submit_draft_payload_rejects_legacy_anchor_query_field() -> None:
     payload = _accepted_payload().model_dump(mode="json")
     payload["anchor_query"] = {
@@ -1540,6 +1569,114 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_task_reset_after_list_limit_feedback(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="admission_history",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=4,
+    )
+    first_label = [
+        {"sequence": 1, "diagnosis": "A"},
+        {"sequence": 2, "diagnosis": "B"},
+        {"sequence": 3, "diagnosis": "C"},
+        {"sequence": 4, "diagnosis": "D"},
+        {"sequence": 5, "diagnosis": "E"},
+        {"sequence": 6, "diagnosis": "F"},
+    ]
+    first_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "admission_diagnoses",
+            "label": first_label,
+            "entity": {"hadm_id": 1},
+            "user_request": "이번 입원의 진단 목록을 순서대로 알려 주세요.",
+            "answer_contract": _list_answer_contract(
+                phrase="진단 목록",
+                constraint_phrases=["순서대로"],
+                limit_phrase=None,
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        first_payload.label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "diagnoses",
+                "column": "hadm_id",
+                "op": "eq",
+                "value": 1,
+            },
+            {
+                "usage": "order_by",
+                "table": "diagnoses",
+                "column": "sequence",
+                "direction": "asc",
+            },
+        ],
+    )
+
+    first_message = await controller.submit(first_payload)
+
+    assert "fixed list labels must stay at 3-5 rows" in first_message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_list_limit_too_wide",
+    )
+
+    second_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "admission_medications",
+            "label": [
+                {"time": "2026-01-01T08:00:00", "medication": "A"},
+                {"time": "2026-01-01T09:00:00", "medication": "B"},
+                {"time": "2026-01-01T10:00:00", "medication": "C"},
+            ],
+            "entity": {"hadm_id": 1},
+            "user_request": "이번 입원의 투약 기록 3건을 시간 순서대로 알려 주세요.",
+            "answer_contract": _list_answer_contract(
+                phrase="투약 기록",
+                constraint_phrases=["시간 순서대로"],
+                limit_phrase="3건",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        second_payload.label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "medications",
+                "column": "hadm_id",
+                "op": "eq",
+                "value": 1,
+            },
+            {
+                "usage": "order_by",
+                "table": "medications",
+                "column": "time",
+                "direction": "asc",
+            },
+        ],
+        query_params={"spec": {"from": {"table": "medications"}}},
+    )
+
+    second_message = await controller.submit(second_payload)
+
+    assert "Feedback Handling Policy reminder" in second_message
+    assert controller.last_feedback_error_codes == ("label_changed_during_repair",)
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_feedbacks_duplicate_order_binding_phrase(
     tmp_path: Path,
 ) -> None:
@@ -1975,6 +2112,9 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "do not turn source status text into boolean completion wording" in schema_surface
     assert "source record sequence into generated display rank" in schema_surface
     assert "Do not add parenthetical normalized choices" in schema_surface
+    assert "When two reachable sources could satisfy the same broad phrase" in schema_surface
+    assert "the current record's category versus a referenced item's category" in schema_surface
+    assert "multiple reachable source surfaces could answer them" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
     assert "JSON string for the canonical submit_result payload" in schema_surface
@@ -2228,6 +2368,8 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "specificity feedback on the current draft" in message
     assert "Preserve the current anchor, target, row set/query path" in message
     assert "source meanings" in message
+    assert "one grounded meaningful dimension" in message
+    assert "Passive display-only fields are weak" in message
     assert "Do not switch topic or table family" in message
     assert "Current answer kind: scalar" in message
     assert "append, do not replace, any new answer field" not in message
@@ -2283,7 +2425,8 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "Policy reminder: Difficulty-Up Policy" in message
     assert "specificity feedback on the current draft" in message
     assert "Preserve the current anchor, target, row set/query path" in message
-    assert "one grounded visible field, relationship, or coherent constraint" in message
+    assert "one grounded meaningful dimension" in message
+    assert "Passive display-only fields are weak" in message
     assert "Do not switch topic or table family" in message
     assert "Current answer kind: list" in message
     assert "append, do not replace, any new answer field" not in message
@@ -2291,7 +2434,6 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "selected-row query target" not in message
     assert "row-set-preserving" not in message
     assert "row-excluding filter" not in message
-    assert "passive display-only fields" not in message
     assert "solver" not in message.lower()
     assert "pass rate" not in message.lower()
     assert "quality gate" not in message.lower()
@@ -3109,6 +3251,126 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
 
     assert "hidden row-scope handles" in message
     assert "must be anchored in entity" in message
+    assert "parent/current-subject handle" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_hidden_filter_unanchored",
+    )
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_hidden_child_to_parent_sibling_scope(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="records",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {"record_time": "2026-01-01T10:00:00", "record_name": "A"},
+        {"record_time": "2026-01-01T11:00:00", "record_name": "B"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "records",
+            "label": label,
+            "entity": {"child_id": 10},
+            "question": _wrap_user_prompt(
+                {"child_id": 10},
+                "이 항목과 관련된 최근 기록 2건을 시간순으로 알려주세요.",
+            ),
+            "answer_contract": _list_answer_contract(
+                phrase="최근 기록 2건",
+                limit_phrase="2건",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        column_sources=[
+            {
+                "output": "record_time",
+                "kind": "select",
+                "table": "sibling",
+                "column": "record_time",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "value_exposes_source": True,
+            },
+            {
+                "output": "record_name",
+                "kind": "select",
+                "table": "sibling",
+                "column": "record_name",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "value_exposes_source": True,
+            },
+        ],
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "child",
+                "column": "child_id",
+                "visibility": "blocked",
+                "is_handle": True,
+                "op": "eq",
+                "value": 10,
+            },
+            {
+                "usage": "order_by",
+                "table": "sibling",
+                "column": "record_time",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "direction": "asc",
+            },
+        ],
+        query_params={
+            "spec": {
+                "from": {"table": "child", "as": "c"},
+                "join": [
+                    {
+                        "from": "c",
+                        "via_edge": "child.parent_id->parent",
+                        "as": "p",
+                    },
+                    {
+                        "from": "p",
+                        "via_edge": "parent<-sibling.parent_id",
+                        "as": "s",
+                    },
+                ],
+                "where": [
+                    {
+                        "ref": {"as": "c", "column": "child_id"},
+                        "op": "eq",
+                        "value": 10,
+                    }
+                ],
+                "order_by": [
+                    {
+                        "ref": {"as": "s", "column": "record_time"},
+                        "direction": "asc",
+                    }
+                ],
+                "limit": 2,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "hidden row-scope handles" in message
     assert "parent/current-subject handle" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_hidden_filter_unanchored",

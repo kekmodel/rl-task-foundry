@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass, field
 from time import perf_counter
 from types import SimpleNamespace
@@ -78,6 +79,44 @@ def _add_token_usage(
 ) -> None:
     for key, value in usage.items():
         total[key] = total.get(key, 0) + int(value)
+
+
+def _solver_rollout_timeout_allowance_s(config: object | None) -> float:
+    """Extra wall-clock budget for submit_draft's internal solver rollout.
+
+    The SDK runner timeout wraps tool execution too. Since submit_draft runs
+    the solver rollout inside a tool call, the composer timeout must leave
+    enough room for infra-failure replacement solver attempts.
+    """
+
+    if config is None:
+        return 0.0
+    calibration = getattr(config, "calibration", None)
+    database = getattr(config, "database", None)
+    solver_runtime = getattr(config, "solver_runtime", None)
+    if calibration is None or database is None or solver_runtime is None:
+        return 0.0
+
+    target_evaluable_runs = int(getattr(calibration, "max_solver_runs", 0) or 0)
+    if target_evaluable_runs <= 0:
+        return 0.0
+    batch_size = max(
+        1,
+        min(
+            int(getattr(calibration, "solver_batch_size", 1) or 1),
+            target_evaluable_runs,
+        ),
+    )
+    max_attempts = max(target_evaluable_runs, target_evaluable_runs * 2)
+    max_batches = math.ceil(max_attempts / batch_size)
+    episode_timeout_s = (
+        int(getattr(database, "statement_timeout_ms", 0) or 0)
+        * int(getattr(solver_runtime, "max_turns", 0) or 0)
+        / 1000.0
+    )
+    if episode_timeout_s <= 0:
+        return 0.0
+    return max_batches * episode_timeout_s
 
 
 def _persist_reasoning_records(
@@ -301,7 +340,14 @@ class OpenAIAgentsSynthesisBackend:
             affordance_map=affordance_map,
         )
         started_at = perf_counter()
-        deadline = started_at + self.runtime_config.run_timeout_s
+        solver_rollout_timeout_allowance_s = _solver_rollout_timeout_allowance_s(
+            getattr(conversation.controller, "config", None)
+        )
+        deadline = (
+            started_at
+            + self.runtime_config.run_timeout_s
+            + solver_rollout_timeout_allowance_s
+        )
         run_input: str | list[object] = request_input
         total_turn_count = 0
         token_usage: dict[str, int] = {}
@@ -365,6 +411,9 @@ class OpenAIAgentsSynthesisBackend:
                             "token_usage": token_usage,
                             "tool_calls": list(tool_calls),
                             "protocol_feedback_events": protocol_feedback_events,
+                            "solver_rollout_timeout_allowance_s": (
+                                solver_rollout_timeout_allowance_s
+                            ),
                             "reasoning_content_path": reasoning_content_path,
                             "reasoning_content_items": reasoning_content_items,
                             "run_items": [
@@ -438,6 +487,9 @@ class OpenAIAgentsSynthesisBackend:
                     "token_usage": token_usage,
                     "tool_calls": list(tool_calls),
                     "protocol_feedback_events": protocol_feedback_events,
+                    "solver_rollout_timeout_allowance_s": (
+                        solver_rollout_timeout_allowance_s
+                    ),
                     "reasoning_content_path": reasoning_content_path,
                     "reasoning_content_items": reasoning_content_items,
                     "run_items": run_item_summaries,

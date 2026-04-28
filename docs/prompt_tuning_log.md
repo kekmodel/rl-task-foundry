@@ -5887,6 +5887,315 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
   통과.
 
+## Iteration 156 — Difficulty-up must not reward passive display width
+
+- **질문**:
+  Iteration 155 이후 같은 smoke 설정에서 composer가 too-easy feedback을 받고
+  의미 있는 난이도 상승을 하는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver 4개, lower band 0.2:
+  `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_02`.
+- **결과**:
+  trial은 accepted되지 않고 `synthesis_failed`로 끝났다.
+
+  - first submit: ICU procedure list, `answer_contract_order_ambiguous`
+  - repair: 전체 14개 row 반환 시도, `answer_contract_list_limit_too_wide`
+  - repair: visible tie-break 추가 뒤 order binding 문구 중복,
+    `answer_contract_binding_missing`
+  - fourth/fifth submit: solver `4/4 = 1.0`, `calibration_inconclusive`
+  - final outcome: budget exhausted, no provider failure
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: clean-good but too easy. 최종 후보는 같은 입원/ICU procedure row set,
+  visible order/tie-break, 5-row limit을 갖춘 검증 가능한 task였고 solver도 전부
+  풀었다. 문제는 저품질이 아니라 Kimi smoke 기준으로 너무 직접적이라는 점이다.
+
+  low-quality accepted는 발생하지 않았다. 초반 14-row 확장과 binding 오류도
+  validator가 막았으므로 rejection은 바람직했다.
+- **원인**:
+  composer reasoning을 보면 too-easy feedback 뒤 "location field를 하나 더 붙이면
+  난이도가 올라간다"고 판단했다. 이는 DB-neutral 원칙 위반은 아니지만
+  `foundation.md`의 "passive display-width additions are not meaningful difficulty"
+  원칙과 어긋난다. 기존 prompt의 `R+C` 예시는 이 오해를 부추길 수 있었다.
+- **변경**:
+  prompt-first 원칙으로 `Difficulty-Up Policy`와 예시를 수정했다.
+
+  - list difficulty-up은 단순 display field가 아니라 lookup/comparison/order/row
+    reasoning을 바꾸는 grounded dimension이어야 한다고 명시했다.
+  - generic example을 `R+C`에서 "related/derived C used for compare/order"로
+    바꾸고, "unused display C"는 bad example로 넣었다.
+  - too-easy feedback은 새 정책을 반복 지시하지 않고 "grounded meaningful
+    dimension"과 "passive display-only fields are weak"만 짧게 상기한다.
+- **원칙 준수**:
+  precision-100 validator는 추가하지 않았다. difficulty quality는 semantic 판단
+  영역이므로 DB literal/table/column/token heuristic으로 막지 않았다. Prompt가
+  durable policy를 정의하고 feedback은 named policy를 상기하는 구조를 유지했다.
+
+## Iteration 157 — Hidden child anchors must not silently select sibling row sets
+
+- **질문**:
+  Iteration 156 변경 뒤 다음 smoke에서 accepted 품질이 개선되는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver 4개, lower band 0.2:
+  `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_03`.
+- **결과**:
+  trial은 `synthesis_failed`로 끝났다.
+
+  - first submit: `answer_contract_binding_missing`
+  - second submit: calibration `0/4 = 0.0`, `calibration_inconclusive`
+  - solver failed runs: `0` (모두 evaluable)
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. composer는 `pharmacy_id=99938576` hidden
+  child anchor에서 시작했지만, canonical query는 `pharmacy -> admissions -> emar`
+  로 이동해 같은 입원 전체의 eMAR row set을 냈다. request는 "이 약물 처방과
+  관련된 투약"처럼 보이므로 solver들은 direct pharmacy/eMAR 관계나 약물명 매칭을
+  찾았다. 실제 정답은 처방 자체가 아니라 parent admission sibling list였고, 그래서
+  solver 0/4가 됐다. 어려운 좋은 문제가 아니라 request/source-scope mismatch다.
+
+  low-quality accepted는 발생하지 않았다.
+- **변경**:
+  precision-100 structural validator를 추가했다. 최신 query가 hidden child PK를
+  `where`로 고정한 뒤 forward edge로 parent를 찾고, 다시 reverse edge로 sibling
+  list를 정답 row set으로 선택하는 경우, parent/current-subject key가 `entity`에
+  없으면 기존 `answer_contract_hidden_filter_unanchored` feedback으로 막는다.
+
+  이는 DB literal/table/column 의미 휴리스틱이 아니다. query spec의 edge 방향,
+  latest query metadata의 hidden handle evidence, submitted entity key만 비교한다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_hidden_child_to_parent_sibling_scope tests/test_synthesis_runtime.py::test_submit_draft_rejects_hidden_filter_missing_from_entity -q`
+  통과 (`2 passed`).
+
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`83 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+## Iteration 158 — Empty label queries must remain repairable
+
+- **질문**:
+  budget feedback가 submit을 앞당기면서도, 행이 0개인 label query를 잘못
+  "성공한 label evidence"로 취급하지 않는가?
+- **실험**:
+  `trial_04`에서 composer가 최종 label query를 실행했지만 `row_count=0`이었다.
+  이 상태에서 budget wrapper가 추가 query를 막아 submit만 강제했다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: 저품질 여부를 판단하기 전 단계에서 실행 정책이 잘못됐다. 빈 list는
+  유효한 정답 label이 아니므로, 이건 어려운 좋은 문제도 저품질 문제도 아니라
+  label evidence repair가 필요한 중간 상태다.
+- **변경**:
+  `data_tool_budget_feedback`가 최신 성공 query의 `rows`가 비어 있으면
+  repair query를 허용하도록 했다. 이는 `row_count/rows` 구조만 보는
+  precision-100 실행 규칙이며 DB literal/token heuristic이 아니다.
+- **검증**:
+  `test_data_tool_budget_feedback_allows_query_repair_for_empty_query` 추가.
+
+## Iteration 159 — Composer timeout must not cut off solver provider retries
+
+- **질문**:
+  provider 실패는 재시도한다는 실험 원칙이 런타임에서도 지켜지는가?
+- **실험**:
+  `trial_04_retry_01`, `trial_04_retry_02`, `trial_05` 모두 OpenRouter Kimi
+  provider timeout으로 끝났다. 특히 `trial_05`는 submit_draft 내부 solver rollout이
+  이미 시작되어 2개 solver는 matched, 1개는 invalid submit까지 기록됐지만, 4번째
+  solver 또는 replacement 시도 전에 바깥 composer `run_timeout_s=420`이 먼저
+  만료됐다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected/중단 data: `trial_05` 후보는 "해당 ICU stay의 처음 5개 배출 기록"으로,
+  너무 쉬운 편이지만 row set, 정렬, limit, 출력 필드는 검증 가능했다. low-quality
+  accepted는 없었다. timeout 때문에 품질 결론을 내릴 수 없으므로 provider failure로
+  분리한다.
+- **변경**:
+  synthesis backend에서 composer timeout에 submit_draft 내부 solver rollout의
+  replacement-attempt budget을 더한다. SDK Runner timeout은 tool 실행까지 감싸므로,
+  solver rollout이 tool 안에서 실행되는 현재 구조에서는 이 allowance가 없으면
+  provider retry 원칙이 중간에 끊긴다.
+
+  계산은 `max_solver_runs`, `solver_batch_size`, `statement_timeout_ms`,
+  `solver_runtime.max_turns`만 사용한다. DB 내용이나 모델 출력 literal을 보지 않는
+  실행 예산 계산이다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`94 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+## Iteration 160 — Limited-list boundary wording must match order direction
+
+- **질문**:
+  timeout allowance 이후 실제 smoke가 provider failure 없이 품질 신호를 주는가?
+- **실험**:
+  `trial_06`을 같은 MIMIC demo no-topic Kimi 4-solver 설정으로 실행했다.
+- **결과**:
+  provider timeout은 사라졌다. solver 4개 모두 evaluable이었고 pass-rate는
+  `0/4 = 0.0`이었다. accepted는 없고 budget exhausted.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 최종 draft는 request에서 "최근 5건"이라고
+  했지만 query는 `admittime asc limit 5`라서 가장 오래된 5건을 canonical answer로
+  만들었다. solver 4개는 모두 최근 5건 쪽으로 해석해 다른 answer를 제출했다.
+  이건 어려운 좋은 문제가 아니라 request boundary와 query direction이 충돌한
+  저품질 후보이다. low-quality accepted는 발생하지 않았다.
+- **변경**:
+  precision-100 validator는 추가하지 않았다. "최근/오래된/최신" 같은 자연어
+  의미를 hard-code하면 literal/token heuristic 금지 원칙 위반이다.
+
+  대신 prompt-first 원칙으로 `List Determinism Policy`를 압축 보강했다:
+  limited ordered list에서는 boundary words와 direction이 서로 맞아야 하며,
+  newest/latest vs oldest/earliest, asc/desc를 섞지 말라고 명시했다.
+- **검증**:
+  prompt 길이 `7993`.
+
+  `uv run pytest tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`94 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+## Iteration 161 — List-limit repair must not reset the task
+
+- **질문**:
+  Iteration 160 이후 다음 smoke에서 boundary mismatch가 줄고, composer가 feedback을
+  정책 reminder로만 사용하는가?
+- **실험**:
+  `trial_07`을 같은 MIMIC demo no-topic Kimi 4-solver 설정으로 실행했다.
+- **결과**:
+  `MaxTurnsExceeded`로 종료됐다. accepted 없음.
+
+  - first submit: 입원 진단 목록 7건, `answer_contract_list_limit_too_wide`
+  - second submit: 전자 약물 투여 기록 2건으로 task reset,
+    `answer_contract_binding_missing`
+  - third submit: 같은 약물 기록 wording repair 실패,
+    `answer_contract_phrase_missing`
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 첫 진단 목록 후보는 같은 target에서 3-5건으로
+  limit만 줄이면 살릴 수 있었다. 그런데 composer가 전자 약물 기록으로 topic/query
+  source를 갈아타며 feedback을 새 지시처럼 사용했다. 이는 어려운 좋은 문제가 아니라
+  Feedback Handling Policy 위반이다. low-quality accepted는 없었다.
+- **변경**:
+  1. `answer_contract_list_limit_too_wide` feedback 문구에서 "다른 더 어려운
+     label을 선택"할 여지를 제거하고, 같은 target/query scope에서 3-5 row limit만
+     줄이라고 상기하도록 수정했다.
+  2. precision-100 구조 검증을 추가했다. list-limit-only feedback 직후에는 이전
+     query evidence의 kind/output sources/predicates/order를 보존하고 item count만
+     3-5로 줄인 repair만 허용한다. 다른 row source/task로 바뀌면
+     `label_changed_during_repair` feedback을 반환한다.
+
+  이 검증은 query metadata 구조와 row count만 비교한다. DB 값, 테이블명 의미,
+  컬럼명 의미, 자연어 token heuristic은 사용하지 않는다.
+- **검증**:
+  `test_submit_draft_rejects_task_reset_after_list_limit_feedback` 추가.
+
+  `uv run pytest tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`95 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+## Iteration 162 — Accepted data can still expose broad source-role ambiguity
+
+- **질문**:
+  Iteration 161 이후 smoke가 accepted를 만들면, accepted data가 정말 좋은가?
+- **실험**:
+  `trial_08`을 같은 MIMIC demo no-topic Kimi 4-solver 설정으로 실행했다.
+- **결과**:
+  accepted. pass-rate `1/4 = 0.25`, completed solver runs 6, infra-excluded
+  timeout 2개는 replacement로 보충되어 evaluable 4개가 확보됐다.
+- **정성 평가**:
+  accepted data: 부분적으로 저품질. row set, 정렬, tie-break, fixed 4-row list는
+  좋다. 그러나 `procedure_category`가 broad source-role ambiguity를 남겼다.
+  canonical은 `procedureevents.ordercategoryname`의 `Peripheral Lines/Invasive Lines`
+  를 사용했고, 한 solver는 reachable referenced item surface인 `d_items.category`
+  의 `Access Lines - Peripheral`를 사용했다. user_request의 "시술의 종류"가 어느
+  source surface의 category인지 충분히 지정하지 못했다.
+
+  rejected data: 첫 두 feedback은 phrase/binding contract repair였고 저품질이
+  accepted되기 전까지 validator가 잘 작동했다. 그러나 최종 accepted에는 broad
+  category ambiguity가 남았다.
+- **변경**:
+  precision-100 hard validator는 추가하지 않았다. category/type/status 같은 자연어
+  source-role ambiguity를 컬럼명이나 단어 literal로 잡으면 금지 원칙 위반이다.
+
+  대신 submit_draft tool schema description을 보강했다. `output_bindings`와
+  `requested_by_phrase` 설명에, 여러 reachable source surface가 같은 broad phrase를
+  만족할 수 있으면 "current record category" vs "referenced item category"처럼 정확한
+  source role을 user_request phrase가 명명해야 한다고 명시했다.
+- **검증**:
+  `test_submit_draft_tool_schema_descriptions_are_prompt_aligned`에 source-surface
+  ambiguity 문구 assertion 추가.
+
+  `uv run pytest tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`95 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/composer_tools.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+## Iteration 163 — Broad medication source roles were rejected, not accepted
+
+- **질문**:
+  Iteration 162 schema description 보강 후 broad source-role ambiguity가 accepted로
+  통과하지 않는가?
+- **실험**:
+  `trial_09`를 같은 MIMIC demo no-topic Kimi 4-solver 설정으로 실행했다.
+- **결과**:
+  accepted 없음. 최종 solver pass-rate `0/4 = 0.0`, provider failure 없음.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 후보는 입원 중 처방 약물 5개를 시작 시간,
+  약물명 tie-break로 정렬하고 `proc_type`, `dispensation`을 요구했다. row set과
+  order는 검증 가능했지만, user_request의 "처방 유형", "조제 방법"이 pharmacy 안의
+  어느 source representation인지 충분히 특정하지 못했다. solver들은 다른 reachable
+  medication/order surface 값을 제출했다. 어려운 좋은 문제가 아니라 source-role
+  wording mismatch다.
+- **판단**:
+  저품질이 accepted되지 않았으므로 이번 반복에서는 hard validator를 추가하지 않는다.
+  이를 컬럼명/값/token 기반으로 막는 것은 literal heuristic 금지 원칙 위반이다.
+  Iteration 162의 schema description 보강 방향은 유지하고, 다음 smoke에서 accepted
+  품질을 계속 본다.
+
+## Iteration 164 — Accepted ICU medication history is qualitatively good
+
+- **질문**:
+  반복 개선 후 accepted data가 정말 좋은가?
+- **실험**:
+  `trial_10`을 같은 MIMIC demo no-topic Kimi 4-solver 설정으로 실행했다.
+- **결과**:
+  accepted. pass-rate `2/4 = 0.5`, completed/evaluable solver runs `4/4`,
+  provider failure 없음.
+- **정성 평가**:
+  accepted data: good. 최종 요청은 특정 ICU stay의 투약 이력 중 처음 5개를
+  `administration_start_time asc`, 동시간이면 `medication_name asc`로 정렬한다.
+  output은 `medication_name`, `administered_amount`, `unit`,
+  `administration_start_time`, `order_category`이고, 모두 최신 query evidence에서
+  user-visible source로 나온다. request phrase, answer_contract binding, query
+  order/select가 같은 구조를 가리킨다.
+
+  solver mismatch: 2개 solver는 canonical과 정확히 matched. 2개는
+  `missing_submit_result`로 invalid_submit이며 정답 row set을 다르게 고른 신호가
+  아니다. 따라서 어렵지만 좋은 문제로 본다.
+
+  rejected data: 첫 draft의 `starttime` 단독 order는 tie가 있었고
+  `answer_contract_order_ambiguous`로 막혔다. 최종 draft는 약물명 tie-break를
+  request/contract/query에 반영해 해결했다. low-quality accepted 없음.
+- **판단**:
+  현재 반복은 만족 기준을 충족한다. provider retry 예산, list-limit repair scope,
+  source-role schema description, prompt boundary wording이 함께 작동했고,
+  accepted data의 품질도 정성 평가를 통과했다.
+
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows
 
 - **질문**:

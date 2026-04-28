@@ -8,7 +8,10 @@ import pytest
 
 from rl_task_foundry.config.models import ModelRef, ProviderConfig, SynthesisRuntimeConfig
 from rl_task_foundry.synthesis import backend_openai_agents as backend_module
-from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
+from rl_task_foundry.synthesis.backend_openai_agents import (
+    OpenAIAgentsSynthesisBackend,
+    _solver_rollout_timeout_allowance_s,
+)
 from rl_task_foundry.synthesis.conversation import SynthesisConversation
 
 
@@ -37,6 +40,16 @@ class _RecordingEventLogger:
         self.sidecar_filenames.append(filename)
         self.sidecar_records.extend(records)
         return Path("/tmp/reasoning_content.jsonl")
+
+
+def test_synthesis_timeout_allowance_covers_solver_replacement_batches() -> None:
+    config = SimpleNamespace(
+        calibration=SimpleNamespace(max_solver_runs=4, solver_batch_size=4),
+        database=SimpleNamespace(statement_timeout_ms=20_000),
+        solver_runtime=SimpleNamespace(max_turns=12),
+    )
+
+    assert _solver_rollout_timeout_allowance_s(config) == 480.0
 
 
 def test_synthesis_backend_reuses_shared_model_client(monkeypatch) -> None:

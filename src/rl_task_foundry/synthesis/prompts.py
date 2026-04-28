@@ -201,10 +201,10 @@ def build_synthesis_agent_instructions(
         "bind one vague phrase to multiple concepts.",
 
         "# List Determinism Policy\n"
-        "Lists require one correct structured result: membership, order "
-        "direction, limit, and tie-breaks. Row-set controls must be entity "
-        "scope/request/contract. Match date/time granularity; state "
-        "direction explicitly: newest-first/oldest-first, asc/desc.\n"
+        "Lists need exact result: membership, order, limit, tie-breaks. "
+        "Row-set controls must be in entity/request/contract. For limited "
+        "ordered lists, boundary words and direction agree "
+        "(newest/latest vs oldest/earliest; asc/desc); no mixed signals.\n"
         "- Rows must be distinguishable through requested output fields. If "
         "`query` reports duplicate projected answer rows, add a natural visible "
         "field/aggregate. Do not shrink limits or add hidden handles.\n"
@@ -225,18 +225,19 @@ def build_synthesis_agent_instructions(
         "there is no fixed ladder. Keep same task, not a new task or difficulty "
         "jump.\n"
         "- For lists, keep filters, order, limit, row set, and output "
-        "fields/source meanings; append exactly one grounded visible field, "
-        "direct-relationship field/aggregate, or row-preserving constraint, "
-        "then ask for it in user_request/answer_contract.\n"
+        "fields/source meanings. Append one grounded dimension that changes lookup, "
+        "comparison, order, or row reasoning; passive display fields are "
+        "weak; ask for it in user_request/answer_contract.\n"
         "- Do not shrink the fixed list, remove/rename/replace fields, or "
         "combine a row-excluding filter with new outputs/order/cardinality.",
 
         "# Difficulty-Up Examples\n"
-        "<example><draft_before>list rows R with fields A,B</draft_before>"
-        "<draft_after>R+C</draft_after><commentary>Good: the canonical label "
-        "changes</commentary></example>\n"
-        "<example><draft_after>same</draft_after><commentary>Bad: this is "
-        "wording drift</commentary></example>",
+        "<example><draft_before>list R fields A,B</draft_before>"
+        "<draft_after>R plus related/derived C used for compare/order"
+        "</draft_after><commentary>Good: changes what must be found"
+        "</commentary></example>\n"
+        "<example><draft_after>R plus unused display C</draft_after>"
+        "<commentary>Bad: passive width</commentary></example>",
 
         "# Task Shapes\n"
         "Prefer data-service tasks: history lookup, shortlist, summary, "
@@ -248,9 +249,8 @@ def build_synthesis_agent_instructions(
         "orders needing zero or one visible tie-break; avoid all matching "
         "when observed count exceeds 5; include at least one non-handle "
         "visible field.\n"
-        "- Keep initial row/list labels narrow: prefer 3-4 fields, max 5 before "
-        "feedback. If too easy, use Difficulty-Up Policy to add one coherent "
-        "field or relationship at a time for calibration.\n"
+        "- Initial row/list labels: prefer 3-4 fields, max 5 before feedback. "
+        "If too easy, add one meaningful dimension per Difficulty-Up Policy.\n"
         "- Open-ended recommendations need deterministic filters, thresholds, "
         "ordering, limit, and tie-breaks; submit through `submit_draft` and "
         "follow that tool's schema exactly.",

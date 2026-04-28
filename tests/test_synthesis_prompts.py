@@ -274,18 +274,18 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "preserve kind, anchor, target, row set/query path" in instructions
     assert "keep filters, order, limit" in instructions
     assert "output fields/source meanings" in instructions
-    assert "append exactly one grounded visible field" in instructions
-    assert "direct-relationship field/aggregate" in instructions
-    assert "row-preserving constraint" in instructions
+    assert "Append one grounded dimension" in instructions
+    assert "changes lookup, comparison, order, or row reasoning" in instructions
+    assert "passive display fields are weak" in instructions
     assert "ask for it in user_request/answer_contract" in instructions
     assert "Do not shrink the fixed list" in instructions
     assert "remove/rename/replace fields" in instructions
     assert "or combine a row-excluding filter" in instructions
     assert "difficulty jump" in instructions
     assert "# Difficulty-Up Examples" in instructions
-    assert "<draft_before>list rows R with fields A,B" in instructions
-    assert "<commentary>Good: the canonical label changes" in instructions
-    assert "<commentary>Bad: this is wording drift" in instructions
+    assert "<draft_before>list R fields A,B" in instructions
+    assert "<commentary>Good: changes what must be found" in instructions
+    assert "<commentary>Bad: passive width" in instructions
     assert "If `submit_draft` says the conversation is terminated" in instructions
 
     # Durable policies are named so feedback/tool descriptions can reference
@@ -389,11 +389,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "order is multi-key" in instructions
     assert "do not bind one vague phrase to multiple concepts" in instructions
     assert "List Determinism Policy" in instructions
-    assert "one correct structured result" in instructions
-    assert "membership, order direction, limit, and tie-breaks" in instructions
-    assert "Row-set controls must be entity scope" in instructions
-    assert "state direction explicitly" in instructions
-    assert "newest-first/oldest-first" in instructions
+    assert "exact result: membership, order, limit, tie-breaks" in instructions
+    assert "Row-set controls must be in entity/request/contract" in instructions
+    assert "boundary words and direction agree" in instructions
+    assert "newest/latest vs oldest/earliest" in instructions
     assert "order leaves distinct-answer ties" in instructions
     assert "ask for a natural visible tie-break before" in instructions
     assert "Use sequence/rank only for named source record order" in instructions
@@ -402,7 +401,6 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "choose unique ordering, or return tied rows" in instructions
     assert "Do not shrink limits" in instructions
     assert "or add hidden handles" in instructions
-    assert "date/time granularity" in instructions
 
     # Task shape is domain-agnostic and concise.
     assert "# Task Shapes" in instructions
@@ -417,10 +415,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "fixed limit of 3-5 rows" in instructions
     assert "avoid all matching when observed count exceeds 5" in instructions
     assert "at least one non-handle visible field" in instructions
-    assert "Keep initial row/list labels narrow" in instructions
+    assert "Initial row/list labels" in instructions
     assert "prefer 3-4 fields" in instructions
     assert "max 5 before feedback" in instructions
-    assert "add one coherent field or relationship at a time" in instructions
+    assert "add one meaningful dimension" in instructions
     assert "Open-ended recommendations" in instructions
     assert "filters, thresholds, ordering, limit, and tie-breaks" in instructions
 

@@ -81,6 +81,6 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
         f"{kind_note} Policy reminder: Difficulty-Up Policy is the repair "
         "source for specificity feedback on the current draft. Preserve the "
         "current anchor, target, row set/query path, and source meanings; add "
-        "one grounded visible field, relationship, or coherent constraint "
-        "supported by new evidence. Do not switch topic or table family."
+        "one grounded meaningful dimension supported by new evidence. Passive "
+        "display-only fields are weak. Do not switch topic or table family."
     )
