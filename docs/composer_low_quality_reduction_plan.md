@@ -106,15 +106,15 @@ Proposed `answer_contract` extension:
   "limit_phrase": "<exact user_request phrase or null>",
   "output_bindings": [
     {
-      "field": "result_field",
+      "label_field": "result_field",
       "requested_by_phrase": "<exact user_request phrase>"
     }
   ],
   "order_bindings": [
     {
-      "output_or_ref": "ordered_field",
+      "requested_by_phrase": "<exact user_request phrase>",
       "direction": "desc",
-      "requested_by_phrase": "<exact user_request phrase>"
+      "label_field": null
     }
   ]
 }

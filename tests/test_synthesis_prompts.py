@@ -343,6 +343,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Do not make a raw handle the main selected answer" in instructions
     assert "current query evidence marks it user-visible" in instructions
     assert "`answer_contract` is only a request-binding surface" in instructions
+    assert "optional output/order bindings" in instructions
     assert "Do not restate tables, columns, operators, or SQL" in instructions
     assert "latest query result supplies structural evidence" in instructions
     assert "Every contract phrase must be an exact substring of `user_request`" in instructions

@@ -110,6 +110,22 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
 JsonScalar = str | int | float | bool
 
 
+def _strip_required_text(value: str, *, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be blank")
+    return normalized
+
+
+def _strip_optional_text(value: str | None, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be blank")
+    return normalized
+
+
 def _error_code_values(
     codes: list[SubmitDraftErrorCode | str] | tuple[SubmitDraftErrorCode | str, ...],
 ) -> list[str]:
@@ -128,6 +144,64 @@ def _validation_error_diagnostics(error: ValidationError) -> list[dict[str, obje
         }
         for error_item in error.errors()
     ]
+
+
+class AnswerOutputBinding(StrictModel):
+    label_field: str = Field(
+        min_length=1,
+        description=(
+            "Exact top-level field name from label_json that is meant to be "
+            "returned. This names the submitted label field, not a source "
+            "table or SQL column."
+        ),
+    )
+    requested_by_phrase: str = Field(
+        min_length=1,
+        description=(
+            "Exact contiguous substring from user_request that asks for this "
+            "label field."
+        ),
+    )
+
+    @field_validator("label_field", "requested_by_phrase")
+    @classmethod
+    def _validate_required_text(cls, value: str) -> str:
+        return _strip_required_text(value, field_name="binding text")
+
+
+class AnswerOrderBinding(StrictModel):
+    requested_by_phrase: str = Field(
+        min_length=1,
+        description=(
+            "Exact contiguous substring from user_request that asks for the "
+            "row order, recency, ranking, or tie-break."
+        ),
+    )
+    direction: Literal["asc", "desc"] | None = Field(
+        default=None,
+        description=(
+            "Requested direction when the wording fixes it, or null when the "
+            "direction is not explicit."
+        ),
+    )
+    label_field: str | None = Field(
+        default=None,
+        description=(
+            "Submitted label_json field that also represents the order key, "
+            "or null when ordering is requested without returning that key. "
+            "Do not put source table or SQL column names here."
+        ),
+    )
+
+    @field_validator("requested_by_phrase")
+    @classmethod
+    def _validate_requested_by_phrase(cls, value: str) -> str:
+        return _strip_required_text(value, field_name="requested_by_phrase")
+
+    @field_validator("label_field")
+    @classmethod
+    def _validate_label_field(cls, value: str | None) -> str | None:
+        return _strip_optional_text(value, field_name="label_field")
 
 
 class AnswerContract(StrictModel):
@@ -162,14 +236,25 @@ class AnswerContract(StrictModel):
             "such as '3 items', or null when there is no fixed size phrase."
         ),
     )
+    output_bindings: list[AnswerOutputBinding] | None = Field(
+        default=None,
+        description=(
+            "Optional request-to-label bindings for fields returned in "
+            "label_json. Omit or use null when not needed."
+        ),
+    )
+    order_bindings: list[AnswerOrderBinding] | None = Field(
+        default=None,
+        description=(
+            "Optional request-to-order bindings for list ordering, ranking, "
+            "recency, or tie-break wording. Omit or use null when not needed."
+        ),
+    )
 
     @field_validator("answer_phrase")
     @classmethod
     def _validate_answer_phrase(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("answer_phrase must not be blank")
-        return normalized
+        return _strip_required_text(value, field_name="answer_phrase")
 
     @field_validator("constraint_phrases")
     @classmethod
@@ -241,9 +326,11 @@ class SubmitDraftPayload(StrictModel):
         description=(
             "Minimal request-binding contract. Provide the answer shape and "
             "exact user_request phrases for the answer target, entity scope, "
-            "filters, ordering, tie-breaks, or fixed list size. Do not restate "
-            "tables, columns, operators, or SQL; the latest successful query "
-            "supplies structural evidence."
+            "filters, ordering, tie-breaks, or fixed list size. Optional "
+            "binding fields may map returned label fields and order wording "
+            "back to exact request phrases. Do not restate tables, columns, "
+            "operators, or SQL; the latest successful query supplies "
+            "structural evidence."
         ),
     )
 
@@ -600,6 +687,110 @@ def _contract_component_phrase_errors(
         ):
             missing_phrases.append(path)
     return missing_phrases
+
+
+def _answer_field_names(value: object) -> list[str]:
+    if isinstance(value, dict):
+        return sorted(str(key) for key in value)
+    if isinstance(value, list):
+        field_names: set[str] = set()
+        for item in value:
+            if isinstance(item, dict):
+                field_names.update(str(key) for key in item)
+        return sorted(field_names)
+    return []
+
+
+def _ordered_unique_texts(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _query_order_output_names(query_result: dict[str, object]) -> list[str]:
+    diagnostics = query_result.get("ordering_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return []
+    raw_outputs = diagnostics.get("order_by_outputs")
+    if not isinstance(raw_outputs, list):
+        return []
+    return _ordered_unique_texts(
+        [output for output in raw_outputs if isinstance(output, str)]
+    )
+
+
+def _query_order_reference_count(query_result: dict[str, object]) -> int:
+    referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
+    return sum(1 for ref in referenced_columns if ref.get("usage") == "order_by")
+
+
+def _answer_contract_binding_diagnostics(
+    contract: AnswerContract,
+    *,
+    user_request: str,
+    canonical_answer: object,
+    query_result: dict[str, object],
+    item_limit: int,
+) -> dict[str, object]:
+    label_fields = _answer_field_names(canonical_answer)
+    label_field_set = set(label_fields)
+    output_bindings = contract.output_bindings or []
+    order_bindings = contract.order_bindings or []
+    bound_output_fields = _ordered_unique_texts(
+        [binding.label_field for binding in output_bindings]
+    )
+    bound_order_label_fields = _ordered_unique_texts(
+        [binding.label_field for binding in order_bindings if binding.label_field is not None]
+    )
+    order_output_fields = [
+        field_name
+        for field_name in _query_order_output_names(query_result)
+        if field_name in label_field_set
+    ]
+    missing_requested_by_phrases: list[str] = []
+    for index, binding in enumerate(output_bindings):
+        if not _phrase_is_in_request(
+            phrase=binding.requested_by_phrase,
+            user_request=user_request,
+        ):
+            missing_requested_by_phrases.append(
+                f"output_bindings[{index}].requested_by_phrase"
+            )
+    for index, binding in enumerate(order_bindings):
+        if not _phrase_is_in_request(
+            phrase=binding.requested_by_phrase,
+            user_request=user_request,
+        ):
+            missing_requested_by_phrases.append(
+                f"order_bindings[{index}].requested_by_phrase"
+            )
+
+    return {
+        "label_fields": label_fields[:item_limit],
+        "bound_output_fields": bound_output_fields[:item_limit],
+        "missing_output_bindings": sorted(
+            label_field_set - set(bound_output_fields)
+        )[:item_limit],
+        "extra_output_bindings": sorted(
+            set(bound_output_fields) - label_field_set
+        )[:item_limit],
+        "order_reference_count": _query_order_reference_count(query_result),
+        "order_binding_count": len(order_bindings),
+        "order_output_fields": order_output_fields[:item_limit],
+        "bound_order_label_fields": bound_order_label_fields[:item_limit],
+        "missing_order_label_bindings": sorted(
+            set(order_output_fields) - set(bound_order_label_fields)
+        )[:item_limit],
+        "extra_order_label_fields": sorted(
+            set(bound_order_label_fields) - label_field_set
+        )[:item_limit],
+        "missing_requested_by_phrases": missing_requested_by_phrases[:item_limit],
+    }
 
 
 def _referenced_predicate_signature(ref: dict[str, object]) -> str | None:
@@ -1200,6 +1391,7 @@ class SubmitDraftController:
 
         submission_index = len(self.attempts) + 1
         error_codes: list[SubmitDraftErrorCode] = []
+        submission_diagnostics: dict[str, object] = {}
         invalid_diagnostics: dict[str, object] = {}
         search_cost_observations = (
             len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
@@ -1272,6 +1464,15 @@ class SubmitDraftController:
         if not isinstance(latest_query_result, dict):
             error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING)
         else:
+            submission_diagnostics["answer_contract_binding_diagnostics"] = (
+                _answer_contract_binding_diagnostics(
+                    payload.answer_contract,
+                    user_request=payload.user_request,
+                    canonical_answer=canonical_answer,
+                    query_result=latest_query_result,
+                    item_limit=self.config.synthesis.runtime.diagnostic_item_limit,
+                )
+            )
             current_query_evidence_signature = _query_evidence_signature(
                 latest_query_result,
                 answer_kind=payload.answer_contract.kind,
@@ -1373,6 +1574,12 @@ class SubmitDraftController:
                     ]
                 )
 
+        if submission_diagnostics:
+            invalid_diagnostics = {
+                **submission_diagnostics,
+                **invalid_diagnostics,
+            }
+
         if error_codes:
             deduped_error_codes = list(dict.fromkeys(error_codes))
             if all(error_code in _FEEDBACK_ONLY_ERROR_CODES for error_code in deduped_error_codes):
@@ -1408,6 +1615,7 @@ class SubmitDraftController:
                 error_codes=[SubmitDraftErrorCode.DRAFT_VALIDATION_FAILED],
                 payload=payload,
                 search_cost_observations=search_cost_observations,
+                diagnostics=submission_diagnostics,
             )
 
         rollout_summary = await self.solver_orchestrator.run_draft(draft)
@@ -1456,7 +1664,7 @@ class SubmitDraftController:
                 evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
                 failed_solver_runs=quality_gate_summary.failed_solver_runs,
                 search_cost_observations=search_cost_observations,
-                diagnostics={},
+                diagnostics=submission_diagnostics,
             )
             return _render_structured_message(
                 kind="Accepted",
@@ -1497,7 +1705,7 @@ class SubmitDraftController:
                 total_solver_runs=quality_gate_summary.total_solver_runs,
                 evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
                 failed_solver_runs=quality_gate_summary.failed_solver_runs,
-                diagnostics={},
+                diagnostics=submission_diagnostics,
                 payload=payload,
                 search_cost_observations=search_cost_observations,
             )
@@ -1537,7 +1745,7 @@ class SubmitDraftController:
                     total_solver_runs=quality_gate_summary.total_solver_runs,
                     evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
                     failed_solver_runs=quality_gate_summary.failed_solver_runs,
-                    diagnostics={},
+                    diagnostics=submission_diagnostics,
                     payload=payload,
                     search_cost_observations=search_cost_observations,
                 )
@@ -1565,6 +1773,7 @@ class SubmitDraftController:
                 evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
                 failed_solver_runs=quality_gate_summary.failed_solver_runs,
                 diagnostics={
+                    **submission_diagnostics,
                     "terminal_rejection": True,
                 },
                 payload=payload,
@@ -1596,6 +1805,7 @@ class SubmitDraftController:
             evaluable_solver_runs=quality_gate_summary.evaluable_solver_runs,
             failed_solver_runs=quality_gate_summary.failed_solver_runs,
             diagnostics={
+                **submission_diagnostics,
                 "terminal_rejection": True,
             },
             payload=payload,

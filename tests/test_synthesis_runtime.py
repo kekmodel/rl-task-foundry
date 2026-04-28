@@ -812,6 +812,7 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
     required_fields = set(schema.get("required", []))
     contract_required = set(schema["$defs"]["AnswerContract"]["required"])
     answer_contract_schema = schema["properties"]["answer_contract"]
+    contract_properties = schema["$defs"]["AnswerContract"]["properties"]
 
     assert "constraint_summary" not in required_fields
     assert "user_request" in required_fields
@@ -823,9 +824,13 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
         "constraint_phrases",
         "limit_phrase",
     } == contract_required
+    assert "output_bindings" in contract_properties
+    assert "order_bindings" in contract_properties
+    assert "output_bindings" not in contract_required
+    assert "order_bindings" not in contract_required
     assert answer_contract_schema["$ref"] == "#/$defs/AnswerContract"
     assert "Do not restate tables" in answer_contract_schema["description"]
-    assert schema["$defs"]["AnswerContract"]["properties"]["kind"]["enum"] == [
+    assert contract_properties["kind"]["enum"] == [
         "scalar",
         "list",
     ]
@@ -860,6 +865,74 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
         == {"customer_count": 1}
     )
     assert _loose_json_schema_paths(schema) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_records_answer_contract_binding_diagnostics(
+    tmp_path: Path,
+) -> None:
+    monitor = _CollectingPhaseMonitor()
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+        phase_monitor=monitor,  # type: ignore[arg-type]
+    )
+    _seed_min_initial_exploration(controller)
+    raw_payload = _accepted_payload().model_dump(mode="json")
+    raw_payload["answer_contract"] = {
+        **raw_payload["answer_contract"],
+        "output_bindings": [
+            {
+                "label_field": "customer_count",
+                "requested_by_phrase": "전체 고객 수",
+            }
+        ],
+        "order_bindings": [
+            {
+                "requested_by_phrase": "배정된 매장",
+                "direction": None,
+                "label_field": "missing_order_field",
+            }
+        ],
+    }
+    payload = SubmitDraftPayload.model_validate(raw_payload)
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "customer",
+                "column": "store_id",
+                "direction": "asc",
+            }
+        ],
+        result_extra={"ordering_diagnostics": {"order_by_outputs": ["store_id"]}},
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+    diagnostics = monitor.records[-1]["diagnostics"]
+    assert isinstance(diagnostics, dict)
+    binding_diagnostics = diagnostics["answer_contract_binding_diagnostics"]
+    assert isinstance(binding_diagnostics, dict)
+    assert binding_diagnostics["bound_output_fields"] == ["customer_count"]
+    assert binding_diagnostics["missing_output_bindings"] == ["store_id"]
+    assert binding_diagnostics["order_reference_count"] == 1
+    assert binding_diagnostics["order_binding_count"] == 1
+    assert binding_diagnostics["order_output_fields"] == ["store_id"]
+    assert binding_diagnostics["extra_order_label_fields"] == [
+        "missing_order_field"
+    ]
+    assert binding_diagnostics["missing_requested_by_phrases"] == []
 
 
 def _loose_json_schema_paths(value: object, *, path: str = "$") -> list[str]:
@@ -910,6 +983,10 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "query.order_by uses tie-break fields" in schema_surface
     assert "must visibly ask for that secondary order" in schema_surface
     assert "merely selecting the field as output is not enough" in schema_surface
+    assert "Optional request-to-label bindings" in schema_surface
+    assert "Optional request-to-order bindings" in schema_surface
+    assert "not a source table or SQL column" in schema_surface
+    assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface
     assert "JSON string for the canonical submit_result payload" in schema_surface
     assert "decorative anchor" in schema_surface
