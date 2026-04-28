@@ -953,6 +953,162 @@ async def test_submit_draft_records_answer_contract_binding_diagnostics(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_accepts_single_row_list_without_order_binding(
+    tmp_path: Path,
+) -> None:
+    monitor = _CollectingPhaseMonitor()
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="stay_summary",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+        phase_monitor=monitor,  # type: ignore[arg-type]
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {
+            "first_unit": "Medical Intensive Care Unit",
+            "last_unit": "Medical Intensive Care Unit",
+            "admitted_at": "2111-11-13T23:40:00",
+            "discharged_at": "2111-11-14T00:14:10",
+        }
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "stay_summary",
+            "label": label,
+            "entity": {"stay_key": 1},
+            "user_request": (
+                "해당 입원의 처음 배정 병동, 마지막 배정 병동, "
+                "입실 시간, 퇴실 시간을 알려주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": (
+                    "처음 배정 병동, 마지막 배정 병동, 입실 시간, 퇴실 시간"
+                ),
+                "constraint_phrases": [],
+                "limit_phrase": None,
+                "output_bindings": [
+                    {
+                        "label_field": "first_unit",
+                        "requested_by_phrase": "처음 배정 병동",
+                    },
+                    {
+                        "label_field": "last_unit",
+                        "requested_by_phrase": "마지막 배정 병동",
+                    },
+                    {"label_field": "admitted_at", "requested_by_phrase": "입실 시간"},
+                    {
+                        "label_field": "discharged_at",
+                        "requested_by_phrase": "퇴실 시간",
+                    },
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "stay",
+                "column": "admitted_at",
+                "direction": "asc",
+            }
+        ],
+        result_extra={
+            "ordering_diagnostics": {
+                "order_by_outputs": ["admitted_at"],
+                "duplicate_order_key_in_returned_rows": False,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+    diagnostics = monitor.records[-1]["diagnostics"]
+    assert isinstance(diagnostics, dict)
+    binding_diagnostics = diagnostics["answer_contract_binding_diagnostics"]
+    assert isinstance(binding_diagnostics, dict)
+    assert binding_diagnostics["order_reference_count"] == 1
+    assert binding_diagnostics["required_order_reference_count"] == 0
+    assert binding_diagnostics["missing_order_binding_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_still_requires_order_binding_for_limited_single_row(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="latest_status",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [{"status": "complete", "recorded_at": "2024-01-02T00:00:00"}]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "latest_status",
+            "label": label,
+            "entity": {"case_key": 1},
+            "user_request": "가장 최근 상태 1개와 기록 시간을 알려주세요.",
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "상태",
+                "constraint_phrases": ["가장 최근", "1개"],
+                "limit_phrase": "1개",
+                "output_bindings": [
+                    {"label_field": "status", "requested_by_phrase": "상태"},
+                    {
+                        "label_field": "recorded_at",
+                        "requested_by_phrase": "기록 시간",
+                    },
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        query_params={"spec": {"limit": 1}},
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "status_history",
+                "column": "recorded_at",
+                "direction": "desc",
+            }
+        ],
+        result_extra={
+            "ordering_diagnostics": {
+                "order_by_outputs": ["recorded_at"],
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 1,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "answer_contract.order_bindings" in message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert controller.attempts == []
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_feedbacks_missing_list_output_binding(
     tmp_path: Path,
 ) -> None:

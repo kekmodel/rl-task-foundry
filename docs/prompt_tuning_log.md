@@ -5584,14 +5584,53 @@ Solver 30/30 완료 결과:
   데이터/문자열 휴리스틱은 추가하지 않았다. timeout은 actor 품질 검증이 아니라
   provider/SDK stall을 실험 실패로 닫기 위한 infra guard다.
 - **다음 개선 후보**:
-  단일 row 속성 묶음을 `kind=object`로 제출하도록 prompt/계약 예시를 최소 추가한다.
-  이것은 DB 특화 예시가 아니라 “one entity, multiple fields -> object; multiple
-  records -> ordered list”라는 범용 answer-shape 정책으로 다뤄야 한다.
+  `submit_draft` 스키마는 단일 row lookup도 `kind=list`로 표현한다. 따라서 다음
+  개선은 prompt를 `kind=object`로 바꾸는 것이 아니라, limit 없이 정확히 한 row만
+  반환되는 list에서 order binding을 과잉 요구하는 validator를 점검하는 것이다.
 - **검증**:
   `uv run pytest tests/test_synthesis_backend_openai_agents.py::test_synthesis_backend_enforces_run_timeout tests/test_solver_backend_openai_agents.py::test_openai_agents_solver_backend_enforces_episode_duration tests/test_config_load.py::test_load_config_uses_solver_run_count_source_of_truth -q`
   통과 (`3 passed`).
 
   `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/solver/backend_openai_agents.py src/rl_task_foundry/config/models.py tests/test_synthesis_backend_openai_agents.py tests/test_solver_backend_openai_agents.py tests/test_config_load.py`
+  통과.
+
+## Iteration 150 — Single-row list order binding should be effect-aware
+
+- **질문**:
+  Iteration 149의 ICU stay draft처럼 단일 entity의 속성 묶음이 `kind=list`로
+  제출됐을 때, `query.order_by`가 있다는 이유만으로 order binding을 요구하는 것이
+  precision-100 validator인가?
+- **판단**:
+  아니다. `submit_draft` 스키마는 `kind`를 `scalar|list`만 지원하고, description도
+  “list means the query rows array, even when one row is returned”라고 명시한다.
+  따라서 단일 row lookup을 `kind=object`로 유도하면 프롬프트와 tool schema가
+  이원화된다.
+
+  반면 query가 `LIMIT` 없이 정확히 한 row만 반환했다면 `order_by`는 정답 membership
+  이나 order를 바꾸지 않는다. 이때 order binding을 필수로 보는 것은 hidden row-set
+  control을 잡는 검증이 아니라 과잉 거절이다.
+- **변경**:
+  `answer_contract_binding_diagnostics`에 `required_order_reference_count`를
+  추가했다. canonical answer가 list이고 row count가 `0/1`이며 query limit이 없으면
+  order binding required count를 `0`으로 둔다. raw `order_reference_count`는
+  diagnostics에 남겨 visibility는 유지한다.
+
+  반대로 `LIMIT 1`처럼 order가 어떤 row를 고를지 결정할 수 있는 경우에는 기존처럼
+  order binding을 요구한다.
+- **원칙 준수**:
+  DB literal/token/table-name heuristic을 쓰지 않았다. 판단 근거는 오직 query
+  metadata(`limit`)와 canonical answer 구조(row count)다. precision-100 구조 조건이다.
+- **정성 평가**:
+  accepted data: 아직 없음.
+
+  rejected data: Iteration 149의 ICU stay draft는 데이터 자체가 나쁜 것이 아니라
+  contract validator가 단일 row list의 무효한 order binding을 요구한 것으로 본다.
+  동일 현상 재실험이 필요하다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_accepts_single_row_list_without_order_binding tests/test_synthesis_runtime.py::test_submit_draft_still_requires_order_binding_for_limited_single_row tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list -q`
+  통과 (`4 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
 ## Iteration 148 — Fixed list labels must stay within 3-5 rows

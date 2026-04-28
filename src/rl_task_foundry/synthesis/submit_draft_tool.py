@@ -798,6 +798,7 @@ def _answer_contract_binding_diagnostics(
     user_request: str,
     canonical_answer: object,
     query_result: dict[str, object],
+    query_limit: int | None,
     item_limit: int,
 ) -> dict[str, object]:
     label_fields = _answer_field_names(canonical_answer)
@@ -805,6 +806,10 @@ def _answer_contract_binding_diagnostics(
     output_bindings = contract.output_bindings or []
     order_bindings = contract.order_bindings or []
     order_reference_count = _query_order_reference_count(query_result)
+    answer_row_count = len(canonical_answer) if isinstance(canonical_answer, list) else None
+    required_order_reference_count = order_reference_count
+    if answer_row_count is not None and answer_row_count <= 1 and query_limit is None:
+        required_order_reference_count = 0
     bound_output_fields = _ordered_unique_texts(
         [binding.label_field for binding in output_bindings]
     )
@@ -847,16 +852,19 @@ def _answer_contract_binding_diagnostics(
             set(bound_output_fields) - label_field_set
         )[:item_limit],
         "order_reference_count": order_reference_count,
+        "required_order_reference_count": required_order_reference_count,
         "order_binding_count": len(order_bindings),
         "missing_order_binding_count": max(
             0,
-            order_reference_count - len(order_bindings),
+            required_order_reference_count - len(order_bindings),
         ),
         "order_output_fields": order_output_fields[:item_limit],
         "bound_order_label_fields": bound_order_label_fields[:item_limit],
-        "missing_order_label_bindings": sorted(
-            set(order_output_fields) - set(bound_order_label_fields)
-        )[:item_limit],
+        "missing_order_label_bindings": (
+            sorted(set(order_output_fields) - set(bound_order_label_fields))[:item_limit]
+            if required_order_reference_count > 0
+            else []
+        ),
         "extra_order_label_fields": sorted(
             set(bound_order_label_fields) - label_field_set
         )[:item_limit],
@@ -1626,6 +1634,10 @@ class SubmitDraftController:
         latest_query_result = (
             latest_query_call.get("result") if latest_query_call is not None else None
         )
+        latest_query_params = (
+            latest_query_call.get("params") if latest_query_call is not None else None
+        )
+        query_limit = _query_limit_from_params(latest_query_params)
         current_query_evidence_signature: QueryEvidenceSignature | None = None
         if not isinstance(latest_query_result, dict):
             error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING)
@@ -1636,6 +1648,7 @@ class SubmitDraftController:
                     user_request=payload.user_request,
                     canonical_answer=canonical_answer,
                     query_result=latest_query_result,
+                    query_limit=query_limit,
                     item_limit=self.config.synthesis.runtime.diagnostic_item_limit,
                 )
             )
@@ -1690,9 +1703,6 @@ class SubmitDraftController:
                         : self.config.synthesis.runtime.diagnostic_item_limit
                     ]
                 )
-            query_limit = _query_limit_from_params(
-                latest_query_call.get("params") if latest_query_call is not None else None
-            )
             latest_rows = latest_query_result.get("rows")
             if (
                 payload.answer_contract.kind == "list"
