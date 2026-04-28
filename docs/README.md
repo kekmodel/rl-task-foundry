@@ -9,5 +9,7 @@
   - 제품 목표, 데이터 계약, runtime 경계, throughput/verification 원칙
 - [plan.md](./plan.md)
   - 구현 순서, 모듈 책임, 완료 기준, 테스트 전략
+- [composer_low_quality_reduction_plan.md](./composer_low_quality_reduction_plan.md)
+  - composer low-quality 감소를 위한 계약/툴/subagent 실험 순서
 - [sample_databases.md](./sample_databases.md)
   - Pagila/Postgres Air 로컬 PostgreSQL bootstrap 경로
