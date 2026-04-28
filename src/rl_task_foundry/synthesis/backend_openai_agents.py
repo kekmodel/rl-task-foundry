@@ -383,7 +383,7 @@ class OpenAIAgentsSynthesisBackend:
             controller = conversation.controller
             missing_submit = (
                 getattr(controller, "accepted_draft", None) is None
-                and "submit_draft" not in tool_calls
+                and (not tool_calls or tool_calls[-1] != "submit_draft")
             )
             if not missing_submit:
                 break

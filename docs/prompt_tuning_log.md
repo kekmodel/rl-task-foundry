@@ -5540,6 +5540,55 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 133 — Resubmit reminder after feedback-side final output
+
+- **질문**:
+  Iteration 132의 Source surface prompt 보강 뒤 단일 smoke에서 feedback 이후
+  recovery가 실제로 이어지는가?
+- **실험**:
+  topic hint 없이 MIMIC demo 단일 smoke를 실행했다. composer/solver는
+  OpenRouter Kimi K2.5, solver rollout은 8개, solver batch size는 4:
+  `artifacts/trial_20260429_mimiciv_demo_source_role_prompt_kimi_8solver_no_topic_smoke_01/trial_01`.
+- **결과**:
+  trial은 solver 실행 전 `synthesis_failed`로 끝났다.
+
+  - first submit topic: `ICU 복약 기록 조회`
+  - request: `이번 중환자실 입원 중에 투여된 약물을 시간 순서대로 5가지 보여주세요...`
+  - first feedback: `answer_contract_order_ambiguous`
+  - feedback events: `1`
+  - solver runs: 없음
+
+  첫 draft는 ICU stay의 `inputevents` 투여 목록을 만들었다. Source role은 이전
+  pharmacy/prescriptions ambiguity보다 나아졌다. 요청이 "중환자실 입원 중 투여"라고
+  말했고 label도 inputevents의 투여 시작/종료/총량/단위였기 때문이다.
+
+  실패 원인은 order recovery다. canonical query는 `started_at asc, limit 5`였고
+  `2140-10-03T11:00:00` 동점 rows가 있어 order ambiguity feedback을 받았다.
+  composer는 reasoning에서 `endtime`, `storetime`, `ordercategoryname` 같은 natural
+  visible tie-break 후보를 검토했다. 방향은 맞았지만, 재query에서 malformed JSON을
+  호출했고 그 다음 "query를 고치겠다"는 final output으로 종료했다. 재제출은 없었다.
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: recovery failure / low-quality rejected. 첫 후보는 고칠 수 있는
+  좋은 방향의 task였지만, 동점 order가 수리되지 않은 상태로는 저품질이다. rejection은
+  바람직했고, low-quality accepted는 발생하지 않았다.
+- **변경**:
+  기존 backend의 missing-submit protocol feedback은 첫 submit이 아예 없을 때만
+  작동했다. 이번 실패는 "feedback 이후 data tool을 더 호출하고도 accepted draft 없이
+  final output으로 멈춤"이다.
+
+  이는 DB 의미 판단이 아니라 프로토콜 상태만으로 precision-100 판정 가능하다:
+  accepted draft가 없고, 마지막 tool call이 `submit_draft`가 아니며, feedback budget이
+  남아 있다. 따라서 `backend_openai_agents`의 continuation 조건을 고쳐, feedback 이후
+  재제출 누락에도 기존 `record_missing_submit_feedback`을 적용한다.
+- **검증**:
+  `uv run pytest tests/test_synthesis_backend_openai_agents.py::test_synthesis_backend_continues_after_final_output_without_submit tests/test_synthesis_backend_openai_agents.py::test_synthesis_backend_continues_after_feedback_without_resubmit -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py tests/test_synthesis_backend_openai_agents.py`
+  통과.
+
 ## Iteration 132 — Source-surface ambiguity in medication lists
 
 - **질문**:

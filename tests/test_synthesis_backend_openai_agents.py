@@ -304,6 +304,169 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
 
 
 @pytest.mark.asyncio
+async def test_synthesis_backend_continues_after_feedback_without_resubmit(
+    monkeypatch,
+) -> None:
+    class FakeAsyncOpenAI:
+        def __init__(self, **_kwargs):
+            pass
+
+    class FakeChatModel:
+        def __init__(self, model: str, openai_client, **_kwargs):
+            self.model = model
+            self.openai_client = openai_client
+
+    class FakeModelSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeRunResult:
+        def __init__(
+            self,
+            *,
+            input_payload,
+            final_output: str,
+            new_items: list[object],
+            turn_count: int,
+        ) -> None:
+            self.input = input_payload
+            self.final_output = final_output
+            self.new_items = new_items
+            self.context_wrapper = SimpleNamespace(
+                usage=SimpleNamespace(requests=turn_count)
+            )
+            self._current_turn = turn_count
+
+        def to_input_list(self, *, mode="preserve_all"):
+            assert mode == "preserve_all"
+            if isinstance(self.input, list):
+                items = list(self.input)
+            else:
+                items = [{"role": "user", "content": self.input}]
+            items.append({"role": "assistant", "content": self.final_output})
+            return items
+
+    class FakeRunner:
+        calls: list[dict[str, object]] = []
+
+        @classmethod
+        async def run(cls, agent, input, max_turns, session=None):
+            del agent, session
+            cls.calls.append({"input": input, "max_turns": max_turns})
+            if len(cls.calls) == 1:
+                return FakeRunResult(
+                    input_payload=input,
+                    final_output="I found a tie-breaker and will fix the query.",
+                    new_items=[
+                        "tool-call(query)",
+                        "tool-call(submit_draft)",
+                        "tool-call(sample)",
+                        "tool-call(query)",
+                    ],
+                    turn_count=4,
+                )
+            assert isinstance(input, list)
+            assert input[-1]["role"] == "user"
+            assert "Plain final output is invalid" in input[-1]["content"]
+            assert "call submit_draft" in input[-1]["content"]
+            return FakeRunResult(
+                input_payload=input,
+                final_output="Accepted: Draft accepted.",
+                new_items=["tool-call(submit_draft)"],
+                turn_count=1,
+            )
+
+    class FakeController:
+        accepted_draft = None
+        _terminated_too_hard = False
+
+        def __init__(self) -> None:
+            self.feedback_calls: list[dict[str, object]] = []
+            self._submissions_left = 3
+
+        def submissions_left(self) -> int:
+            return self._submissions_left
+
+        def record_missing_submit_feedback(
+            self,
+            *,
+            final_output_text: str,
+            tool_calls: tuple[str, ...],
+        ) -> str:
+            self.feedback_calls.append(
+                {
+                    "final_output_text": final_output_text,
+                    "tool_calls": tool_calls,
+                }
+            )
+            self._submissions_left -= 1
+            return (
+                "FeedbackError: Plain final output is invalid for this role. "
+                "Next step: call submit_draft. Do not end the run with text only. "
+                "Attempts left: 2."
+            )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_shared_load_sdk_components",
+        lambda **_kwargs: SimpleNamespace(
+            Agent=FakeAgent,
+            AsyncOpenAI=FakeAsyncOpenAI,
+            ModelSettings=FakeModelSettings,
+            OpenAIChatCompletionsModel=FakeChatModel,
+            Runner=FakeRunner,
+            set_tracing_disabled=lambda **_kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(backend_module, "build_submit_draft_sdk_tool", lambda _controller: object())
+
+    backend = OpenAIAgentsSynthesisBackend(
+        model_ref=ModelRef(provider="openrouter", model="moonshotai/kimi-k2.5"),
+        provider_config=ProviderConfig(
+            type="openai_compatible",
+            base_url="http://127.0.0.1:10531/v1",
+            api_key_env="MISSING_OPENAI_KEY",
+            max_concurrency=8,
+            timeout_s=30,
+        ),
+        runtime_config=SynthesisRuntimeConfig(max_turns=5),
+    )
+    controller = FakeController()
+
+    result = await backend.run_synthesis(
+        conversation=_conversation_with_controller(controller),
+        db_id="sakila",
+        requested_topic="assignment",
+        domain_name="customer support",
+        task_language="en",
+        scenario_description="end user support",
+        schema_summary={},
+        tool_surface_summary={},
+        max_turns=5,
+    )
+
+    assert len(FakeRunner.calls) == 2
+    assert FakeRunner.calls[1]["max_turns"] == 1
+    assert controller.feedback_calls == [
+        {
+            "final_output_text": "I found a tie-breaker and will fix the query.",
+            "tool_calls": ("query", "submit_draft", "sample", "query"),
+        }
+    ]
+    assert result.tool_calls == (
+        "query",
+        "submit_draft",
+        "sample",
+        "query",
+        "submit_draft",
+    )
+
+
+@pytest.mark.asyncio
 async def test_synthesis_backend_logs_unified_event_before_reraising_runner_error(
     monkeypatch,
 ) -> None:
