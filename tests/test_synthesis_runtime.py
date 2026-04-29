@@ -1405,6 +1405,9 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
     assert "label_json row order" in contract_properties["order_bindings"][
         "description"
     ]
+    assert "all/every matching records" in contract_properties["limit_phrase"][
+        "description"
+    ]
     order_direction_schema = schema["$defs"]["AnswerOrderBinding"]["properties"][
         "direction"
     ]
@@ -3565,7 +3568,8 @@ async def test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list(
     assert "list query limit fixes membership" in message
     assert "answer_contract.limit_phrase" in message
     assert "exact fixed-size phrase" in message
-    assert "do not remove the limit or only edit output/order phrases" in message
+    assert "do not ask for all/every matching records" in message
+    assert "remove the limit, or only edit output/order phrases" in message
     assert "Label Contract reminder" in message
     assert controller.last_feedback_error_codes == ("answer_contract_query_mismatch",)
     assert controller.attempts == []

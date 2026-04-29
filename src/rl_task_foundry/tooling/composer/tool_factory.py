@@ -777,7 +777,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "a final list query with limit must have the same fixed "
                     "size requested and bound before submit_draft. Do not "
                     "request one order to select limited membership and a "
-                    "different order to display the returned rows."
+                    "different order to display the returned rows. Do not "
+                    "describe a limited query as all/every matching records."
                 ),
             },
             "group_by": {

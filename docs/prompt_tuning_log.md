@@ -9832,6 +9832,71 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_76`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 155 — Limited query labels must request the fixed N
+
+- **질문**:
+  `trial_77`은 Iteration 154 뒤 어떤 저품질 원인으로 실패했는가? 어려운 좋은 문제였는가,
+  아니면 composer가 아직 제출하지 말아야 할 draft를 반복했는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, solver rollout 없음.
+
+  composer는 admission anchor에서 microbiologyevents 5개 list를 만들었다. 제출 흐름은:
+  - first submit: `composer_submit_draft_missing`
+  - submit 2: null organism/antibiotic/result/sensitivity 포함, `label_null_value_forbidden`,
+    `answer_contract_phrase_missing`, `answer_contract_query_mismatch`, `answer_contract_order_ambiguous`
+  - submit 3-5: null은 줄였지만 `limit=5` query를 쓰면서 request/limit_phrase에 5개 고정 개수를
+    넣지 않았다. 또한 `charttime + test_seq` order인데 request는 `검사 시간 순서`만 말해
+    `answer_contract_order_ambiguous`와 `answer_contract_binding_missing`이 계속 남았다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 null field 문제를 정확히 인지하고 "non-null fields only"로 수리했다.
+  하지만 이후에도 query는 `limit=5`를 유지하면서 user_request는 "모든 미생물 검사 기록" 또는
+  "미생물 검사 결과"처럼 fixed N을 말하지 않았다. 마지막 request에는 출력 field phrase는 대부분
+  들어갔지만 answer_phrase와 fixed-size phrase가 여전히 맞지 않았다.
+
+  이건 solver가 못 푼 어려운 문제가 아니다. solver rollout 전 label contract가 정확히 reject한
+  low-quality draft다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. null label, unbound fixed limit, unstable/under-described order가
+  모두 구조적으로 명확하다. 저품질이 accept되지 않은 점은 좋지만, composer가 같은 mismatch를
+  반복한 점은 개선 대상이다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 이미 `answer_contract_query_mismatch`와
+  `answer_contract_order_ambiguous`가 precision 100 구조 신호로 reject하고 있다.
+
+  source of truth는 기존 Label Contract/Task Shapes/List Determinism 쪽에 있다. 이번에는
+  tool schema와 feedback reminder를 좁게 보강했다.
+  `submit_draft.answer_contract.limit_phrase` schema는 query가 fixed limit을 쓰면 null로 두거나
+  all/every matching records를 묻지 말라고 설명한다.
+  `query.limit` description도 limited query를 all/every matching records로 표현하지 말라고 설명한다.
+  `answer_contract_query_mismatch` feedback은 phrase feedback과 함께 나올 때 정확한 fixed-size phrase를
+  user_request와 limit_phrase에 추가하고, all/every matching records로 묻지 말라고 상기한다.
+
+  이 변경은 DB 리터럴이나 컬럼 의미를 보지 않는다. query 구조의 fixed limit과 contract binding
+  문제만 다루므로 리터럴/토큰 휴리스틱 금지 원칙을 위반하지 않는다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_payload_schema_does_not_require_constraint_summary tests/test_synthesis_runtime.py::test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+    통과 (`3 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+- **현재 streak**:
+  `trial_77`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

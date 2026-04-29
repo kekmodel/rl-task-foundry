@@ -473,6 +473,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "final list query with limit" in descriptions["query"]["$.spec.limit"]
     assert "same fixed size requested and bound" in descriptions["query"]["$.spec.limit"]
     assert "different order to display" in descriptions["query"]["$.spec.limit"]
+    assert "all/every matching records" in descriptions["query"]["$.spec.limit"]
     assert "group_by replaces select" in descriptions["query"]["$.spec.group_by"]
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"

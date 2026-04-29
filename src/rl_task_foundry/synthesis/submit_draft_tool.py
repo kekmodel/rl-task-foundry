@@ -326,7 +326,9 @@ class AnswerContract(StrictModel):
             "such as '3 items', or null when there is no fixed size phrase. "
             "For ordered limited lists, the limit phrase and order bindings "
             "must communicate the same row-selection boundary as query.order_by; "
-            "do not imply a different boundary from the query order."
+            "do not imply a different boundary from the query order. Do not "
+            "leave this null or ask for all/every matching records when the "
+            "query uses a fixed limit."
         ),
     )
     output_bindings: list[AnswerOutputBinding] | None = Field(
@@ -2847,7 +2849,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH: (
                 "Rejected. Label Contract reminder: the latest successful query must contain structural evidence for this answer; if a list query limit fixes membership, that fixed size must be bound in user_request and answer_contract.limit_phrase."  # noqa: E501
-                " When this appears with phrase feedback, repair the same label by adding the exact fixed-size phrase to user_request and limit_phrase; do not remove the limit or only edit output/order phrases."  # noqa: E501
+                " When this appears with phrase feedback, repair the same label by adding the exact fixed-size phrase to user_request and limit_phrase; do not ask for all/every matching records, remove the limit, or only edit output/order phrases."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
                 "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. If the tie-break is sequence/rank-like, request wording must name source record sequence instead of a generated display rank. Do not repair this with hidden handles or artificial id wording. Request Contract reminder: preserve fluent request wording; use ordinary target-language words, not malformed terms. If a repair needs long/mechanical field lists, choose another label instead of stacking tie-break fields."  # noqa: E501
