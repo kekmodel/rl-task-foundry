@@ -10468,6 +10468,60 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_86`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 165 — Trial 87 rejected malformed Korean and hidden tie-breaks
+
+- **질문**:
+  `trial_87`에서 input/output event 계열 후보가 accepted 품질로 이어지는가? 실패한다면
+  hidden tie-break, malformed request, source-role ambiguity 중 무엇이 남는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, solver rollout 없음.
+
+  제출 흐름:
+  - submit 1: `composer_submit_draft_missing`
+  - submit 2:
+    `이번 입원中最先로 투약된 주사제 5가지의 이름, 투약 시작 시간, 용량, 단위, 그리고 투약 상태를 알려주세요.`
+    - 오류: `answer_contract_phrase_missing`, `answer_contract_order_ambiguous`,
+      `answer_contract_binding_missing`
+    - mixed-script/malformed Korean과 order binding 부족
+  - submit 3:
+    `이번 입원 중 시작 시간이 빠른 순서대로 처음 5가지 투약 품목의 이름과 투약 시작 시간, 용량, 단위를 알려주세요.`
+    - 오류: `answer_contract_order_ambiguous`, `answer_contract_binding_missing`
+    - inputevents starttime tie가 남았고, composer가 hidden `orderid` tie-break를 시도했다.
+  - submit 4:
+    `이번 입원 중 기록된 배양관 및 쇄쉽 출량 데이터 5개를 시간이 빠른 순서대로 품목 이름, 측정 시간, 측정값, 단위를 포함해서 관싸 있겠어?`
+    - 오류: `answer_contract_binding_missing`
+    - outputevents로 target을 바꿨지만 request Korean이 깨졌고 binding이 부족했다.
+  - submit 5 budget exhausted:
+    `이번 입원 중 기록된 배양관 및 쇄쉽 출량 데이터 5개를 측정 시간이 빠른 순서대로 정렬해주세요. 동일한 시간이마다는 경우 품목 이름 순서로 확인해주세요.`
+    - 오류: `answer_contract_phrase_missing`
+    - tie-break phrase를 추가하려 했지만 여전히 malformed wording.
+
+- **reasoning 교차 분석**:
+  composer는 inputevents에서 hidden `orderid`가 tie-break로 쓰였다는 점을 인지하고 다른 label로
+  전환했다. 이 점은 hidden tie-break 금지 정책이 reasoning에 들어간 신호다.
+
+  그러나 outputevents repair에서는 한국어가 크게 깨졌다. 기존 Request Contract와 schema description은
+  mixed-script/malformed terms를 금지하고 있고, phrase_missing이 이를 reject했다. 즉 저품질이 accepted된
+  것은 아니다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. hidden order key, malformed Korean, missing phrase/binding 문제다.
+  어려운 좋은 문제가 아니라 composer가 제출하지 말아야 할 draft들이었다.
+
+- **변경**:
+  코드 변경 없음. malformed wording 금지, hidden tie-break 금지, phrase/binding repair는 이미 prompt와
+  feedback에 있다. 이번 trial은 그 정책이 accepted 전에 저품질을 막은 사례로 본다.
+
+- **검증**:
+  코드 변경 없음.
+
+- **현재 streak**:
+  `trial_87`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
