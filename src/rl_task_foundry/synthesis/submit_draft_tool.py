@@ -45,6 +45,7 @@ class SubmitDraftErrorCode(StrEnum):
     ANCHOR_ENTITY_SCALAR_MAP_REQUIRED = "anchor_entity_scalar_map_required"
     CANONICAL_ANSWER_JSON_INVALID = "canonical_answer_json_invalid"
     QUESTION_REQUIRED = "question_required"
+    USER_REQUEST_INVALID = "user_request_invalid"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
     LABEL_NULL_VALUE_FORBIDDEN = "label_null_value_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
@@ -96,6 +97,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION,
         SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED,
         SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED,
+        SubmitDraftErrorCode.USER_REQUEST_INVALID,
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_NULL_VALUE_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
@@ -484,12 +486,26 @@ class SubmitDraftPayload(StrictModel):
         _normalize_anchor_entity_map(parsed)
         return raw
 
-    @field_validator("topic", "user_request", mode="before")
+    @field_validator("topic", mode="before")
     @classmethod
-    def _validate_non_blank_text(cls, value: object) -> str:
-        raw = str(value).strip() if not isinstance(value, str) else value.strip()
+    def _validate_topic(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        raw = value.strip()
         if not raw:
             raise ValueError("text fields must not be blank")
+        return raw
+
+    @field_validator("user_request", mode="before")
+    @classmethod
+    def _validate_user_request(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        raw = value.strip()
+        if not raw:
+            raise ValueError("text fields must not be blank")
+        if raw.startswith("<entity>"):
+            raise ValueError("user_request must not include a hidden entity block")
         return raw
 
     @field_validator("answer_contract", mode="before")
@@ -1973,6 +1989,8 @@ class SubmitDraftController:
                     error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED)
                 else:
                     error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED)
+            elif location == ("user_request",):
+                error_codes.append(SubmitDraftErrorCode.USER_REQUEST_INVALID)
             elif location and location[0] == "answer_contract":
                 error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_JSON_INVALID)
             else:
@@ -2711,6 +2729,11 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.QUESTION_REQUIRED: (
                 "Rejected. Tool schema reminder: user_request is required."
+            ),
+            SubmitDraftErrorCode.USER_REQUEST_INVALID: (
+                "Rejected. Request Contract reminder: user_request must be only "
+                "the natural request body. Hidden entity context belongs in "
+                "entity_json, not in a <entity> block."
             ),
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. Tool schema reminder: label_json must be a valid JSON string."

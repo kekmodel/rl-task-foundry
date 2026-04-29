@@ -1384,6 +1384,46 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     assert _loose_json_schema_paths(schema) == []
 
 
+def test_submit_draft_payload_rejects_hidden_entity_block_user_request(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    payload = _accepted_payload().model_dump(mode="json")
+    payload["user_request"] = (
+        "<entity>\n"
+        '{"customer_id": 999}\n'
+        "</entity>\n\n"
+        "내가 배정된 매장과 전체 고객 수를 알려 주세요."
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        SubmitDraftPayload.model_validate(payload)
+
+    message = controller.reject_invalid_payload(parsed=payload, error=exc_info.value)
+
+    assert "user_request must be only the natural request body" in message
+    assert "entity_json" in message
+    assert controller.accepted_draft is None
+
+
+def test_submit_draft_payload_rejects_non_string_topic() -> None:
+    for bad_topic in (None, [], {}):
+        payload = _accepted_payload().model_dump(mode="json")
+        payload["topic"] = bad_topic
+
+        with pytest.raises(ValidationError):
+            SubmitDraftPayload.model_validate(payload)
+
+
 @pytest.mark.asyncio
 async def test_submit_draft_records_answer_contract_binding_diagnostics(
     tmp_path: Path,
@@ -3685,7 +3725,7 @@ async def test_submit_draft_surfaces_order_binding_errors_with_ambiguous_order(
             "user_request": (
                 "이번 입원 중 약물 처방 5개를 시작 시간 오름차순, "
                 "약물 이름 오름차순으로 보여 주세요. 약물 이름, 시작 시간, "
-                "투여 경로, 투여 빈도를 포함해 주세요.",
+                "투여 경로, 투여 빈도를 포함해 주세요."
             ),
             "answer_contract": {
                 "kind": "list",
@@ -3814,7 +3854,7 @@ async def test_submit_draft_rejects_mechanical_multi_key_list_order(
             "user_request": (
                 "이번 입원 중 미생물 검사 목록을 검체 채취 일시 기준으로 오름차순, "
                 "검체 종류 기준으로 오름차순, 검사 순서 기준으로 오름차순 "
-                "정렬하여 상위 3건 보여주세요.",
+                "정렬하여 상위 3건 보여주세요."
             ),
             "answer_contract": {
                 "kind": "list",
