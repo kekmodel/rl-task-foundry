@@ -1238,7 +1238,7 @@ def test_data_tool_budget_feedback_allows_repair_query_after_limit(
     assert feedback["error"] == "submit_draft_required"
 
 
-def test_data_tool_budget_feedback_allows_query_repair_for_ambiguous_query(
+def test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_query(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -1276,7 +1276,10 @@ def test_data_tool_budget_feedback_allows_query_repair_for_ambiguous_query(
         },
     )
 
-    assert controller.data_tool_budget_feedback(tool_name="query") is None
+    feedback = controller.data_tool_budget_feedback(tool_name="query")
+
+    assert feedback is not None
+    assert feedback["error"] == "submit_draft_required"
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 
@@ -1308,7 +1311,7 @@ def test_data_tool_budget_feedback_blocks_binding_only_data_repair(
     assert "stop exploration" in str(feedback["message"])
 
 
-def test_data_tool_budget_feedback_allows_query_repair_for_empty_query(
+def test_data_tool_budget_feedback_blocks_repeated_query_repair_for_empty_query(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -1333,7 +1336,10 @@ def test_data_tool_budget_feedback_allows_query_repair_for_empty_query(
         result={"rows": [], "row_count": 0},
     )
 
-    assert controller.data_tool_budget_feedback(tool_name="query") is None
+    feedback = controller.data_tool_budget_feedback(tool_name="query")
+
+    assert feedback is not None
+    assert feedback["error"] == "submit_draft_required"
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 

@@ -7446,6 +7446,81 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 175 — ToolBudgetFeedback must cap repeated diagnostic queries
+
+- **질문**:
+  Iteration 174의 list difficulty-up 정책/validator 정리 뒤 다음 smoke에서 만족스러운 accepted가
+  나왔는가? 새 row-filter guard가 실제로 작동했는가?
+
+- **실험/결과**:
+  `trial_57`은 accepted 없이 `MaxTurnsExceeded`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_57`
+  - composer/solver: OpenRouter Kimi K2.5
+  - accepted data: 없음
+
+  submit 흐름은 다음과 같았다.
+
+  1. eMAR 단일 medication administration lookup: list 1 row라 `answer_contract_list_size_invalid`.
+  2. procedureevents list: 5 rows까지는 만들었지만 `location=null` 포함, phrase mismatch.
+  3. outputevents list: request가 unicode escape처럼 깨졌고, `charttime` source가 blocked/handle 성격으로
+     잡혔으며, order boundary ambiguity까지 있어 feedback.
+
+  이후 submit 없이 query를 계속 돌리다 MaxTurnsExceeded.
+
+- **reasoning 교차 분석**:
+  composer는 첫 feedback 뒤 list size 문제를 이해하고 admission scope로 확장했다. 이 방향 자체는
+  맞았다. 그러나 feedback 뒤 query를 과도하게 반복했다.
+
+  실제 call sequence는 feedback 이후 `neighborhood` 1회 + `query` 5회 이상이었다. 여러 query가
+  duplicate order key, duplicate projected rows, null field, handle order key 같은 diagnostics를
+  냈고, composer는 submit으로 feedback을 받기보다 새 surface를 계속 찾아다녔다.
+
+  Iteration 170에서 prompt/feedback은 "after feedback max 3 data tools; diagnostics repair query는
+  1회만"이라고 정렬했지만, 구현은 `latest query`에 blocking diagnostics가 있으면 다음 query를
+  계속 허용하고 있었다. 즉 이번 실패는 durable policy 부재가 아니라 runtime budget enforcement
+  구멍이다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - eMAR 단일 lookup은 low-quality rejected. list로 제출할 수 없는 1 row task였다.
+  - procedureevents list는 후보 방향은 가능했지만 null answer field와 phrase mismatch가 있어
+    low-quality rejected.
+  - outputevents list는 escaped Korean request, non-user-visible/handle-like time output, ordering
+    ambiguity가 겹친 low-quality rejected.
+
+  `trial_57`은 어려운 좋은 문제가 아니라 composer가 low-quality 후보를 너무 오래 탐색한 실패다.
+
+- **변경**:
+  프롬프트는 바꾸지 않았다. source of truth는 이미 Draft Submission Budget에 있었다.
+
+  runtime enforcement를 policy에 맞췄다.
+
+  - protocol boundary 이후 data tool count가 limit에 도달하면 submit을 요구한다.
+  - 단, boundary 이후 아직 query를 한 번도 하지 않았고 현재 tool이 `query`라면 final label query
+    1회는 허용한다.
+  - 이미 query를 한 번 실행했다면, 그 query가 empty/ambiguous/duplicate diagnostic을 냈더라도
+    추가 query를 무한 허용하지 않고 `submit_draft_required`를 반환한다.
+
+  이 검증은 tool call count와 tool name만 보는 구조 검증이다. DB 값/문자열/컬럼 의미 리터럴
+  휴리스틱을 사용하지 않는다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_first_submit tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_allows_first_label_query_after_limit tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_feedback_repair tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_allows_repair_query_after_limit tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_query tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_repeated_query_repair_for_empty_query -q`
+  통과 (`6 passed`).
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`111 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

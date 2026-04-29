@@ -1883,21 +1883,11 @@ class SubmitDraftController:
                 "calls_since_boundary": calls_since_boundary,
                 "limit": 0,
             }
-        latest_query_call = self._latest_successful_query_call_since_protocol_boundary()
-        latest_query_result = (
-            latest_query_call.get("result") if latest_query_call is not None else None
-        )
-        query_needs_repair = isinstance(latest_query_result, dict) and (
-            _query_result_has_no_rows(latest_query_result)
-            or _query_ordering_is_ambiguous(latest_query_result)
-            or _query_projection_has_duplicate_answer_rows(latest_query_result)
-        )
-        if tool_name == "query" and (
-            latest_query_call is None or query_needs_repair
-        ):
-            return None
+        query_call_since_boundary = self._latest_query_call_since_protocol_boundary()
         if not self.attempts and self._feedback_events == 0:
             if calls_since_boundary < FIRST_SUBMIT_MAX_DATA_TOOLS:
+                return None
+            if tool_name == "query" and query_call_since_boundary is None:
                 return None
             return {
                 "error": "submit_draft_required",
@@ -1914,6 +1904,8 @@ class SubmitDraftController:
                 "limit": FIRST_SUBMIT_MAX_DATA_TOOLS,
             }
         if calls_since_boundary < FEEDBACK_REPAIR_MAX_DATA_TOOLS:
+            return None
+        if tool_name == "query" and query_call_since_boundary is None:
             return None
         return {
             "error": "submit_draft_required",
@@ -1946,6 +1938,15 @@ class SubmitDraftController:
             self._tool_call_count_at_last_protocol_boundary :
         ]
         return self._latest_successful_query_call(recent_calls)
+
+    def _latest_query_call_since_protocol_boundary(self) -> dict[str, object] | None:
+        recent_calls = self._raw_atomic_tool_calls[
+            self._tool_call_count_at_last_protocol_boundary :
+        ]
+        for call in reversed(recent_calls):
+            if call.get("tool_name") == "query":
+                return call
+        return None
 
     @staticmethod
     def _latest_successful_query_call(
