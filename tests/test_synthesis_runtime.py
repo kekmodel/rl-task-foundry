@@ -3534,6 +3534,8 @@ async def test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list(
 
     assert "list query limit fixes membership" in message
     assert "answer_contract.limit_phrase" in message
+    assert "exact fixed-size phrase" in message
+    assert "do not remove the limit or only edit output/order phrases" in message
     assert "Label Contract reminder" in message
     assert controller.last_feedback_error_codes == ("answer_contract_query_mismatch",)
     assert controller.attempts == []

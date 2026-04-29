@@ -9576,6 +9576,64 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_72`는 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 151 — Limited list repairs must keep the fixed size phrase
+
+- **질문**:
+  `trial_73`은 왜 accepted 없이 `answer_contract_phrase_missing` +
+  `answer_contract_query_mismatch`로 끝났는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed / SynthesisArtifactGenerationError`.
+
+  제출 2:
+  서비스 이력 draft는 1 row, null, blocked source가 섞인 low-quality rejected였다.
+
+  제출 3-5:
+  procedureevents 후보는 query 자체만 보면 더 좋아졌다.
+  `stay_id=37093652`의 procedureevents 5개를 `starttime asc`로 가져왔고,
+  `duplicate_order_key_in_returned_rows=false`였다.
+  그러나 query는 `limit=5`였는데 user_request와 answer_contract에 고정 크기 `5개`가 들어가지 않았다.
+  그래서 query가 정한 row membership과 request contract가 불일치했다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 “order_binding phrase를 정확히 맞춰야 한다”는 쪽에만 집중했다.
+  feedback diagnostics에는 `missing_limit_phrase_for_query_limit=5`가 있었지만, composer는
+  output/order phrase만 바꾸고 fixed-size phrase를 추가하지 않았다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - services draft는 low-quality rejected.
+  - procedureevents draft는 row set/order는 잠재적으로 괜찮았지만, limit phrase가 빠진 contract
+    오류 때문에 rejected. 이건 어려운 좋은 문제라기보다 composer repair 누락이다.
+  - `procedure_value`는 여전히 자연어 requestability가 약해 다음 실험에서도 주의 깊게 봐야 한다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 이미 query mismatch validator가 정확히 잡고 있다.
+
+  `ANSWER_CONTRACT_QUERY_MISMATCH` feedback을 보강했다.
+  list query limit이 membership을 고정하면, phrase feedback과 같이 발생했을 때 같은 label을 유지한 채
+  user_request와 `answer_contract.limit_phrase`에 exact fixed-size phrase를 추가해야 한다고 명시했다.
+  limit을 제거하거나 output/order phrase만 고치는 수리는 금지했다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list -q`
+    통과 (`1 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_73`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
