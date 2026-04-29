@@ -396,8 +396,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Source-sensitive result/status/type fields/filters" in instructions
     assert "query-path source role" in instructions
     assert "request must name it" in instructions
+    assert "Source status text is recorded" in instructions
+    assert "not current/derived state" in instructions
     assert "no normalized choices" in instructions
-    assert "Note/comment text must be requested as that surface" in instructions
+    assert "Note/comment text needs that surface" in instructions
     assert "not broad result/value" in instructions
     assert "Distinguish source sequence from display rank" in instructions
     assert "never add sequence/order output only to make duplicate rows unique" in (

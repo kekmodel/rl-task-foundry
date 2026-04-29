@@ -373,6 +373,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "request names that text surface" in descriptions["query"][
         "$.spec.select[].as"
     ]
+    assert "source status text" in descriptions["query"]["$.spec.select[].as"]
+    assert "current/derived state wording" in descriptions["query"][
+        "$.spec.select[].as"
+    ]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
     assert "without a primary key" in descriptions["query"]["$.spec.select"]

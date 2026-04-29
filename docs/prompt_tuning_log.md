@@ -7662,6 +7662,73 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 178 — Source status text is not derived current state
+
+- **질문**:
+  Iteration 177의 result/comment representation 보강 뒤 다음 smoke에서 좋은 accepted가 나왔는가?
+
+- **실험/결과**:
+  `trial_60`도 accepted 없이 `synthesis_failed`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_60`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - pass rate: `0/4 = 0.0`
+  - accepted data: 없음
+
+  composer는 특정 입원의 `pharmacy` rows에서 약물명, `starttime`, source `status`를 제출했다. 여러
+  feedback 동안 spacing, tie-break, limit phrase를 수리했고 최종 request는 "처방받은 약물 중 처방
+  시작 시간이 빠른 5건"과 "현재 상태"를 물었다.
+
+- **reasoning 교차 분석**:
+  solver reasoning은 4개 모두 `prescriptions`를 ordinary source로 골랐다. 요청 문구의
+  "처방받은 약물"은 `pharmacy`보다 `prescriptions`로 자연스럽게 해석됐고, "현재 상태"는
+  `stoptime` 존재 여부에서 Completed/Stopped 같은 derived state로 계산됐다.
+
+  DB 교차검증 결과, 같은 top-5 row의 약물명/시작 시간은 `pharmacy`와 `prescriptions`가 거의 맞았지만,
+  `pharmacy.status`는 `"Discontinued via patient discharge"`이고 `prescriptions`에는 `status`가 아니라
+  `stoptime`이 있었다. 즉 row search가 어려웠던 것이 아니라 source status representation이
+  request에 고정되지 않았다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - 초기 submit들은 string spacing, limit phrase, order ambiguity가 있어 low-quality rejected다.
+  - 최종 submit은 row/order 자체는 solver가 찾을 수 있었지만, request가 `pharmacy` source status
+    text를 "현재 상태"라는 derived/current state처럼 표현했다. 어려운 좋은 문제가 아니라
+    source-sensitive status representation이 애매한 low-quality rejected다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 어떤 source가 ordinary source인지, source status text와 derived
+  current state가 같은지 다른지는 자연어/도메인 의미 판단이 필요하므로 precision 100 구조 검사가 아니다.
+
+  prompt-first/tool-local contract 원칙으로 다음을 보강했다.
+
+  - Label Contract: source-sensitive result/status/type field는 query-path source role을 request가
+    이름 붙여야 하며, source status text는 recorded/source status이지 current/derived state가 아니라고
+    명시했다.
+  - `AnswerOutputBinding.requested_by_phrase`: source status text를 current/derived state나 boolean
+    completion wording으로 바꾸지 말라고 보강했다.
+  - `query.select[].as`: source status text를 current/derived state wording처럼 보이게 하지 말라고
+    tool-local description을 맞췄다.
+
+  이 변경도 특정 table/column/value 리터럴 기반 reject가 아니다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`111 passed`).
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

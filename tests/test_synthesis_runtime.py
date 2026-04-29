@@ -2609,9 +2609,10 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "names this field's distinct role" in schema_surface
     assert "do not reuse one vague phrase" in schema_surface
     assert "preserve the source representation" in schema_surface
-    assert "do not turn source status text into boolean completion wording" in schema_surface
+    assert "do not turn source status text into current/derived state" in schema_surface
     assert "source record sequence into generated display rank" in schema_surface
     assert "Do not add parenthetical normalized choices" in schema_surface
+    assert "current/derived state or boolean completion wording" in schema_surface
     assert "When two reachable sources could satisfy the same broad phrase" in schema_surface
     assert "the current record's category versus a referenced item's category" in schema_surface
     assert "Do not bind note/comment/description text to broad result/value" in schema_surface
