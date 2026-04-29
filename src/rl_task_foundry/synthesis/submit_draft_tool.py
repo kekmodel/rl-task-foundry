@@ -202,7 +202,9 @@ class AnswerOutputBinding(StrictModel):
             "choices for source type/category/status fields. When two "
             "reachable sources could satisfy the same broad phrase, the "
             "phrase must name the exact source role, such as the current "
-            "record's category versus a referenced item's category."
+            "record's category versus a referenced item's category. Do not "
+            "bind note/comment/description text to broad result/value wording "
+            "unless user_request asks for that text surface."
         ),
     )
 

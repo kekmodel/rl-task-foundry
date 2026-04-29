@@ -394,9 +394,11 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "user_request names role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
     assert "Source-sensitive result/status/type fields/filters" in instructions
-    assert "same source role used by query path" in instructions
+    assert "query-path source role" in instructions
     assert "request must name it" in instructions
     assert "no normalized choices" in instructions
+    assert "Note/comment text must be requested as that surface" in instructions
+    assert "not broad result/value" in instructions
     assert "Distinguish source sequence from display rank" in instructions
     assert "never add sequence/order output only to make duplicate rows unique" in (
         instructions

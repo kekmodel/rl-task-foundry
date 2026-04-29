@@ -7590,6 +7590,78 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 177 — Result wording must not hide note/comment representation
+
+- **질문**:
+  Iteration 176의 broad source wording 보강 뒤 다음 smoke에서 좋은 accepted가 나왔는가?
+
+- **실험/결과**:
+  `trial_59`는 accepted 없이 `synthesis_failed`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_59`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - pass rate: `0/4 = 0.0`
+  - accepted data: 없음
+
+  submit 흐름은 다음과 같았다.
+
+  1. `chartevents` list: table에 primary key가 없고 `charttime` 동점 order ambiguity가 있어 reject.
+  2. `microbiologyevents` list: `comments` 값을 `result`로 제출했지만 query string spacing을 보존하지
+     않아 `label_values_not_grounded`/evidence mismatch.
+  3. spacing은 고쳤지만 order binding phrase가 request에 없어서 reject.
+  4. order phrase를 추가했지만 Korean request에 `탐익 기준` 같은 malformed phrase가 생겼고,
+     solver pass `0/4`로 terminal rejection.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 primary-key 없는 `chartevents`를 버리고 `microbiologyevents`로 전환한 점은
+  맞았다. 그러나 `comments` free-text를 broad `결과`로 제출했다.
+
+  solver reasoning은 네 개 모두 같은 `microbiologyevents` row set과 `charttime/test_name` order를
+  찾았다. 실패 지점은 row search가 아니라 `result` representation이었다. solver들은 `org_name`,
+  `quantity`, `interpretation` 쪽을 검사 결과로 보았고, 첫 5개 row에서 이 값들이 null이라 `"null"`이나
+  빈 문자열을 제출했다. DB 교차검증에서도 같은 row의 `org_name/quantity/interpretation`은 모두 null이고
+  `comments`만 free-text였다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - `chartevents` 후보는 no-primary-key와 order ambiguity가 있어 low-quality rejected다.
+  - 최종 `microbiologyevents` 후보는 row/order 자체는 solver가 찾을 수 있었지만, broad `결과`가
+    `comments` representation을 고정하지 못했다. 어려운 좋은 문제가 아니라 source-sensitive output
+    representation이 애매한 low-quality rejected다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. `comments`를 결과로 볼지, `org_name`/`interpretation`을 결과로
+  볼지는 자연어/도메인 의미 판단이 필요하므로 precision 100 구조 검사가 아니다.
+
+  대신 prompt-first/tool-local contract 원칙으로 보강했다.
+
+  - Label Contract: source-sensitive result/status/type 필드는 query-path source role을 request가
+    이름 붙여야 하며, note/comment text는 broad result/value가 아니라 그 text surface로 요청해야
+    한다고 명시했다.
+  - `AnswerOutputBinding.requested_by_phrase`: note/comment/description text를 broad result/value
+    phrase에 바인딩하지 말라고 추가했다.
+  - `query.select[].as`: note/comment/description text를 result/status/value field처럼 보이게 하지
+    말고, request가 text surface를 이름 붙일 때만 쓰라고 문구를 맞췄다.
+
+  특정 테이블/컬럼 리터럴을 근거로 reject하는 검증은 만들지 않았다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`111 passed`).
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

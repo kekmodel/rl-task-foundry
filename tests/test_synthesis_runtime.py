@@ -2614,6 +2614,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "Do not add parenthetical normalized choices" in schema_surface
     assert "When two reachable sources could satisfy the same broad phrase" in schema_surface
     assert "the current record's category versus a referenced item's category" in schema_surface
+    assert "Do not bind note/comment/description text to broad result/value" in schema_surface
+    assert "unless user_request asks for that text surface" in schema_surface
     assert "multiple reachable source surfaces could answer them" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface

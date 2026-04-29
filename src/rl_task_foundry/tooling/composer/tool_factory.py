@@ -686,7 +686,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                                 "phrases must name the selected source role. "
                                 "Do not make note/comment/description text "
                                 "look like a result/status/value field unless "
-                                "the request names that surface."
+                                "the request names that text surface."
                             ),
                         },
                     },
