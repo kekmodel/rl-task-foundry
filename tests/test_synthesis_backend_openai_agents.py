@@ -27,20 +27,20 @@ def _conversation_with_controller(controller: object) -> SynthesisConversation:
 class _RecordingEventLogger:
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
-        self.sidecar_filenames: list[str] = []
-        self.sidecar_records: list[dict[str, object]] = []
+        self.analysis_sources: list[str] = []
+        self.analysis_records: list[dict[str, object]] = []
 
     def log_sync(self, **kwargs: object) -> None:
         self.events.append(dict(kwargs))
 
-    def write_sidecar_jsonl(
+    def write_analysis_records(
         self,
-        filename: str,
+        source_name: str,
         records: list[dict[str, object]],
     ) -> Path:
-        self.sidecar_filenames.append(filename)
-        self.sidecar_records.extend(records)
-        return Path("/tmp/reasoning_content.jsonl")
+        self.analysis_sources.append(source_name)
+        self.analysis_records.extend(records)
+        return Path("/tmp/analysis.jsonl")
 
 
 def test_synthesis_timeout_allowance_covers_solver_replacement_batches() -> None:
@@ -292,10 +292,10 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
         "total_tokens": 24,
     }
     assert result.tool_calls == ("query", "submit_draft")
-    assert controller.event_logger.sidecar_filenames == ["reasoning_content.jsonl"]
-    assert controller.event_logger.sidecar_records[0]["actor"] == "composer"
-    assert controller.event_logger.sidecar_records[0]["segment_index"] == 2
-    assert controller.event_logger.sidecar_records[0]["raw_item"] == {
+    assert controller.event_logger.analysis_sources == ["reasoning_content"]
+    assert controller.event_logger.analysis_records[0]["actor"] == "composer"
+    assert controller.event_logger.analysis_records[0]["segment_index"] == 2
+    assert controller.event_logger.analysis_records[0]["raw_item"] == {
         "type": "reasoning",
         "summary": [
             {
@@ -312,8 +312,8 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
     assert len(completion_events) == 1
     assert completion_events[0]["payload"]["protocol_feedback_events"] == 1
     assert completion_events[0]["payload"]["reasoning_content_items"] == 1
-    assert completion_events[0]["payload"]["reasoning_content_path"] == (
-        "/tmp/reasoning_content.jsonl"
+    assert completion_events[0]["payload"]["analysis_log_path"] == (
+        "/tmp/analysis.jsonl"
     )
 
 

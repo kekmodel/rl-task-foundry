@@ -831,7 +831,7 @@ async def run_proof_task(
     config: AppConfig,
     *,
     output_root: Path,
-    mirror_monitor_path: Path | None = None,
+    mirror_analysis_log_path: Path | None = None,
     schema_name: str | None = None,
 ) -> RealDbTrialSummary:
     """Provision an ephemeral proof schema and drive a trial through the runtime."""
@@ -878,7 +878,7 @@ async def run_proof_task(
                 output_root,
                 db_id=PROOF_DB_ID,
                 topic=PROOF_TASK_TOPIC,
-                mirror_monitor_path=mirror_monitor_path,
+                mirror_analysis_log_path=mirror_analysis_log_path,
             )
         finally:
             await runner.close()

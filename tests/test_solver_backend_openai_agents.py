@@ -74,15 +74,15 @@ def _sample_episode() -> SolverEpisodeInput:
 class _RecordingReasoningLogger:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.filenames: list[str] = []
+        self.sources: list[str] = []
         self.records: list[dict[str, object]] = []
 
-    def write_sidecar_jsonl(
+    def write_analysis_records(
         self,
-        filename: str,
+        source_name: str,
         records: list[dict[str, object]],
     ) -> Path:
-        self.filenames.append(filename)
+        self.sources.append(source_name)
         self.records.extend(records)
         return self.path
 
@@ -314,7 +314,7 @@ async def test_openai_agents_solver_backend_enforces_episode_duration(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_solver_backend_persists_raw_reasoning_sidecar(
+async def test_openai_agents_solver_backend_persists_raw_reasoning_to_analysis_log(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -376,7 +376,7 @@ async def test_openai_agents_solver_backend_persists_raw_reasoning_sidecar(
             ToolsToFinalOutputResult=lambda **kwargs: SimpleNamespace(**kwargs),
         ),
     )
-    event_logger = _RecordingReasoningLogger(tmp_path / "reasoning_content.jsonl")
+    event_logger = _RecordingReasoningLogger(tmp_path / "analysis.jsonl")
 
     backend = OpenAIAgentsSolverBackend(
         solver_config=SolverModelConfig(
@@ -398,7 +398,7 @@ async def test_openai_agents_solver_backend_persists_raw_reasoning_sidecar(
 
     result = await backend.run(episode)
 
-    assert event_logger.filenames == ["reasoning_content.jsonl"]
+    assert event_logger.sources == ["reasoning_content"]
     assert len(event_logger.records) == 1
     assert event_logger.records[0]["actor"] == "solver"
     assert event_logger.records[0]["actor_id"] == "solver_a"
@@ -413,8 +413,8 @@ async def test_openai_agents_solver_backend_persists_raw_reasoning_sidecar(
             }
         ],
     }
-    assert result.termination_metadata["reasoning_content_path"] == str(
-        tmp_path / "reasoning_content.jsonl"
+    assert result.termination_metadata["analysis_log_path"] == str(
+        tmp_path / "analysis.jsonl"
     )
     assert result.termination_metadata["reasoning_content_items"] == 1
 

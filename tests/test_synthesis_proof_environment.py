@@ -134,15 +134,19 @@ async def test_run_proof_task_commits_without_exporting_bundle(
     assert summary.flow_id is not None
     assert summary.registry_status is TaskRegistryCommitStatus.COMMITTED
     assert summary.bundle_root is None
-    assert summary.phase_monitor_log_path is not None
+    assert summary.analysis_log_path is not None
     assert summary.task_id is not None
     assert "anchor candidate seeding failed" not in caplog.text
 
-    phase_monitor_lines = [
+    analysis_lines = [
         json.loads(line)
-        for line in summary.phase_monitor_log_path.read_text(encoding="utf-8").splitlines()
+        for line in summary.analysis_log_path.read_text(encoding="utf-8").splitlines()
     ]
-    phases = [line["phase"] for line in phase_monitor_lines]
+    phases = [
+        line["payload"]["phase"]
+        for line in analysis_lines
+        if line["actor"] == "phase"
+    ]
     assert "trial" in phases
     assert "registry_commit" in phases
     assert "bundle_export" in phases

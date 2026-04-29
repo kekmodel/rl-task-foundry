@@ -22,7 +22,7 @@ def normalize_chat_completion_reasoning_for_agents(response: Any) -> None:
     The Agents SDK chat-completions converter promotes `reasoning_content` into
     a `ReasoningItem`, but OpenRouter normalizes thinking output as `reasoning`
     on the chat message. Copying it into `reasoning_content` keeps the raw
-    provider-visible reasoning available to our sidecar writer without changing
+    provider-visible reasoning available to the analysis log without changing
     model behavior.
     """
 
@@ -418,8 +418,8 @@ def extract_raw_reasoning_records(items: list[Any] | tuple[Any, ...]) -> list[di
 
     OpenAI Responses reasoning and OpenAI-compatible chat-completion
     `reasoning_content` are surfaced by the SDK as `ReasoningItem` objects when
-    the provider returns them. Keep the full SDK payload out of the primary event
-    timeline; callers can persist these records to a sidecar artifact.
+    the provider returns them. Callers persist these records as dedicated
+    analysis events in the unified timeline.
     """
 
     records: list[dict[str, Any]] = []

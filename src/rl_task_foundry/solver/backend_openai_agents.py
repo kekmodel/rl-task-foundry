@@ -135,7 +135,7 @@ def _persist_reasoning_records(
 ) -> tuple[str | None, int]:
     if not records:
         return None, 0
-    writer = getattr(event_logger, "write_sidecar_jsonl", None)
+    writer = getattr(event_logger, "write_analysis_records", None)
     if not callable(writer):
         return None, len(records)
     enriched = [
@@ -148,7 +148,7 @@ def _persist_reasoning_records(
         }
         for record in records
     ]
-    path = writer("reasoning_content.jsonl", enriched)
+    path = writer("reasoning_content", enriched)
     return (str(path) if path is not None else None), len(records)
 
 
@@ -550,7 +550,7 @@ class OpenAIAgentsSolverBackend:
             latency_ms = int((perf_counter() - started_at) * 1000)
             raw_output_text = _failure_raw_output_text(exc)
             recovered_items = _extract_run_error_items(exc)
-            reasoning_path, reasoning_items = _persist_reasoning_records(
+            analysis_log_path, reasoning_items = _persist_reasoning_records(
                 event_logger=self.event_logger,
                 records=_extract_raw_reasoning_records(
                     getattr(getattr(exc, "run_data", None), "new_items", []) or []
@@ -563,8 +563,8 @@ class OpenAIAgentsSolverBackend:
                 "detail": str(exc),
                 "run_items": recovered_items,
             }
-            if reasoning_path is not None:
-                termination_metadata["reasoning_content_path"] = reasoning_path
+            if analysis_log_path is not None:
+                termination_metadata["analysis_log_path"] = analysis_log_path
             if reasoning_items:
                 termination_metadata["reasoning_content_items"] = reasoning_items
             return SolverResult(
@@ -601,7 +601,7 @@ class OpenAIAgentsSolverBackend:
         ]
         if protocol_feedback_events:
             metadata["protocol_feedback_events"] = protocol_feedback_events
-        reasoning_path, reasoning_items = _persist_reasoning_records(
+        analysis_log_path, reasoning_items = _persist_reasoning_records(
             event_logger=self.event_logger,
             records=_extract_raw_reasoning_records(
                 run_items
@@ -610,8 +610,8 @@ class OpenAIAgentsSolverBackend:
             model=self.solver_config.model,
             solver_id=self.solver_config.solver_id,
         )
-        if reasoning_path is not None:
-            metadata["reasoning_content_path"] = reasoning_path
+        if analysis_log_path is not None:
+            metadata["analysis_log_path"] = analysis_log_path
         if reasoning_items:
             metadata["reasoning_content_items"] = reasoning_items
         if submitted_answer_text is None and status == "completed":

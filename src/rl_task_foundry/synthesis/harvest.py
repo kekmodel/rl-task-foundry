@@ -19,6 +19,7 @@ from pathlib import Path
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.db import DatabasePools, ensure_database_pools
+from rl_task_foundry.infra.event_log import TrialEventLogger
 from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
@@ -50,7 +51,7 @@ class HarvestSummary:
     attempted: int
     accepted_task_ids: tuple[str, ...]
     flow_id: str
-    phase_monitor_log_path: Path
+    analysis_log_path: Path
     output_root: Path
     elapsed_seconds: float
     productive_elapsed_seconds: float
@@ -151,12 +152,19 @@ class HarvestRunner:
             )
         if self.trial_runner_factory is None:
             await self._warm_synthesis_db(db_id)
-        harvest_monitor_path = output_root / "phase_monitors.jsonl"
+        harvest_analysis_log_path = output_root / "analysis.jsonl"
         flow_id = build_flow_id("harvest")
-        harvest_monitor = PipelinePhaseMonitorLogger(
-            phase_monitor_log_path=harvest_monitor_path,
+        event_logger = TrialEventLogger(
+            harvest_analysis_log_path,
             flow_kind="harvest",
             flow_id=flow_id,
+        )
+        harvest_monitor = PipelinePhaseMonitorLogger(
+            phase_monitor_log_path=harvest_analysis_log_path,
+            flow_kind="harvest",
+            flow_id=flow_id,
+            event_logger=event_logger,
+            write_phase_log_file=False,
         )
 
         started_at = time.monotonic()
@@ -197,7 +205,7 @@ class HarvestRunner:
                     summary = await trial_runner.run(
                         trial_root,
                         db_id=db_id,
-                        mirror_monitor_path=harvest_monitor_path,
+                        mirror_analysis_log_path=harvest_analysis_log_path,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -329,6 +337,7 @@ class HarvestRunner:
             diagnostics={},
         )
         harvest_monitor.close()
+        event_logger.close()
 
         return HarvestSummary(
             outcome=outcome,
@@ -338,7 +347,7 @@ class HarvestRunner:
             attempted=attempted,
             accepted_task_ids=tuple(accepted_task_ids),
             flow_id=flow_id,
-            phase_monitor_log_path=harvest_monitor_path,
+            analysis_log_path=harvest_analysis_log_path,
             output_root=output_root,
             elapsed_seconds=elapsed,
             productive_elapsed_seconds=productive_elapsed,

@@ -279,7 +279,7 @@ def run_proof_task_cli(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
-    """Run the synthetic proof-task vertical slice and export its bundle."""
+    """Run the synthetic proof-task vertical slice."""
 
     async def _run() -> None:
         config = load_config(config_path)
@@ -293,8 +293,8 @@ def run_proof_task_cli(
             console.print(f"quality_gate_status={summary.quality_gate_status}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
-        if summary.phase_monitor_log_path is not None:
-            console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
+        if summary.analysis_log_path is not None:
+            console.print(f"analysis_log_path={summary.analysis_log_path}")
         if summary.elapsed_seconds is not None:
             console.print(f"elapsed_seconds={summary.elapsed_seconds:.3f}")
         if summary.solver_pass_rate is not None:
@@ -388,8 +388,8 @@ def run_real_db_trial(
         console.print(f"topic_experiment_hint={summary.requested_topic}")
         if summary.flow_id is not None:
             console.print(f"flow_id={summary.flow_id}")
-        if summary.phase_monitor_log_path is not None:
-            console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
+        if summary.analysis_log_path is not None:
+            console.print(f"analysis_log_path={summary.analysis_log_path}")
         if summary.elapsed_seconds is not None:
             console.print(f"elapsed_seconds={summary.elapsed_seconds:.3f}")
         if summary.task_id is not None:
@@ -523,7 +523,7 @@ def harvest(
             f"{summary.provider_issue_elapsed_seconds:.1f}"
         )
         console.print(f"flow_id={summary.flow_id}")
-        console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
+        console.print(f"analysis_log_path={summary.analysis_log_path}")
         if summary.accepted_task_ids:
             console.print(f"accepted_task_ids={list(summary.accepted_task_ids)}")
         if summary.outcome is not HarvestOutcome.TARGET_REACHED:

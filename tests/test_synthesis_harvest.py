@@ -164,8 +164,9 @@ class _ScriptedSummaryRunner:
         *,
         db_id: str,
         topic: str | None = None,
-        mirror_monitor_path: Path | None = None,
+        mirror_analysis_log_path: Path | None = None,
     ) -> RealDbTrialSummary:
+        del mirror_analysis_log_path
         return self.summary
 
     async def close(self) -> None:
@@ -213,10 +214,13 @@ async def test_harvest_runner_reaches_target(tmp_path: Path) -> None:
     assert summary.productive_elapsed_seconds >= 0.0
     assert summary.productive_seconds_per_accepted is not None
     assert summary.production_viability_passed is True
-    assert (out / "phase_monitors.jsonl").exists()
-    assert (out / "trials" / "trial_0001" / "debug" / "phase_monitors.jsonl").exists()
+    assert summary.analysis_log_path == out / "analysis.jsonl"
+    assert (out / "analysis.jsonl").exists()
+    assert (out / "trials" / "trial_0001" / "debug" / "analysis.jsonl").exists()
+    assert not (out / "phase_monitors.jsonl").exists()
+    assert not (out / "trials" / "trial_0001" / "debug" / "phase_monitors.jsonl").exists()
     # mirror aggregation includes harvest events + every trial's events
-    aggregate = (out / "phase_monitors.jsonl").read_text().strip().splitlines()
+    aggregate = (out / "analysis.jsonl").read_text().strip().splitlines()
     flow_kinds = {json.loads(line)["flow_kind"] for line in aggregate}
     assert "harvest" in flow_kinds
     assert "real_db_trial" in flow_kinds

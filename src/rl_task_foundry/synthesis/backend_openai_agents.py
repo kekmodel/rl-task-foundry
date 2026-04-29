@@ -143,7 +143,7 @@ def _persist_reasoning_records(
 ) -> tuple[str | None, int]:
     if not records:
         return None, 0
-    writer = getattr(event_logger, "write_sidecar_jsonl", None)
+    writer = getattr(event_logger, "write_analysis_records", None)
     if not callable(writer):
         return None, len(records)
     enriched = [
@@ -157,7 +157,7 @@ def _persist_reasoning_records(
         }
         for record in records
     ]
-    path = writer("reasoning_content.jsonl", enriched)
+    path = writer("reasoning_content", enriched)
     return (str(path) if path is not None else None), len(records)
 
 
@@ -376,7 +376,7 @@ class OpenAIAgentsSynthesisBackend:
         tool_calls: list[str] = []
         run_item_summaries: list[dict[str, Any]] = []
         protocol_feedback_events = 0
-        reasoning_content_path: str | None = None
+        analysis_log_path: str | None = None
         reasoning_content_items = 0
         segment_index = 0
         final_output_text = ""
@@ -408,7 +408,7 @@ class OpenAIAgentsSynthesisBackend:
             except Exception as exc:
                 latency_ms = int((perf_counter() - started_at) * 1000)
                 event_logger = getattr(conversation.controller, "event_logger", None)
-                error_reasoning_path, error_reasoning_items = _persist_reasoning_records(
+                error_analysis_path, error_reasoning_items = _persist_reasoning_records(
                     event_logger=event_logger,
                     records=_extract_raw_reasoning_records(
                         getattr(getattr(exc, "run_data", None), "new_items", []) or []
@@ -417,8 +417,8 @@ class OpenAIAgentsSynthesisBackend:
                     model=self.model_name,
                     segment_index=segment_index,
                 )
-                if error_reasoning_path is not None:
-                    reasoning_content_path = error_reasoning_path
+                if error_analysis_path is not None:
+                    analysis_log_path = error_analysis_path
                 reasoning_content_items += error_reasoning_items
                 if event_logger is not None:
                     event_logger.log_sync(
@@ -436,7 +436,7 @@ class OpenAIAgentsSynthesisBackend:
                             "solver_rollout_timeout_allowance_s": (
                                 solver_rollout_timeout_allowance_s
                             ),
-                            "reasoning_content_path": reasoning_content_path,
+                            "analysis_log_path": analysis_log_path,
                             "reasoning_content_items": reasoning_content_items,
                             "run_items": [
                                 *run_item_summaries,
@@ -454,7 +454,7 @@ class OpenAIAgentsSynthesisBackend:
                 _summarize_run_item(item)
                 for item in getattr(run_result, "new_items", []) or []
             )
-            segment_reasoning_path, segment_reasoning_items = _persist_reasoning_records(
+            segment_analysis_path, segment_reasoning_items = _persist_reasoning_records(
                 event_logger=getattr(conversation.controller, "event_logger", None),
                 records=_extract_raw_reasoning_records(
                     getattr(run_result, "new_items", []) or []
@@ -463,8 +463,8 @@ class OpenAIAgentsSynthesisBackend:
                 model=self.model_name,
                 segment_index=segment_index,
             )
-            if segment_reasoning_path is not None:
-                reasoning_content_path = segment_reasoning_path
+            if segment_analysis_path is not None:
+                analysis_log_path = segment_analysis_path
             reasoning_content_items += segment_reasoning_items
             final_output_text = _final_output_text(run_result)
 
@@ -512,7 +512,7 @@ class OpenAIAgentsSynthesisBackend:
                     "solver_rollout_timeout_allowance_s": (
                         solver_rollout_timeout_allowance_s
                     ),
-                    "reasoning_content_path": reasoning_content_path,
+                    "analysis_log_path": analysis_log_path,
                     "reasoning_content_items": reasoning_content_items,
                     "run_items": run_item_summaries,
                 },

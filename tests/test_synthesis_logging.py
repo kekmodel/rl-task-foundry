@@ -56,18 +56,56 @@ def test_pipeline_flow_logger_reuses_file_handle(tmp_path: Path) -> None:
     assert [line["status"] for line in lines] == ["started", "completed"]
 
 
-def test_trial_event_logger_flushes_sidecar_records_immediately(tmp_path: Path) -> None:
-    logger = TrialEventLogger(tmp_path / "trial_events.jsonl")
+def test_trial_event_logger_flushes_analysis_records_immediately(tmp_path: Path) -> None:
+    logger = TrialEventLogger(
+        tmp_path / "analysis.jsonl",
+        flow_kind="real_db_trial",
+        flow_id="flow-1",
+    )
 
-    sidecar = logger.write_sidecar_jsonl(
-        "reasoning_content.jsonl",
+    analysis_log = logger.write_analysis_records(
+        "reasoning_content",
         [{"actor": "composer", "raw_item": {"type": "reasoning"}}],
     )
 
-    assert sidecar == tmp_path / "reasoning_content.jsonl"
-    lines = sidecar.read_text(encoding="utf-8").splitlines()
+    assert analysis_log == tmp_path / "analysis.jsonl"
+    lines = analysis_log.read_text(encoding="utf-8").splitlines()
     assert json.loads(lines[0]) == {
+        "ts": json.loads(lines[0])["ts"],
+        "flow_kind": "real_db_trial",
+        "flow_id": "flow-1",
         "actor": "composer",
-        "raw_item": {"type": "reasoning"},
+        "actor_id": None,
+        "event_type": "reasoning_content",
+        "payload": {
+            "source_name": "reasoning_content",
+            "raw_item": {"type": "reasoning"},
+        },
     }
     logger.close()
+
+
+def test_phase_monitor_can_write_only_to_analysis_log(tmp_path: Path) -> None:
+    analysis_log = tmp_path / "analysis.jsonl"
+    event_logger = TrialEventLogger(
+        analysis_log,
+        flow_kind="real_db_trial",
+        flow_id="flow-1",
+    )
+    logger = PipelinePhaseMonitorLogger(
+        phase_monitor_log_path=analysis_log,
+        flow_kind="real_db_trial",
+        flow_id="flow-1",
+        event_logger=event_logger,
+        write_phase_log_file=False,
+    )
+
+    logger.emit(phase="trial", status="started")
+    logger.close()
+    event_logger.close()
+
+    lines = [json.loads(line) for line in analysis_log.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 1
+    assert lines[0]["actor"] == "phase"
+    assert lines[0]["event_type"] == "trial.started"
+    assert lines[0]["payload"]["phase"] == "trial"

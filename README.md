@@ -80,12 +80,11 @@ Durable accepted data lives in the task registry under `artifacts/tasks`,
 `artifacts/databases`, and `artifacts/task_registry.db`. Use `export-bundle` to
 materialize serving bundles from that registry.
 
-Per-trial debug output is for analysis only:
+Trial debug output is for analysis only:
 
-- `phase_monitors.jsonl`: phase-level state transitions
-- `trial_events.jsonl`: unified composer/solver/runner event timeline
-- `reasoning_content.jsonl`: optional provider-visible reasoning sidecar
-- `traces/`: SDK/tool/session traces
+- `analysis.jsonl`: one ordered timeline for phase transitions, runner events,
+  composer events, solver events, and provider-visible reasoning records
+- `traces/`: raw SDK/tool/session traces referenced by the analysis timeline
 
 All trial commands are lightweight by design. They commit accepted tasks to the
 registry and write debug traces, but they do not create per-trial serving

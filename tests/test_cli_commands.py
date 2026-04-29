@@ -191,16 +191,16 @@ def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
         _config: object,
         *,
         output_root: Path,
-        mirror_monitor_path: Path | None = None,
+        mirror_analysis_log_path: Path | None = None,
     ) -> RealDbTrialSummary:
         captured["output_root"] = output_root
-        captured["mirror_monitor_path"] = mirror_monitor_path
+        captured["mirror_analysis_log_path"] = mirror_analysis_log_path
         return RealDbTrialSummary(
             db_id="proof_trip_fixture",
             requested_topic="itinerary",
             trial_status=RealDbTrialStatus.ACCEPTED,
             flow_id="flow_proof_test",
-            phase_monitor_log_path=output_root / "debug" / "phase_monitors.jsonl",
+            analysis_log_path=output_root / "debug" / "analysis.jsonl",
             debug_root=output_root / "debug",
             task_id="task_itinerary_fixture",
             quality_gate_status="accept",
@@ -209,7 +209,7 @@ def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
             solver_ci_high=0.8,
             registry_status=TaskRegistryCommitStatus.COMMITTED,
             registry_task_id="task_itinerary_fixture",
-            bundle_root=output_root / "bundle",
+            bundle_root=None,
             elapsed_seconds=12.345,
         )
 
@@ -224,11 +224,11 @@ def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
     assert "task_id=task_itinerary_fixture" in result.stdout
     assert "quality_gate_status=accept" in result.stdout
     assert "flow_id=flow_proof_test" in result.stdout
-    assert "phase_monitor_log_path=" in result.stdout
+    assert "analysis_log_path=" in result.stdout
     assert "elapsed_seconds=12.345" in result.stdout
-    assert "bundle_root=" in result.stdout
+    assert "bundle_root=" not in result.stdout
     assert captured["output_root"] == output_dir
-    assert captured["mirror_monitor_path"] is None
+    assert captured["mirror_analysis_log_path"] is None
 
 
 def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
@@ -256,7 +256,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 requested_topic=topic,
                 trial_status=RealDbTrialStatus.ACCEPTED,
                 flow_id="flow_trial_test",
-                phase_monitor_log_path=output_dir / "debug" / "phase_monitors.jsonl",
+                analysis_log_path=output_dir / "debug" / "analysis.jsonl",
                 task_id="task_real_trial",
                 quality_gate_status="accept",
                 synthesis_phase=None,
@@ -311,7 +311,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "topic_experiment_hint=assignment" in result.stdout
     assert "flow_id=flow_trial_test" in result.stdout
     assert "task_id=task_real_trial" in result.stdout
-    assert "phase_monitor_log_path=" in result.stdout
+    assert "analysis_log_path=" in result.stdout
     assert "elapsed_seconds=12.345" in result.stdout
     assert "solver_matched_runs=10" in result.stdout
     assert "solver_planned_runs=20" in result.stdout

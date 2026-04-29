@@ -50,7 +50,7 @@ class RealDbTrialSummary:
     requested_topic: str
     trial_status: RealDbTrialStatus
     flow_id: str | None = None
-    phase_monitor_log_path: Path | None = None
+    analysis_log_path: Path | None = None
     debug_root: Path | None = None
     debug_traces_dir: Path | None = None
     synthesis_traces_dir: Path | None = None
@@ -85,7 +85,7 @@ class RealDbTrialSummary:
         requested_topic: str | None = None,
         trial_status: RealDbTrialStatus,
         flow_id: str | None = None,
-        phase_monitor_log_path: Path | None = None,
+        analysis_log_path: Path | None = None,
         debug_root: Path | None = None,
         debug_traces_dir: Path | None = None,
         synthesis_traces_dir: Path | None = None,
@@ -121,7 +121,7 @@ class RealDbTrialSummary:
         )
         object.__setattr__(self, "trial_status", trial_status)
         object.__setattr__(self, "flow_id", flow_id)
-        object.__setattr__(self, "phase_monitor_log_path", phase_monitor_log_path)
+        object.__setattr__(self, "analysis_log_path", analysis_log_path)
         object.__setattr__(self, "debug_root", debug_root)
         object.__setattr__(self, "debug_traces_dir", debug_traces_dir)
         object.__setattr__(self, "synthesis_traces_dir", synthesis_traces_dir)
@@ -198,19 +198,24 @@ class RealDbTrialRunner:
         *,
         db_id: str,
         topic: str | None = None,
-        mirror_monitor_path: Path | None = None,
+        mirror_analysis_log_path: Path | None = None,
     ) -> RealDbTrialSummary:
         if topic:
             topic = normalize_topic(topic)
         output_root.mkdir(parents=True, exist_ok=True)
         debug_root = output_root / "debug"
         debug_traces_dir = debug_root / "traces"
-        phase_monitor_log_path = debug_root / "phase_monitors.jsonl"
+        analysis_log_path = debug_root / "analysis.jsonl"
         synthesis_traces_dir = debug_traces_dir / "synthesis"
         solver_traces_dir = debug_traces_dir
         synthesis_traces_dir.mkdir(parents=True, exist_ok=True)
-        event_logger = TrialEventLogger(debug_root / "trial_events.jsonl")
         flow_id = build_flow_id("real_db_trial")
+        event_logger = TrialEventLogger(
+            analysis_log_path,
+            flow_kind="real_db_trial",
+            flow_id=flow_id,
+            mirror_path=mirror_analysis_log_path,
+        )
         event_logger.log_sync(
             actor="runner",
             event_type="trial_started",
@@ -222,11 +227,11 @@ class RealDbTrialRunner:
             },
         )
         phase_monitor = PipelinePhaseMonitorLogger(
-            phase_monitor_log_path=phase_monitor_log_path,
+            phase_monitor_log_path=analysis_log_path,
             flow_kind="real_db_trial",
             flow_id=flow_id,
-            mirror_phase_monitor_log_path=mirror_monitor_path,
             event_logger=event_logger,
+            write_phase_log_file=False,
         )
         phase_monitor.emit(
             phase="trial",
@@ -286,7 +291,7 @@ class RealDbTrialRunner:
                 requested_topic=topic,
                 trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                 flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
+                analysis_log_path=analysis_log_path,
                 debug_root=debug_root,
                 debug_traces_dir=debug_traces_dir,
                 synthesis_traces_dir=synthesis_traces_dir,
@@ -333,7 +338,7 @@ class RealDbTrialRunner:
                 requested_topic=topic,
                 trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                 flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
+                analysis_log_path=analysis_log_path,
                 debug_root=debug_root,
                 debug_traces_dir=debug_traces_dir,
                 synthesis_traces_dir=synthesis_traces_dir,
@@ -369,7 +374,7 @@ class RealDbTrialRunner:
                 requested_topic=topic,
                 trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                 flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
+                analysis_log_path=analysis_log_path,
                 debug_root=debug_root,
                 debug_traces_dir=debug_traces_dir,
                 synthesis_traces_dir=synthesis_traces_dir,
@@ -401,7 +406,7 @@ class RealDbTrialRunner:
                 requested_topic=topic,
                 trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                 flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
+                analysis_log_path=analysis_log_path,
                 debug_root=debug_root,
                 debug_traces_dir=debug_traces_dir,
                 synthesis_traces_dir=synthesis_traces_dir,
@@ -431,7 +436,7 @@ class RealDbTrialRunner:
                 requested_topic=topic,
                 trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
                 flow_id=flow_id,
-                phase_monitor_log_path=phase_monitor_log_path,
+                analysis_log_path=analysis_log_path,
                 debug_root=debug_root,
                 debug_traces_dir=debug_traces_dir,
                 synthesis_traces_dir=synthesis_traces_dir,
@@ -486,7 +491,7 @@ class RealDbTrialRunner:
             requested_topic=topic,
             trial_status=final_status,
             flow_id=flow_id,
-            phase_monitor_log_path=phase_monitor_log_path,
+            analysis_log_path=analysis_log_path,
             debug_root=debug_root,
             debug_traces_dir=debug_traces_dir,
             synthesis_traces_dir=synthesis_traces_dir,

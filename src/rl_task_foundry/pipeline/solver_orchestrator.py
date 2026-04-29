@@ -396,8 +396,8 @@ class SolverOrchestrator:
                     "final_output_preview": termination_metadata.get(
                         "final_output_preview", ""
                     ),
-                    "reasoning_content_path": termination_metadata.get(
-                        "reasoning_content_path", ""
+                    "analysis_log_path": termination_metadata.get(
+                        "analysis_log_path", ""
                     ),
                     "reasoning_content_items": termination_metadata.get(
                         "reasoning_content_items", 0

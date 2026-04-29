@@ -36,11 +36,14 @@ class PipelinePhaseMonitorLogger:
     flow_id: str
     mirror_phase_monitor_log_path: Path | None = None
     event_logger: object | None = None
+    write_phase_log_file: bool = True
     _seq: int = field(default=0, init=False, repr=False)
-    _primary_sink: JsonlFileSink = field(init=False, repr=False)
+    _primary_sink: JsonlFileSink | None = field(default=None, init=False, repr=False)
     _mirror_sink: JsonlFileSink | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not self.write_phase_log_file:
+            return
         self._primary_sink = JsonlFileSink(self.phase_monitor_log_path)
         if (
             self.mirror_phase_monitor_log_path is not None
@@ -83,7 +86,8 @@ class PipelinePhaseMonitorLogger:
             "checks": record.checks,
             "diagnostics": record.diagnostics,
         }
-        self._primary_sink.write_record(payload)
+        if self._primary_sink is not None:
+            self._primary_sink.write_record(payload)
         if self._mirror_sink is not None:
             self._mirror_sink.write_record(payload)
         if self.event_logger is not None:
@@ -91,7 +95,12 @@ class PipelinePhaseMonitorLogger:
                 actor="phase",
                 event_type=f"{record.phase}.{record.status}",
                 payload={
+                    "flow_kind": record.flow_kind,
+                    "flow_id": record.flow_id,
                     "seq": record.seq,
+                    "timestamp": record.timestamp,
+                    "phase": record.phase,
+                    "status": record.status,
                     "expected_contract": record.expected_contract,
                     "actual_data": record.actual_data,
                     "checks": record.checks,
@@ -101,6 +110,7 @@ class PipelinePhaseMonitorLogger:
         return record
 
     def close(self) -> None:
-        self._primary_sink.close()
+        if self._primary_sink is not None:
+            self._primary_sink.close()
         if self._mirror_sink is not None:
             self._mirror_sink.close()

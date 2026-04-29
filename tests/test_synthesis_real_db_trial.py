@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -163,7 +164,15 @@ async def test_real_db_trial_runner_commits_without_exporting_bundle(
     assert summary.solver_evaluable_runs == 20
     assert summary.solver_failed_runs == 0
     assert summary.elapsed_seconds is not None
-    assert summary.phase_monitor_log_path == output_root / "debug" / "phase_monitors.jsonl"
+    assert summary.analysis_log_path == output_root / "debug" / "analysis.jsonl"
+    assert summary.analysis_log_path.exists()
+    assert not (output_root / "debug" / "phase_monitors.jsonl").exists()
+    assert not (output_root / "debug" / "trial_events.jsonl").exists()
+    analysis_lines = [
+        json.loads(line)
+        for line in summary.analysis_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert {line["actor"] for line in analysis_lines} >= {"runner", "phase"}
     assert registry.closed is False  # injected registry stays open; caller owns lifecycle
 
 
