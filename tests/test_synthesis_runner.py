@@ -216,7 +216,7 @@ async def test_synthesis_registry_runner_cold_start_produces_draft(
     assert summary.generated_drafts == 1
 
 
-def test_load_synthesis_registry_supports_plain_db_ids_and_legacy_topics(tmp_path: Path) -> None:
+def test_load_synthesis_registry_rejects_legacy_topic_fields(tmp_path: Path) -> None:
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(
         json.dumps(
@@ -232,6 +232,39 @@ def test_load_synthesis_registry_supports_plain_db_ids_and_legacy_topics(tmp_pat
                 {
                     "db_id": "northwind",
                     "categories": ["itinerary"],
+                    "database": {
+                        "dsn": "postgresql://reader@localhost/northwind",
+                        "readonly_role": "rlvr_reader",
+                    },
+                    "domain": {
+                        "name": "support_ops",
+                    },
+                },
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_synthesis_registry(registry_path)
+
+
+def test_load_synthesis_registry_loads_db_entries(tmp_path: Path) -> None:
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            [
+                {
+                    "db_id": "sakila",
+                    "database": {
+                        "dsn": "postgresql://reader@localhost/sakila",
+                        "readonly_role": "rlvr_reader",
+                    },
+                },
+                {
+                    "db_id": "northwind",
                     "database": {
                         "dsn": "postgresql://reader@localhost/northwind",
                         "readonly_role": "rlvr_reader",

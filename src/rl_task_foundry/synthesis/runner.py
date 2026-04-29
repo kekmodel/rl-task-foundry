@@ -98,23 +98,6 @@ class SynthesisRegistryRunSummary:
     registry_index_db_path: Path | None = None
     steps: list[SynthesisRegistryStepSummary] = field(default_factory=list)
 
-    # Backward-compatible aliases
-    @property
-    def total_pairs(self) -> int:
-        return self.total_entries
-
-    @property
-    def initially_processed_pairs(self) -> int:
-        return self.initially_processed_entries
-
-    @property
-    def processed_pairs_after_run(self) -> int:
-        return self.processed_entries_after_run
-
-    @property
-    def remaining_pairs(self) -> int:
-        return self.remaining_entries
-
     @property
     def last_decision(self) -> SynthesisSchedulerDecision | None:
         if not self.steps:
@@ -458,9 +441,7 @@ def load_synthesis_registry(path: Path) -> list[SynthesisDbRegistryEntry]:
 
 
 def _parse_registry_item(item: dict[str, Any]) -> SynthesisDbRegistryEntry:
-    # Accept and ignore legacy topics/categories keys
-    cleaned = {k: v for k, v in item.items() if k not in ("topics", "categories")}
-    payload = SynthesisRegistryFileEntry.model_validate(cleaned)
+    payload = SynthesisRegistryFileEntry.model_validate(item)
     return payload.to_registry_entry()
 
 

@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from rl_task_foundry.config import load_config
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.coverage_planner import SynthesisCoveragePlanner
 from rl_task_foundry.synthesis.orchestrator import SynthesisDbRegistryEntry
 from rl_task_foundry.synthesis.task_registry import (
@@ -19,12 +18,12 @@ def test_synthesis_coverage_planner_builds_db_deficits() -> None:
         [
             TaskRegistryCoverageEntry(
                 db_id="sakila",
-                category=CategoryTaxonomy.ASSIGNMENT,
+                topic="assignment",
                 count=2,
             ),
             TaskRegistryCoverageEntry(
                 db_id="northwind",
-                category=CategoryTaxonomy.ASSIGNMENT,
+                topic="assignment",
                 count=1,
             ),
         ],

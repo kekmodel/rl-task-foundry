@@ -194,13 +194,7 @@ def _unmatched_answer_json() -> str:
 
 
 def build_proof_question() -> str:
-    entity_block = json.dumps(PROOF_ANCHOR_ENTITY, ensure_ascii=False, sort_keys=True)
-    return (
-        "<entity>\n"
-        f"{entity_block}\n"
-        "</entity>\n\n"
-        f"{PROOF_QUESTION_BODY}"
-    )
+    return PROOF_QUESTION_BODY
 
 
 def build_proof_schema_graph(schema_name: str) -> SchemaGraph:
@@ -668,9 +662,9 @@ def build_proof_composer_script() -> ScriptedComposerScript:
     submit_payload = SubmitDraftPayload.model_validate(
         {
             "topic": PROOF_TASK_TOPIC,
-            "label": PROOF_CANONICAL_ANSWER,
-            "entity": PROOF_ANCHOR_ENTITY,
-            "question": build_proof_question(),
+            "label_json": PROOF_CANONICAL_ANSWER,
+            "entity_json": PROOF_ANCHOR_ENTITY,
+            "user_request": build_proof_question(),
             "answer_contract": {
                 "kind": "list",
                 "answer_phrase": "일정표",

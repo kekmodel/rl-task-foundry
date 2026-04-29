@@ -168,7 +168,7 @@ def show_task_registry(
     config_path: Path = Path("rl_task_foundry.yaml"),
     limit: int = 10,
     db_id: str | None = None,
-    topic: str | None = typer.Option(None, "--topic", "--category"),
+    topic: str | None = typer.Option(None, "--topic"),
 ) -> None:
     """Print the current durable synthesis task registry snapshot."""
 
@@ -248,7 +248,7 @@ def export_bundle(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
     db_id: str | None = None,
-    topic: str | None = typer.Option(None, "--topic", "--category"),
+    topic: str | None = typer.Option(None, "--topic"),
     task_id: str | None = None,
 ) -> None:
     """Export registered task bundles into the bundle layout."""

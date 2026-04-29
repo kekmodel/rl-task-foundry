@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from rl_task_foundry.config import load_config
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
     RealDbTrialStatus,
@@ -149,7 +148,7 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
         summary = await runner.run(
             output_root,
             db_id="sakila",
-            topic=CategoryTaxonomy.ASSIGNMENT,
+            topic="assignment",
         )
     finally:
         await runner.close()
@@ -219,7 +218,7 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
         summary = await runner.run(
             tmp_path / "real_trial",
             db_id="sakila",
-            topic=CategoryTaxonomy.ASSIGNMENT,
+            topic="assignment",
         )
     finally:
         await runner.close()

@@ -43,17 +43,6 @@ def blocks_direct_label_exposure(value: object) -> bool:
     return value in DIRECT_LABEL_BLOCKING_VISIBILITIES
 
 
-def infer_visibility(column_name: str) -> Visibility | None:
-    """Deprecated compatibility hook.
-
-    Visibility must come from explicit configuration or database metadata, not
-    from token rules over column names.
-    """
-
-    del column_name
-    return None
-
-
 def resolve_visibility(
     column_name: str,
     *,

@@ -45,23 +45,6 @@ class SynthesisDbRegistryEntry:
     domain: DomainConfig | None = None
     graph: SchemaGraph | None = None
 
-    def __init__(
-        self,
-        *,
-        db_id: str,
-        topics: list[str] | None = None,
-        categories: list[object] | None = None,
-        database: DatabaseConfig | None = None,
-        domain: DomainConfig | None = None,
-        graph: SchemaGraph | None = None,
-    ) -> None:
-        # topics/categories parameters are accepted for backward compatibility
-        # but ignored — the registry no longer tracks topics.
-        self.db_id = db_id
-        self.database = database
-        self.domain = domain
-        self.graph = graph
-
 
 @dataclass(slots=True)
 class SynthesisOrchestrationStep:

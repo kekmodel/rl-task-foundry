@@ -1,12 +1,10 @@
-"""Scheduler helpers for synthesis domain/category selection."""
+"""Scheduler helpers for synthesis database selection."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-
-from pydantic import model_validator
 
 from rl_task_foundry.synthesis.contracts import StrictModel
 
@@ -20,19 +18,6 @@ class SynthesisSelectionStatus(StrEnum):
 class SynthesisDbSnapshot(StrictModel):
     db_id: str
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_keys(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        # Drop legacy fields silently
-        payload.pop("topics", None)
-        payload.pop("categories", None)
-        payload.pop("topic_status", None)
-        payload.pop("category_status", None)
-        return payload
-
 
 class SynthesisSchedulerDecision(StrictModel):
     status: SynthesisSelectionStatus
@@ -40,17 +25,6 @@ class SynthesisSchedulerDecision(StrictModel):
     reason: str = ""
     wait_until: datetime | None = None
     wait_seconds: float = 0.0
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_category_key(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        # Drop legacy topic/category fields silently
-        payload.pop("topic", None)
-        payload.pop("category", None)
-        return payload
 
 
 @dataclass(slots=True)

@@ -39,25 +39,15 @@ from rl_task_foundry.synthesis.submit_draft_validators import _ungrounded_answer
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 
 
-def _wrap_user_prompt(anchor_entity: dict[str, object], body: str) -> str:
-    return (
-        "<entity>\n"
-        f"{json.dumps(anchor_entity, ensure_ascii=False, sort_keys=True)}\n"
-        "</entity>\n\n"
-        f"{body}"
-    )
-
 def _scalar_answer_contract(
     *,
     phrase: str,
     constraint_phrases: list[str] | None = None,
-    **legacy: object,
 ) -> dict[str, object]:
-    phrases = _legacy_constraint_phrases(constraint_phrases, legacy)
     return {
         "kind": "scalar",
         "answer_phrase": phrase,
-        "constraint_phrases": phrases,
+        "constraint_phrases": list(constraint_phrases or []),
         "limit_phrase": None,
     }
 
@@ -66,30 +56,13 @@ def _list_answer_contract(
     phrase: str,
     constraint_phrases: list[str] | None = None,
     limit_phrase: str | None = "3건",
-    **legacy: object,
 ) -> dict[str, object]:
-    phrases = _legacy_constraint_phrases(constraint_phrases, legacy)
     return {
         "kind": "list",
         "answer_phrase": phrase,
-        "constraint_phrases": phrases,
+        "constraint_phrases": list(constraint_phrases or []),
         "limit_phrase": limit_phrase,
     }
-
-
-def _legacy_constraint_phrases(
-    phrases: list[str] | None,
-    legacy: dict[str, object],
-) -> list[str]:
-    normalized = list(phrases or [])
-    for key in ("predicates", "order_by"):
-        raw_entries = legacy.get(key)
-        if not isinstance(raw_entries, list):
-            continue
-        for entry in raw_entries:
-            if isinstance(entry, dict) and isinstance(entry.get("phrase"), str):
-                normalized.append(entry["phrase"])
-    return normalized
 
 
 def _answer_contract_kind(answer_contract: object | None) -> object:
@@ -192,8 +165,12 @@ def _draft_with_task_bundle(payload: SubmitDraftPayload):
         selected_topic=payload.topic,
         task_bundle=task_bundle,
         rendered_user_prompt=payload.user_request,
-        anchor_entity=payload.entity,
-        canonical_answer_json=json.dumps(payload.label, ensure_ascii=False, sort_keys=True),
+        anchor_entity=payload.parsed_entity,
+        canonical_answer_json=json.dumps(
+            payload.canonical_answer,
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
         label_signature="test-label",
     )
 
@@ -963,14 +940,14 @@ class _FakeBackend:
         if self.reject_payload is not None:
             _record_query_evidence(
                 controller,
-                self.reject_payload.label,
+                self.reject_payload.canonical_answer,
                 answer_contract=self.reject_payload.answer_contract,
             )
             await controller.submit(self.reject_payload)
         if self.accept_payload is not None:
             _record_query_evidence(
                 controller,
-                self.accept_payload.label,
+                self.accept_payload.canonical_answer,
                 answer_contract=self.accept_payload.answer_contract,
             )
             await controller.submit(self.accept_payload)
@@ -1046,12 +1023,9 @@ def _accepted_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": '{"store_id": 1, "customer_count": 5}',
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "내가 배정된 매장과 전체 고객 수를 알려 주세요.",
-            ),
+            "label_json": '{"store_id": 1, "customer_count": 5}',
+            "entity_json": anchor_entity,
+            "user_request": "내가 배정된 매장과 전체 고객 수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(phrase="전체 고객 수"),
         }
     )
@@ -1066,7 +1040,7 @@ def _too_easy_readable_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "assignment_summary",
-            "label": json.dumps(
+            "label_json": json.dumps(
                 {
                     "staff_name": "Mike Hillyer",
                     "staff_email": "Mike.Hillyer@sakilastaff.com",
@@ -1074,16 +1048,13 @@ def _too_easy_readable_payload() -> SubmitDraftPayload:
                 },
                 ensure_ascii=False,
             ),
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "내 계정 기준으로 담당 직원 이름과 이메일을 알려주고,"
-                " 제가 지금까지 빌린 건수도 함께 알려주세요.",
+            "entity_json": anchor_entity,
+            "user_request": (
+                "내 계정 기준으로 담당 직원 이름과 이메일을 알려주고"
+                " 제가 지금까지 빌린 건수도 함께 알려주세요."
             ),
             "answer_contract": _scalar_answer_contract(
                 phrase="빌린 건수",
-                table="rental",
-                column="rental_id",
             ),
         }
     )
@@ -1093,34 +1064,17 @@ def _too_easy_list_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "recent_payments",
-            "label": [
+            "label_json": [
                 {"amount": "7.99", "payment_date": "2007-02-14 15:16:03"},
                 {"amount": "5.99", "payment_date": "2007-02-13 10:11:12"},
                 {"amount": "4.99", "payment_date": "2007-02-12 09:08:07"},
             ],
-            "entity": anchor_entity,
+            "entity_json": anchor_entity,
             "user_request": "제 결제 중 5달러 이상인 최근 3건을 결제일 내림차순으로 알려 주세요.",
             "answer_contract": {
                 **_list_answer_contract(
                     phrase="알려 주세요",
-                    predicates=[
-                        {
-                            "table": "payment",
-                            "column": "amount",
-                            "op": "gte",
-                            "value": 5,
-                            "phrase": "5달러 이상",
-                        }
-                    ],
-                    order_by=[
-                        {
-                            "table": "payment",
-                            "column": "payment_date",
-                            "direction": "desc",
-                            "phrase": "결제일 내림차순",
-                        }
-                    ],
-                    limit=3,
+                    constraint_phrases=["5달러 이상", "결제일 내림차순"],
                     limit_phrase="3건",
                 ),
                 "order_bindings": [
@@ -1149,12 +1103,9 @@ def _count_without_count_evidence_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": '{"customer_count": 1, "customer_name": "Alice"}',
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "제 기록을 기준으로 고객 수와 제 이름을 알려 주세요.",
-            ),
+            "label_json": '{"customer_count": 1, "customer_name": "Alice"}',
+            "entity_json": anchor_entity,
+            "user_request": "제 기록을 기준으로 고객 수와 제 이름을 알려 주세요.",
             "answer_contract": _scalar_answer_contract(phrase="고객 수"),
         }
     )
@@ -1164,17 +1115,11 @@ def _ungrounded_text_payload(*, customer_id: int = 1) -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "record_history",
-            "label": '{"film_title": "Airplane Sierra"}',
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "내 기록과 관련된 영화 제목을 알려 주세요.",
-            ),
+            "label_json": '{"film_title": "Airplane Sierra"}',
+            "entity_json": anchor_entity,
+            "user_request": "내 기록과 관련된 영화 제목을 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="영화 제목",
-                table="film",
-                fn="max",
-                column="title",
             ),
         }
     )
@@ -1184,23 +1129,17 @@ def _partially_rewritten_string_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "latest_rental_assignment",
-            "label": json.dumps(
+            "label_json": json.dumps(
                 {
                     "rental_staff_name": "Bob",
                     "latest_rental_date": "2005-08-22T20:03:46",
                 },
                 ensure_ascii=False,
             ),
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "제가 최근에 대여한 기록의 처리 직원 이름과 대여 시각을 알려주세요.",
-            ),
+            "entity_json": anchor_entity,
+            "user_request": "제가 최근에 대여한 기록의 처리 직원 이름과 대여 시각을 알려주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="대여 시각",
-                table="rental",
-                fn="max",
-                column="rental_date",
             ),
         }
     )
@@ -1210,12 +1149,9 @@ def _global_count_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": '{"customer_name": "Alice", "customer_count": 5}',
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "제 기록을 기준으로 제 이름과 관련 고객 수를 알려 주세요.",
-            ),
+            "label_json": '{"customer_name": "Alice", "customer_count": 5}',
+            "entity_json": anchor_entity,
+            "user_request": "제 기록을 기준으로 제 이름과 관련 고객 수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(phrase="고객 수"),
         }
     )
@@ -1225,16 +1161,11 @@ def _id_chain_payload() -> SubmitDraftPayload:
     return SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": '{"rental_id": 777, "payment_id": 9710}',
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "제 계정과 연결된 대여와 결제 한 건을 알려 주세요.",
-            ),
+            "label_json": '{"rental_id": 777, "payment_id": 9710}',
+            "entity_json": anchor_entity,
+            "user_request": "제 계정과 연결된 대여와 결제 한 건을 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="한 건",
-                table="rental",
-                column="rental_id",
             ),
         }
     )
@@ -1438,19 +1369,18 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     )
     assert "entity scope" in schema["properties"]["answer_contract"]["description"]
     assert "Do not restate tables" in schema["properties"]["answer_contract"]["description"]
-    assert SubmitDraftPayload.model_validate(
-        {
-            **_accepted_payload().model_dump(mode="json"),
-            "entity": '{"customer_id": 1}',
-        }
-    ).parsed_entity == {"customer_id": 1}
+    with pytest.raises(ValidationError):
+        SubmitDraftPayload.model_validate(
+            {
+                **_accepted_payload().model_dump(mode="json"),
+                "entity": '{"customer_id": 1}',
+            }
+        )
     legacy_label_payload = _accepted_payload().model_dump(mode="json")
     legacy_label_payload.pop("label_json")
     legacy_label_payload["label"] = '{"customer_count": 1}'
-    assert (
-        SubmitDraftPayload.model_validate(legacy_label_payload).canonical_answer
-        == {"customer_count": 1}
-    )
+    with pytest.raises(ValidationError):
+        SubmitDraftPayload.model_validate(legacy_label_payload)
     assert _loose_json_schema_paths(schema) == []
 
 
@@ -1491,7 +1421,7 @@ async def test_submit_draft_records_answer_contract_binding_diagnostics(
     payload = SubmitDraftPayload.model_validate(raw_payload)
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         answer_contract=payload.answer_contract,
         referenced_columns=[
             {
@@ -1549,8 +1479,8 @@ async def test_submit_draft_rejects_single_row_list_as_too_direct(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "stay_summary",
-            "label": label,
-            "entity": {"stay_key": 1},
+            "label_json": label,
+            "entity_json": {"stay_key": 1},
             "user_request": (
                 "해당 입원의 처음 배정 병동, 마지막 배정 병동, "
                 "입실 시간, 퇴실 시간을 알려주세요."
@@ -1582,7 +1512,7 @@ async def test_submit_draft_rejects_single_row_list_as_too_direct(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -1631,8 +1561,8 @@ async def test_submit_draft_rejects_limited_single_row_before_order_repair(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "latest_status",
-            "label": label,
-            "entity": {"case_key": 1},
+            "label_json": label,
+            "entity_json": {"case_key": 1},
             "user_request": "가장 최근 상태 1개와 기록 시간을 알려주세요.",
             "answer_contract": {
                 "kind": "list",
@@ -1651,7 +1581,7 @@ async def test_submit_draft_rejects_limited_single_row_before_order_repair(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         query_params={"spec": {"limit": 1}},
         referenced_columns=[
             {
@@ -1705,8 +1635,8 @@ async def test_submit_draft_rejects_primary_key_detail_list_as_too_direct(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medication_event",
-            "label": label,
-            "entity": {"medication_id": "10021118-149"},
+            "label_json": label,
+            "entity_json": {"medication_id": "10021118-149"},
             "user_request": (
                 "Sodium Chloride 0.9% Flush 투약 이벤트의 투약 ID, "
                 "투약명, 이벤트 유형, 기록시간을 보여주세요."
@@ -1733,7 +1663,7 @@ async def test_submit_draft_rejects_primary_key_detail_list_as_too_direct(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         query_params={"spec": {"limit": 1}},
         column_sources=[
             {
@@ -1802,8 +1732,8 @@ async def test_submit_draft_feedbacks_missing_list_output_binding(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "results",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": (
                 "최근 검사 결과 3개와 검사 시간을 검사 시간 내림차순으로 보여 주세요."
             ),
@@ -1827,7 +1757,7 @@ async def test_submit_draft_feedbacks_missing_list_output_binding(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -1883,8 +1813,8 @@ async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": (
                 "최근 처방 약물 3개의 용량과 투여 경로를 투여 경로 순서대로 보여 주세요."
             ),
@@ -1910,7 +1840,7 @@ async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -1966,7 +1896,7 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     first_payload = SubmitDraftPayload.model_validate(first_payload_data)
     _record_query_evidence(
         controller,
-        first_payload.label,
+        first_payload.canonical_answer,
         answer_contract=first_payload.answer_contract,
     )
 
@@ -1982,15 +1912,15 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     second_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"store_id": 2, "customer_count": 9},
-            "entity": {"customer_id": 1},
+            "label_json": {"store_id": 2, "customer_count": 9},
+            "entity_json": {"customer_id": 1},
             "user_request": "내가 배정된 매장과 전체 고객 수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(phrase="전체 고객 수"),
         }
     )
     _record_query_evidence(
         controller,
-        second_payload.label,
+        second_payload.canonical_answer,
         answer_contract=second_payload.answer_contract,
     )
 
@@ -2027,8 +1957,8 @@ async def test_submit_draft_rejects_label_reset_after_binding_feedback(
     first_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "results",
-            "label": first_label,
-            "entity": {"customer_id": 1},
+            "label_json": first_label,
+            "entity_json": {"customer_id": 1},
             "user_request": (
                 "최근 검사 결과 3개와 검사 시간을 검사 시간 내림차순으로 보여 주세요."
             ),
@@ -2052,7 +1982,7 @@ async def test_submit_draft_rejects_label_reset_after_binding_feedback(
     )
     _record_query_evidence(
         controller,
-        first_payload.label,
+        first_payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -2080,15 +2010,15 @@ async def test_submit_draft_rejects_label_reset_after_binding_feedback(
     second_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "admission_details",
-            "label": {"admission_count": 1},
-            "entity": {"customer_id": 1},
+            "label_json": {"admission_count": 1},
+            "entity_json": {"customer_id": 1},
             "user_request": "내 입원 기록 수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(phrase="입원 기록 수"),
         }
     )
     _record_query_evidence(
         controller,
-        second_payload.label,
+        second_payload.canonical_answer,
         answer_contract=second_payload.answer_contract,
     )
 
@@ -2126,8 +2056,8 @@ async def test_submit_draft_rejects_task_reset_after_list_limit_feedback(
     first_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "admission_diagnoses",
-            "label": first_label,
-            "entity": {"hadm_id": 1},
+            "label_json": first_label,
+            "entity_json": {"hadm_id": 1},
             "user_request": "이번 입원의 진단 목록을 순서대로 알려 주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="진단 목록",
@@ -2138,7 +2068,7 @@ async def test_submit_draft_rejects_task_reset_after_list_limit_feedback(
     )
     _record_query_evidence(
         controller,
-        first_payload.label,
+        first_payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "where",
@@ -2166,12 +2096,12 @@ async def test_submit_draft_rejects_task_reset_after_list_limit_feedback(
     second_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "admission_medications",
-            "label": [
+            "label_json": [
                 {"time": "2026-01-01T08:00:00", "medication": "A"},
                 {"time": "2026-01-01T09:00:00", "medication": "B"},
                 {"time": "2026-01-01T10:00:00", "medication": "C"},
             ],
-            "entity": {"hadm_id": 1},
+            "entity_json": {"hadm_id": 1},
             "user_request": "이번 입원의 투약 기록 3건을 시간 순서대로 알려 주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="투약 기록",
@@ -2182,7 +2112,7 @@ async def test_submit_draft_rejects_task_reset_after_list_limit_feedback(
     )
     _record_query_evidence(
         controller,
-        second_payload.label,
+        second_payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "where",
@@ -2246,8 +2176,8 @@ async def test_submit_draft_feedbacks_duplicate_order_binding_phrase(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "procedures",
-            "label": label,
-            "entity": {"stay_id": 1},
+            "label_json": label,
+            "entity_json": {"stay_id": 1},
             "user_request": (
                 "최근 시술 3건의 시술명, 시작 시간, 주문 ID를 "
                 "최근 시행된 순서대로 보여 주세요."
@@ -2279,7 +2209,7 @@ async def test_submit_draft_feedbacks_duplicate_order_binding_phrase(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -2350,8 +2280,8 @@ async def test_submit_draft_feedbacks_order_binding_reusing_output_phrase(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "results",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": "최근 검사 결과 3개와 검사 시간을 보여 주세요.",
             "answer_contract": {
                 "kind": "list",
@@ -2374,7 +2304,7 @@ async def test_submit_draft_feedbacks_order_binding_reusing_output_phrase(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -2452,8 +2382,8 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": "최근 약물 3개를 시작 시간순으로 알려 주세요.",
             "answer_contract": {
                 "kind": "list",
@@ -2477,7 +2407,7 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -2537,8 +2467,8 @@ async def test_submit_draft_feedbacks_missing_order_binding_by_query_order_count
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "results",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": "최근 검사 결과 3개를 보여 주세요.",
             "answer_contract": {
                 "kind": "list",
@@ -2561,7 +2491,7 @@ async def test_submit_draft_feedbacks_missing_order_binding_by_query_order_count
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -2936,8 +2866,8 @@ async def test_submit_draft_rejects_null_list_output_field(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "procedures",
-            "label": label,
-            "entity": {"stay_id": 1},
+            "label_json": label,
+            "entity_json": {"stay_id": 1},
             "user_request": (
                 "시술 3건의 시술명과 위치 카테고리를 시술명 순서대로 알려 주세요."
             ),
@@ -2968,7 +2898,7 @@ async def test_submit_draft_rejects_null_list_output_field(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -3068,7 +2998,7 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     payload = _too_easy_readable_payload()
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         answer_contract=payload.answer_contract,
     )
 
@@ -3129,7 +3059,7 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     payload = _too_easy_list_payload()
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         answer_contract=payload.answer_contract,
         referenced_columns=[
             {
@@ -3196,7 +3126,7 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         answer_contract=payload.answer_contract,
     )
 
@@ -3242,7 +3172,7 @@ async def test_submit_draft_rejects_binding_phrase_absent_from_request(
     payload = SubmitDraftPayload.model_validate(raw_payload)
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         answer_contract=payload.answer_contract,
     )
 
@@ -3373,45 +3303,25 @@ async def test_submit_draft_does_not_require_contract_to_restate_query_predicate
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "family_films",
-            "label": {"family_high_rental_count": 2},
-            "entity": {"actor_id": 112},
+            "label_json": {"family_high_rental_count": 2},
+            "entity_json": {"actor_id": 112},
             "user_request": (
                 "2015년 이후에 출시된 가족(Family) 영화면서 대여료가 "
                 "2.99달러보다 높은 영화는 몇 개인가요?"
             ),
             "answer_contract": _scalar_answer_contract(
                 phrase="몇 개인가요",
-                table="film",
-                column="film_id",
-                predicates=[
-                    {
-                        "table": "film",
-                        "column": "rental_rate",
-                        "op": "gt",
-                        "value": 2.99,
-                        "phrase": "2.99달러보다 높은",
-                    },
-                    {
-                        "table": "film",
-                        "column": "release_year",
-                        "op": "gte",
-                        "value": 2015,
-                        "phrase": "2015년 이후에 출시된",
-                    },
-                    {
-                        "table": "category",
-                        "column": "name",
-                        "op": "eq",
-                        "value": "Family",
-                        "phrase": "가족(Family) 영화",
-                    },
+                constraint_phrases=[
+                    "2.99달러보다 높은",
+                    "2015년 이후에 출시된",
+                    "가족(Family) 영화",
                 ],
             ),
         }
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         answer_contract=payload.answer_contract,
         referenced_columns=[
             {
@@ -3464,26 +3374,17 @@ async def test_submit_draft_treats_list_limit_one_as_rows_array(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "recent_rental",
-            "label": [
+            "label_json": [
                 {
                     "대여일": "2022-08-22 23:56:01+00:00",
                     "반납예정일": "2022-08-24 00:00:01+00:00",
                 }
             ],
-            "entity": {"film_id": 245},
+            "entity_json": {"film_id": 245},
             "user_request": "가장 최근 1건의 대여 일자와 반납 예정일을 알려 주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="대여 일자와 반납 예정일",
-                table="rental",
-                order_by=[
-                    {
-                        "table": "rental",
-                        "column": "rental_date",
-                        "direction": "desc",
-                        "phrase": "가장 최근",
-                    }
-                ],
-                limit=1,
+                constraint_phrases=["가장 최근"],
                 limit_phrase="가장 최근 1건",
             ),
         }
@@ -3505,7 +3406,7 @@ async def test_submit_draft_treats_list_limit_one_as_rows_array(
     payload = SubmitDraftPayload.model_validate(raw_payload)
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         answer_contract=payload.answer_contract,
         query_params={"spec": {"test_evidence": True, "where": [{"value": 245}]}},
     )
@@ -3544,12 +3445,9 @@ async def test_submit_draft_requires_limit_phrase_when_query_limit_shapes_list(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "recent_prescriptions",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "내 최근 처방전 목록을 보여주세요.",
-            ),
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": "내 최근 처방전 목록을 보여주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="최근 처방전 목록",
                 limit_phrase=None,
@@ -3612,12 +3510,9 @@ async def test_submit_draft_rejects_list_limit_above_task_shape_policy(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "이 입원의 처음 6개 약물명을 알려주세요.",
-            ),
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": "이 입원의 처음 6개 약물명을 알려주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="처음 6개 약물명",
                 constraint_phrases=["이 입원"],
@@ -3683,12 +3578,9 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "recent_labs",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "최근 혈액 검사 결과 3개 알려주세요.",
-            ),
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": "최근 혈액 검사 결과 3개 알려주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="혈액 검사 결과",
                 limit_phrase="3개",
@@ -3788,10 +3680,9 @@ async def test_submit_draft_surfaces_order_binding_errors_with_ambiguous_order(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "입원 중 약물 처방 내역",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": (
                 "이번 입원 중 약물 처방 5개를 시작 시간 오름차순, "
                 "약물 이름 오름차순으로 보여 주세요. 약물 이름, 시작 시간, "
                 "투여 경로, 투여 빈도를 포함해 주세요.",
@@ -3918,10 +3809,9 @@ async def test_submit_draft_rejects_mechanical_multi_key_list_order(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "microbiology_list",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": (
                 "이번 입원 중 미생물 검사 목록을 검체 채취 일시 기준으로 오름차순, "
                 "검체 종류 기준으로 오름차순, 검사 순서 기준으로 오름차순 "
                 "정렬하여 상위 3건 보여주세요.",
@@ -4065,12 +3955,9 @@ async def test_submit_draft_rejects_duplicate_projected_list_rows(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "procedures",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "시술 내역 3개를 시작 시간 순서로 보여주세요.",
-            ),
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": "시술 내역 3개를 시작 시간 순서로 보여주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="시술 내역",
                 limit_phrase="3개",
@@ -4146,16 +4033,16 @@ async def test_submit_draft_rejects_scalar_row_detail_without_aggregate_query(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "admission",
-            "label": {
+            "label_json": {
                 "admission_type": "DIRECT OBSERVATION",
                 "admission_time": "2148-09-14T14:19:00",
             },
-            "entity": {"admission_id": 25559382},
+            "entity_json": {"admission_id": 25559382},
             "user_request": "이 입원의 입원 유형과 입원 시간을 알려 주세요.",
             "answer_contract": _scalar_answer_contract(phrase="입원 유형과 입원 시간"),
         }
     )
-    _record_query_evidence(controller, payload.label)
+    _record_query_evidence(controller, payload.canonical_answer)
 
     message = await controller.submit(payload)
 
@@ -4192,12 +4079,9 @@ async def test_submit_draft_rejects_multirow_list_without_order_by(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "payments",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "내 결제 내역을 보여주세요.",
-            ),
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": "내 결제 내역을 보여주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="내 결제 내역을 보여주세요.",
                 limit_phrase=None,
@@ -4259,12 +4143,9 @@ async def test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "내가 가장 최근에 투약받은 약물 3가지를 알려줘.",
-            ),
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": "내가 가장 최근에 투약받은 약물 3가지를 알려줘.",
             "answer_contract": _list_answer_contract(
                 phrase="가장 최근에 투약받은 약물",
                 limit_phrase="3가지",
@@ -4347,12 +4228,9 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
-            "label": label,
-            "entity": anchor_entity,
-            "question": _wrap_user_prompt(
-                anchor_entity,
-                "이 약물 투여 기록의 최근 투약 정보 3개를 알려주세요.",
-            ),
+            "label_json": label,
+            "entity_json": anchor_entity,
+            "user_request": "이 약물 투여 기록의 최근 투약 정보 3개를 알려주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="최근 투약 정보",
                 limit_phrase="3개",
@@ -4433,12 +4311,9 @@ async def test_submit_draft_rejects_hidden_child_to_parent_sibling_scope(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "records",
-            "label": label,
-            "entity": {"child_id": 10},
-            "question": _wrap_user_prompt(
-                {"child_id": 10},
-                "이 항목과 관련된 최근 기록 3건을 시간순으로 알려주세요.",
-            ),
+            "label_json": label,
+            "entity_json": {"child_id": 10},
+            "user_request": "이 항목과 관련된 최근 기록 3건을 시간순으로 알려주세요.",
             "answer_contract": _list_answer_contract(
                 phrase="최근 기록 3건",
                 limit_phrase="3건",
@@ -4552,20 +4427,17 @@ async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"staff_email": "agent@example.test"},
-            "entity": {"customer_id": 1},
+            "label_json": {"staff_email": "agent@example.test"},
+            "entity_json": {"customer_id": 1},
             "user_request": "내 담당 직원의 이메일을 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="이메일",
-                table="staff",
-                fn="max",
-                column="email",
             ),
         }
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         column_sources=[
             {
                 "output": "staff_email",
@@ -4610,19 +4482,17 @@ async def test_submit_draft_rejects_label_from_table_without_primary_key(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"detail_status": "complete"},
-            "entity": {"event_id": 1},
+            "label_json": {"detail_status": "complete"},
+            "entity_json": {"event_id": 1},
             "user_request": "이 이벤트의 상세 상태를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="상세 상태",
-                table="event_detail",
-                column="detail_status",
             ),
         }
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         column_sources=[
             {
                 "output": "detail_status",
@@ -4669,20 +4539,17 @@ async def test_submit_draft_allows_count_from_table_without_primary_key(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"detail_count": 3},
-            "entity": {"event_id": 1},
+            "label_json": {"detail_count": 3},
+            "entity_json": {"event_id": 1},
             "user_request": "이 이벤트의 상세 기록 수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="상세 기록 수",
-                table="event_detail",
-                fn="count",
-                column="event_id",
             ),
         }
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         column_sources=[
             {
                 "output": "detail_count",
@@ -4722,20 +4589,17 @@ async def test_submit_draft_allows_aggregate_from_table_without_primary_key(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"average_detail_amount": 12.5},
-            "entity": {"event_id": 1},
+            "label_json": {"average_detail_amount": 12.5},
+            "entity_json": {"event_id": 1},
             "user_request": "이 이벤트의 평균 상세 금액을 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="평균 상세 금액",
-                table="event_detail",
-                fn="avg",
-                column="amount",
             ),
         }
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         column_sources=[
             {
                 "output": "average_detail_amount",
@@ -4775,20 +4639,17 @@ async def test_submit_draft_allows_handle_label_when_visibility_policy_allows_it
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"assigned_location_reference": 117},
-            "entity": {"account_reference": 1},
+            "label_json": {"assigned_location_reference": 117},
+            "entity_json": {"account_reference": 1},
             "user_request": "연결된 지점 참조 값을 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="지점 참조 값",
-                table="location",
-                fn="max",
-                column="location_id",
             ),
         }
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         column_sources=[
             {
                 "output": "assigned_location_reference",
@@ -4825,12 +4686,12 @@ async def test_submit_draft_rejects_query_without_visibility_metadata(
     )
     _seed_min_initial_exploration(controller)
     payload = _accepted_payload()
-    rows = [payload.label]
+    rows = [payload.canonical_answer]
     controller.record_atomic_tool_call(
         tool_name="query",
         params={"spec": {"legacy_result": True}},
         result={
-            "columns": list(payload.label.keys()),
+            "columns": list(payload.canonical_answer.keys()),
             "rows": rows,
             "row_count": len(rows),
         },
@@ -4860,28 +4721,18 @@ async def test_submit_draft_allows_non_user_visible_query_predicate(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"matching_customer_count": 3},
-            "entity": {"customer_id": 1},
+            "label_json": {"matching_customer_count": 3},
+            "entity_json": {"customer_id": 1},
             "user_request": "이메일이 있는 관련 고객 수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="고객 수",
-                table="customer",
-                column="customer_id",
-                predicates=[
-                    {
-                        "table": "customer",
-                        "column": "email",
-                        "op": "is_not_null",
-                        "value": None,
-                        "phrase": "이메일이 있는",
-                    }
-                ],
+                constraint_phrases=["이메일이 있는"],
             ),
         }
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         column_sources=[
             {
                 "output": "matching_customer_count",
@@ -4942,8 +4793,8 @@ async def test_submit_draft_rejects_unbound_visible_non_null_filter(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": "처방 시작 시간 순서대로 약물명과 처방 시작 시간을 보여 주세요.",
             "answer_contract": {
                 "kind": "list",
@@ -4969,7 +4820,7 @@ async def test_submit_draft_rejects_unbound_visible_non_null_filter(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "where",
@@ -5034,8 +4885,8 @@ async def test_submit_draft_rejects_unbound_visible_equality_filter(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "admissions",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": (
                 "내 입원 기록을 확인해주세요. 입원 시간, 퇴원 시간, "
                 "입원 경로를 알려주세요."
@@ -5059,7 +4910,7 @@ async def test_submit_draft_rejects_unbound_visible_equality_filter(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "where",
@@ -5120,8 +4971,8 @@ async def test_submit_draft_allows_bound_visible_non_null_filter(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
-            "label": label,
-            "entity": {"customer_id": 1},
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
             "user_request": (
                 "약물명이 기록된 처방을 처방 시작 시간 순서대로 보여 주세요. "
                 "약물명과 처방 시작 시간을 알고 싶습니다."
@@ -5153,7 +5004,7 @@ async def test_submit_draft_allows_bound_visible_non_null_filter(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "where",
@@ -5200,27 +5051,17 @@ async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": [
+            "label_json": [
                 {"first_name": "JULIA"},
                 {"first_name": "NICK"},
                 {"first_name": "TOM"},
             ],
-            "entity": {"film_reference": 830},
+            "entity_json": {"film_reference": 830},
             "user_request": "배우 이름을 첫 3명만 알려 주세요.",
             "answer_contract": {
                 **_list_answer_contract(
                     phrase="배우 이름",
-                    table="actor",
-                    column=None,
-                    order_by=[
-                        {
-                            "table": "actor",
-                            "column": "actor_id",
-                            "direction": "asc",
-                            "phrase": "첫 3명",
-                        }
-                    ],
-                    limit=3,
+                    constraint_phrases=["첫 3명"],
                     limit_phrase="첫 3명",
                 ),
                 "output_bindings": [
@@ -5241,7 +5082,7 @@ async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
     )
     _record_query_evidence(
         controller,
-        payload.label,
+        payload.canonical_answer,
         column_sources=[
             {
                 "output": "first_name",
@@ -5294,7 +5135,7 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
     first_payload = _accepted_payload()
     _record_query_evidence(
         controller,
-        first_payload.label,
+        first_payload.canonical_answer,
         answer_contract=first_payload.answer_contract,
     )
 
@@ -5304,19 +5145,17 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
     second_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": {"store_id": 1, "payment_count": 7},
-            "entity": {"customer_id": 1},
+            "label_json": {"store_id": 1, "payment_count": 7},
+            "entity_json": {"customer_id": 1},
             "user_request": "내가 배정된 매장과 전체 결제 수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="전체 결제 수",
-                table="payment",
-                column="payment_id",
             ),
         }
     )
     _record_query_evidence(
         controller,
-        second_payload.label,
+        second_payload.canonical_answer,
         answer_contract=second_payload.answer_contract,
     )
 
@@ -5388,8 +5227,8 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     first_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "admissions",
-            "label": first_label,
-            "entity": anchor_entity,
+            "label_json": first_label,
+            "entity_json": anchor_entity,
             "user_request": (
                 "내 최근 5건의 입원 이력을 확인해 주세요. "
                 "입원일, 퇴원일, 입원 유형, 입원 경로를 알고 싶습니다."
@@ -5430,7 +5269,7 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     )
     _record_query_evidence(
         controller,
-        first_payload.label,
+        first_payload.canonical_answer,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -5471,8 +5310,8 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     weakened_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "emergency_admissions",
-            "label": weakened_label,
-            "entity": anchor_entity,
+            "label_json": weakened_label,
+            "entity_json": anchor_entity,
             "user_request": (
                 "응급실을 통해 입원한 내 최근 입원 이력 3건을 확인해 주세요. "
                 "입원일, 퇴원일, 입원 유형을 알고 싶습니다."
@@ -5486,7 +5325,7 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     )
     _record_query_evidence(
         controller,
-        weakened_payload.label,
+        weakened_payload.canonical_answer,
         query_params={"spec": {"limit": 3, "where": [{"value": 10023117}]}},
     )
 
@@ -5514,8 +5353,8 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     drifted_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "emergency_admissions",
-            "label": drifted_label,
-            "entity": anchor_entity,
+            "label_json": drifted_label,
+            "entity_json": anchor_entity,
             "user_request": (
                 "응급실을 통해 입원한 내 최근 입원 이력 3건을 확인해 주세요. "
                 "입원일, 퇴원일, 입원 유형, 퇴원 장소를 알고 싶습니다."
@@ -5529,7 +5368,7 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     )
     _record_query_evidence(
         controller,
-        drifted_payload.label,
+        drifted_payload.canonical_answer,
         query_params={"spec": {"limit": 3, "where": [{"value": 10023117}]}},
     )
 
@@ -5567,27 +5406,18 @@ async def test_submit_draft_too_easy_rejects_renamed_same_scalar_value(
     first_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "rental_status",
-            "label": {"unreturned_count": 2},
-            "entity": {"customer_id": 1},
+            "label_json": {"unreturned_count": 2},
+            "entity_json": {"customer_id": 1},
             "user_request": "이 고객의 미반납 대여 건수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="미반납 대여 건수",
-                table="rental",
-                column="rental_id",
-                predicates=[
-                    {
-                        "table": "rental",
-                        "column": "return_date",
-                        "op": "is_null",
-                        "phrase": "미반납",
-                    }
-                ],
+                constraint_phrases=["미반납"],
             ),
         }
     )
     _record_query_evidence(
         controller,
-        first_payload.label,
+        first_payload.canonical_answer,
         answer_contract=first_payload.answer_contract,
     )
 
@@ -5597,34 +5427,18 @@ async def test_submit_draft_too_easy_rejects_renamed_same_scalar_value(
     second_payload = SubmitDraftPayload.model_validate(
         {
             "topic": "rental_status",
-            "label": {"unreturned_since_february": 2},
-            "entity": {"customer_id": 1},
+            "label_json": {"unreturned_since_february": 2},
+            "entity_json": {"customer_id": 1},
             "user_request": "이 고객의 2022년 2월 이후 미반납 대여 건수를 알려 주세요.",
             "answer_contract": _scalar_answer_contract(
                 phrase="미반납 대여 건수",
-                table="rental",
-                column="rental_id",
-                predicates=[
-                    {
-                        "table": "rental",
-                        "column": "return_date",
-                        "op": "is_null",
-                        "phrase": "미반납",
-                    },
-                    {
-                        "table": "rental",
-                        "column": "rental_date",
-                        "op": "gte",
-                        "value": "2022-02-01",
-                        "phrase": "2022년 2월 이후",
-                    },
-                ],
+                constraint_phrases=["미반납", "2022년 2월 이후"],
             ),
         }
     )
     _record_query_evidence(
         controller,
-        second_payload.label,
+        second_payload.canonical_answer,
         answer_contract=second_payload.answer_contract,
     )
 

@@ -1,18 +1,11 @@
 from rl_task_foundry.infra.visibility import (
     blocks_direct_label_exposure,
-    infer_visibility,
     is_blocked_visibility,
     is_user_visible_visibility,
     is_visibility,
     redact_dict,
     resolve_visibility,
 )
-
-
-def test_visibility_does_not_infer_visibility_from_column_names():
-    assert infer_visibility("customer_email") is None
-    assert infer_visibility("card_number") is None
-    assert infer_visibility("delivery_status") is None
 
 
 def test_visibility_resolve_uses_only_overrides_and_default_visibility():

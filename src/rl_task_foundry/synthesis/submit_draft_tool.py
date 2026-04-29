@@ -7,14 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import (
-    AliasChoices,
-    Field,
-    PrivateAttr,
-    ValidationError,
-    field_validator,
-    model_validator,
-)
+from pydantic import Field, PrivateAttr, ValidationError, field_validator
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
@@ -52,10 +45,6 @@ class SubmitDraftErrorCode(StrEnum):
     ANCHOR_ENTITY_SCALAR_MAP_REQUIRED = "anchor_entity_scalar_map_required"
     CANONICAL_ANSWER_JSON_INVALID = "canonical_answer_json_invalid"
     QUESTION_REQUIRED = "question_required"
-    QUESTION_ENTITY_BLOCK_REQUIRED = "question_entity_block_required"
-    QUESTION_ENTITY_BLOCK_INVALID_JSON = "question_entity_block_invalid_json"
-    QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
-    QUESTION_BODY_REQUIRED = "question_body_required"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
     LABEL_NULL_VALUE_FORBIDDEN = "label_null_value_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
@@ -107,10 +96,6 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION,
         SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED,
         SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED,
-        SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED,
-        SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON,
-        SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH,
-        SubmitDraftErrorCode.QUESTION_BODY_REQUIRED,
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_NULL_VALUE_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
@@ -415,7 +400,6 @@ class SubmitDraftPayload(StrictModel):
     )
     user_request: str = Field(
         min_length=1,
-        validation_alias=AliasChoices("user_request", "question"),
         description=(
             "Natural user-facing request body in the configured task language. "
             "Do not include the hidden <entity> block; provide only the request "
@@ -460,22 +444,6 @@ class SubmitDraftPayload(StrictModel):
         ),
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_dynamic_fields(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        copied = dict(value)
-        if "label" in copied:
-            legacy_label = copied.pop("label")
-            if "label_json" not in copied:
-                copied["label_json"] = legacy_label
-        if "entity" in copied:
-            legacy_entity = copied.pop("entity")
-            if "entity_json" not in copied:
-                copied["entity_json"] = legacy_entity
-        return copied
-
     @field_validator("label_json", mode="before")
     @classmethod
     def _validate_label_json(cls, value: object) -> str:
@@ -516,24 +484,12 @@ class SubmitDraftPayload(StrictModel):
         _normalize_anchor_entity_map(parsed)
         return raw
 
-    @field_validator("topic")
+    @field_validator("topic", "user_request", mode="before")
     @classmethod
-    def _validate_non_blank_text(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("text fields must not be blank")
-        return normalized
-
-    @field_validator("user_request", mode="before")
-    @classmethod
-    def _validate_user_request(cls, value: object) -> str:
+    def _validate_non_blank_text(cls, value: object) -> str:
         raw = str(value).strip() if not isinstance(value, str) else value.strip()
         if not raw:
             raise ValueError("text fields must not be blank")
-        if raw.startswith("<entity>"):
-            _, body, prompt_error = _split_entity_wrapped_prompt(raw)
-            if prompt_error is None and body is not None:
-                return body
         return raw
 
     @field_validator("answer_contract", mode="before")
@@ -564,18 +520,6 @@ class SubmitDraftPayload(StrictModel):
         if self._cached_canonical_answer is None:
             self._cached_canonical_answer = json.loads(self.label_json)
         return self._cached_canonical_answer
-
-    @property
-    def entity(self) -> dict[str, JsonScalar]:
-        return self.parsed_entity
-
-    @property
-    def label(self) -> object:
-        return self.canonical_answer
-
-    @property
-    def question(self) -> str:
-        return self.user_request
 
 
 SubmitDraftPayload.model_rebuild()
@@ -716,7 +660,7 @@ def _monitor_label_data(
         canonical_answer = payload.canonical_answer
     else:
         canonical_answer = None
-        raw_canonical = payload.get("label_json", payload.get("label"))
+        raw_canonical = payload.get("label_json")
         if isinstance(raw_canonical, (dict, list)):
             canonical_answer = raw_canonical
         elif isinstance(raw_canonical, str):
@@ -1833,37 +1777,6 @@ def _query_visibility_errors(
         diagnostics["no_primary_key_label_sources"] = unstable_record_sources
     return codes, diagnostics
 
-_ENTITY_BLOCK_PREFIX = "<entity>\n"
-_ENTITY_BLOCK_SEPARATOR = "\n</entity>\n\n"
-
-
-def _split_entity_wrapped_prompt(
-    value: str,
-) -> tuple[dict[str, object] | None, str | None, SubmitDraftErrorCode | None]:
-    normalized = value.strip()
-    if not normalized.startswith(_ENTITY_BLOCK_PREFIX):
-        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED
-    rest = normalized[len(_ENTITY_BLOCK_PREFIX):]
-    entity_json, separator, body = rest.partition(_ENTITY_BLOCK_SEPARATOR)
-    if separator == "":
-        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED
-    entity_json = entity_json.strip()
-    try:
-        parsed_entity = json.loads(entity_json)
-    except json.JSONDecodeError:
-        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON
-    if not isinstance(parsed_entity, dict):
-        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON
-    try:
-        anchor_entity = _normalize_anchor_entity_map(parsed_entity)
-    except ValueError:
-        return None, None, SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON
-    body = body.strip()
-    if not body:
-        return anchor_entity, None, SubmitDraftErrorCode.QUESTION_BODY_REQUIRED
-    return anchor_entity, body, None
-
-
 @dataclass(slots=True)
 class SubmitDraftController:
     config: AppConfig
@@ -2042,9 +1955,9 @@ class SubmitDraftController:
                     required_code = SubmitDraftErrorCode.QUESTION_REQUIRED
                 elif location[0] == "answer_contract":
                     required_code = SubmitDraftErrorCode.ANSWER_CONTRACT_REQUIRED
-                elif location[0] in {"entity", "entity_json"}:
+                elif location[0] == "entity_json":
                     required_code = SubmitDraftErrorCode.ANCHOR_ENTITY_REQUIRED
-                elif location[0] in {"label", "label_json"}:
+                elif location[0] == "label_json":
                     required_code = SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID
                 else:
                     required_code = getattr(
@@ -2053,9 +1966,9 @@ class SubmitDraftController:
                         SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID,
                     )
                 error_codes.append(required_code)
-            elif location in {("label",), ("label_json",)}:
+            elif location == ("label_json",):
                 error_codes.append(SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID)
-            elif location in {("entity",), ("entity_json",)}:
+            elif location == ("entity_json",):
                 if error_type in ("value_error", "dict_type"):
                     error_codes.append(SubmitDraftErrorCode.ANCHOR_ENTITY_SCALAR_MAP_REQUIRED)
                 else:
@@ -2799,21 +2712,8 @@ class SubmitDraftController:
             SubmitDraftErrorCode.QUESTION_REQUIRED: (
                 "Rejected. Tool schema reminder: user_request is required."
             ),
-            SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_REQUIRED: (
-                "Rejected. Request Contract reminder: user_request is only the natural request body; hidden entity context belongs in entity."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_INVALID_JSON: (
-                "Rejected. Tool schema reminder: the hidden <entity> block requires a valid flat JSON object with one or more primary-key fields."  # noqa: E501
-            ),
-            SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH: (
-                "Rejected. Tool schema reminder: the JSON inside the <entity> "
-                "block must exactly match entity."
-            ),
-            SubmitDraftErrorCode.QUESTION_BODY_REQUIRED: (
-                "Rejected. Request Contract reminder: user_request needs a natural request body."
-            ),
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
-                "Rejected. Tool schema reminder: label must be a valid JSON string."
+                "Rejected. Tool schema reminder: label_json must be a valid JSON string."
             ),
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
                 "Rejected. Label Grounding Policy reminder: the canonical answer contains blank string fields; answer fields require grounded, non-empty values observed in tool results."  # noqa: E501
@@ -3106,14 +3006,14 @@ class SubmitDraftController:
                 "user_request": (
                     payload.user_request
                     if isinstance(payload, SubmitDraftPayload)
-                    else payload.get("user_request", payload.get("question"))
+                    else payload.get("user_request")
                     if isinstance(payload, dict)
                     else None
                 ),
                 "anchor_entity": (
                     payload.parsed_entity
                     if isinstance(payload, SubmitDraftPayload)
-                    else payload.get("entity")
+                    else payload.get("entity_json")
                     if isinstance(payload, dict)
                     else None
                 ),
@@ -3205,17 +3105,6 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
                 ],
             )
         parsed = {str(key): value for key, value in parsed_raw.items()}
-        raw_question = parsed.pop("question", None)
-        if isinstance(raw_question, str) and "user_request" not in parsed:
-            parsed_anchor_entity, question_body, prompt_error = (
-                _split_entity_wrapped_prompt(raw_question)
-            )
-            if prompt_error is None and question_body is not None:
-                parsed["user_request"] = question_body
-                if "entity" not in parsed and parsed_anchor_entity is not None:
-                    parsed["entity"] = parsed_anchor_entity
-            else:
-                parsed["user_request"] = raw_question
         try:
             payload = SubmitDraftPayload.model_validate(parsed)
         except ValidationError as exc:

@@ -215,54 +215,6 @@ def test_task_registry_exact_signature_ignores_label_signature(tmp_path: Path) -
     assert second_result.duplicate_of_task_id == "task_a"
 
 
-def test_task_registry_bootstrap_migrates_legacy_schema(tmp_path: Path) -> None:
-    index_db_path = tmp_path / "task_registry.db"
-    with sqlite3.connect(index_db_path) as conn:
-        conn.execute(
-            f"""
-            CREATE TABLE environments (
-                {"env" + "_id"} TEXT PRIMARY KEY,
-                db_id TEXT NOT NULL,
-                domain TEXT NOT NULL,
-                category TEXT NOT NULL,
-                difficulty_band TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                generator_version TEXT NOT NULL,
-                tool_signature TEXT NOT NULL,
-                task_signature TEXT NOT NULL,
-                verifier_signature TEXT NOT NULL,
-                exact_signature TEXT NOT NULL UNIQUE,
-                semantic_dedup_text TEXT NOT NULL DEFAULT '',
-                semantic_dedup_text_version INTEGER NOT NULL DEFAULT 1,
-                semantic_minhash_signature TEXT NOT NULL DEFAULT '[]',
-                filesystem_path TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            )
-            """
-        )
-        conn.commit()
-
-    writer = TaskRegistryWriter(
-        root_dir=tmp_path / "tasks",
-        index_db_path=index_db_path,
-    )
-    result = writer.commit_draft(_sample_draft())
-
-    assert result.status is TaskRegistryCommitStatus.COMMITTED
-    with sqlite3.connect(index_db_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
-    assert "tasks" in tables
-    assert "environments" not in tables
-    assert "verifier_signature" not in columns
-
-
 def test_build_semantic_dedup_text_uses_task_surface() -> None:
     draft = _sample_draft()
 

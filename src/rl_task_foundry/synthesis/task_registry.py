@@ -24,7 +24,6 @@ from rl_task_foundry.synthesis.contracts import (
     OutputFieldType,
     TaskBundleContract,
     TaskBundleStatus,
-    TopicName,
     normalize_topic,
 )
 from rl_task_foundry.synthesis.runtime import SynthesisTaskDraft
@@ -91,7 +90,7 @@ class TaskRegistryCommitResult:
     semantic_similarity: float | None = None
 
 
-@dataclass(init=False, slots=True)
+@dataclass(slots=True)
 class TaskRegistryRecord:
     task_id: str
     db_id: str
@@ -104,65 +103,21 @@ class TaskRegistryRecord:
     filesystem_path: Path
     question: str | None = None
 
-    def __init__(
-        self,
-        *,
-        task_id: str,
-        db_id: str,
-        domain: str,
-        topic: str | None = None,
-        category: object | None = None,
-        created_at: datetime,
-        status: TaskBundleStatus,
-        generator_version: str,
-        exact_signature: str,
-        filesystem_path: Path,
-        question: str | None = None,
-        **_kwargs: object,
-    ) -> None:
-        resolved_topic = topic if topic is not None else category
-        self.task_id = task_id
-        self.db_id = db_id
-        self.domain = domain
-        self.topic = normalize_topic(resolved_topic)
-        self.created_at = created_at
-        self.status = status
-        self.generator_version = generator_version
-        self.exact_signature = exact_signature
-        self.filesystem_path = filesystem_path
-        self.question = question
-
-    @property
-    def category(self) -> TopicName:
-        return TopicName(self.topic)
+    def __post_init__(self) -> None:
+        self.topic = normalize_topic(self.topic)
 
 
-@dataclass(init=False, slots=True)
+@dataclass(slots=True)
 class TaskRegistryCoverageEntry:
     db_id: str
     topic: str
     count: int
 
-    def __init__(
-        self,
-        *,
-        db_id: str,
-        topic: str | None = None,
-        category: object | None = None,
-        count: int,
-        **_kwargs: object,
-    ) -> None:
-        resolved_topic = topic if topic is not None else category
-        self.db_id = db_id
-        self.topic = normalize_topic(resolved_topic)
-        self.count = count
-
-    @property
-    def category(self) -> TopicName:
-        return TopicName(self.topic)
+    def __post_init__(self) -> None:
+        self.topic = normalize_topic(self.topic)
 
 
-@dataclass(init=False, slots=True)
+@dataclass(slots=True)
 class SemanticDedupCandidate:
     task_id: str
     db_id: str
@@ -173,33 +128,8 @@ class SemanticDedupCandidate:
     semantic_text: str
     filesystem_path: Path
 
-    def __init__(
-        self,
-        *,
-        task_id: str,
-        db_id: str,
-        domain: str,
-        topic: str | None = None,
-        category: object | None = None,
-        question: str | None,
-        constraint_summaries: tuple[str, ...],
-        semantic_text: str,
-        filesystem_path: Path,
-        **_kwargs: object,
-    ) -> None:
-        resolved_topic = topic if topic is not None else category
-        self.task_id = task_id
-        self.db_id = db_id
-        self.domain = domain
-        self.topic = normalize_topic(resolved_topic)
-        self.question = question
-        self.constraint_summaries = constraint_summaries
-        self.semantic_text = semantic_text
-        self.filesystem_path = filesystem_path
-
-    @property
-    def category(self) -> TopicName:
-        return TopicName(self.topic)
+    def __post_init__(self) -> None:
+        self.topic = normalize_topic(self.topic)
 
 
 @dataclass(slots=True)
@@ -888,7 +818,6 @@ class TaskRegistryWriter:
 
     def _bootstrap(self) -> None:
         with self._connect() as conn:
-            self._migrate_legacy_task_table(conn)
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
             self._ensure_task_column(
@@ -909,86 +838,6 @@ class TaskRegistryWriter:
             for statement in INDEX_STATEMENTS:
                 conn.execute(statement)
             conn.commit()
-
-    @staticmethod
-    def _migrate_legacy_task_table(conn: sqlite3.Connection) -> None:
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tasks', 'environments')"  # noqa: E501
-        ).fetchall()
-        if not tables:
-            return
-        if any(str(row["name"]) == "tasks" for row in tables):
-            columns = conn.execute("PRAGMA table_info(tasks)").fetchall()
-            column_names = {str(row["name"]) for row in columns}
-            if "topic" in column_names and "task_id" in column_names:
-                return
-            return
-        columns = conn.execute("PRAGMA table_info(environments)").fetchall()
-        column_names = {str(row["name"]) for row in columns}
-        conn.execute("DROP INDEX IF EXISTS idx_env_registry_db_category")
-        conn.execute("DROP INDEX IF EXISTS idx_env_registry_exact_signature")
-        conn.execute(
-            """
-            CREATE TABLE tasks_v2 (
-                task_id TEXT PRIMARY KEY,
-                db_id TEXT NOT NULL,
-                domain TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                generator_version TEXT NOT NULL,
-                tool_signature TEXT NOT NULL,
-                task_signature TEXT NOT NULL,
-                exact_signature TEXT NOT NULL UNIQUE,
-                semantic_dedup_text TEXT NOT NULL DEFAULT '',
-                semantic_dedup_text_version INTEGER NOT NULL DEFAULT 1,
-                semantic_minhash_signature TEXT NOT NULL DEFAULT '[]',
-                filesystem_path TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            )
-            """
-        )
-        legacy_task_id_column = "env" + "_id"
-        conn.execute(
-            f"""
-            INSERT INTO tasks_v2 (
-                task_id,
-                db_id,
-                domain,
-                topic,
-                created_at,
-                status,
-                generator_version,
-                tool_signature,
-                task_signature,
-                exact_signature,
-                semantic_dedup_text,
-                semantic_dedup_text_version,
-                semantic_minhash_signature,
-                filesystem_path,
-                payload_json
-            )
-            SELECT
-                {legacy_task_id_column},
-                db_id,
-                domain,
-                category,
-                created_at,
-                status,
-                generator_version,
-                tool_signature,
-                task_signature,
-                exact_signature,
-                semantic_dedup_text,
-                semantic_dedup_text_version,
-                semantic_minhash_signature,
-                filesystem_path,
-                payload_json
-            FROM environments
-            """
-        )
-        conn.execute("DROP TABLE environments")
-        conn.execute("ALTER TABLE tasks_v2 RENAME TO tasks")
 
     @staticmethod
     def _ensure_task_column(

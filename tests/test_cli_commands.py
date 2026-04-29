@@ -16,7 +16,7 @@ from rl_task_foundry.infra.storage import (
     record_verification_result,
 )
 from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy, TaskBundleStatus
+from rl_task_foundry.synthesis.contracts import TaskBundleStatus
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialStatus,
     RealDbTrialSummary,
@@ -244,7 +244,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
             output_dir: Path,
             *,
             db_id: str,
-            topic: CategoryTaxonomy,
+            topic: str,
         ) -> RealDbTrialSummary:
             captured["output_dir"] = output_dir
             captured["db_id"] = db_id
@@ -302,7 +302,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0
     assert "real db trial complete" in result.stdout
-    assert captured["topic"] == CategoryTaxonomy.ASSIGNMENT
+    assert captured["topic"] == "assignment"
     assert "trial_status=accepted" in result.stdout
     assert "db_id=sakila" in result.stdout
     assert "topic_experiment_hint=assignment" in result.stdout
@@ -340,7 +340,7 @@ def test_cli_run_real_db_trial_requires_topic_hint_approval(
             output_dir: Path,
             *,
             db_id: str,
-            topic: CategoryTaxonomy,
+            topic: str,
         ) -> RealDbTrialSummary:
             nonlocal called
             called = True
@@ -380,13 +380,13 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
         def snapshot(self, *, limit, db_id=None, topic=None):
             assert limit == 5
             assert db_id == "sakila"
-            assert topic == CategoryTaxonomy.ASSIGNMENT
+            assert topic == "assignment"
             return TaskRegistrySnapshot(
                 task_count=2,
                 coverage=[
                     TaskRegistryCoverageEntry(
                         db_id="sakila",
-                        category=CategoryTaxonomy.ASSIGNMENT,
+                        topic="assignment",
                         count=2,
                     )
                 ],
@@ -395,7 +395,7 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
                         task_id="task_assignment_deadbeef",
                         db_id="sakila",
                         domain="service_operations",
-                        category=CategoryTaxonomy.ASSIGNMENT,
+                        topic="assignment",
                         created_at=datetime(2026, 4, 12, tzinfo=timezone.utc),
                         status=TaskBundleStatus.DRAFT,
                         generator_version="milestone-test",
@@ -409,13 +409,13 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
         def semantic_dedup_candidates(self, *, limit, db_id=None, topic=None):
             assert limit == 5
             assert db_id == "sakila"
-            assert topic == CategoryTaxonomy.ASSIGNMENT
+            assert topic == "assignment"
             return [
                 SemanticDedupCandidate(
                     task_id="task_assignment_deadbeef",
                     db_id="sakila",
                     domain="service_operations",
-                    category=CategoryTaxonomy.ASSIGNMENT,
+                    topic="assignment",
                     question="내 배정을 해줘",
                     constraint_summaries=("같은 고객을 중복 배정하지 않는다.",),
                     semantic_text="question:내 배정을 해줘",
@@ -436,7 +436,7 @@ def test_cli_show_task_registry_reports_snapshot(monkeypatch) -> None:
             "5",
             "--db-id",
             "sakila",
-            "--category",
+            "--topic",
             "assignment",
         ],
     )
@@ -465,7 +465,7 @@ def test_cli_plan_synthesis_coverage_reports_deficits(monkeypatch, tmp_path) -> 
             return [
                 TaskRegistryCoverageEntry(
                     db_id="sakila",
-                    category=CategoryTaxonomy.ASSIGNMENT,
+                    topic="assignment",
                     count=2,
                 )
             ]

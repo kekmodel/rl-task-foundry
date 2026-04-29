@@ -35,7 +35,6 @@ from rl_task_foundry.synthesis.contracts import (
     TaskBundleStatus,
     TaskContract,
     TaskQualityMetrics,
-    TopicName,
     normalize_topic,
 )
 from rl_task_foundry.synthesis.conversation import SynthesisConversation
@@ -143,16 +142,6 @@ class SynthesisCategoryStatus(StrictModel):
     last_error_codes: list[str] = Field(default_factory=list)
     last_updated_at: datetime | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_legacy_category_key(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        if "topic" not in payload and "category" in payload:
-            payload["topic"] = payload.pop("category")
-        return payload
-
     @model_validator(mode="after")
     def _validate_timezones(self) -> SynthesisCategoryStatus:
         self.topic = normalize_topic(self.topic)
@@ -161,10 +150,6 @@ class SynthesisCategoryStatus(StrictModel):
         if self.last_updated_at is not None and self.last_updated_at.tzinfo is None:
             raise ValueError("last_updated_at must be timezone-aware")
         return self
-
-    @property
-    def category(self) -> TopicName:
-        return TopicName(self.topic)
 
 
 class SynthesisTaskDraft(StrictModel):
@@ -302,10 +287,6 @@ class SynthesisCategoryBackoffError(SynthesisRuntimeError):
         self.backoff_until = backoff_until
         self.last_outcome = last_outcome
         self.last_error_codes = list(last_error_codes or [])
-
-    @property
-    def category(self) -> TopicName:
-        return TopicName(self.topic)
 
 
 @dataclass(slots=True)

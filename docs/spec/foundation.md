@@ -178,8 +178,7 @@ or value. The current value set is `blocked`, `internal`, and `user_visible`
   asks for it and the value is grounded in observed tool/query evidence.
 
 Visibility comes from explicit config/default metadata and snapshot
-materialization. The deprecated `infer_visibility` compatibility hook must not
-infer visibility from column-name tokens; it returns no classification.
+materialization. Runtime code must not infer visibility from column-name tokens.
 
 Reason:
 

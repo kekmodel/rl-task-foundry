@@ -84,7 +84,6 @@ class RealDbTrialSummary:
         *,
         db_id: str,
         requested_topic: str | None = None,
-        requested_category: object | None = None,
         trial_status: RealDbTrialStatus,
         flow_id: str | None = None,
         phase_monitor_log_path: Path | None = None,
@@ -114,12 +113,11 @@ class RealDbTrialSummary:
         registry_task_id: str | None = None,
         bundle_root: Path | None = None,
     ) -> None:
-        resolved_topic = requested_topic if requested_topic is not None else requested_category
         object.__setattr__(self, "db_id", db_id)
         object.__setattr__(
             self,
             "requested_topic",
-            normalize_topic(resolved_topic) if resolved_topic else "",
+            normalize_topic(requested_topic) if requested_topic else "",
         )
         object.__setattr__(self, "trial_status", trial_status)
         object.__setattr__(self, "flow_id", flow_id)

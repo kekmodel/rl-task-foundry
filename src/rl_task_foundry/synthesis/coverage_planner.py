@@ -24,10 +24,6 @@ class SynthesisCoverageCellPlan:
     def satisfied(self) -> bool:
         return self.deficit == 0
 
-    @property
-    def category(self) -> str:
-        return self.topic
-
 
 @dataclass(slots=True)
 class SynthesisCoveragePairPlan:
@@ -37,10 +33,6 @@ class SynthesisCoveragePairPlan:
     total_current_count: int
     total_target_count: int
     total_deficit: int
-
-    @property
-    def category(self) -> str:
-        return self.topic
 
 
 @dataclass(slots=True)

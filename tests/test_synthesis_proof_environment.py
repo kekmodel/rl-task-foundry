@@ -8,7 +8,6 @@ import pytest
 
 from rl_task_foundry.config import load_config
 from rl_task_foundry.config.models import OutputConfig
-from rl_task_foundry.synthesis.contracts import CategoryTaxonomy
 from rl_task_foundry.synthesis.proof_environment import (
     PROOF_ANCHOR_ENTITY,
     PROOF_CANONICAL_ANSWER,
@@ -49,12 +48,10 @@ def test_build_proof_schema_graph_uses_given_schema_name() -> None:
         assert edge.target_schema == "proof_trial_demo"
 
 
-def test_build_proof_question_wraps_entity_block() -> None:
+def test_build_proof_question_returns_user_request_body() -> None:
     question = build_proof_question()
 
-    assert question.startswith("<entity>\n")
-    assert "\"anchor_id\": 1" in question
-    assert "</entity>\n\n" in question
+    assert not question.startswith("<entity>\n")
     assert "봄 시즌 3일 출장" in question
 
 
@@ -63,7 +60,7 @@ def test_build_proof_composer_script_payload_matches_canonical_answer() -> None:
 
     assert script.submit_payload.topic == PROOF_TASK_TOPIC
     assert script.submit_payload.parsed_entity == PROOF_ANCHOR_ENTITY
-    assert script.submit_payload.label == PROOF_CANONICAL_ANSWER
+    assert script.submit_payload.canonical_answer == PROOF_CANONICAL_ANSWER
     assert not script.submit_payload.user_request.startswith("<entity>\n")
     assert "봄 시즌 3일 출장" in script.submit_payload.user_request
     tool_names = [call.tool_name for call in script.atomic_tool_calls]
@@ -112,7 +109,7 @@ def test_proof_environment_module_has_no_legacy_imports() -> None:
 
 
 def test_proof_topic_is_itinerary_taxonomy() -> None:
-    assert PROOF_TASK_TOPIC == CategoryTaxonomy.ITINERARY.value
+    assert PROOF_TASK_TOPIC == "itinerary"
 
 
 @pytest.mark.asyncio

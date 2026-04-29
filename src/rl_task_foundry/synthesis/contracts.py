@@ -11,30 +11,7 @@ from pydantic import Field, model_validator
 from rl_task_foundry.config.models import StrictModel
 
 
-class TopicName(str):
-    """Compatibility helper for older `.value` call sites while topics are plain strings."""
-
-    @property
-    def value(self) -> str:
-        return str(self)
-
-
-class CategoryTaxonomy:
-    """Compatibility constants only. Topics are plain strings, not enums."""
-
-    ITINERARY = TopicName("itinerary")
-    ASSIGNMENT = TopicName("assignment")
-    BUNDLE_SELECTION = TopicName("bundle_selection")
-    ELIGIBILITY_FILTER = TopicName("eligibility_filter")
-    NO_REPEAT_RECOMMENDATION = TopicName("no_repeat_recommendation")
-    THRESHOLD_ROUTING = TopicName("threshold_routing")
-    TEMPORAL_PLANNING = TopicName("temporal_planning")
-    OTHER = TopicName("other")
-
-
 def normalize_topic(value: object) -> str:
-    if isinstance(value, TopicName):
-        return str(value)
     if isinstance(value, str):
         normalized = value.strip()
         if normalized:
@@ -58,7 +35,6 @@ class TaskBundleStatus(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     ARCHIVED = "archived"
-    LEGACY = "legacy"
 
 
 class ConstraintKind(StrEnum):
@@ -200,10 +176,6 @@ class TaskContract(StrictModel):
         self.topic = normalize_topic(self.topic)
         return self
 
-    @property
-    def category(self) -> TopicName:
-        return TopicName(self.topic)
-
 
 class RolloutConstraintsContract(StrictModel):
     max_turns: int = Field(ge=1)
@@ -255,7 +227,3 @@ class TaskBundleContract(StrictModel):
         if self.task.topic != self.topic:
             raise ValueError("task bundle topic must match task topic")
         return self
-
-    @property
-    def category(self) -> TopicName:
-        return TopicName(self.topic)
