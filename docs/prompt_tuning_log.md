@@ -10241,6 +10241,61 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_82`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 161 — Trial 83 rejected low-quality surfaces, no new rule
+
+- **질문**:
+  binding feedback 보강 뒤 `trial_83`에서 sequence tie-break를 user_request로 포장하는 패턴이 줄었는가?
+  accepted가 없었다면 어떤 저품질이 validator에 걸렸는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, solver rollout 없음.
+
+  제출 흐름:
+  - submit 1: `composer_submit_draft_missing`
+  - submit 2:
+    `이번 입원 중에 내게 진단된 질병들이 궁금해요. 진단 번호, ICD 코드, ICD 버전, 입원 시간,
+    퇴원 시간을 순서대로 5개 보여주세요.`
+    - 오류: `label_non_user_visible_source`
+    - blocked PK/handle 성격의 진단 번호, ICD 코드, ICD 버전을 label로 노출
+  - submit 3:
+    `이번 입원에서 DRG 코드 정보를 알고 싶어요. DRG 유형, 설명, 중증도, 사망률을 보여주세요.`
+    - 오류: `answer_contract_list_size_invalid`, `label_null_value_forbidden`,
+      `label_no_primary_key_source`, `answer_contract_order_ambiguous`
+    - no-PK `drgcodes`, 2 rows, null severity/mortality
+  - submit 4: `composer_submit_draft_missing`
+  - submit 5 budget exhausted:
+    `이번 입원 중에 처방된 약물 정보를 알고 싶어요. 약물명, 처방유형, 상태, 투여 경로,
+    입력 시간을 가장 최근에 입력된 순서로 5개씩 보여주세요.`
+    - 오류: `answer_contract_phrase_missing`, `answer_contract_duplicate_answer_rows`,
+      `answer_contract_binding_missing`
+    - pharmacy list가 duplicate projected rows를 남겼고, secondary order key를 request/label에
+      제대로 반영하지 못함
+
+- **reasoning 교차 분석**:
+  sequence tie-break를 "기록 순번"으로 포장하는 직접 패턴은 이전 trial보다 줄었다. 대신 composer는
+  blocked diagnosis fields, no-PK DRG fields, duplicate pharmacy rows로 이동했다.
+
+  마지막 pharmacy 후보에서 composer는 duplicate rows를 인식하고 visible distinguishing field를 찾으려 했다.
+  하지만 최종 request/answer_contract/query가 싱크되지 않아 duplicate/binding feedback을 받았다.
+  이는 어려운 좋은 문제가 아니라 아직 label construction 품질이 부족한 케이스다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 각 후보가 validator에 의해 정확히 거절됐다. 특히 blocked source,
+  no-PK/null list, duplicate projected rows는 모두 기존 precision-100 validator가 잡을 수 있는 범위였다.
+
+- **변경**:
+  코드 변경 없음. 이미 존재하는 validator와 feedback이 의도대로 작동했다. 추가 hard rule을 만들면
+  natural/source 판단으로 넘어가거나 기존 원칙을 중복하게 된다.
+
+- **검증**:
+  코드 변경 없음.
+
+- **현재 streak**:
+  `trial_83`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
