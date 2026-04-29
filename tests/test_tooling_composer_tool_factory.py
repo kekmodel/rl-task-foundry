@@ -386,6 +386,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "do not submit that result as final label evidence" in descriptions[
         "query"
     ]["$.spec"]
+    assert "do not add source sequence/reference/order fields solely" in descriptions[
+        "query"
+    ]["$.spec"]
+    assert "aggregate, or choose another label" in descriptions["query"]["$.spec"]
     assert {
         tool.name: _loose_schema_paths(tool.params_json_schema)
         for tool in tools.values()

@@ -394,6 +394,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "request must name it" in instructions
     assert "no normalized choices" in instructions
     assert "Distinguish source sequence from display rank" in instructions
+    assert "never add sequence/order output only to make duplicate rows unique" in (
+        instructions
+    )
     assert "Keep output names faithful" in instructions
     assert "broad/vague words are invalid" in instructions
     assert "several reachable sources fit" in instructions
@@ -401,6 +404,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "every selected field becomes exact answer" in instructions
     assert "distinguishable through requested output fields" in instructions
     assert "duplicate projected answer rows" in instructions
+    assert "if only sequence/reference/record-order can distinguish them" in (
+        instructions
+    )
     assert "Do not select helper values unless" in instructions
     assert "answer item combines facts from the same event/record" in instructions
     assert "Avoid independent sibling joins" in instructions

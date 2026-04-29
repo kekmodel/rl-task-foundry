@@ -6929,6 +6929,56 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/schema/sensitivity.py src/rl_task_foundry/schema/introspect.py tests/test_schema_introspection.py`
   통과.
 
+## Iteration 167 — Duplicate rows should not be rescued with artificial sequence outputs
+
+- **질문**:
+  Iteration 166의 handle visibility 변경 뒤 다음 smoke에서 품질이 좋아졌는가?
+
+- **실험/결과**:
+  `trial_49`는 accepted 없이 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_49`
+  - 최종 topic: `일일 투약 기록`
+  - 최종 pass rate: `0/4 = 0.0`
+  - failed solver runs: `0`
+  - 최종 오류: `calibration_inconclusive`
+
+- **정성 평가**:
+  rejected low-quality로 판단한다.
+
+  데이터 자체는 한 입원/하루의 eMAR 투약 기록이라 자연스럽다. 그러나 composer가 중복 projected
+  answer row를 보고 자연 field나 aggregate로 바꾸지 않고 `sequence_number`를 label output에
+  추가했다. 이후 user_request에 "같은 시간이면 기록 순서"를 넣어 이 sequence 출력을 정당화했다.
+  이는 실제 사용자가 먼저 요청한 정보라기보다 duplicate row를 구제하기 위해 만든 technical control이다.
+
+  handle visibility 개선은 작동했다. `emar_id`는 query evidence에서 `blocked`로 표시되어 직접
+  출력/정렬용 handle로 쓰기 어렵게 됐다. 문제는 PK/FK handle이 아닌 `emar_seq` 같은 source
+  sequence를 composer가 user-visible output처럼 사용한 점이다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 "Rows must be distinguishable" 원칙을 인식했고, duplicate rows를 해결해야
+  한다고 판단했다. 하지만 "자연 visible field/aggregate" 대신 sequence/order output을 새로
+  만들어 넣었다. 즉 정책 부재가 아니라 정책의 경계가 덜 선명했다. solver reasoning은 최종 요청의
+  `sequence_number`를 맞추려 했지만 도구 표면에서 같은 row boundary와 exact 값 재현에 실패했다.
+
+- **개선 판단**:
+  `emar_seq` 같은 컬럼명을 리터럴로 막는 것은 금지 원칙 위반이다. PK/FK도 아니므로 precision-100
+  validator로 일반 차단할 근거가 없다.
+
+  따라서 프롬프트 우선 원칙대로 durable List Determinism Policy를 보강한다. 중복 answer row는
+  자연 visible field나 aggregate로 해결해야 하며, sequence/reference/record-order output을
+  중복 제거 목적으로 새로 만들어야 한다면 label을 바꾸라고 지시한다. query tool desc도
+  projection diagnostics 해석을 같은 방향으로 보강하고, feedback은 이 기존 정책을 상기하는 역할만
+  한다.
+
+- **변경**:
+  - synthesis prompt에 "duplicate row를 sequence/order output으로 구제하지 말라"는 일반 원칙을
+    추가했다.
+  - query tool schema description에 projection diagnostics가 duplicate rows를 보고할 때의
+    대응 원칙을 추가했다.
+  - duplicate-answer feedback 메시지는 같은 durable policy를 짧게 상기하도록 수정했다.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
