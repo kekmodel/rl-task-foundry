@@ -1909,6 +1909,7 @@ class SubmitDraftController:
     _limit_repair_scope: LimitRepairScope | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
     _last_feedback_error_codes: tuple[str, ...] = field(default=(), init=False)
+    _missing_submit_after_tool_budget: bool = field(default=False, init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
     _observed_response_strings: set[str] = field(default_factory=set, init=False)
     _terminated_too_hard: bool = field(default=False, init=False)
@@ -1976,7 +1977,24 @@ class SubmitDraftController:
             len(self._raw_atomic_tool_calls)
             - self._tool_call_count_at_last_protocol_boundary
         )
+        query_call_since_boundary = self._latest_query_call_since_protocol_boundary()
         last_feedback_error_codes = set(self._last_feedback_error_codes)
+        if self._missing_submit_after_tool_budget:
+            if tool_name == "query" and query_call_since_boundary is None:
+                return None
+            return {
+                "error": "submit_draft_required",
+                "message": (
+                    "ToolBudgetFeedback: Missing-submit boundary reminder: "
+                    "the previous run stopped after ToolBudgetFeedback without "
+                    "submit_draft. This remains a hard protocol boundary. "
+                    "Call submit_draft now; only one final query is allowed "
+                    "after that boundary when no query has run yet. Do not "
+                    "switch targets or call more data tools."
+                ),
+                "calls_since_boundary": calls_since_boundary,
+                "limit": 1,
+            }
         if (
             last_feedback_error_codes
             and last_feedback_error_codes <= _CONTRACT_ONLY_REPAIR_ERROR_VALUES
@@ -1995,7 +2013,6 @@ class SubmitDraftController:
                 "calls_since_boundary": calls_since_boundary,
                 "limit": 0,
             }
-        query_call_since_boundary = self._latest_query_call_since_protocol_boundary()
         if not self.attempts and self._feedback_events == 0:
             if calls_since_boundary < FIRST_SUBMIT_MAX_DATA_TOOLS:
                 return None
@@ -2212,6 +2229,7 @@ class SubmitDraftController:
                 "do not continue data-tool exploration inside the same run."
             )
             next_step = budget_feedback
+        self._missing_submit_after_tool_budget = budget_feedback is not None
         message = _render_structured_message(
             kind="FeedbackError",
             primary=primary,
@@ -2243,6 +2261,7 @@ class SubmitDraftController:
         )
 
     async def submit(self, payload: SubmitDraftPayload) -> str:
+        self._missing_submit_after_tool_budget = False
         if self.accepted_draft is not None:
             return _render_structured_message(
                 kind="Accepted",

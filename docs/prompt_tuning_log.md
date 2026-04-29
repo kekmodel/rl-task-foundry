@@ -11460,3 +11460,68 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_95`는 좋은 accepted로 판정하므로 연속 만족 accepted streak는 `1/5`.
+
+## Iteration 175 — Missing-submit after ToolBudgetFeedback must stay locked
+
+- **질문**:
+  `trial_96` 실패는 어려운 좋은 문제 때문인가, 아니면 composer가 protocol boundary를 지키지 못한
+  저품질 생성 때문인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T103428Z:d3098c4d`.
+
+  제출 흐름:
+  - 첫 budget boundary 후 submit 없이 종료되어 `composer_submit_draft_missing`.
+  - 그 다음에도 query/query/query/schema_map을 실행한 뒤 다시 `composer_submit_draft_missing`.
+  - 진단 code list 제출은 `label_non_user_visible_source`.
+  - eMAR list 제출은 `label_null_value_forbidden`.
+  - 마지막 admission detail object는 `answer_contract_scalar_not_aggregate`.
+
+- **reasoning 교차 분석**:
+  composer는 admission hub를 잡고 diagnosis와 eMAR를 탐색했다. diagnosis query는 `seq_num`,
+  `icd_code`, `icd_version`이 모두 blocked인데도 “row가 distinguishable하다”고 판단해 제출했다.
+  reject 이후에는 eMAR로 전환했지만 `medication=null` row를 포함했고, 마지막에는 budget에 몰려
+  admissions detail object를 scalar로 제출했다.
+
+  더 중요한 반복 패턴은 submit 누락 후 boundary 해제다. `ToolBudgetFeedback`은 “한 번 query 후
+  submit”을 요구했지만, 다음 라운드에서 일반 feedback처럼 여러 data tool이 실제 실행됐다. 이건
+  자연어 품질 판단이 아니라 프로토콜 상태 전이 문제다.
+
+- **정성 평가**:
+  accepted data: 없음. 연속 만족 accepted streak는 `0/5`로 리셋.
+
+  rejected data:
+  - diagnosis code draft는 low-quality rejected. blocked/internal answer field를 직접 노출했다.
+  - eMAR draft는 low-quality rejected. null answer field가 포함됐다.
+  - admission detail scalar는 low-quality rejected. aggregate가 아닌 single-record detail을 scalar로
+    제출했다.
+
+- **변경**:
+  precision 100%가 가능한 hard protocol gate를 추가했다. `ToolBudgetFeedback`을 받은 뒤
+  `submit_draft` 없이 끝난 경우, 다음 라운드에서도 그 boundary를 유지한다. 이후 data tool은
+  query가 아직 없을 때 `query` 1회만 허용하고, 그 뒤에는 어떤 data tool도
+  `submit_draft_required`를 반환한다.
+
+  이 변경은 DB literal, column token, 자연어 의미를 판정하지 않는다. “이전 run이 ToolBudgetFeedback
+  이후 submit 없이 끝났는가”와 “boundary 이후 query가 이미 있었는가”만 보는 실행 프로토콜이므로
+  precision 100%로 강제할 수 있다.
+
+  plain text submit 누락 전체를 막지는 않았다. final output이 ToolBudgetFeedback payload가 아닌
+  일반 plain text였던 경우는 기존처럼 evidence 보강 여지를 유지한다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_records_missing_submit_protocol_feedback tests/test_synthesis_runtime.py::test_submit_draft_records_tool_budget_missing_submit_feedback tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_allows_repair_query_after_limit tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_feedback_repair -q`
+  통과 (`4 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`97 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_96`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

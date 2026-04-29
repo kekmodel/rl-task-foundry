@@ -2964,6 +2964,7 @@ def test_submit_draft_records_missing_submit_protocol_feedback(tmp_path: Path) -
     assert controller.feedback_events == 1
     assert controller.last_feedback_error_codes == ("composer_submit_draft_missing",)
     assert controller.submissions_left() == 2
+    assert controller.data_tool_budget_feedback(tool_name="sample") is None
 
 
 def test_submit_draft_records_tool_budget_missing_submit_feedback(tmp_path: Path) -> None:
@@ -2996,6 +2997,22 @@ def test_submit_draft_records_tool_budget_missing_submit_feedback(tmp_path: Path
     assert controller.feedback_events == 1
     assert controller.last_feedback_error_codes == ("composer_submit_draft_missing",)
     assert controller.submissions_left() == 2
+    assert controller.data_tool_budget_feedback(tool_name="sample") is not None
+    assert controller.data_tool_budget_feedback(tool_name="query") is None
+
+    controller.record_atomic_tool_call(
+        tool_name="query",
+        params={"spec": {}},
+        result={"rows": [{"value": 1}]},
+    )
+    repeated_feedback = controller.data_tool_budget_feedback(tool_name="query")
+
+    assert repeated_feedback is not None
+    assert repeated_feedback["error"] == "submit_draft_required"
+    assert repeated_feedback["limit"] == 1
+    assert "Missing-submit boundary reminder" in str(repeated_feedback["message"])
+    assert "only one final query is allowed" in str(repeated_feedback["message"])
+    assert "Do not switch targets" in str(repeated_feedback["message"])
 
 
 @pytest.mark.asyncio
