@@ -60,13 +60,16 @@ nodes:
   - id: B0000
     type: baseline
     branch: main
-    commit: "36471d1"
+    commit: "28a5402"
     parent: null
     parent_commit: null
     status: current
     phase_target: v1
     hypothesis: >
-      Current main is the root baseline for the next experiment graph.
+      Main through 28a5402 is the root baseline for the next experiment graph.
+    metadata_note: >
+      Node commit is the artifact snapshot. Registry commits that record or
+      revise node metadata may be descendants of the artifact snapshot.
     architecture_summary: >
       Existing synthesis pipeline after composer prompt, submit_draft validation,
       entity_json contract, and KISS prompt plumbing cleanup.

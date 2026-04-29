@@ -30,6 +30,8 @@
 
 노드는 직접 부모만 기록한다. 전체 lineage는 도구나 사람이 parent chain을 따라 계산한다.
 
+`commit`은 해당 노드의 artifact snapshot이다. 그 노드를 registry에 기록하는 metadata commit은 artifact commit의 descendant일 수 있다. Active experiment worktree는 `AGENTS.md`와 `docs/experiments/*` governance docs를 포함한 snapshot에서 만들어야 하며, governance docs 이전의 raw code commit에서 직접 분기하지 않는다.
+
 ## Status values
 
 - `current`: registry의 현재 기준선
