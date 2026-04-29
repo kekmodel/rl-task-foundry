@@ -6635,6 +6635,67 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Iteration 162 — Binding-only feedback must not reopen data exploration
+
+- **질문**:
+  Iteration 161 뒤 `trial_44`에서 order binding wording 개선이 실제 repair completion으로
+  이어졌는가?
+
+- **실험/결과**:
+  `trial_44`도 solver rollout 전 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_44`
+  - 첫 draft: 환자 `subject_id=10000032`의 최근 eMAR 투약 기록 5개
+  - 첫 feedback: `answer_contract_order_ambiguous`
+  - 두 번째 feedback: `answer_contract_binding_missing`
+  - 이후 feedback: `label_changed_during_repair`, `answer_contract_order_ambiguous`,
+    `answer_contract_binding_missing`
+  - solver 도달 없음
+
+- **reasoning 교차 분석**:
+  reasoning content는 반환되고 있었고, composer는 첫 tie를 이해해서 `emar_seq`를
+  tie-break로 추가했다. 또한 두 번째 feedback 뒤에는 `sequence_number`가 tie-break인데
+  user_request와 order binding에 명시되지 않았다는 점도 인지했다.
+
+  문제는 그 다음 행동이었다. `answer_contract_binding_missing`은 row data가 아니라
+  `user_request`/`answer_contract` mapping 수리 신호인데, composer가 data tool을 다시
+  호출하고 label field 이름까지 바꾸면서 repair-locked label을 흔들었다. 그래서
+  `label_changed_during_repair`가 추가로 발생했고, 같은 binding 결함이 반복됐다.
+
+- **정성 평가**:
+  accepted data: 없음. 저품질 accepted도 없음.
+
+  rejected data: low-quality rejected. row 후보 자체는 contract repair만 되면 쓸 수 있었지만,
+  제출된 draft는 request/contract가 order role과 tie-break를 유일하게 고정하지 못했고,
+  repair 중 label drift까지 발생했다. 어려운 좋은 문제가 아니라 composer의 repair discipline
+  문제다.
+
+- **개선 판단**:
+  `answer_contract_binding_missing`만 단독으로 나온 경우는 precision 100으로 contract-only
+  feedback이다. 이 판단은 feedback error code에만 의존하며 DB 리터럴/토큰/컬럼 의미 휴리스틱을
+  쓰지 않는다.
+
+  따라서 이 경우 feedback 뒤 data tool 예산을 0으로 보고, 기존 label/query 값을 보존한 채
+  `user_request`와 `answer_contract`만 고쳐 `submit_draft`하도록 budget feedback을 정렬했다.
+  새 validator를 추가한 것이 아니라, 이미 존재하는 durable policy와 feedback reminder의 실행
+  경계를 맞춘 것이다.
+
+- **변경**:
+  - `data_tool_budget_feedback`이 단독 `answer_contract_binding_missing` 뒤에는 즉시
+    `submit_draft_required`를 반환한다.
+  - budget prompt에 `binding feedback uses none`을 추가해 source of truth와 runtime feedback을
+    맞췄다.
+  - 기존 일반 repair budget 테스트는 query mismatch 계열으로 유지하고, binding-only 전용 테스트를
+    추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_tooling_composer_tool_factory.py -q`
+  통과 (`109 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_prompts.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

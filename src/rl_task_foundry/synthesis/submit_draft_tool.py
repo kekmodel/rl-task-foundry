@@ -1856,6 +1856,21 @@ class SubmitDraftController:
             len(self._raw_atomic_tool_calls)
             - self._tool_call_count_at_last_protocol_boundary
         )
+        if self._last_feedback_error_codes == (
+            SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING.value,
+        ):
+            return {
+                "error": "submit_draft_required",
+                "message": (
+                    "ToolBudgetFeedback: Binding repair reminder: "
+                    "answer_contract_binding_missing is contract-only. This is "
+                    "not a data result; do not call data tools after this "
+                    "message. Preserve the current label/query values and "
+                    "resubmit with repaired user_request/answer_contract."
+                ),
+                "calls_since_boundary": calls_since_boundary,
+                "limit": 0,
+            }
         latest_query_call = self._latest_successful_query_call_since_protocol_boundary()
         latest_query_result = (
             latest_query_call.get("result") if latest_query_call is not None else None

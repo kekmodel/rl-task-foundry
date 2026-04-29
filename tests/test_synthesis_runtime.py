@@ -1072,7 +1072,7 @@ def test_data_tool_budget_feedback_blocks_late_feedback_repair(tmp_path: Path) -
     )
     controller._record_feedback(
         message="FeedbackError: repair",
-        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH],
     )
     controller.record_atomic_tool_call(
         tool_name="profile",
@@ -1111,7 +1111,7 @@ def test_data_tool_budget_feedback_allows_repair_query_after_limit(
     )
     controller._record_feedback(
         message="FeedbackError: repair",
-        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH],
     )
     for index in range(FEEDBACK_REPAIR_MAX_DATA_TOOLS):
         controller.record_atomic_tool_call(
@@ -1175,6 +1175,33 @@ def test_data_tool_budget_feedback_allows_query_repair_for_ambiguous_query(
 
     assert controller.data_tool_budget_feedback(tool_name="query") is None
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
+
+
+def test_data_tool_budget_feedback_blocks_binding_only_data_repair(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    controller._record_feedback(
+        message="FeedbackError: binding repair",
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
+    )
+
+    feedback = controller.data_tool_budget_feedback(tool_name="query")
+
+    assert feedback is not None
+    assert feedback["error"] == "submit_draft_required"
+    assert feedback["limit"] == 0
+    assert "contract-only" in str(feedback["message"])
+    assert "Preserve the current label/query values" in str(feedback["message"])
 
 
 def test_data_tool_budget_feedback_allows_query_repair_for_empty_query(

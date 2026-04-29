@@ -16,9 +16,9 @@ def build_tool_call_budget_instruction(*, max_tool_calls: int) -> str:
         "tool calls; "
         f"max {FIRST_SUBMIT_MAX_DATA_TOOLS} data tools before first "
         "`submit_draft`.\n"
-        f"- After feedback, use at most {FEEDBACK_REPAIR_MAX_DATA_TOOLS} data "
-        "tools; at limit, only label `query` if rows missing. On "
-        "ToolBudgetFeedback, stop data calls; submit next.\n"
+        f"- After feedback, max {FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools; "
+        "binding feedback uses none. At ToolBudgetFeedback, submit next; "
+        "only label `query` if rows missing.\n"
         "- If `submit_draft` says the conversation is terminated, stop.\n"
         "- Plain text is invalid."
     )
