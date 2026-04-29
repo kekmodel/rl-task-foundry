@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -14,28 +15,241 @@ from rl_task_foundry.config.models import ProviderConfig
 
 ToolExecutor = Callable[[dict[str, Any]], Any | Awaitable[Any]]
 ToolInvokeCallback = Callable[[str, dict[str, Any], Any], Any | Awaitable[Any]]
+TextToolCallParser = Callable[
+    [str],
+    list[dict[str, Any]],
+]
 
 
-def normalize_chat_completion_reasoning_for_agents(response: Any) -> None:
-    """Preserve OpenAI-compatible reasoning fields before Agents conversion.
+_KIMI_TOOL_ID_RE = re.compile(
+    r"(?:functions\.)?(?P<name>[A-Za-z_][A-Za-z0-9_.-]*):(?P<index>[0-9]+)"
+)
+_TOOL_ARGUMENT_BEGIN = "<|tool_call_argument_begin|>"
+
+
+def normalize_chat_completion_reasoning_for_agents(
+    response: Any,
+    *,
+    model: str | None = None,
+    allowed_tool_names: set[str] | frozenset[str] | None = None,
+) -> None:
+    """Preserve reasoning and run model-specific tool-call normalization.
 
     The Agents SDK chat-completions converter promotes `reasoning_content` into
     a `ReasoningItem`, but OpenRouter normalizes thinking output as `reasoning`
     on the chat message. Copying it into `reasoning_content` keeps the raw
-    provider-visible reasoning available to the analysis log without changing
-    model behavior.
+    provider-visible reasoning available to the analysis log.
+
+    Provider/model families expose failed tool-call transport differently. Keep
+    each repair as a model-specific adapter instead of one global parser. The
+    first adapter is Kimi: OpenRouter may put Kimi's native tool-call template in
+    `reasoning` while leaving `message.tool_calls` empty.
     """
 
+    text_tool_call_parsers = _tool_call_text_parsers_for_model(model)
     choices = getattr(response, "choices", None) or []
     for choice in choices:
         message = getattr(choice, "message", None)
         if message is None:
             continue
-        if getattr(message, "reasoning_content", None):
+        if not getattr(message, "reasoning_content", None):
+            reasoning = getattr(message, "reasoning", None)
+            if reasoning:
+                setattr(message, "reasoning_content", reasoning)
+        if getattr(message, "tool_calls", None):
             continue
-        reasoning = getattr(message, "reasoning", None)
-        if reasoning:
-            setattr(message, "reasoning_content", reasoning)
+        promoted = _extract_provider_text_tool_calls(
+            message,
+            allowed_tool_names=allowed_tool_names,
+            parsers=text_tool_call_parsers,
+        )
+        if not promoted:
+            continue
+        setattr(message, "tool_calls", promoted)
+        if _content_is_only_tool_call_text(getattr(message, "content", None)):
+            setattr(message, "content", None)
+        try:
+            setattr(choice, "finish_reason", "tool_calls")
+        except Exception:
+            pass
+
+
+def _extract_provider_text_tool_calls(
+    message: Any,
+    *,
+    allowed_tool_names: set[str] | frozenset[str] | None,
+    parsers: tuple[TextToolCallParser, ...],
+) -> list[Any]:
+    if not allowed_tool_names or not parsers:
+        return []
+    texts = _candidate_tool_call_texts(message)
+    calls: list[Any] = []
+    seen_ids: set[str] = set()
+    for text in texts:
+        for parser in parsers:
+            for parsed in parser(text):
+                if not _tool_name_allowed(parsed["name"], allowed_tool_names):
+                    continue
+                call_id = str(parsed["id"])
+                if call_id in seen_ids:
+                    continue
+                seen_ids.add(call_id)
+                calls.append(_make_chat_completion_tool_call(parsed))
+    return calls
+
+
+def _tool_call_text_parsers_for_model(model: str | None) -> tuple[TextToolCallParser, ...]:
+    if model is None:
+        return ()
+    lowered = model.lower()
+    if "kimi" in lowered:
+        return (_parse_kimi_template_tool_calls,)
+    return ()
+
+
+def _candidate_tool_call_texts(message: Any) -> list[str]:
+    texts: list[str] = []
+    for attr in ("reasoning", "reasoning_content", "content"):
+        value = getattr(message, attr, None)
+        texts.extend(_text_values(value))
+    return [text for text in texts if text.strip()]
+
+
+def _text_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list | tuple):
+        texts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                texts.append(item)
+                continue
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type == "text" and isinstance(item.get("text"), str):
+                    texts.append(item["text"])
+                elif item_type in {"tool_use", "function_call"}:
+                    texts.append(json.dumps(item, ensure_ascii=False))
+            else:
+                text = getattr(item, "text", None)
+                if isinstance(text, str):
+                    texts.append(text)
+        return texts
+    return []
+
+
+def _parse_kimi_template_tool_calls(
+    text: str,
+) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+    for match in _KIMI_TOOL_ID_RE.finditer(text):
+        name = match.group("name")
+        args_start = _find_json_object_start(text, match.end())
+        if args_start is None:
+            continue
+        try:
+            arguments, _end = decoder.raw_decode(text[args_start:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(arguments, dict):
+            continue
+        parsed.append(
+            {
+                "id": f"functions.{name}:{match.group('index')}",
+                "name": name,
+                "arguments": arguments,
+            }
+        )
+    return parsed
+
+
+def _find_json_object_start(text: str, start: int) -> int | None:
+    candidate = text.find("{", start)
+    if candidate < 0:
+        return None
+    argument_marker = text.find(_TOOL_ARGUMENT_BEGIN, start)
+    if argument_marker >= 0 and argument_marker < candidate:
+        marker_end = argument_marker + len(_TOOL_ARGUMENT_BEGIN)
+        marked_candidate = text.find("{", marker_end)
+        if marked_candidate >= 0:
+            return marked_candidate
+    return candidate
+
+
+def _tool_name_allowed(
+    name: str,
+    allowed_tool_names: set[str] | frozenset[str] | None,
+) -> bool:
+    return bool(allowed_tool_names) and name in allowed_tool_names
+
+
+def _make_chat_completion_tool_call(parsed: dict[str, Any]) -> Any:
+    from openai.types.chat.chat_completion_message_function_tool_call import (
+        ChatCompletionMessageFunctionToolCall,
+        Function,
+    )
+
+    return ChatCompletionMessageFunctionToolCall(
+        id=str(parsed["id"]),
+        type="function",
+        function=Function(
+            name=str(parsed["name"]),
+            arguments=json.dumps(parsed["arguments"], ensure_ascii=False),
+        ),
+    )
+
+
+def _content_is_only_tool_call_text(value: Any) -> bool:
+    texts = _text_values(value)
+    if not texts:
+        return False
+    joined = "\n".join(texts).strip()
+    if not joined:
+        return False
+    if "<|tool_call_begin|>" in joined:
+        return True
+    if joined.startswith(("{", "[")) and any(
+        marker in joined
+        for marker in (
+            "tool_calls",
+            "toolCalls",
+            "function_calls",
+            "functionCalls",
+            "tool_name",
+            "toolName",
+        )
+    ):
+        return True
+    return False
+
+
+def tool_names_from_sdk_tools(tools: list[Any] | tuple[Any, ...]) -> frozenset[str]:
+    names: set[str] = set()
+    for tool in tools:
+        name = getattr(tool, "name", None)
+        if isinstance(name, str) and name:
+            names.add(name)
+            continue
+        if isinstance(tool, dict):
+            function = tool.get("function")
+            if isinstance(function, dict) and isinstance(function.get("name"), str):
+                names.add(function["name"])
+            elif isinstance(tool.get("name"), str):
+                names.add(tool["name"])
+    return frozenset(names)
+
+
+def _tools_from_fetch_response_args(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> list[Any] | tuple[Any, ...]:
+    tools = kwargs.get("tools")
+    if isinstance(tools, list | tuple):
+        return tools
+    if len(args) >= 4 and isinstance(args[3], list | tuple):
+        return args[3]
+    return ()
 
 
 def build_reasoning_preserving_chat_completions_model(
@@ -51,7 +265,13 @@ def build_reasoning_preserving_chat_completions_model(
         async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:
             result = await super()._fetch_response(*args, **kwargs)
             if not isinstance(result, tuple):
-                normalize_chat_completion_reasoning_for_agents(result)
+                normalize_chat_completion_reasoning_for_agents(
+                    result,
+                    model=self.model,
+                    allowed_tool_names=tool_names_from_sdk_tools(
+                        _tools_from_fetch_response_args(args, kwargs)
+                    ),
+                )
             return result
 
     return ReasoningPreservingChatCompletionsModel(
@@ -84,6 +304,7 @@ _AUTO_TOOL_CHOICE_MODEL_MARKERS: tuple[str, ...] = (
     "deepseek-r",
     "reasoning",
     "minimax",
+    "kimi",
 )
 
 
@@ -93,8 +314,7 @@ def tool_choice_for_model(model: str) -> str:
     Some OpenAI-compatible gateways reject or mishandle
     `tool_choice="required"` and tool-object forms. Relax to `"auto"` for
     those; keep `"required"` for models where the endpoint supports
-    SDK-enforced tool-use each turn. Kimi/Moonshot is kept required because
-    OpenRouter accepts it and synthesis depends on strict tool-only turns.
+    SDK-enforced tool-use each turn.
     """
 
     lowered = model.lower()
@@ -107,10 +327,11 @@ def tool_choice_for_model(model: str) -> str:
 def build_reasoning_replay_hook() -> Callable[[Any], bool]:
     """Return a hook that tells openai-agents when to replay `reasoning_content`.
 
-    Qwen3.5's canonical chat template expects reasoning for in-flight assistant
-    turns (between the last user message and the current one) to be carried
-    forward via `reasoning_content`. The openai-agents default only replays
-    for DeepSeek, so Qwen loses that continuity without this hook.
+    Qwen and Kimi-style thinking templates expect reasoning for in-flight
+    assistant turns (between the last user message and the current one) to be
+    carried forward via `reasoning_content`. The openai-agents default only
+    replays for DeepSeek, so these models lose that continuity without this
+    hook.
     """
 
     from agents.models.reasoning_content_replay import (
@@ -119,7 +340,7 @@ def build_reasoning_replay_hook() -> Callable[[Any], bool]:
 
     def _should_replay(context: Any) -> bool:
         target_model = (getattr(context, "model", "") or "").lower()
-        if "qwen" in target_model:
+        if "qwen" in target_model or "kimi" in target_model:
             return True
         return default_should_replay_reasoning_content(context)
 

@@ -35,6 +35,13 @@ def test_hook_is_case_insensitive_for_qwen_target() -> None:
     assert hook(_ctx("Qwen3.5-Max")) is True
 
 
+def test_hook_replays_reasoning_for_kimi_target() -> None:
+    hook = build_reasoning_replay_hook()
+
+    assert hook(_ctx("moonshotai/kimi-k2.5", origin_model="moonshotai/kimi-k2.5")) is True
+    assert hook(_ctx("Kimi-K2.5")) is True
+
+
 def test_hook_skips_replay_for_gpt_target() -> None:
     hook = build_reasoning_replay_hook()
 

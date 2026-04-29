@@ -241,6 +241,83 @@ def test_normalize_chat_completion_reasoning_for_agents_copies_openrouter_field(
     assert message.reasoning_content == "openrouter reasoning"
 
 
+def test_normalize_kimi_reasoning_tool_call_promotes_standard_tool_call() -> None:
+    reasoning = (
+        "<|tool_call_begin|><|tool_call_end|>"
+        'functions.lookup:0{"id": 7}<|tool_call_argument_begin|>'
+    )
+    message = SimpleNamespace(reasoning=reasoning, content=None)
+    choice = SimpleNamespace(message=message, finish_reason="stop")
+    response = SimpleNamespace(choices=[choice])
+
+    normalize_chat_completion_reasoning_for_agents(
+        response,
+        model="moonshotai/kimi-k2.5",
+        allowed_tool_names=frozenset({"lookup"}),
+    )
+
+    assert message.reasoning_content == reasoning
+    assert choice.finish_reason == "tool_calls"
+    assert len(message.tool_calls) == 1
+    tool_call = message.tool_calls[0]
+    assert tool_call.id == "functions.lookup:0"
+    assert tool_call.function.name == "lookup"
+    assert json.loads(tool_call.function.arguments) == {"id": 7}
+
+
+def test_normalize_kimi_official_template_tool_call_promotes_standard_tool_call() -> None:
+    content = (
+        "<|tool_calls_section_begin|><|tool_call_begin|>"
+        'functions.query:1<|tool_call_argument_begin|>{"sql": "select 1"}'
+        "<|tool_call_end|><|tool_calls_section_end|>"
+    )
+    message = SimpleNamespace(content=content)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+
+    normalize_chat_completion_reasoning_for_agents(
+        response,
+        model="kimi-k2.5",
+        allowed_tool_names=frozenset({"query"}),
+    )
+
+    assert message.content is None
+    assert message.tool_calls[0].id == "functions.query:1"
+    assert message.tool_calls[0].function.name == "query"
+    assert json.loads(message.tool_calls[0].function.arguments) == {"sql": "select 1"}
+
+
+def test_normalize_kimi_tool_call_requires_allowed_tool_name() -> None:
+    message = SimpleNamespace(
+        reasoning='functions.not_registered:0{"id": 7}',
+        content=None,
+    )
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+
+    normalize_chat_completion_reasoning_for_agents(
+        response,
+        model="moonshotai/kimi-k2.5",
+        allowed_tool_names=frozenset({"lookup"}),
+    )
+
+    assert getattr(message, "tool_calls", None) is None
+
+
+def test_normalize_kimi_tool_call_does_not_run_for_other_models() -> None:
+    message = SimpleNamespace(
+        reasoning='functions.lookup:0{"id": 7}',
+        content=None,
+    )
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+
+    normalize_chat_completion_reasoning_for_agents(
+        response,
+        model="deepseek/deepseek-chat-v3.1",
+        allowed_tool_names=frozenset({"lookup"}),
+    )
+
+    assert getattr(message, "tool_calls", None) is None
+
+
 def test_extract_raw_reasoning_records_accepts_openrouter_reasoning_field() -> None:
     raw_message = SimpleNamespace(
         type="message",
