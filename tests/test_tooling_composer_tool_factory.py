@@ -491,6 +491,11 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
+    assert "Task Shapes policy before the final label query" in descriptions[
+        "query"
+    ]["$.spec.limit"]
+    assert "3-5 row boundary" in descriptions["query"]["$.spec.limit"]
+    assert "unbounded row-list query" in descriptions["query"]["$.spec.limit"]
     assert "List Determinism Policy" in descriptions["query"]["$.spec.limit"]
     assert "final list query with limit" in descriptions["query"]["$.spec.limit"]
     assert "same fixed size requested and bound" in descriptions["query"]["$.spec.limit"]

@@ -11592,3 +11592,60 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_97`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 177 — Final list queries should set the 3-5 row boundary first
+
+- **질문**:
+  `trial_98`은 transfer history data가 어려워서 실패한 것인가, 아니면 composer가 final list query를
+  잘못 짠 것인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T105312Z:d5bdd9cf`.
+
+  composer는 patient transfer history를 선택했다. 첫 final query는 subject의 transfer 31행 전체를
+  반환했고, request는 `병동 이동 기록` 전체를 요구했다. 이 때문에:
+  - 초기 submit은 query result와 label copy가 맞지 않아 `answer_contract_evidence_mismatch`.
+  - 전체 31행을 맞추려 하자 `answer_contract_list_limit_too_wide`.
+  - discharge row의 `care_unit`/`out_time` null 때문에 `label_null_value_forbidden`.
+  - 마지막에 limit 5와 non-null fields로 고친 draft는 solver `4/4`로 너무 쉬웠고 budget exhausted.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 query 결과가 31행임을 인지했지만, ToolBudgetFeedback boundary 때문에
+  "submit해야 한다"고 판단하고 불완전한 label을 제출했다. 이후에야 limit 5 query를 실행했다.
+  즉 실패의 중심은 solver capability가 아니라 final label query를 실행하기 전에 list boundary를
+  정하지 않은 planning/tool-use 문제다.
+
+  solver들은 최종 5-row transfer task를 모두 쉽게 풀었다. therefore rejected hard-good이 아니라
+  too-easy/저품질 수리 실패다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - 31-row transfer list는 low-quality rejected. list shape가 프로젝트 기준을 벗어났고 null도 포함됐다.
+  - final 5-row transfer list는 깨끗하지만 too-easy rejected. 좋은 accepted로 볼 수 없다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. list size/null validator는 이미 precision 100%로 작동한다.
+
+  Tool schema description을 보강했다. `query.spec.limit`에 final row-list label은 query 전에 3-5 row
+  boundary를 정하고, prior evidence로 전체 matching row가 이미 3-5임이 확인된 경우가 아니면
+  `limit`을 포함하라고 명시했다. full matching set이 5행을 넘을 수 있는데 unbounded final list
+  query를 submit하지 말라는 원칙이다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py -q`
+  통과 (`108 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+- **현재 streak**:
+  `trial_98`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
