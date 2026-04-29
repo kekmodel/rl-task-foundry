@@ -10813,6 +10813,61 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_90`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 170 — Trial 91 rejected target switch after too-easy scalar
+
+- **질문**:
+  `trial_91`에서 source-status 보강 이후 accepted 품질이 좋아지는가? 실패한다면, too-easy 이후
+  difficulty-up이 원칙대로 작동했는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`.
+
+  제출 2:
+  `내 입원 기록을 확인하고 싶어. 입원 유형과 입원 경로, 퇴원 장소, 입원일자와 퇴원일자를 최근 순서대로 3개까지 알려줘.`
+  - 오류: `answer_contract_list_size_invalid`
+  - 해당 patient의 admission row가 1건뿐이었다.
+
+  제출 3:
+  `지금까지 내가 병원에 총 몇 번 입원했는지 알려줘.`
+  - solver pass_rate `1.0` (`4/4`)
+  - 오류: `calibration_inconclusive`
+  - 정성 평가: 정확하지만 너무 쉬운 scalar count다.
+
+  제출 4/5:
+  hospital transfer history 5-row list로 전환했다.
+  - 오류: `answer_contract_not_incremental`
+  - diagnostics: `kind_changed`, `operation_changed`, `predicate_removed`, `list_row_filter_added`
+  - submit 4에는 `careunit: null`도 포함되어 `label_null_value_forbidden`이 함께 발생했다.
+
+- **reasoning 교차 분석**:
+  composer는 admission_count가 too easy로 rejected된 뒤 “더 복잡한 관련 정보”를 찾으려 했다. 그러나 실제로는
+  admission_count baseline을 강화한 것이 아니라 transfers list라는 다른 task로 전환했다.
+
+  transfers 후보 자체는 row count와 order는 괜찮았지만, 첫 버전은 null careunit을 포함했고, 최종 버전은
+  baseline scalar의 target/predicate/output과 연결되지 않았다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - admission detail list는 low-quality rejected. 1-row list shape mismatch다.
+  - admission_count는 good-but-too-easy rejected.
+  - transfers list는 potential good list지만, too-easy repair로는 저품질이다. 어려운 좋은 문제가 아니라
+    baseline을 버린 target switch다.
+
+- **변경**:
+  코드 변경 없음.
+
+  이유: `answer_contract_not_incremental`이 precision 100% 구조 진단으로 정당하게 작동했다.
+  target/predicate/kind가 바뀐 것을 리터럴 없이 구조적으로 잡았고, 저품질 accepted는 발생하지 않았다.
+
+- **검증**:
+  별도 코드 변경이 없으므로 추가 테스트는 실행하지 않았다.
+
+- **현재 streak**:
+  `trial_91`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
