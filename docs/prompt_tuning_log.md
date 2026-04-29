@@ -11525,3 +11525,70 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_96`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 176 — Too-easy repair must not use hidden existence filters
+
+- **질문**:
+  `trial_97`은 good-hard data를 살리지 못한 것인가, 아니면 too-easy 이후 composer가 잘못된
+  difficulty-up 수리를 한 것인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T104246Z:000bc7f0`.
+
+  첫 제출:
+  `내 최근 입원 기록 5건과 각 입원의 유형, 입원 시각, 퇴원 시각을 보여주세요.`
+  - pass_rate `4/4 = 1.0`
+  - solver 모두 `admissions`에서 `subject_id=10039708`, `admittime desc`, limit 5를 정확히 풀었다.
+  - data 자체는 깨끗하지만 너무 쉬운 baseline이다.
+
+  이후 수리:
+  - `내 진단이 있는 최근 입원 기록...`으로 hidden diagnosis existence filter를 추가했다.
+  - 마지막에는 `입원 기간이 가장 긴 5건` wording을 넣었지만 canonical answer/query는 여전히 기존
+    admission rows였고, hidden diagnosis filter가 남아 있었다.
+  - validator가 `answer_contract_hidden_filter_unanchored`, `label_not_strengthened`,
+    `answer_contract_not_incremental`로 거절했다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 “primary diagnosis를 붙이면 related-row dimension이 된다”고 판단했다.
+  하지만 실제 schema에는 diagnosis code를 readable diagnosis description으로 연결할 수 있는
+  composer query edge가 없었고, available query는 blocked diagnosis code 또는 hidden `seq_num=1`
+  filter뿐이었다. 따라서 이 related dimension은 visible answer/aggregate로 만들 수 없었다.
+
+  새 hard gate는 작동했다. `composer_submit_draft_missing` 이후 두 번째 query는 실제 DB query가 아니라
+  `ToolBudgetFeedback: Missing-submit boundary reminder`를 반환했다. 다만 모델은 그 뒤에도 좋은
+  strengthening을 만들지 못했다.
+
+- **정성 평가**:
+  accepted data: 없음. 연속 만족 accepted streak는 `0/5`.
+
+  rejected data:
+  - 첫 draft는 too-easy rejected. 좋은 품질이지만 목표 난이도에는 너무 쉬웠다.
+  - 이후 drafts는 low-quality rejected. hidden/existence filter로 row set을 바꾸고, visible
+    strengthening output이나 aggregate를 만들지 못했다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 이미 incremental validator가 precision 100%로 row-set
+  narrowing과 hidden filter 문제를 잡고 있다.
+
+  Feedback reminder만 보강했다. too-easy specificity feedback에서 related-row strengthening은
+  visible output 또는 aggregate로 나타나야 하며, hidden existence/primary-row filter를 added
+  dimension으로 쓰면 안 된다고 명시했다. 이는 새 지시가 아니라 기존 Difficulty-Up Policy
+  (`같은 row set 유지`, `narrowing filter 금지`, `visible related/aggregate dimension`)의 구체적
+  reminder다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_preserves_readable_path tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_is_list_aware -q`
+  통과 (`2 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`97 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_messages.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_97`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

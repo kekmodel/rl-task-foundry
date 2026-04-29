@@ -3263,6 +3263,8 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
     assert "related-row selection instead of adding another field" in message
+    assert "Related-row strengthening must be visible or aggregated" in message
+    assert "do not use hidden existence or primary-row filters" in message
     assert "row membership" not in message
     assert "Request Contract reminder" in message
     assert "copy visible context/source values exactly" in message
@@ -3331,6 +3333,8 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
     assert "related-row selection instead of adding another field" in message
+    assert "Related-row strengthening must be visible or aggregated" in message
+    assert "do not use hidden existence or primary-row filters" in message
     assert "row membership" not in message
     assert "Request Contract reminder" in message
     assert "copy visible context/source values exactly" in message
