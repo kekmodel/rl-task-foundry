@@ -486,6 +486,15 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "generic latest/recent time wording is not enough" in descriptions[
         "query"
     ]["$.spec.order_by"]
+    assert "both start and end times are selected or reachable" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
+    assert "plain recent/latest is ambiguous" in descriptions["query"][
+        "$.spec.order_by"
+    ]
+    assert "request start-time or end-time recency explicitly" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
     assert "choose another label or return tied rows" in descriptions["query"][
         "$.spec.order_by"
     ]

@@ -12272,3 +12272,65 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_108`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 188 — Make start/end recency ambiguity explicit in order_by schema
+
+- **질문**:
+  `trial_109`의 pass rate `0/4`는 solver가 못 푼 어려운 좋은 procedure list였나, 아니면 composer가
+  order role을 user_request에 충분히 드러내지 않은 저품질 문제였나?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T123642Z:f3662381`.
+  solver pass rate는 `0/4`였고, 오류 코드는 `calibration_inconclusive`였다.
+
+  final user_request:
+  `이번 중환자실 입원 기간에 시행된 최근 시술 5개를 확인하고 싶어요. 각 시술의 이름, 시작 시간, 종료 시간, 그리고 시술 상태를 알려주세요.`
+
+  composer label/query는 `procedureevents`를 `stay_id=38197705`로 필터하고, `starttime desc`로 정렬해 최근 5개를
+  선택했다. 출력은 `procedure_name`, `procedure_start_time`, `procedure_end_time`, `procedure_status`였다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 “최근 시술”을 start time 기준으로 해석했다. 하지만 user_request는 시작 시간 기준 최근이라고
+  말하지 않았고, 출력에는 시작 시간과 종료 시간이 모두 포함되어 있었다.
+
+  solver 2개는 정확히 같은 scope와 table을 찾았지만 `endtime desc`로 정렬했다. 이는 “최근 시술”을 종료 시간이 최근인
+  시술로 해석한 자연스러운 경로다. solver 2개는 submit 형식 실패였지만, 나머지 2개가 같은 endtime 선택을 했다는 점이
+  핵심이다. 따라서 이 케이스는 solver가 못 푼 좋은 어려운 문제가 아니라, request/order surface ambiguity가 있는
+  저품질 rejected다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - procedure list의 row set 자체는 좋다. hidden ICU stay scope도 자연스럽고 procedureevents + d_items path도
+    solver tool로 재현 가능하다.
+  - 하지만 order semantics가 저품질이다. `starttime`과 `endtime`이 모두 output에 있는데 user_request는
+    `최근 시술`만 말한다. 이 wording에서는 solver가 `endtime desc`를 택해도 합리적이다.
+  - `procedure_status`가 모두 `FinishedRunning`인 점도 난이도 상승에는 거의 기여하지 않는다. 다만 이번 0/4의
+    주된 원인은 status가 아니라 start/end recency ambiguity다.
+
+- **변경**:
+  `query.order_by` tool description을 보강했다. 여러 temporal field가 reachable/selected일 때 generic
+  latest/recent wording이 부족하다는 기존 원칙을 더 구체화하여, start time과 end time이 모두 selected/reachable이면
+  plain recent/latest는 ambiguous이며 start-time 또는 end-time recency를 자연어로 명시하거나 request가 이미 이름 붙인
+  boundary로 정렬하라고 추가했다.
+
+  hard validator는 추가하지 않았다. “최근 입원 기록”처럼 domain noun 자체가 특정 time boundary를 자연스럽게 내포하는
+  좋은 케이스도 있으므로, order phrase에 output phrase 포함을 일괄 강제하면 precision 100을 보장할 수 없다.
+  따라서 이번은 tool schema/description 레벨의 prompt-first 보강으로 처리한다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_109`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
