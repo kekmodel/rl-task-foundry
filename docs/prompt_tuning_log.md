@@ -11649,3 +11649,80 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_98`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 178 — One requested output slot must stay one label field
+
+- **질문**:
+  `trial_99`은 MIMIC microbiology data가 어려워서 실패한 것인가, 아니면 composer가 좋은 label 후보를
+  contract로 잘못 포장한 것인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T105922Z:02a68aa6`.
+
+  composer는 admission `27617929`의 `microbiologyevents`를 골랐다. 최종 후보는 입원 중 채취된
+  검체 검사 5건의 시간, 검체 종류, 검사명, 결과를 반환하는 list였다. 첫 query는 `charttime asc`
+  단일 정렬이라 동점과 limit boundary tie가 있었고, 두 번째 query는 `charttime asc`,
+  `test_name asc`로 동점 정렬을 해결했다.
+
+  실패 흐름:
+  - 첫 submit 누락은 `composer_submit_draft_missing`.
+  - 첫 list 제출은 string copy mismatch와 동점 정렬 때문에
+    `label_values_not_grounded`, `answer_contract_evidence_mismatch`,
+    `answer_contract_order_ambiguous`.
+  - tie-break query 이후 request/contract phrase 수리 과정에서 `answer_contract_query_mismatch`,
+    `answer_contract_phrase_missing`.
+  - 마지막 제출은 `answer_contract_binding_missing`. 진단상 `채취 시간` phrase가
+    `test_date`와 `test_time` 두 label field에 중복 binding됐다.
+
+- **reasoning 교차 분석**:
+  reasoning content는 반환되고 있었다. composer는 첫 feedback 뒤 실제 원인을 꽤 잘 파악했다.
+  string casing/spacing을 그대로 복사해야 하고, `charttime` 동점 때문에 자연스러운 tie-break가
+  필요하다고 판단했다. 그래서 `test_name` secondary sort를 넣은 것은 List Determinism Policy에 맞다.
+
+  하지만 다음 단계에서 `chartdate`와 `charttime`을 모두 label field로 유지한 채, 둘 다 사용자의
+  `채취 시간` 요청 슬롯에 묶었다. `charttime` 자체가 날짜와 시간을 포함하는 timestamp인데도
+  별도 date-only field를 같이 반환한 셈이다. 이건 solver가 풀기 어려운 좋은 문제라기보다
+  Label Contract 위반이다. 하나의 자연어 출력 슬롯은 하나의 label field가 되어야 하고, date/time이나
+  value/unit을 나누려면 request에 각각의 자연스러운 phrase가 있어야 한다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - microbiology list의 row set 자체는 좋은 후보였다. hidden admission scope도 자연스럽고,
+    검체 종류/검사명/결과/시간은 solver 도구로 접근 가능하다.
+  - 다만 제출된 draft는 low-quality rejected. 마지막 실패는 데이터 난이도가 아니라 redundant
+    `test_date`/`test_time` field split과 중복 output binding 문제다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. `duplicate_output_binding_phrases`는 이미 precision 100%로
+  잡히고 있었고, 리터럴/토큰/column semantic 휴리스틱도 사용하지 않았다.
+
+  Prompt/tool schema/feedback을 같은 원칙으로 정렬했다.
+  - 시스템 프롬프트 Label Contract: 하나의 자연어 output slot은 하나의 label field에 매핑하며,
+    timestamp가 이미 date+time을 담고 있으면 병렬 date-only field를 같이 선택하지 말라고 명시했다.
+  - `query.select` tool description: final label field 선택 단계에서 같은 원칙을 먼저 보게 했다.
+  - `submit_draft` schema: output binding에서도 같은 정책을 반복했다.
+  - binding feedback: 실제 중복 phrase와 field 목록을 보여주되, 새 지시가 아니라 Label Contract
+    reminder로 표현했다. 중복 field set 자체가 문제인 경우에는 같은 target으로 field set을 정리해
+    query를 다시 실행할 수 있게 기존 “phrase-only면 data tool 금지” 문구와 충돌하지 않도록 했다.
+
+  프롬프트 길이는 8k 예산 아래로 유지하기 위해 Difficulty-Up example 표현을 압축했다. 정책의
+  source-of-truth는 유지했고, feedback은 여전히 프롬프트를 상기시키는 역할만 한다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`114 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/turn_budget.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+  Full:
+  `uv run pytest -q`
+  통과 (`508 passed`).
+
+- **현재 streak**:
+  `trial_99`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

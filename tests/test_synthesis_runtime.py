@@ -2091,6 +2091,10 @@ async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
     message = await controller.submit(payload)
 
     assert "own natural role phrase" in message
+    assert "Duplicate output binding phrases" in message
+    assert "phrase='용량' fields=['dose', 'unit']" in message
+    assert "one natural output slot should not be split" in message
+    assert "returned field set is already correct" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
     diagnostics = monitor.records[-1]["diagnostics"]
@@ -2842,6 +2846,9 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "unless user_request asks for that text surface" in schema_surface
     assert "Date/time fields are source-sensitive too" in schema_surface
     assert "do not bind two time-like outputs to generic time phrases" in schema_surface
+    assert "One requested output slot should map to one label field" in schema_surface
+    assert "timestamp already includes date and time" in schema_surface
+    assert "Value/unit or date/time splits need separate fluent phrases" in schema_surface
     assert "stored/entered time" in schema_surface
     assert "generic latest/recent time wording is not enough" in schema_surface
     assert "multiple reachable source surfaces could answer them" in schema_surface

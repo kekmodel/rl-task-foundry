@@ -15,9 +15,9 @@ def build_tool_call_budget_instruction(*, max_tool_calls: int) -> str:
         "tool calls; "
         f"max {FIRST_SUBMIT_MAX_DATA_TOOLS} data tools.\n"
         f"- After feedback, max {FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools; "
-        "binding feedback uses none. ToolBudgetFeedback boundary: stop "
-        "exploration; submit next. If final query allowed, run it once "
-        "then submit.\n"
+        "binding feedback uses none.\n"
+        "- ToolBudgetFeedback boundary: stop exploration; submit next. "
+        "If final query allowed, run it once then submit.\n"
         "- If `submit_draft` says the conversation is terminated, stop.\n"
         "- Plain text is invalid."
     )

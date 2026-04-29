@@ -107,6 +107,40 @@ def _format_missing_request_phrase_guidance(
     )
 
 
+def _format_duplicate_output_binding_guidance(
+    diagnostics: dict[str, object] | None,
+) -> str:
+    if diagnostics is None:
+        return ""
+    binding_diagnostics = diagnostics.get("answer_contract_binding_diagnostics")
+    if not isinstance(binding_diagnostics, dict):
+        return ""
+    raw_duplicates = binding_diagnostics.get("duplicate_output_binding_phrases")
+    if not isinstance(raw_duplicates, list):
+        return ""
+    details: list[str] = []
+    for item in raw_duplicates[:3]:
+        if not isinstance(item, dict):
+            continue
+        phrase = item.get("requested_by_phrase")
+        raw_fields = item.get("label_fields")
+        if not isinstance(phrase, str) or not isinstance(raw_fields, list):
+            continue
+        fields = [str(field) for field in raw_fields if isinstance(field, str)]
+        if fields:
+            details.append(f"phrase={phrase!r} fields={fields!r}")
+    if not details:
+        return ""
+    return (
+        " Duplicate output binding phrases: "
+        + "; ".join(details)
+        + ". Label Contract reminder: one natural output slot should not be "
+        "split across multiple label fields. Rerun the same target with one "
+        "field per requested slot, or rewrite the request with distinct fluent "
+        "phrases when the fields are genuinely separate."
+    )
+
+
 def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
     kind_note = ""
     if answer_kind in {"scalar", "list"}:

@@ -427,6 +427,11 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "several reachable sources fit" in instructions
     assert "`query.select` includes only returned label fields" in instructions
     assert "every selected field becomes exact answer" in instructions
+    assert "One natural output slot maps to one label field" in instructions
+    assert "timestamp already carries date and time" in instructions
+    assert "split date/time or value/unit only when `user_request` has separate" in (
+        instructions
+    )
     assert "distinguishable through requested output fields" in instructions
     assert "duplicate projected answer rows" in instructions
     assert "source rows differ" in instructions

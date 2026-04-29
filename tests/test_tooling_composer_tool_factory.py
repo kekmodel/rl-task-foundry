@@ -363,6 +363,15 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "select only values the user_request asks to receive" in descriptions[
         "query"
     ]["$.spec.select"]
+    assert "One requested output slot should become one selected field" in descriptions[
+        "query"
+    ]["$.spec.select"]
+    assert "timestamp already carries date and time" in descriptions["query"][
+        "$.spec.select"
+    ]
+    assert "Split value/unit only when both have distinct natural request phrases" in (
+        descriptions["query"]["$.spec.select"]
+    )
     assert "Use where/order_by for helper context" in descriptions["query"][
         "$.spec.select"
     ]
