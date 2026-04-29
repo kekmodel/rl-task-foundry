@@ -305,7 +305,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Core Definitions" in instructions
     assert "Source surface" in instructions
     assert "user wording, label fields, query path" in instructions
-    assert "ambiguous across reachable surfaces" in instructions
+    assert "reachable surfaces" in instructions
+    assert "same broad noun" in instructions
+    assert "returns different rows" in instructions
     assert "request/contract must name chosen source role" in instructions
     assert "broad nouns invalid" in instructions
     assert "label/output_schema cannot disambiguate" in instructions
@@ -315,7 +317,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "If no primary key" in instructions
     assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
-    assert "Timestamp/date surfaces are distinct too" in instructions
+    assert "Timestamp/date surfaces differ" in instructions
     assert "event time, stored/entered time, scheduled time" in instructions
     assert "generic time/date wording is invalid" in instructions
     assert "# Feedback And Difficulty-Up Policy" in instructions
@@ -356,15 +358,17 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "entity needs the parent/current-subject key" in instructions
     assert "# Scope Examples" in instructions
     assert '"user_request":"show R"' in instructions
-    assert '"query":"S_event.R"' in instructions
-    assert "hidden lifecycle source" in instructions
+    assert '"answer_contract":{"answer_phrase":"R"}' in instructions
+    assert "<query>S_event.R</query>" in instructions
+    assert "Bad: S_order.R also fits" in instructions
     assert "S_order.R also fits" in instructions
     assert '"user_request":"show S_event R"' in instructions
-    assert "source role visible" in instructions
-    assert "entity={C.pk}; query C->P->siblings" in instructions
-    assert "rewording as C-related is not enough" in instructions
-    assert "entity={P.pk}; query P->siblings" in instructions
-    assert "answer row set share parent scope" in instructions
+    assert "<query>S_event.R</query>" in instructions
+    assert "Good: source role visible" in instructions
+    assert "entity={C.pk}; C->P->sib" in instructions
+    assert "Bad: C wording" in instructions
+    assert "entity={P.pk}; P->sib" in instructions
+    assert "Good: rows share parent" in instructions
     assert "Do not attach `entity` to a global report" in instructions
     assert "Copy scoped evidence values exactly" in instructions
     assert "scoped evidence" in instructions

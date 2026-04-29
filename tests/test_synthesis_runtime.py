@@ -1439,6 +1439,9 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     assert "Do not call one lifecycle surface another" in (
         schema["properties"]["user_request"]["description"]
     )
+    assert "another reachable source would answer the same broad request" in (
+        schema["properties"]["user_request"]["description"]
+    )
     assert "order/request/event/fulfillment/log" in (
         schema["properties"]["user_request"]["description"]
     )

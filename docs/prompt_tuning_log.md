@@ -10296,6 +10296,75 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_83`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 162 — Broad source-role ambiguity must be rejected before solver
+
+- **질문**:
+  `trial_84` 계열에서 accepted가 나오면 정말 좋은 데이터인가? reasoning content를 보면
+  composer가 broad source-role ambiguity를 submit 전에 인지하고 있는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+
+  첫 `trial_84`는 첫 feedback 뒤 이벤트 갱신 없이 장시간 멈춰 provider/API stall로 중단했다.
+  품질 판단 대상에서 제외하고 같은 설정으로 `trial_84_retry_01`을 재시도했다.
+
+  `trial_84_retry_01` 결과는 accepted, pass_rate `0.25` (`1/4` matched).
+
+  accepted request:
+  `이번 입원 중 처방된 약물 목록을 시작 시간 순으로 알파벳순으로 정렬해서 5개 보여주세요.
+  각 약물의 이름, 처방 시작 시간, 종료 시간, 투여 주기, 처방 유형, 주문 상태도 함께 알려주세요.`
+
+  canonical label은 `pharmacy`의 medication/starttime/stoptime/frequency/proc_type/status를
+  starttime + medication으로 정렬한 5-row list였다.
+
+- **reasoning 교차 분석**:
+  composer는 `pharmacy_id`를 technical handle로 보고 피하려고 했고, starttime 동점을 medication
+  tie-break로 고쳤다. 이 부분은 이전 sequence/order repair 개선이 어느 정도 작동한 신호다.
+
+  그러나 더 큰 문제를 놓쳤다. user_request의 “처방된 약물”은 자연스럽게 `prescriptions` 계열도
+  강하게 가리킨다. 실제 solver 4개 중 3개는 `prescriptions`에서 시작했고, 그 결과 `pharmacy`
+  canonical과 다른 row set/field meaning을 제출하거나 max turns에 걸렸다. 즉 solver가 어려워서
+  못 푼 문제가 아니라, composer가 같은 자연어가 두 reachable source surface를 가리키는 상태로
+  accepted draft를 제출한 것이다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted. 저품질이 solver에서 거절된 게 아니라 quality gate를 통과했으므로
+  개선 대상이다.
+
+  rejected data: submit 2는 hidden admission scope와 order binding 부족으로 reject됐다. 이 reject는
+  정상이다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. “어떤 자연어가 어떤 source surface를 더 자연스럽게 가리키는가”는
+  precision 100% validator로 만들 수 없고, 리터럴/컬럼명 휴리스틱으로 구현하면 금지 원칙 위반이다.
+
+  Prompt-first 원칙에 따라 Source surface 정책을 보강했다.
+  submit 전 sibling source surfaces를 비교하고, 같은 broad noun이 다른 reachable source에서 다른 row
+  set을 만들 수 있으면 broad noun을 쓰지 말라고 명시했다. chosen source role을 자연어로 드러내거나,
+  ordinary wording이 가리키는 source를 쓰거나, label을 바꾸게 했다.
+
+  Scope example도 mini draft 형식으로 바꿔 `user_request`와 `answer_contract.answer_phrase`가 broad
+  noun만 담은 경우 왜 나쁜지 보이게 했다.
+
+  `submit_draft.user_request` schema description에도 같은 자기검사를 추가했다. 이는 feedback이 아니라
+  tool 호출 직전 schema reminder다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_payload_schema_uses_strict_json_string_fields -q`
+    통과 (`2 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`96 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_84_retry_01`은 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

@@ -131,12 +131,13 @@ def build_synthesis_agent_instructions(
         "- Unique label: one correct structured answer. "
         "Handle visible ties; never rely on hidden ids/order/filters.\n"
         "- Source surface: user wording, label fields, query path same role. "
-        "If ambiguous across reachable surfaces, request/contract must name "
-        "chosen source role; label/output_schema cannot disambiguate; broad "
-        "nouns invalid. If ordinary wording points elsewhere, use that source "
+        "Compare reachable surfaces. If same broad noun returns "
+        "different rows, broad nouns invalid; "
+        "request/contract must name chosen source role; label/output_schema "
+        "cannot disambiguate. If ordinary wording points elsewhere, use that source "
         "or name the role; visible cannot replace hidden. If no primary key, use "
         "primary-key-backed path/aggregate; no hidden path guessing. "
-        "Timestamp/date surfaces are distinct too: event time, stored/entered "
+        "Timestamp/date surfaces differ: event time, stored/entered "
         "time, scheduled time; generic time/date wording is invalid.",
 
         "# Request Contract\n"
@@ -212,19 +213,18 @@ def build_synthesis_agent_instructions(
         "them for tie-break/binding repair. Max two order keys.",
 
         "# Scope Examples\n"
-        "<example>{\"user_request\":\"show R\","
-        "\"query\":\"S_event.R\"}"
-        "<commentary>hidden lifecycle source; S_order.R also fits"
+        "<example><draft>{\"user_request\":\"show R\","
+        "\"answer_contract\":{\"answer_phrase\":\"R\"}}</draft>"
+        "<query>S_event.R</query><commentary>Bad: S_order.R also fits"
         "</commentary></example>\n"
-        "<example>{\"user_request\":\"show S_event R\","
-        "\"query\":\"S_event.R\"}"
-        "<commentary>source role visible"
+        "<example>{\"user_request\":\"show S_event R\"}<query>S_event.R</query>"
+        "<commentary>Good: source role visible"
         "</commentary></example>\n"
-        "<example>entity={C.pk}; query C->P->siblings"
-        "<commentary>rewording as C-related is not enough"
+        "<example>entity={C.pk}; C->P->sib"
+        "<commentary>Bad: C wording"
         "</commentary></example>\n"
-        "<example>entity={P.pk}; query P->siblings"
-        "<commentary>answer row set share parent scope"
+        "<example>entity={P.pk}; P->sib"
+        "<commentary>Good: rows share parent"
         "</commentary></example>",
 
         "# Feedback And Difficulty-Up Policy\n"
@@ -252,7 +252,7 @@ def build_synthesis_agent_instructions(
         "<example><draft_after>R+same-row C</draft_after>"
         "<commentary>Bad: passive width</commentary></example>\n"
         "<example><draft_after>list R where C</draft_after>"
-        "<commentary>Bad after too-easy: narrowing filter changes row set"
+        "<commentary>Bad: narrowing filter changes row set"
         "</commentary></example>",
 
         "# Task Shapes\n"
