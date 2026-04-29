@@ -13,6 +13,7 @@
 - 평가 정책 변경 미기록
 - source-of-truth 원칙 위반
 - DB/region readiness 부족을 무시하고 억지 accepted 생성
+- promotion 후보에 독립 DQS evaluator report 없음
 
 ## Draft labels
 
@@ -128,6 +129,13 @@ DQS는 ranking aid다. 다음을 모두 만족해야 promotion 가능하다.
 - hard gates 통과
 - DQS가 baseline보다 개선되거나, 품질 유지 상태에서 yield/diversity 개선
 - 적대적 리뷰에서 평가 해킹 가능성이 설득력 있게 발견되지 않음
+- 독립 evaluator subagent의 전수 정성평가 report가 기록됨
+
+## Independent evaluation
+
+Builder가 만든 실험을 builder가 단독으로 promotion 판단하지 않는다. Promotion 후보는 `docs/experiments/evaluator_subagent.md` 프로토콜에 따라 독립 DQS evaluator가 평가해야 한다.
+
+Evaluator는 구현 의도보다 artifact, generated drafts, solver traces, DB evidence, rubric을 우선한다. Builder는 evaluator report에 반론을 쓸 수 있지만, 단독 override할 수 없다. Accepted low-quality 판정 충돌은 사용자 판단 또는 재평가가 필요하다.
 
 ## v1 target
 
@@ -154,4 +162,3 @@ v1 달성 기준:
 - 각 DB 평균 `diversity_score >= 3.5`
 - severe mode collapse 없음
 - DB readiness diagnosis가 불가능 region/DB를 구조적으로 설명함
-

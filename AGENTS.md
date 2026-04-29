@@ -17,6 +17,7 @@
 7. 억지 생성보다 거절: DB 또는 DB region이 stable identity, visible answer surface, diversity, fanout, verifiable task structure를 충분히 제공하지 못하면 task를 조작해서 만들지 말고 구조적 이유를 보고하고 거절한다.
 8. 모든 평가는 버전 기록: rubric version, solver band, solver model, solver count, DB, prompt version, architecture node, qualitative judgment를 실험 노드마다 기록한다.
 9. 단계 목표 달성 시 정지: phase target을 metric 기준으로 달성하면 자동 개선을 멈추고 사용자에게 promote/freeze/continue/branch/revise 중 무엇을 할지 물어본다.
+10. 독립 평가: promotion 후보는 builder 자신이 단독 평가하지 않는다. 사용자가 subagent 평가를 승인했거나 요청한 경우, `docs/experiments/evaluator_subagent.md` 프로토콜로 독립 DQS evaluator subagent를 만든다. 승인 없이 subagent를 만들 수 없으면 멈추고 사용자에게 평가 승인을 요청한다.
 
 ## 평가 메트릭
 
@@ -29,6 +30,7 @@ Hard gates:
 - precision-100가 아닌 hard rejector 없음
 - severe mode collapse 없음
 - 평가 정책 변경은 별도 experiment node로 기록
+- promotion 전 독립 DQS 평가 리포트 기록
 
 DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다. 단일 숫자만으로 승격하지 않는다.
 
@@ -49,6 +51,7 @@ DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다
 
 - `docs/experiments/first_principles.md`
 - `docs/experiments/rubric_dqs_v1.md`
+- `docs/experiments/evaluator_subagent.md`
 - `docs/experiments/registry.yaml`
 - `docs/experiments/tree.md`
 
@@ -57,4 +60,3 @@ DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다
 - `mimiciv_demo`
 - `postgres_air`
 - `pagila`
-

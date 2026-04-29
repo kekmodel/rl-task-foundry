@@ -46,9 +46,10 @@
 
 1. node를 `candidate` 또는 `frontier`로 기록한다.
 2. 동일 evaluation policy로 반복 검증한다.
-3. DQS-v1 hard gates와 적대적 리뷰를 통과한다.
-4. 사용자 확인 후 baseline으로 promote한다.
-5. 충분히 안정된 baseline snapshot만 `main`에 반영한다.
+3. `docs/experiments/evaluator_subagent.md` 프로토콜로 독립 DQS evaluator report를 만든다.
+4. DQS-v1 hard gates와 적대적 리뷰를 통과한다.
+5. 사용자 확인 후 baseline으로 promote한다.
+6. 충분히 안정된 baseline snapshot만 `main`에 반영한다.
 
 ## Branching protocol
 
@@ -70,6 +71,12 @@ exp/R0001-band-calibration-035
 - `R`: rubric/evaluation policy
 - `B`: baseline
 
+## Independent evaluator reports
+
+Promotion 후보 노드는 builder self-check만으로 승격할 수 없다. 독립 evaluator report를 `docs/experiments/evaluations/<node-id>.md`에 저장하고, 필요하면 builder response를 `docs/experiments/evaluations/<node-id>_builder_response.md`에 저장한다.
+
+Evaluator는 code diff 자체보다 실험 artifact와 DQS-v1 rubric을 먼저 본다. 구현자의 hypothesis는 가능하면 primary labeling 이후에 비교한다.
+
 ## Phase stop rule
 
 단계별 목표를 metric 기준으로 달성하면 Codex는 자동 개선을 멈추고 사용자에게 다음 결정을 요청해야 한다.
@@ -80,4 +87,3 @@ exp/R0001-band-calibration-035
 2. 다음 phase로 진행
 3. 다른 노드에서 새 분기
 4. metric/rubric 수정
-

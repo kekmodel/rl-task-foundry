@@ -15,6 +15,8 @@
   - 평가 해킹 방지 원칙과 실험 그래프의 불변 규칙
 - [experiments/rubric_dqs_v1.md](./experiments/rubric_dqs_v1.md)
   - DQS-v1 accept/reject 정성평가 루브릭과 promotion 기준
+- [experiments/evaluator_subagent.md](./experiments/evaluator_subagent.md)
+  - Codex subagent 기반 독립 DQS 평가자 생성/리포트 프로토콜
 - [experiments/tree.md](./experiments/tree.md)
   - git branch/worktree 기반 실험 탐색 그래프 운영 규칙
 - [sample_databases.md](./sample_databases.md)

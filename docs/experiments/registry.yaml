@@ -20,6 +20,18 @@ evaluation_policies:
       DQS is a quantitative rollup of qualitative rubric labels. Promotion
       also requires hard gates and adversarial review.
 
+evaluation_protocols:
+  - id: independent-dqs-v1
+    protocol: docs/experiments/evaluator_subagent.md
+    required_for:
+      - candidate
+      - frontier
+      - promoted
+    report_dir: docs/experiments/evaluations
+    notes: >
+      Builder self-evaluation is not sufficient for promotion. Use a blind-ish
+      evaluator subagent when the user has authorized subagent evaluation.
+
 nodes:
   - id: B0000
     type: baseline
@@ -44,6 +56,7 @@ nodes:
       - diversity_required
       - diagnose_bad_db_regions
     evaluation_policy: DQS-v1
+    evaluation_protocol: independent-dqs-v1
     quality_eval: null
     branching_notes:
       continue_from_here:
@@ -52,4 +65,3 @@ nodes:
       avoid:
         - "Do not encode benchmark DB literals or known failed draft strings."
         - "Do not promote on accept count without DQS-v1 qualitative review."
-
