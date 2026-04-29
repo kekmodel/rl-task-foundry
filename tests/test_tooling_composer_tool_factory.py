@@ -291,6 +291,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "query path is the selected source surface" in tools["query"].description
     assert "ordinary matching source" in tools["query"].description
     assert "duplicate projected answer rows" in tools["query"].description
+    assert "submission_diagnostics highlights final-label blockers" in tools[
+        "query"
+    ].description
     assert "blocking diagnostics must be fixed before submit_draft" in tools[
         "query"
     ].description
@@ -500,6 +503,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "$.spec.aggregate"
     ]
     assert "projection diagnostics" in descriptions["query"]["$.spec"]
+    assert "submission_diagnostics summarizes structural blockers" in descriptions[
+        "query"
+    ]["$.spec"]
+    assert "blocked/internal" in descriptions["query"]["$.spec"]
     assert "Status/type/result outputs must name the selected source role" in (
         descriptions["query"]["$.spec"]
     )

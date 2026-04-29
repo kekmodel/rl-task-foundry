@@ -389,6 +389,28 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "direction": "asc",
         },
     ]
+    assert result["submission_diagnostics"] == {
+        "blocking_for_submit_draft": True,
+        "message": (
+            "Do not use this query result as final label evidence until these "
+            "structural blockers are fixed. Rerun query with final "
+            "user-visible answer fields, use an aggregate, repair list "
+            "determinism, or choose another grounded label."
+        ),
+        "blockers": ["non_user_visible_label_source"],
+        "non_user_visible_label_sources": [
+            {
+                "output": "contact",
+                "kind": "select",
+                "table": "customer",
+                "column": "email",
+                "visibility": "internal",
+                "is_handle": False,
+                "is_primary_key": False,
+                "table_has_primary_key": True,
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio
@@ -429,6 +451,39 @@ async def test_query_marks_label_sources_without_primary_key():
             "value_exposes_source": True,
         }
     ]
+    assert result["submission_diagnostics"]["blockers"] == [
+        "no_primary_key_label_source"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_query_does_not_warn_for_count_over_hidden_source():
+    session, _ = _stub_session()
+
+    result = await query(
+        session,
+        spec={
+            "from": _from("customer", "c"),
+            "aggregate": [_agg("count", "email_count", alias="c", column="email")],
+        },
+    )
+
+    assert result["column_sources"] == [
+        {
+            "output": "email_count",
+            "kind": "aggregate",
+            "value_exposes_source": False,
+            "fn": "count",
+            "table": "customer",
+            "column": "email",
+            "visibility": "internal",
+            "is_handle": False,
+            "is_primary_key": False,
+            "table_primary_key": ["customer_id"],
+            "table_has_primary_key": True,
+        }
+    ]
+    assert "submission_diagnostics" not in result
 
 
 @pytest.mark.asyncio

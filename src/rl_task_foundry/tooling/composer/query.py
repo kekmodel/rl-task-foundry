@@ -31,7 +31,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_task_foundry.infra.visibility import is_user_visible_visibility
+from rl_task_foundry.infra.visibility import (
+    blocks_direct_label_exposure,
+    is_user_visible_visibility,
+)
 from rl_task_foundry.tooling.common.edges import TypedEdge, resolve_edge
 from rl_task_foundry.tooling.common.payload import ensure_int as _require_int
 from rl_task_foundry.tooling.common.schema import TableSpec
@@ -846,6 +849,88 @@ def _projection_diagnostics(rows: list[dict[str, object]]) -> dict[str, object] 
     }
 
 
+def _final_label_submission_diagnostics(
+    *,
+    column_sources: list[dict[str, object]],
+    ordering_diagnostics: dict[str, object] | None,
+    projection_diagnostics: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Summarize structural blockers for using this query as final evidence.
+
+    This is advisory tool output, not a new rejector. It mirrors facts already
+    proven by query metadata so the composer sees blocking evidence before it
+    spends a submit_draft attempt.
+    """
+
+    blockers: list[str] = []
+    diagnostics: dict[str, object] = {}
+
+    non_user_visible_sources: list[dict[str, object]] = []
+    no_primary_key_sources: list[dict[str, object]] = []
+    for source in column_sources:
+        if source.get("value_exposes_source") is not True:
+            continue
+        payload = {
+            key: source.get(key)
+            for key in (
+                "output",
+                "kind",
+                "table",
+                "column",
+                "visibility",
+                "is_handle",
+                "is_primary_key",
+                "table_has_primary_key",
+            )
+            if key in source
+        }
+        if blocks_direct_label_exposure(source.get("visibility")):
+            non_user_visible_sources.append(payload)
+        if (
+            source.get("table_has_primary_key") is False
+            and source.get("kind") != "aggregate"
+        ):
+            no_primary_key_sources.append(payload)
+
+    if non_user_visible_sources:
+        blockers.append("non_user_visible_label_source")
+        diagnostics["non_user_visible_label_sources"] = non_user_visible_sources
+    if no_primary_key_sources:
+        blockers.append("no_primary_key_label_source")
+        diagnostics["no_primary_key_label_sources"] = no_primary_key_sources
+
+    if projection_diagnostics and projection_diagnostics.get("duplicate_answer_rows"):
+        blockers.append("duplicate_projected_answer_rows")
+        diagnostics["projection_diagnostics"] = projection_diagnostics
+
+    if ordering_diagnostics and any(
+        ordering_diagnostics.get(key)
+        for key in (
+            "missing_order_by_for_limit",
+            "duplicate_order_key_in_returned_rows",
+            "unrepresented_order_by_tie_breakers",
+            "limit_boundary_tie",
+        )
+    ):
+        blockers.append("unstable_list_order")
+        diagnostics["ordering_diagnostics"] = ordering_diagnostics
+
+    if not blockers:
+        return None
+
+    return {
+        "blocking_for_submit_draft": True,
+        "message": (
+            "Do not use this query result as final label evidence until these "
+            "structural blockers are fixed. Rerun query with final "
+            "user-visible answer fields, use an aggregate, repair list "
+            "determinism, or choose another grounded label."
+        ),
+        "blockers": blockers,
+        **diagnostics,
+    }
+
+
 def _order_key_splits_answer_tie(
     rows: list[dict[str, object]],
     *,
@@ -1295,6 +1380,13 @@ async def query(
     projection_diagnostics = _projection_diagnostics(materialized)
     if projection_diagnostics is not None:
         result["projection_diagnostics"] = projection_diagnostics
+    submission_diagnostics = _final_label_submission_diagnostics(
+        column_sources=column_sources,
+        ordering_diagnostics=ordering_diagnostics,
+        projection_diagnostics=projection_diagnostics,
+    )
+    if submission_diagnostics is not None:
+        result["submission_diagnostics"] = submission_diagnostics
     return result
 
 
