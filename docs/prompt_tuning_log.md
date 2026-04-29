@@ -7729,6 +7729,67 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 179 — Non-visible source feedback must force clean relabeling
+
+- **질문**:
+  Iteration 178의 status wording 보강 뒤 다음 smoke에서 좋은 accepted가 나왔는가?
+
+- **실험/결과**:
+  `trial_61`은 solver rollout 없이 `synthesis_failed`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_61`
+  - composer/solver: OpenRouter Kimi K2.5
+  - accepted data: 없음
+
+  submit 흐름은 다음과 같았다.
+
+  1. 단일 eMAR 투약 기록 detail lookup: list row 1개라 `answer_contract_list_size_invalid`.
+  2. 입원 기간 약물 투약 5건: null medication, phrase/order/binding 문제.
+  3. ICU output measurements: request 문구가 `최신 순으`, `계앙`처럼 깨졌고, 시간 field가
+     non-user-visible source라 reject.
+  4. output field를 바꾸려 했지만 여전히 non-user-visible source/ordering/binding 문제가 남아
+     budget exhausted.
+
+- **reasoning 교차 분석**:
+  composer는 첫 feedback 후 list size 문제를 이해하고 admission-level list로 확장했다. 그러나
+  duplicate order/null 문제를 처리하다가 다른 surface로 옮겨갔고, blocked/internal field를 노출한 뒤
+  자연스러운 request 전체를 다시 쓰지 못했다. reasoning에서도 "Korean text issue"를 인지했지만
+  최종적으로 깨진 문구와 order binding 문제를 남겼다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - 단일 eMAR lookup은 low-quality rejected.
+  - eMAR list는 null output과 unstable order가 있어 low-quality rejected.
+  - outputevents list는 row count는 맞지만 non-user-visible source와 깨진 Korean request가 있어
+    low-quality rejected. 좋은 어려움이 아니다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 이미 `label_non_user_visible_source`는 precision 100 구조 검증으로
+  동작하고 있고, 이번 개선은 그 feedback reminder를 더 명확히 하는 것이다.
+
+  - `label_non_user_visible_source` feedback: blocked/internal field를 새 alias로 포장하지 말고,
+    user-visible non-handle answer field만 선택하거나 aggregate/다른 label을 고르라고 명시했다.
+  - 같은 feedback에 Request Contract reminder를 추가해, field/source를 교체할 때 user_request 전체를
+    target language로 깨끗하게 다시 쓰고 malformed phrase를 끼워 넣지 말라고 상기했다.
+
+  이는 새 정책 원천이 아니라 기존 Label Contract와 Request Contract의 적용이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_from_non_user_visible_query_source -q`
+  통과 (`1 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`111 passed`).
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

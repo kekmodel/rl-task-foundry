@@ -2816,7 +2816,7 @@ class SubmitDraftController:
                 " Each returned output field also needs its own natural role phrase; do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
-                "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata."  # noqa: E501
+                "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata. Rerun query with only user-visible non-handle answer fields, use an aggregate, or choose another label; do not expose the blocked field under a new alias. Request Contract reminder: rewrite the full user_request cleanly in the target language when replacing fields or source surfaces; do not splice malformed phrases."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE: (
                 "Rejected. Source Surface Policy reminder: the latest query exposes label values from a table without a primary key, so those rows cannot be revisited as stable records. Choose a primary-key-backed path for row values, or use a derived aggregate over the no-primary-key table; do not resubmit the same row-value label from that surface."  # noqa: E501
