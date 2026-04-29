@@ -159,24 +159,6 @@ def _snapshot():
     )
 
 
-def _no_primary_key_snapshot():
-    event_detail = TableProfile(
-        schema_name="public",
-        table_name="event_detail",
-        columns=[
-            _column("event_detail", "event_id"),
-            _column("event_detail", "amount", data_type="numeric"),
-        ],
-        primary_key=(),
-    )
-    return snapshot_from_graph(
-        SchemaGraph(
-            tables=[event_detail],
-            edges=[],
-        )
-    )
-
-
 def _duplicate_name_snapshot():
     public_customer = TableProfile(
         schema_name="public",
@@ -407,25 +389,6 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "direction": "asc",
         },
     ]
-    assert result["label_source_diagnostics"] == {
-        "non_user_visible_outputs": [
-            {
-                "output": "contact",
-                "kind": "select",
-                "table": "customer",
-                "column": "email",
-                "visibility": "internal",
-                "is_handle": False,
-                "is_primary_key": False,
-            }
-        ],
-        "submit_blocked": True,
-        "message": (
-            "Selected outputs marked blocked/internal cannot be submitted as "
-            "label fields. Do not infer visibility from table, column, or "
-            "domain names; use the latest query metadata."
-        ),
-    }
 
 
 @pytest.mark.asyncio
@@ -466,7 +429,6 @@ async def test_query_marks_label_sources_without_primary_key():
             "value_exposes_source": True,
         }
     ]
-    assert "label_source_diagnostics" not in result
 
 
 @pytest.mark.asyncio
@@ -620,14 +582,6 @@ async def test_query_reports_limit_boundary_tie_diagnostics():
         "returned_row_count": 3,
         "limit": 3,
         "limit_boundary_tie": True,
-        "selected_visible_tie_breaker_candidates": [
-            {
-                "output": "store_id",
-                "table": "customer",
-                "column": "store_id",
-                "visibility": "user_visible",
-            }
-        ],
     }
     assert len(conn.calls) == 2
     diagnostic_sql, _ = conn.calls[1]
@@ -680,14 +634,6 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
         ],
         "returned_row_count": 3,
         "limit": 3,
-        "selected_visible_tie_breaker_candidates": [
-            {
-                "output": "store_id",
-                "table": "customer",
-                "column": "store_id",
-                "visibility": "user_visible",
-            }
-        ],
     }
 
 
@@ -735,14 +681,6 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_without_limit():
             }
         ],
         "returned_row_count": 3,
-        "selected_visible_tie_breaker_candidates": [
-            {
-                "output": "store_id",
-                "table": "customer",
-                "column": "store_id",
-                "visibility": "user_visible",
-            }
-        ],
     }
 
 
@@ -1143,7 +1081,7 @@ async def test_query_join_chain_supports_composite_fk_edges():
 @pytest.mark.asyncio
 async def test_query_aggregate_count_without_group_by():
     session, conn = _stub_session()
-    result = await query(
+    await query(
         session,
         spec={
             "from": _from("rental", "r"),
@@ -1153,53 +1091,6 @@ async def test_query_aggregate_count_without_group_by():
     sql, _ = conn.calls[0]
     assert "COUNT(*) AS \"total\"" in sql
     assert "GROUP BY" not in sql
-    assert result["column_sources"] == [
-        {
-            "output": "total",
-            "kind": "aggregate",
-            "value_exposes_source": False,
-            "fn": "count",
-            "visibility": "derived",
-            "source_tables": [
-                {
-                    "table": "rental",
-                    "table_primary_key": ["rental_id"],
-                    "table_has_primary_key": True,
-                }
-            ],
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_query_aggregate_count_reports_no_primary_key_source_table():
-    conn = _RecordingConnection()
-    session = ComposerSession(snapshot=_no_primary_key_snapshot(), connection=conn)
-
-    result = await query(
-        session,
-        spec={
-            "from": _from("event_detail", "e"),
-            "aggregate": [_agg("count", "total")],
-        },
-    )
-
-    assert result["column_sources"] == [
-        {
-            "output": "total",
-            "kind": "aggregate",
-            "value_exposes_source": False,
-            "fn": "count",
-            "visibility": "derived",
-            "source_tables": [
-                {
-                    "table": "event_detail",
-                    "table_primary_key": [],
-                    "table_has_primary_key": False,
-                }
-            ],
-        }
-    ]
 
 
 @pytest.mark.asyncio

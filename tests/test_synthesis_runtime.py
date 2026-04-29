@@ -1440,10 +1440,6 @@ def test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_qu
     assert feedback is not None
     assert feedback["error"] == "submit_draft_required"
     assert "without blocking diagnostics" in str(feedback["message"])
-    assert "exact natural phrases for every output/order binding" in str(
-        feedback["message"]
-    )
-    assert "broad wording with missing binding phrases" in str(feedback["message"])
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 
@@ -2095,10 +2091,6 @@ async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
     message = await controller.submit(payload)
 
     assert "own natural role phrase" in message
-    assert "Duplicate output binding phrases" in message
-    assert "phrase='용량' fields=['dose', 'unit']" in message
-    assert "one natural output slot should not be split" in message
-    assert "returned field set is already correct" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
     diagnostics = monitor.records[-1]["diagnostics"]
@@ -2141,8 +2133,6 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     assert "exact contiguous substring" in first_message
     assert "When only phrase/binding errors remain" in first_message
     assert "repair the same label in place" in first_message
-    assert "Missing contract phrases" in first_message
-    assert "answer_phrase='요청에 없는 문구'" in first_message
     assert "same query/label row order" in first_message
     assert "opposite display-order phrase" in first_message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
@@ -2678,11 +2668,6 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
     assert "bare output noun" in message
     assert "Display-only output wording is not enough" in message
     assert "Do not reuse one broad order phrase" in message
-    assert "split wording into distinct request substrings" in message
-    assert "one primary order phrase and one tie-break phrase" in message
-    assert "Missing returned order label bindings" in message
-    assert "'stoptime'" in message
-    assert "set label_field to that returned label field" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 
@@ -2841,14 +2826,12 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "not a source table or SQL column" in schema_surface
     assert "names this field's distinct role" in schema_surface
     assert "do not reuse one vague phrase" in schema_surface
-    assert "include/show wording" in schema_surface
-    assert "reserve order/sort wording for row ordering" in schema_surface
     assert "preserve the source representation" in schema_surface
     assert "do not turn source status text into current/derived state" in schema_surface
-    assert "Status/type/category fields from related sources are not interchangeable" in (
+    assert "Status fields from related sources are not interchangeable" in (
         schema_surface
     )
-    assert "a broad object status/type/category phrase is invalid" in schema_surface
+    assert "a broad object status phrase is invalid" in schema_surface
     assert "broad object wording is not enough" in schema_surface
     assert "source record sequence into generated display rank" in schema_surface
     assert "Do not add parenthetical normalized choices" in schema_surface
@@ -2859,9 +2842,6 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "unless user_request asks for that text surface" in schema_surface
     assert "Date/time fields are source-sensitive too" in schema_surface
     assert "do not bind two time-like outputs to generic time phrases" in schema_surface
-    assert "One requested output slot should map to one label field" in schema_surface
-    assert "timestamp already includes date and time" in schema_surface
-    assert "Value/unit or date/time splits need separate fluent phrases" in schema_surface
     assert "stored/entered time" in schema_surface
     assert "generic latest/recent time wording is not enough" in schema_surface
     assert "multiple reachable source surfaces could answer them" in schema_surface
@@ -2984,7 +2964,6 @@ def test_submit_draft_records_missing_submit_protocol_feedback(tmp_path: Path) -
     assert controller.feedback_events == 1
     assert controller.last_feedback_error_codes == ("composer_submit_draft_missing",)
     assert controller.submissions_left() == 2
-    assert controller.data_tool_budget_feedback(tool_name="sample") is None
 
 
 def test_submit_draft_records_tool_budget_missing_submit_feedback(tmp_path: Path) -> None:
@@ -3017,27 +2996,6 @@ def test_submit_draft_records_tool_budget_missing_submit_feedback(tmp_path: Path
     assert controller.feedback_events == 1
     assert controller.last_feedback_error_codes == ("composer_submit_draft_missing",)
     assert controller.submissions_left() == 2
-    assert controller.data_tool_budget_feedback(tool_name="sample") is not None
-    assert controller.data_tool_budget_feedback(tool_name="query") is None
-
-    controller.record_atomic_tool_call(
-        tool_name="query",
-        params={"spec": {}},
-        result={"rows": [{"value": 1}]},
-    )
-    repeated_feedback = controller.data_tool_budget_feedback(tool_name="query")
-
-    assert repeated_feedback is not None
-    assert repeated_feedback["error"] == "submit_draft_required"
-    assert repeated_feedback["limit"] == 1
-    assert "Missing-submit boundary reminder" in str(repeated_feedback["message"])
-    assert "only one final query is allowed" in str(repeated_feedback["message"])
-    assert "must be the current label target" in str(repeated_feedback["message"])
-    assert "do not escape to a single-row detail" in str(repeated_feedback["message"])
-    assert "scalar labels require an aggregate query" in str(
-        repeated_feedback["message"]
-    )
-    assert "Do not switch targets" in str(repeated_feedback["message"])
 
 
 @pytest.mark.asyncio
@@ -3283,16 +3241,11 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "existing output field request phrases" in message
     assert "Do not add a narrowing row filter or lower the row count" in message
     assert "one grounded meaningful dimension" in message
-    assert (
-        "changes lookup, comparison, group/aggregate, visible ordering, or "
-        "related-row reasoning"
-    ) in message
+    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in message
     assert "Do not only add display fields for the same selected row" in message
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
     assert "related-row selection instead of adding another field" in message
-    assert "Related-row strengthening must be visible or aggregated" in message
-    assert "do not use hidden existence or primary-row filters" in message
     assert "row membership" not in message
     assert "Request Contract reminder" in message
     assert "copy visible context/source values exactly" in message
@@ -3356,16 +3309,11 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "existing output field request phrases" in message
     assert "Do not add a narrowing row filter or lower the row count" in message
     assert "one grounded meaningful dimension" in message
-    assert (
-        "changes lookup, comparison, group/aggregate, visible ordering, or "
-        "related-row reasoning"
-    ) in message
+    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in message
     assert "Do not only add display fields for the same selected row" in message
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
     assert "related-row selection instead of adding another field" in message
-    assert "Related-row strengthening must be visible or aggregated" in message
-    assert "do not use hidden existence or primary-row filters" in message
     assert "row membership" not in message
     assert "Request Contract reminder" in message
     assert "copy visible context/source values exactly" in message
@@ -3416,8 +3364,6 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
     assert "preserve the natural user_request wording" in message
     assert "prior label_json fields/values" in message
     assert "rewrite the full sentence cleanly" in message
-    assert "Missing contract phrases" in message
-    assert "answer_phrase='대여 횟수'" in message
     assert "ordinary target-language direction words" in message
     assert "malformed order phrase" in message
     assert "splicing label fields" in message
@@ -3467,7 +3413,6 @@ async def test_submit_draft_rejects_binding_phrase_absent_from_request(
     assert "label_field='customer_count'" in message
     assert "phrase='_customer_count_'" in message
     assert "Keep those label fields only if they still form a fluent user request" in message
-    assert "Add missing outputs with include/show wording" in message
     assert "rerun with a cleaner field set" in message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None
@@ -3934,8 +3879,7 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
     assert "does not uniquely determine" in message
     assert "preserve the current anchor and target" in message
     assert "natural visible tie-break" in message
-    assert "source record sequence is already the natural domain answer" in message
-    assert "new sequence/order wording" in message
+    assert "source record sequence instead of a generated display rank" in message
     assert "hidden handles" in message
     assert "ordinary target-language words" in message
     assert "not malformed terms" in message
@@ -4332,7 +4276,6 @@ async def test_submit_draft_rejects_duplicate_projected_list_rows(
     assert "distinct underlying source rows are not enough" in message
     assert "Preserve the list size" in message
     assert "add one natural visible distinguishing field or aggregate" in message
-    assert "Submit only if the repaired query diagnostics no longer report" in message
     assert "Do not add source sequence/reference/order wording solely" in message
     assert "rows are still duplicate" in message
     assert "choose another label instead of stacking fields" in message
@@ -4797,8 +4740,6 @@ async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
     message = await controller.submit(payload)
 
     assert "field marked internal or blocked" in message
-    assert "only by that metadata" in message
-    assert "not by table names, column names, or domain guesses" in message
     assert "only user-visible non-handle answer fields" in message
     assert "do not expose the blocked field under a new alias" in message
     assert "do not substitute a different visible field" in message
@@ -4856,10 +4797,11 @@ async def test_submit_draft_rejects_label_from_table_without_primary_key(
 
     message = await controller.submit(payload)
 
-    assert "table without a primary key as an answer source" in message
-    assert "Downstream answer tools require primary-key-backed tables" in message
+    assert "table without a primary key" in message
+    assert "stable records" in message
     assert "primary-key-backed path" in message
-    assert "row values or aggregates from the no-primary-key table" in message
+    assert "derived aggregate" in message
+    assert "do not resubmit the same row-value label" in message
     assert controller.last_feedback_error_codes == (
         "label_no_primary_key_source",
         "answer_contract_scalar_not_aggregate",
@@ -4868,7 +4810,7 @@ async def test_submit_draft_rejects_label_from_table_without_primary_key(
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_rejects_count_from_table_without_primary_key(
+async def test_submit_draft_allows_count_from_table_without_primary_key(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -4904,14 +4846,11 @@ async def test_submit_draft_rejects_count_from_table_without_primary_key(
                 "output": "detail_count",
                 "kind": "aggregate",
                 "fn": "count",
-                "visibility": "derived",
-                "source_tables": [
-                    {
-                        "table": "event_detail",
-                        "table_primary_key": [],
-                        "table_has_primary_key": False,
-                    }
-                ],
+                "table": "event_detail",
+                "column": "event_id",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "table_has_primary_key": False,
                 "value_exposes_source": False,
             }
         ],
@@ -4919,13 +4858,12 @@ async def test_submit_draft_rejects_count_from_table_without_primary_key(
 
     message = await controller.submit(payload)
 
-    assert "Downstream answer tools require primary-key-backed tables" in message
-    assert controller.last_feedback_error_codes == ("label_no_primary_key_source",)
-    assert controller.accepted_draft is None
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_rejects_aggregate_from_table_without_primary_key(
+async def test_submit_draft_allows_aggregate_from_table_without_primary_key(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -4973,9 +4911,8 @@ async def test_submit_draft_rejects_aggregate_from_table_without_primary_key(
 
     message = await controller.submit(payload)
 
-    assert "row values or aggregates from the no-primary-key table" in message
-    assert controller.last_feedback_error_codes == ("label_no_primary_key_source",)
-    assert controller.accepted_draft is None
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
 
 
 @pytest.mark.asyncio
@@ -5550,9 +5487,6 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
     assert "not later failed detours" in second_message
     assert "Restore that evaluated task's target scope" in second_message
     assert "predicates, row set, and output sources" in second_message
-    assert "Incremental diagnostics" in second_message
-    assert "no_new_structural_constraint" in second_message
-    assert "do not add lookup, comparison, group/aggregate" in second_message
     assert "Scalar aggregate retries may become grouped aggregate lists" in second_message
     assert "keep every prior output field/source" in second_message
     assert "including fields already added by earlier too-easy retries" in second_message

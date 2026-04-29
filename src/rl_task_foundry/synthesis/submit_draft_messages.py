@@ -102,132 +102,8 @@ def _format_missing_request_phrase_guidance(
         " Missing request phrases: "
         + "; ".join(details)
         + ". Keep those label fields only if they still form a fluent user "
-        "request. Add missing outputs with include/show wording, not row-order "
-        "wording; otherwise rerun with a cleaner field set or choose another label."
-    )
-
-
-def _format_missing_contract_phrase_guidance(
-    diagnostics: dict[str, object] | None,
-) -> str:
-    if diagnostics is None:
-        return ""
-    raw_details = diagnostics.get("answer_contract_missing_phrase_details")
-    details: list[str] = []
-    if isinstance(raw_details, list):
-        for item in raw_details[:3]:
-            if not isinstance(item, dict):
-                continue
-            path = item.get("path")
-            phrase = item.get("phrase")
-            if isinstance(path, str) and isinstance(phrase, str):
-                details.append(f"{path}={phrase!r}")
-    if not details:
-        raw_paths = diagnostics.get("answer_contract_missing_phrases")
-        if isinstance(raw_paths, list):
-            details = [str(path) for path in raw_paths[:3] if isinstance(path, str)]
-    if not details:
-        return ""
-    return (
-        " Missing contract phrases: "
-        + "; ".join(details)
-        + ". Label Contract reminder: each contract phrase must be copied as "
-        "one contiguous substring from user_request; if a natural phrase was "
-        "split by limit or order words, use a contiguous target substring or "
-        "rewrite the request and contract together."
-    )
-
-
-def _format_missing_order_label_binding_guidance(
-    diagnostics: dict[str, object] | None,
-) -> str:
-    if diagnostics is None:
-        return ""
-    binding_diagnostics = diagnostics.get("answer_contract_binding_diagnostics")
-    if not isinstance(binding_diagnostics, dict):
-        return ""
-    raw_fields = binding_diagnostics.get("missing_order_label_bindings")
-    if not isinstance(raw_fields, list):
-        return ""
-    fields = [repr(field) for field in raw_fields[:3] if isinstance(field, str)]
-    if not fields:
-        return ""
-    return (
-        " Missing returned order label bindings: "
-        + ", ".join(fields)
-        + ". Tool schema reminder: when a query.order_by key is returned in "
-        "label_json, the matching answer_contract.order_bindings item must "
-        "set label_field to that returned label field; use null only for an "
-        "ordered key that is not returned. Display/include wording for that "
-        "field is not enough; user_request needs a separate natural row-order "
-        "phrase for the primary order or tie-break."
-    )
-
-
-def _format_incremental_error_guidance(
-    diagnostics: dict[str, object] | None,
-) -> str:
-    if diagnostics is None:
-        return ""
-    raw_errors = diagnostics.get("answer_contract_incremental_errors")
-    if not isinstance(raw_errors, list):
-        return ""
-    errors = [str(error) for error in raw_errors[:5] if isinstance(error, str)]
-    if not errors:
-        return ""
-    guidance = " Incremental diagnostics: " + ", ".join(errors) + "."
-    if any(
-        error in {"list_output_only", "no_new_structural_constraint"}
-        for error in errors
-    ):
-        guidance += (
-            " Difficulty-Up Policy reminder: same-row output additions only "
-            "widen the displayed answer; they do not add lookup, comparison, "
-            "group/aggregate, visible-order, or related-row reasoning."
-        )
-    if any(
-        error in {"operation_changed", "list_row_filter_added", "cardinality_weakened"}
-        for error in errors
-    ):
-        guidance += (
-            " Restore the last solver-evaluated row set, order, limit, and "
-            "output sources before adding a strengthening dimension; remove "
-            "target switches, added row filters, or cardinality changes."
-        )
-    return guidance
-
-
-def _format_duplicate_output_binding_guidance(
-    diagnostics: dict[str, object] | None,
-) -> str:
-    if diagnostics is None:
-        return ""
-    binding_diagnostics = diagnostics.get("answer_contract_binding_diagnostics")
-    if not isinstance(binding_diagnostics, dict):
-        return ""
-    raw_duplicates = binding_diagnostics.get("duplicate_output_binding_phrases")
-    if not isinstance(raw_duplicates, list):
-        return ""
-    details: list[str] = []
-    for item in raw_duplicates[:3]:
-        if not isinstance(item, dict):
-            continue
-        phrase = item.get("requested_by_phrase")
-        raw_fields = item.get("label_fields")
-        if not isinstance(phrase, str) or not isinstance(raw_fields, list):
-            continue
-        fields = [str(field) for field in raw_fields if isinstance(field, str)]
-        if fields:
-            details.append(f"phrase={phrase!r} fields={fields!r}")
-    if not details:
-        return ""
-    return (
-        " Duplicate output binding phrases: "
-        + "; ".join(details)
-        + ". Label Contract reminder: one natural output slot should not be "
-        "split across multiple label fields. Rerun the same target with one "
-        "field per requested slot, or rewrite the request with distinct fluent "
-        "phrases when the fields are genuinely separate."
+        "request; otherwise rerun with a cleaner field set or choose another "
+        "label."
     )
 
 
@@ -242,16 +118,13 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
         "current anchor and target; for list labels preserve the evaluated row "
         "set, order, limit, source meanings, and existing output field request "
         "phrases. Do not add a narrowing row filter or lower the row count as a "
-        "difficulty-up move. Add one grounded meaningful dimension with "
-        "structural effect, supported by new evidence that changes lookup, "
-        "comparison, group/aggregate, visible ordering, or related-row "
-        "reasoning while keeping those rows. Do not only add display "
+        "difficulty-up move. Add one grounded meaningful dimension supported by "
+        "new evidence that changes lookup, comparison, visible ordering, or "
+        "related-row reasoning while keeping those rows. Do not only add display "
         "fields for the same selected row; same-row display/derived fields alone "
         "are still too direct. If that was just tried, switch answer work with "
         "aggregate, comparison, grouping, visible ordering, or related-row "
-        "selection instead of adding another field. Related-row strengthening "
-        "must be visible or aggregated; do not use hidden existence or "
-        "primary-row filters as the added dimension. "
+        "selection instead of adding another field. "
         "Request Contract reminder: keep user_request fluent and copy visible "
         "context/source values exactly; do not translate/transliterate them "
         "while strengthening. Do not switch topic or table family."

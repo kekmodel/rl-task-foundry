@@ -348,10 +348,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
     assert "hidden helper row-set controls" in descriptions["query"]["$.spec.where"]
     assert "Source Surface Policy" in descriptions["query"]["$.spec.where"]
-    assert "implies status, type, or category membership" in descriptions["query"][
+    assert "implies status or type membership" in descriptions["query"][
         "$.spec.where"
     ]
-    assert "records plus that status/type/category field" in descriptions["query"][
+    assert "records plus that status/type field" in descriptions["query"][
         "$.spec.where"
     ]
     assert "Blocked or internal handle values" in descriptions["query"][
@@ -363,15 +363,6 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "select only values the user_request asks to receive" in descriptions[
         "query"
     ]["$.spec.select"]
-    assert "One requested output slot should become one selected field" in descriptions[
-        "query"
-    ]["$.spec.select"]
-    assert "timestamp already carries date and time" in descriptions["query"][
-        "$.spec.select"
-    ]
-    assert "Split value/unit only when both have distinct natural request phrases" in (
-        descriptions["query"]["$.spec.select"]
-    )
     assert "Use where/order_by for helper context" in descriptions["query"][
         "$.spec.select"
     ]
@@ -397,12 +388,8 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "different blocked source role" in descriptions["query"][
         "$.spec.select[].as"
     ]
-    assert "source status/type/category text" in descriptions[
-        "query"
-    ]["$.spec.select[].as"]
-    assert "broad object state/type/category" in descriptions[
-        "query"
-    ]["$.spec.select[].as"]
+    assert "source status text" in descriptions["query"]["$.spec.select[].as"]
+    assert "broad object status" in descriptions["query"]["$.spec.select[].as"]
     assert "current/derived state wording" in descriptions["query"][
         "$.spec.select[].as"
     ]
@@ -426,10 +413,6 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "naturally requestable distinct source role" in descriptions["query"][
         "$.spec.select"
     ]
-    assert "Process/status/type/category outputs are not passive width" in (
-        descriptions["query"]["$.spec.select"]
-    )
-    assert "exact source/lifecycle surface" in descriptions["query"]["$.spec.select"]
     assert "source sequence/reference/order numbers" in descriptions["query"][
         "$.spec.select"
     ]
@@ -441,10 +424,6 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]["$.spec.select"]
     assert "blocked/internal source" in descriptions["query"]["$.spec.select"]
     assert "blocked source role" in descriptions["query"]["$.spec.select"]
-    assert "label_source_diagnostics.submit_blocked" in descriptions["query"][
-        "$.spec.select"
-    ]
-    assert "rerun with visible outputs" in descriptions["query"]["$.spec.select"]
     assert "For aggregate queries, do not use select" in descriptions["query"][
         "$.spec.select"
     ]
@@ -486,15 +465,6 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "generic latest/recent time wording is not enough" in descriptions[
         "query"
     ]["$.spec.order_by"]
-    assert "both start and end times are selected or reachable" in descriptions[
-        "query"
-    ]["$.spec.order_by"]
-    assert "plain recent/latest is ambiguous" in descriptions["query"][
-        "$.spec.order_by"
-    ]
-    assert "request start-time or end-time recency explicitly" in descriptions[
-        "query"
-    ]["$.spec.order_by"]
     assert "choose another label or return tied rows" in descriptions["query"][
         "$.spec.order_by"
     ]
@@ -517,11 +487,6 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
-    assert "Task Shapes policy before the final label query" in descriptions[
-        "query"
-    ]["$.spec.limit"]
-    assert "3-5 row boundary" in descriptions["query"]["$.spec.limit"]
-    assert "unbounded row-list query" in descriptions["query"]["$.spec.limit"]
     assert "List Determinism Policy" in descriptions["query"]["$.spec.limit"]
     assert "final list query with limit" in descriptions["query"]["$.spec.limit"]
     assert "same fixed size requested and bound" in descriptions["query"]["$.spec.limit"]
@@ -531,18 +496,11 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"
     ]
-    assert "primary-key-backed tables" in descriptions["query"]["$.spec.aggregate"]
-    assert "do not aggregate over a table without a primary key" in descriptions[
-        "query"
-    ]["$.spec.aggregate"]
-    assert "answering tool surface cannot reproduce it" in descriptions["query"][
-        "$.spec.aggregate"
-    ]
     assert "Do not combine aggregate with select" in descriptions["query"][
         "$.spec.aggregate"
     ]
     assert "projection diagnostics" in descriptions["query"]["$.spec"]
-    assert "Status/type/category/classification/result outputs must name" in (
+    assert "Status/type/result outputs must name the selected source role" in (
         descriptions["query"]["$.spec"]
     )
     assert "indistinguishable" in descriptions["query"]["$.spec"]
@@ -552,14 +510,6 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "do not submit that result as final label evidence" in descriptions[
         "query"
     ]["$.spec"]
-    assert "selected_visible_tie_breaker_candidates" in descriptions["query"]["$.spec"]
-    assert "already selected visible outputs" in descriptions["query"]["$.spec"]
-    assert "natural requested tie-break" in descriptions["query"]["$.spec"]
-    assert "rewrite user_request" in descriptions["query"]["$.spec"]
-    assert "selected output wording alone is not order wording" in descriptions[
-        "query"
-    ]["$.spec"]
-    assert "fixed limits still need limit phrases" in descriptions["query"]["$.spec"]
     assert "do not add source sequence/reference/order fields solely" in descriptions[
         "query"
     ]["$.spec"]

@@ -266,7 +266,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "formatting quirks" in instructions
     assert "choose another label" in instructions
     assert "Exact substring binding never justifies broken wording" in instructions
-    assert "invented/diagnostic phrases" in instructions
+    assert "invented terms, diagnostic phrases" in instructions
     assert "one natural request" in instructions
     assert "Derive `user_request`/`topic` from label" in instructions
     assert "request exact label fields/row controls" in instructions
@@ -274,24 +274,21 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "if diagnostics pass, submit immediately" in instructions
     assert "no decorative global answer" in instructions
     assert "Difficulty-Up Policy" in instructions
-    assert "smallest grounded structural dimension" in instructions
-    assert "no fixed ladder" in instructions
+    assert "smallest grounded related/derived dimension" in instructions
+    assert "there is no fixed ladder" in instructions
     assert "baseline is the last evaluated draft" in instructions
     assert "preserve anchor/target" in instructions
     assert "Lists preserve row set/order/limit" in instructions
     assert "scalar aggregates may add group/compare" in instructions
-    assert "smallest grounded structural dimension" in instructions
-    assert "Real strengthening changes work" in instructions
+    assert "smallest grounded related/derived dimension" in instructions
+    assert "Real strengthening changes answer work" in instructions
     assert "not passive same-row fields" in instructions
     assert "If just tried, switch work" in instructions
     assert "do not add narrowing filters" in instructions
     assert "remove filters" in instructions
     assert "output fields/source meanings/phrases" in instructions
     assert "Add one dimension that keeps the same rows" in instructions
-    assert (
-        "changes lookup, comparison, group/aggregate, visible ordering, or "
-        "related-row reasoning"
-    ) in instructions
+    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in instructions
     assert "ask for it in user_request/answer_contract" in instructions
     assert "shrink the fixed list" in instructions
     assert "replace fields" in instructions
@@ -318,8 +315,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "use that source or name the role" in instructions
     assert "visible cannot replace hidden" in instructions
     assert "If no primary key" in instructions
-    assert "primary-key-backed source/path" in instructions
-    assert "no no-PK row values or aggregates" in instructions
+    assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
     assert "Timestamp/date surfaces differ" in instructions
     assert "event time, stored/entered time, scheduled time" in instructions
@@ -350,7 +346,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "hidden handle" in instructions
     assert "hidden current subject/context" in instructions
     assert "Bind modifiers/filters to exact object/scope" in instructions
-    assert "Non-null/status/type/category filters need row-set wording" in instructions
+    assert "Non-null/status/type filters need row-set wording" in instructions
     assert "matching query.where" in instructions
     assert "not output names" in instructions
     assert "If only returned, ask records plus field" in instructions
@@ -374,16 +370,16 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "entity={P.pk}; P->sib" in instructions
     assert "Good: rows share parent" in instructions
     assert "Do not attach `entity` to a global report" in instructions
-    assert "Copy scoped evidence exactly" in instructions
+    assert "Copy scoped evidence values exactly" in instructions
     assert "scoped evidence" in instructions
-    assert "no translate/transliterate" in instructions
+    assert "do not translate/transliterate them" in instructions
     assert "Keep request compact" in instructions
     assert "Exact substring binding never justifies broken wording" in instructions
-    assert "key translations" in instructions
-    assert "Field keys stay JSON" in instructions
-    assert "Fields use include/with" in instructions
-    assert "order/sort only for row order" in instructions
-    assert "roles/tie-breaks cannot fit one natural request" in instructions
+    assert "misleading column/key translations" in instructions
+    assert "Field keys stay in JSON" in instructions
+    assert "fields/source roles/tie-breaks cannot fit one natural request" in (
+        instructions
+    )
     assert "do not expose it" in instructions
     assert "exact object/scope/source" in instructions
     assert not re.search(r"[가-힣]", instructions)
@@ -405,19 +401,16 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "semantic API-style field names" in instructions
     assert "not raw DB aliases" in instructions
     assert "values stay user-visible non-handles" in instructions
-    assert "by metadata, not names" in instructions
     assert "Bind answer representation exactly" in instructions
     assert "no code/reference-to-display" in instructions
     assert "source-field-to-related-field upgrade" in instructions
     assert "user_request names role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
-    assert "Source-sensitive result/status/type/category/classification fields/" in (
-        instructions
-    )
+    assert "Source-sensitive result/status/type fields/filters" in instructions
     assert "query-path source role" in instructions
     assert "request must name it" in instructions
-    assert "Source status/type/category text is source-specific" in instructions
-    assert "broad object state/type/category" in instructions
+    assert "Source status text is source-specific" in instructions
+    assert "broad object status" in instructions
     assert "current/derived state" in instructions
     assert "no normalized choices" in instructions
     assert "Note/comment text needs that surface" in instructions
@@ -432,16 +425,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "several reachable sources fit" in instructions
     assert "`query.select` includes only returned label fields" in instructions
     assert "every selected field becomes exact answer" in instructions
-    assert "One natural output slot maps to one label field" in instructions
-    assert "timestamp already carries date and time" in instructions
-    assert "split date/time or value/unit only when `user_request` has separate" in (
-        instructions
-    )
     assert "distinguishable through requested output fields" in instructions
     assert "duplicate projected answer rows" in instructions
     assert "source rows differ" in instructions
-    assert "Submit only if diagnostics clear" in instructions
-    assert "only sequence/reference/order can distinguish them" in (
+    assert "if only sequence/reference/record-order can distinguish them" in (
         instructions
     )
     assert "Do not select helper values unless" in instructions

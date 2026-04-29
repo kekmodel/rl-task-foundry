@@ -26,10 +26,6 @@ from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import StrictModel
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.submit_draft_messages import (
-    _format_duplicate_output_binding_guidance,
-    _format_incremental_error_guidance,
-    _format_missing_contract_phrase_guidance,
-    _format_missing_order_label_binding_guidance,
     _format_missing_request_phrase_guidance,
     _format_ungrounded_value_guidance,
     _render_structured_message,
@@ -224,10 +220,9 @@ class AnswerOutputBinding(StrictModel):
             "source representation; do not turn source status text into "
             "current/derived state or boolean completion wording, or source "
             "record sequence into generated display rank. "
-            "Status/type/category fields from related sources are not "
-            "interchangeable; a broad object status/type/category phrase is "
-            "invalid when another reachable source has its own surface. Do "
-            "not add "
+            "Status fields from related sources are not interchangeable; "
+            "a broad object status phrase is invalid when another reachable "
+            "source has its own status. Do not add "
             "sequence/reference/order fields during repair merely to satisfy "
             "tie-break or binding feedback. Do not add "
             "parenthetical normalized "
@@ -238,15 +233,9 @@ class AnswerOutputBinding(StrictModel):
             "bind note/comment/description text to broad result/value wording "
             "unless user_request asks for that text surface. Date/time fields "
             "are source-sensitive too; do not bind two time-like outputs to "
-            "generic time phrases. One requested output slot should map to "
-            "one label field; if a timestamp already includes date and time, "
-            "bind only that timestamp unless date and time are separately "
-            "requested. Value/unit or date/time splits need separate fluent "
-            "phrases. Use distinct natural roles such as event "
+            "generic time phrases. Use distinct natural roles such as event "
             "time, value timestamp, scheduled time, or stored/entered time "
             "only when user_request can say that role fluently."
-            " Ask output field lists with include/show wording; reserve "
-            "order/sort wording for row ordering and order_bindings."
             " The phrase must remain fluent customer wording; do not create it "
             "by translating a label key or column-like role into a misleading "
             "term. If the role cannot be requested naturally, omit that label "
@@ -452,9 +441,8 @@ class SubmitDraftPayload(StrictModel):
             "source/lifecycle role in ordinary language. Before submitting, "
             "ask whether another reachable source would answer the same broad "
             "request with different rows; if so, rewrite the request or choose "
-            "another label. For status/type/category/classification/result "
-            "outputs, broad object wording is not enough when related source "
-            "surfaces can differ. "
+            "another label. For status/type/result outputs, broad object "
+            "wording is not enough when related source statuses can differ. "
             "Do not call one "
             "lifecycle surface another, such as order/request/event/"
             "fulfillment/log, just because fields overlap. "
@@ -845,22 +833,7 @@ def _contract_component_phrase_errors(
     *,
     user_request: str,
 ) -> list[str]:
-    return [
-        detail["path"]
-        for detail in _contract_component_phrase_error_details(
-            contract,
-            user_request=user_request,
-        )
-        if isinstance(detail.get("path"), str)
-    ]
-
-
-def _contract_component_phrase_error_details(
-    contract: AnswerContract,
-    *,
-    user_request: str,
-) -> list[dict[str, str]]:
-    missing_phrases: list[dict[str, str]] = []
+    missing_phrases: list[str] = []
     components: list[tuple[str, str | None]] = [
         ("answer_phrase", contract.answer_phrase),
         ("limit", contract.limit_phrase),
@@ -888,7 +861,7 @@ def _contract_component_phrase_error_details(
             phrase=phrase,
             user_request=user_request,
         ):
-            missing_phrases.append({"path": path, "phrase": phrase})
+            missing_phrases.append(path)
     return missing_phrases
 
 
@@ -1838,6 +1811,8 @@ def _query_visibility_errors(
     label_sources: list[dict[str, object]] = []
     unstable_record_sources: list[dict[str, object]] = []
     for source in column_sources:
+        if source.get("value_exposes_source") is not True:
+            continue
         source_payload = {
             key: source.get(key)
             for key in (
@@ -1847,31 +1822,18 @@ def _query_visibility_errors(
                 "column",
                 "visibility",
                 "table_has_primary_key",
-                "source_tables",
             )
             if key in source
         }
-        no_primary_key_sources: list[object] = []
-        if source.get("table_has_primary_key") is False:
-            table = source.get("table")
-            no_primary_key_sources.append(table if isinstance(table, str) else source_payload)
-        raw_source_tables = source.get("source_tables")
-        if isinstance(raw_source_tables, list):
-            for source_table in raw_source_tables:
-                if (
-                    isinstance(source_table, dict)
-                    and source_table.get("table_has_primary_key") is False
-                ):
-                    no_primary_key_sources.append(source_table)
-        if no_primary_key_sources:
-            source_payload["no_primary_key_sources"] = no_primary_key_sources[
-                :3
-            ]
-            unstable_record_sources.append(source_payload)
-        if source.get("value_exposes_source") is not True:
-            continue
         if blocks_direct_label_exposure(source.get("visibility")):
             label_sources.append(source_payload)
+        # Aggregates are reproducible from their query row set; they do not
+        # require revisiting one source row as a stable record.
+        if (
+            source.get("table_has_primary_key") is False
+            and source.get("kind") != "aggregate"
+        ):
+            unstable_record_sources.append(source_payload)
 
     codes: list[SubmitDraftErrorCode] = []
     diagnostics: dict[str, object] = {}
@@ -1945,7 +1907,6 @@ class SubmitDraftController:
     _limit_repair_scope: LimitRepairScope | None = field(default=None, init=False)
     _feedback_events: int = field(default=0, init=False)
     _last_feedback_error_codes: tuple[str, ...] = field(default=(), init=False)
-    _missing_submit_after_tool_budget: bool = field(default=False, init=False)
     _locked_anchor_entity: dict[str, object] | None = field(default=None, init=False)
     _observed_response_strings: set[str] = field(default_factory=set, init=False)
     _terminated_too_hard: bool = field(default=False, init=False)
@@ -2013,27 +1974,7 @@ class SubmitDraftController:
             len(self._raw_atomic_tool_calls)
             - self._tool_call_count_at_last_protocol_boundary
         )
-        query_call_since_boundary = self._latest_query_call_since_protocol_boundary()
         last_feedback_error_codes = set(self._last_feedback_error_codes)
-        if self._missing_submit_after_tool_budget:
-            if tool_name == "query" and query_call_since_boundary is None:
-                return None
-            return {
-                "error": "submit_draft_required",
-                "message": (
-                    "ToolBudgetFeedback: Missing-submit boundary reminder: "
-                    "the previous run stopped after ToolBudgetFeedback without "
-                    "submit_draft. This remains a hard protocol boundary. "
-                    "Call submit_draft now; only one final query is allowed "
-                    "after that boundary when no query has run yet, and it "
-                    "must be the current label target. Task Shapes still apply: "
-                    "do not escape to a single-row detail, and scalar labels "
-                    "require an aggregate query. Do not switch targets or call "
-                    "more data tools."
-                ),
-                "calls_since_boundary": calls_since_boundary,
-                "limit": 1,
-            }
         if (
             last_feedback_error_codes
             and last_feedback_error_codes <= _CONTRACT_ONLY_REPAIR_ERROR_VALUES
@@ -2052,6 +1993,7 @@ class SubmitDraftController:
                 "calls_since_boundary": calls_since_boundary,
                 "limit": 0,
             }
+        query_call_since_boundary = self._latest_query_call_since_protocol_boundary()
         if not self.attempts and self._feedback_events == 0:
             if calls_since_boundary < FIRST_SUBMIT_MAX_DATA_TOOLS:
                 return None
@@ -2085,9 +2027,6 @@ class SubmitDraftController:
                 "query has returned label values without blocking diagnostics, "
                 "submit them now. If diagnostics still block the label, this "
                 "candidate should have been abandoned before this boundary. "
-                "Label Contract still applies: submit only when user_request "
-                "contains exact natural phrases for every output/order binding; "
-                "do not use broad wording with missing binding phrases. "
                 "This is a hard protocol boundary, not a data result. Your next tool "
                 "call must be submit_draft unless no repair query has returned "
                 "label values; in that case run exactly one final label query, "
@@ -2271,7 +2210,6 @@ class SubmitDraftController:
                 "do not continue data-tool exploration inside the same run."
             )
             next_step = budget_feedback
-        self._missing_submit_after_tool_budget = budget_feedback is not None
         message = _render_structured_message(
             kind="FeedbackError",
             primary=primary,
@@ -2303,7 +2241,6 @@ class SubmitDraftController:
         )
 
     async def submit(self, payload: SubmitDraftPayload) -> str:
-        self._missing_submit_after_tool_budget = False
         if self.accepted_draft is not None:
             return _render_structured_message(
                 kind="Accepted",
@@ -2402,12 +2339,6 @@ class SubmitDraftController:
                 contract_phrase_errors[
                     : self.config.synthesis.runtime.diagnostic_item_limit
                 ]
-            )
-            invalid_diagnostics["answer_contract_missing_phrase_details"] = (
-                _contract_component_phrase_error_details(
-                    payload.answer_contract,
-                    user_request=payload.user_request,
-                )[: self.config.synthesis.runtime.diagnostic_item_limit]
             )
 
         latest_query_call = self._latest_successful_query_call_since_last_submission()
@@ -2975,7 +2906,7 @@ class SubmitDraftController:
                 " When this appears with phrase feedback, repair the same label by adding the exact fixed-size phrase to user_request and limit_phrase; do not ask for all/every matching records, remove the limit, or only edit output/order phrases."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
-                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. Sequence/rank-like keys are valid only when the source record sequence is already the natural domain answer; otherwise choose another label. Do not repair this with hidden handles, artificial id wording, or new sequence/order wording. Request Contract reminder: preserve fluent request wording; use ordinary target-language words, not malformed terms. If a repair needs long/mechanical field lists, choose another label instead of stacking tie-break fields."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. If the tie-break is sequence/rank-like, request wording must name source record sequence instead of a generated display rank. Do not repair this with hidden handles or artificial id wording. Request Contract reminder: preserve fluent request wording; use ordinary target-language words, not malformed terms. If a repair needs long/mechanical field lists, choose another label instead of stacking tie-break fields."  # noqa: E501
                 " If two order keys still leave duplicate_order_key or limit_boundary_tie diagnostics, choose another label or return tied rows; do not submit wording-only repairs."  # noqa: E501
                 " If query ordering_diagnostics still flags ambiguity, do not resubmit with wording-only changes; rerun a repaired label query or choose another label."  # noqa: E501
             ),
@@ -2983,7 +2914,7 @@ class SubmitDraftController:
                 "Rejected. List Determinism Policy reminder: list order may use at most one natural visible tie-break, so query.order_by must have no more than two keys total. If more order keys are needed, choose another label or return tied rows instead of building a long mechanical sort contract."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
-                "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields; distinct underlying source rows are not enough. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query. Submit only if the repaired query diagnostics no longer report duplicate answer rows. Do not add source sequence/reference/order wording solely to make duplicate rows unique. Request Contract reminder: if rows are still duplicate or the repair needs long/mechanical field lists, choose another label instead of stacking fields."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields; distinct underlying source rows are not enough. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query and submit_draft. Do not add source sequence/reference/order wording solely to make duplicate rows unique. Request Contract reminder: if rows are still duplicate or the repair needs long/mechanical field lists, choose another label instead of stacking fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_SIZE_INVALID: (
                 "Rejected. Task Shapes reminder: list labels must return 3-5 rows. A 1-2 row list is too direct; do not keep probing the same target after it still returns fewer than 3 rows. Choose another scoped list with 3-5 distinguishable rows, or use a scalar aggregate when the request asks for a summary."  # noqa: E501
@@ -3006,13 +2937,13 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
                 "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request. If an order key is only a tie-break, user_request still needs natural visible tie-break wording before that key can be bound; otherwise rerun query without that order key or return tied rows."  # noqa: E501
-                " Each returned output field also needs its own natural role phrase; rewrite user_request so every binding phrase appears exactly there, instead of repairing only answer_contract. Do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different keys or add an opposite display-order phrase. For multi-key order, split wording into distinct request substrings: one primary order phrase and one tie-break phrase. List Determinism Policy reminder: do not justify a source sequence/reference/order field that was added as a tie-break; remove that field/order key, return tied rows, or choose another label. When only phrase/binding errors remain and the returned field set is already correct, do not call data tools; repair the same label in place."  # noqa: E501
+                " Each returned output field also needs its own natural role phrase; rewrite user_request so every binding phrase appears exactly there, instead of repairing only answer_contract. Do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different keys or add an opposite display-order phrase. List Determinism Policy reminder: do not justify a source sequence/reference/order field that was added as a tie-break; remove that field/order key, return tied rows, or choose another label. When only phrase/binding errors remain, do not call data tools; repair the same label in place."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
-                "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata. Visibility is decided only by that metadata, not by table names, column names, or domain guesses. Rerun query with only user-visible non-handle answer fields, use an aggregate, or choose another label; do not expose the blocked field under a new alias, and do not substitute a different visible field unless user_request naturally asks for that selected source role. Request Contract reminder: rewrite the full user_request cleanly in the target language when replacing fields or source surfaces; do not splice malformed phrases."  # noqa: E501
+                "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata. Rerun query with only user-visible non-handle answer fields, use an aggregate, or choose another label; do not expose the blocked field under a new alias, and do not substitute a different visible field unless user_request naturally asks for that selected source role. Request Contract reminder: rewrite the full user_request cleanly in the target language when replacing fields or source surfaces; do not splice malformed phrases."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE: (
-                "Rejected. Source Surface Policy reminder: the latest query uses a table without a primary key as an answer source. Downstream answer tools require primary-key-backed tables for row values and aggregates, so choose a primary-key-backed path/source instead of row values or aggregates from the no-primary-key table."  # noqa: E501
+                "Rejected. Source Surface Policy reminder: the latest query exposes row values from a table without a primary key, so those rows cannot be revisited as stable records. Choose a primary-key-backed path for row values, or use a derived aggregate over the no-primary-key table; do not resubmit the same row-value label from that surface."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
@@ -3048,22 +2979,9 @@ class SubmitDraftController:
             )
         if (
             error_codes
-            and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL
-        ):
-            primary += _format_incremental_error_guidance(diagnostics)
-        if (
-            error_codes
             and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING
         ):
-            primary += _format_missing_contract_phrase_guidance(diagnostics)
             primary += _format_missing_request_phrase_guidance(diagnostics)
-            primary += _format_missing_order_label_binding_guidance(diagnostics)
-        if (
-            error_codes
-            and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING
-        ):
-            primary += _format_missing_order_label_binding_guidance(diagnostics)
-            primary += _format_duplicate_output_binding_guidance(diagnostics)
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (

@@ -301,7 +301,7 @@ Purpose:
 
 Success criteria:
 
-- no false positive on primary-key-backed aggregates or PK-backed related displays
+- no false positive on derived aggregates or PK-backed related displays
 - fewer low-quality rejected drafts caused by unreachable source paths
 
 Stop criteria:

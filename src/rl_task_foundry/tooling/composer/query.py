@@ -31,10 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_task_foundry.infra.visibility import (
-    blocks_direct_label_exposure,
-    is_user_visible_visibility,
-)
+from rl_task_foundry.infra.visibility import is_user_visible_visibility
 from rl_task_foundry.tooling.common.edges import TypedEdge, resolve_edge
 from rl_task_foundry.tooling.common.payload import ensure_int as _require_int
 from rl_task_foundry.tooling.common.schema import TableSpec
@@ -646,7 +643,6 @@ def _column_source_payload(
     resolved: _ResolvedRef | None,
     value_exposes_source: bool,
     fn: str | None = None,
-    source_tables: list[TableSpec] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "output": output,
@@ -657,15 +653,6 @@ def _column_source_payload(
         payload["fn"] = fn
     if resolved is None:
         payload["visibility"] = "derived"
-        if source_tables is not None:
-            payload["source_tables"] = [
-                {
-                    "table": table.handle,
-                    "table_primary_key": list(table.primary_key),
-                    "table_has_primary_key": bool(table.primary_key),
-                }
-                for table in source_tables
-            ]
         return payload
     column = resolved.table.column(resolved.column)
     payload.update(
@@ -680,43 +667,6 @@ def _column_source_payload(
         }
     )
     return payload
-
-
-def _label_source_diagnostics(
-    column_sources: list[dict[str, object]],
-) -> dict[str, object] | None:
-    blocked_outputs: list[dict[str, object]] = []
-    for source in column_sources:
-        if source.get("value_exposes_source") is not True:
-            continue
-        if not blocks_direct_label_exposure(source.get("visibility")):
-            continue
-        blocked_outputs.append(
-            {
-                key: source.get(key)
-                for key in (
-                    "output",
-                    "kind",
-                    "table",
-                    "column",
-                    "visibility",
-                    "is_handle",
-                    "is_primary_key",
-                )
-                if key in source
-            }
-        )
-    if not blocked_outputs:
-        return None
-    return {
-        "non_user_visible_outputs": blocked_outputs,
-        "submit_blocked": True,
-        "message": (
-            "Selected outputs marked blocked/internal cannot be submitted as "
-            "label fields. Do not infer visibility from table, column, or "
-            "domain names; use the latest query metadata."
-        ),
-    }
 
 
 def _referenced_column_payload(
@@ -957,41 +907,6 @@ def _unrepresented_order_by_tie_breakers(
     return unrepresented
 
 
-def _selected_visible_tie_breaker_candidates(
-    rows: list[dict[str, object]],
-    *,
-    represented_outputs: list[str],
-    answer_outputs: list[str],
-    column_sources: list[dict[str, object]],
-) -> list[dict[str, object]]:
-    candidates: list[dict[str, object]] = []
-    seen: set[str] = set(represented_outputs)
-    for source in column_sources:
-        output = source.get("output")
-        if not isinstance(output, str) or output in seen:
-            continue
-        seen.add(output)
-        if not is_user_visible_visibility(source.get("visibility")):
-            continue
-        if source.get("is_handle") is True:
-            continue
-        if not _order_key_splits_answer_tie(
-            rows,
-            represented_prefix=represented_outputs,
-            diagnostic_output=output,
-            answer_outputs=answer_outputs,
-        ):
-            continue
-        candidates.append(
-            {
-                key: source.get(key)
-                for key in ("output", "table", "column", "visibility")
-                if key in source
-            }
-        )
-    return candidates
-
-
 def _handle_order_by_columns(
     order_entries: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -1075,12 +990,6 @@ def _ordering_diagnostics(
         order_entries,
         answer_outputs=answer_outputs,
     )
-    selected_visible_tie_breaker_candidates = _selected_visible_tie_breaker_candidates(
-        diagnostic_rows,
-        represented_outputs=order_outputs,
-        answer_outputs=answer_outputs,
-        column_sources=column_sources,
-    )
     handle_order_by_columns = _handle_order_by_columns(order_entries)
     limit_boundary_tie = (
         _limit_boundary_has_answer_distinguishable_tie(
@@ -1121,10 +1030,6 @@ def _ordering_diagnostics(
             diagnostics["unrepresented_order_by_tie_breakers"] = (
                 unrepresented_tie_breakers
             )
-        if selected_visible_tie_breaker_candidates:
-            diagnostics["selected_visible_tie_breaker_candidates"] = (
-                selected_visible_tie_breaker_candidates
-            )
         if handle_order_by_columns:
             diagnostics["handle_order_by_columns"] = handle_order_by_columns
         if limit_boundary_tie:
@@ -1139,10 +1044,6 @@ def _ordering_diagnostics(
         diagnostics["limit"] = parsed.limit
     if unrepresented_tie_breakers:
         diagnostics["unrepresented_order_by_tie_breakers"] = unrepresented_tie_breakers
-    if selected_visible_tie_breaker_candidates:
-        diagnostics["selected_visible_tie_breaker_candidates"] = (
-            selected_visible_tie_breaker_candidates
-        )
     if handle_order_by_columns and (
         duplicate_order_key or unrepresented_tie_breakers or limit_boundary_tie
     ):
@@ -1213,11 +1114,6 @@ async def query(
                     fn=aggregate.fn,
                     resolved=resolved_ref,
                     value_exposes_source=aggregate.fn != "count",
-                    source_tables=(
-                        [entry.table for entry in chain]
-                        if resolved_ref is None
-                        else None
-                    ),
                 )
             )
     elif parsed.select is not None:
@@ -1386,9 +1282,6 @@ async def query(
         "rows": materialized,
         "row_count": len(materialized),
     }
-    label_source_diagnostics = _label_source_diagnostics(column_sources)
-    if label_source_diagnostics is not None:
-        result["label_source_diagnostics"] = label_source_diagnostics
     ordering_diagnostics = _ordering_diagnostics(
         materialized,
         parsed=parsed,
