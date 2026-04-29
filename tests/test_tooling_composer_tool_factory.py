@@ -348,10 +348,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
     assert "hidden helper row-set controls" in descriptions["query"]["$.spec.where"]
     assert "Source Surface Policy" in descriptions["query"]["$.spec.where"]
-    assert "implies status or type membership" in descriptions["query"][
+    assert "implies status, type, or category membership" in descriptions["query"][
         "$.spec.where"
     ]
-    assert "records plus that status/type field" in descriptions["query"][
+    assert "records plus that status/type/category field" in descriptions["query"][
         "$.spec.where"
     ]
     assert "Blocked or internal handle values" in descriptions["query"][
@@ -388,8 +388,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "different blocked source role" in descriptions["query"][
         "$.spec.select[].as"
     ]
-    assert "source status text" in descriptions["query"]["$.spec.select[].as"]
-    assert "broad object status" in descriptions["query"]["$.spec.select[].as"]
+    assert "source status/type/category text" in descriptions[
+        "query"
+    ]["$.spec.select[].as"]
+    assert "broad object state/type/category" in descriptions[
+        "query"
+    ]["$.spec.select[].as"]
     assert "current/derived state wording" in descriptions["query"][
         "$.spec.select[].as"
     ]
@@ -500,7 +504,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "$.spec.aggregate"
     ]
     assert "projection diagnostics" in descriptions["query"]["$.spec"]
-    assert "Status/type/result outputs must name the selected source role" in (
+    assert "Status/type/category/classification/result outputs must name" in (
         descriptions["query"]["$.spec"]
     )
     assert "indistinguishable" in descriptions["query"]["$.spec"]

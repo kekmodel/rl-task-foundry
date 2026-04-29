@@ -2828,10 +2828,10 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "do not reuse one vague phrase" in schema_surface
     assert "preserve the source representation" in schema_surface
     assert "do not turn source status text into current/derived state" in schema_surface
-    assert "Status fields from related sources are not interchangeable" in (
+    assert "Status/type/category fields from related sources are not interchangeable" in (
         schema_surface
     )
-    assert "a broad object status phrase is invalid" in schema_surface
+    assert "a broad object status/type/category phrase is invalid" in schema_surface
     assert "broad object wording is not enough" in schema_surface
     assert "source record sequence into generated display rank" in schema_surface
     assert "Do not add parenthetical normalized choices" in schema_surface

@@ -628,9 +628,10 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "or a customer-visible constraint stated in user_request "
                     "and submit_draft.answer_contract. Do not use filters as "
                     "hidden helper row-set controls; keep scope aligned with "
-                    "the Source Surface Policy. If wording implies status or "
-                    "type membership, implement it here; otherwise request "
-                    "records plus that status/type field."
+                    "the Source Surface Policy. If wording implies status, "
+                    "type, or category membership, implement it here; "
+                    "otherwise request records plus that status/type/category "
+                    "field."
                 ),
                 "items": {
                     "type": "object",
@@ -708,8 +709,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                                 "Do not make note/comment/description text "
                                 "look like a result/status/value field unless "
                                 "the request names that text surface. Do not "
-                                "make source status text look like broad "
-                                "object status or current/derived state wording."
+                                "make source status/type/category text look "
+                                "like broad object state/type/category or "
+                                "current/derived state wording."
                             ),
                         },
                     },
@@ -854,9 +856,10 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Before submit_draft, ensure user_request/topic name the "
                     "selected source role when multiple reachable sources could "
                     "answer the broad noun; label/output field names do not "
-                    "disambiguate source surface. Status/type/result outputs "
-                    "must name the selected source role when related surfaces "
-                    "can differ. If naming the chosen source "
+                    "disambiguate source surface. Status/type/category/"
+                    "classification/result outputs must name the selected "
+                    "source role when related surfaces can differ. If naming "
+                    "the chosen source "
                     "role would sound awkward, choose another label/source "
                     "instead of submitting broad wording. "
                     "Copy returned row values exactly into the label, including "

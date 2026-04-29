@@ -11337,3 +11337,72 @@ Solver 30/30 완료 결과:
   Ruff:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
+
+## Iteration 173 — Source classification wording must name the selected surface
+
+- **질문**:
+  `trial_94`의 procedure list는 solver에게 어려운 좋은 문제였는가, 아니면 composer가 broad
+  request를 잘못 제출한 저품질 문제였는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed / calibration_inconclusive`, `pass_rate=0/4`.
+
+  최종 budget-exhausted 제출:
+  `이 입원 기간 동안 수행된 시술 목록을 수행 시간, 시술명, 시술 유형으로 보여주세요. 수행 시간 순서대로 정렬하고, 수행 시간이 같은 경우 시술명 순서로 정렬해주세요`
+
+  canonical:
+  - source: `icustays -> procedureevents -> d_items`
+  - fields: `procedureevents.starttime`, `d_items.label`, `d_items.category`
+  - order: `starttime asc`, `d_items.label asc`
+
+  solver 4개 모두 row set, 시간, 시술명, order는 사실상 같은 경로로 도달했다. 그러나 `시술 유형`
+  field를 모두 `procedureevents.ordercategoryname`으로 제출했고, canonical의 `d_items.category`와
+  달라서 전부 mismatch가 났다.
+
+- **reasoning 교차 분석**:
+  composer는 procedureevents 5건을 발견했고, 같은 `performed_at` tie를 해결하려고 처음에는
+  `orderid`를 tie-break로 쓰려 했다가 blocked handle 진단을 보고 제거했다. 그 뒤 visible한
+  `d_items.label`을 tie-break로 사용한 것은 List Determinism Policy 관점에서 올바른 수리다.
+
+  실패의 핵심은 order가 아니라 output source surface였다. composer는 `d_items.category`를
+  `시술 유형`으로 제출했지만, solver reasoning은 “procedure event의 type”을 자연스럽게
+  `procedureevents.ordercategoryname`으로 해석했다. 즉 solver가 풀 수 없었던 것이 아니라, request가
+  같은 broad classification noun으로 둘 이상의 reachable source surface를 허용했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. row set과 order는 좋았지만, `시술 유형`이 어떤 source의
+  classification인지 고정되지 않았다. solver가 주어진 tool로 같은 rows를 찾고 다른 visible
+  classification field를 고른 것이므로 hard-good이 아니다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. source classification phrase가 충분히 자연스럽게 특정 source를
+  고정하는지 판정하려면 자연어 의미 판단이 필요하므로 precision 100% validator로 만들 수 없다.
+  리터럴/토큰/컬럼명 기반 휴리스틱도 금지 원칙 때문에 사용하지 않았다.
+
+  Prompt-first 원칙에 따라 durable policy와 tool schema description만 보강했다.
+  `status/type` 중심으로 쓰여 있던 source-sensitive field 정책을 `status/type/category/classification`
+  전반으로 일반화했다. broad object wording이 여러 reachable source surface에 맞을 수 있으면
+  `user_request`와 `answer_contract`가 선택한 source role을 자연어로 드러내야 하고, 그 표현이
+  어색하면 다른 label/source를 선택해야 한다.
+
+  feedback은 추가하지 않았다. 이번 문제는 feedback 준수 문제가 아니라 submit 전 정책 판단 문제라서,
+  피드백에 새 지시를 중복으로 넣지 않는 원칙을 지켰다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`3 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py -q`
+  통과 (`108 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_94`는 accepted가 없으므로 연속 만족 accepted streak는 `0/5`로 리셋.

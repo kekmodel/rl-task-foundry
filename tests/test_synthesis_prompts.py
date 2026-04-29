@@ -346,7 +346,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "hidden handle" in instructions
     assert "hidden current subject/context" in instructions
     assert "Bind modifiers/filters to exact object/scope" in instructions
-    assert "Non-null/status/type filters need row-set wording" in instructions
+    assert "Non-null/status/type/category filters need row-set wording" in instructions
     assert "matching query.where" in instructions
     assert "not output names" in instructions
     assert "If only returned, ask records plus field" in instructions
@@ -406,11 +406,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "source-field-to-related-field upgrade" in instructions
     assert "user_request names role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
-    assert "Source-sensitive result/status/type fields/filters" in instructions
+    assert "Source-sensitive result/status/type/category/classification fields/" in (
+        instructions
+    )
     assert "query-path source role" in instructions
     assert "request must name it" in instructions
-    assert "Source status text is source-specific" in instructions
-    assert "broad object status" in instructions
+    assert "Source status/type/category text is source-specific" in instructions
+    assert "broad object state/type/category" in instructions
     assert "current/derived state" in instructions
     assert "no normalized choices" in instructions
     assert "Note/comment text needs that surface" in instructions
