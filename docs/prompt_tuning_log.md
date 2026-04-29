@@ -10176,6 +10176,71 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_81`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 160 — Binding feedback must not justify sequence tie-breaks
+
+- **질문**:
+  `trial_82`에서 order phrase 보강이 sequence/order repair를 막았는가? 아니면 composer가
+  여전히 sequence field를 자연어로 정당화하려 하는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, solver rollout 없음.
+
+  제출 흐름:
+  - submit 1: `composer_submit_draft_missing`
+  - submit 2:
+    `해당 입원 기간 중 투여된 약물 중 시간순으로 앞선 5가지를 보여주세요. 약물명, 투여 시간,
+    투여 상태를 알고 싶습니다.`
+    - 오류: `answer_contract_binding_missing`
+    - label에 `sequenceId` 포함
+  - submit 3:
+    `... 기록 순번을 알고 싶습니다.`
+    - 오류: `answer_contract_phrase_missing`
+    - sequence tie-break를 user_request로 정당화하려 함
+  - submit 4: `composer_submit_draft_missing`
+  - submit 5 budget exhausted:
+    sequence field를 제거했지만 latest successful query evidence와 맞지 않아
+    `answer_contract_evidence_mismatch`
+
+- **reasoning 교차 분석**:
+  composer reasoning이 문제를 명시했다:
+  `sequenceId`는 tie-break이지 자연스러운 요청 대상이 아니며, 그런데도 이를 user_request에서
+  정당화해야 한다고 판단했다. 즉 모델이 원칙을 부분적으로 이해했지만, `answer_contract_binding_missing`
+  feedback을 "sequence field를 말로 포장하라"로 잘못 해석했다.
+
+  이후 phrase/binding-only 구간에서 data tool이 차단된 것은 의도대로다. 하지만 composer는 sequence 없는
+  label로 바꿔 submit했고, latest query evidence는 sequence 포함 label이어서 mismatch가 났다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 약물 투여 목록이라는 target 자체는 자연스러웠지만, duplicate rows와
+  order tie를 해결하기 위해 source sequence를 붙이려 한 순간 저품질 repair가 됐다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. sequence field가 실제 도메인 답인지 repair crutch인지 구분하는 것은
+  여전히 semantic 판단이고, 컬럼명 기반 차단은 리터럴/토큰 휴리스틱이다.
+
+  대신 `answer_contract_binding_missing` feedback에 기존 List Determinism Policy를 더 직접적으로 상기했다.
+  missing binding이 source sequence/reference/order field를 정당화하라는 뜻이 아니며, 그런 field/order key는
+  제거하거나 tied rows를 반환하거나 다른 label을 고르라고 명시했다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_by_query_order_count -q`
+    통과 (`1 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_82`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

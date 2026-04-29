@@ -2595,6 +2595,8 @@ async def test_submit_draft_feedbacks_missing_order_binding_by_query_order_count
     message = await controller.submit(payload)
 
     assert "answer_contract.order_bindings" in message
+    assert "do not justify a source sequence/reference/order field" in message
+    assert "remove that field/order key" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 
