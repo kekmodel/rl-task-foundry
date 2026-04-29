@@ -1,6 +1,7 @@
 schema_version: 1
 
 current_baseline: B0001
+current_baseline_ref: baseline/current
 current_phase_target: v1
 
 architecture_policy:
@@ -112,7 +113,8 @@ nodes:
   - id: B0001
     type: baseline
     branch: main
-    commit: "f0a965e"
+    commit: "baseline/current"
+    artifact_commit: "f0a965e"
     parent: B0000
     parent_commit: "d5784a1"
     status: current
@@ -122,8 +124,11 @@ nodes:
       production viability gating, lightweight trial artifacts, unified
       analysis logs, and proof smoke command cleanup.
     metadata_note: >
-      Other AI agents should start new experiment branches from this commit
-      unless the user explicitly asks to branch from an older node.
+      Other AI agents should start new experiment branches from the
+      `baseline/current` ref unless the user explicitly asks to branch from an
+      older node. `artifact_commit` records the last code artifact snapshot
+      before governance metadata commits; the moving ref avoids a
+      self-referential commit-hash problem in this registry file.
     architecture_summary: >
       Trial commands are lightweight. `smoke-proof-task` is a developer wiring
       check, `run-real-db-trial` is a single-sample analysis microscope, and
