@@ -22,6 +22,7 @@
 - architecture_summary
 - change_summary
 - principles_touched
+- agent_topology
 - evaluation_policy
 - quality_eval
 - branching_notes
@@ -70,6 +71,19 @@ exp/R0001-band-calibration-035
 - `A`: architecture variant
 - `R`: rubric/evaluation policy
 - `B`: baseline
+
+## Agent topology
+
+SDK agent 종류/수/context 공유 방식은 실험 설계자가 자유롭게 바꿀 수 있다. Composer/solver를 없애거나 planner/verifier/naturalizer/judge로 나누는 것도 허용된다. 단, 각 노드는 다음을 기록해야 한다.
+
+- builder agent 종류와 수
+- agent 간 shared context 여부
+- isolated context 또는 blind-ish 평가 context 여부
+- LLM judge/validator 사용 여부
+- 각 LLM judge/validator의 model, prompt/version, decision authority
+- 어떤 판단이 semantic quality signal이고, 어떤 판단이 precision-100 structural reject인지
+
+LLM judge/validator는 사용할 수 있지만, precision-100 structural rejector인 것처럼 기록하면 안 된다.
 
 ## Independent evaluator reports
 

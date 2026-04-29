@@ -3,6 +3,25 @@ schema_version: 1
 current_baseline: B0000
 current_phase_target: v1
 
+architecture_policy:
+  mutable_components:
+    - composer
+    - solver
+    - tools
+    - prompts
+    - pipeline
+    - sdk_agent_topology
+  sdk_agents:
+    count: unconstrained
+    types: unconstrained
+    context_sharing: experiment_variable
+  llm_judges_and_validators:
+    allowed: true
+    requirements:
+      - record_model_prompt_version_context_scope_and_decision_authority
+      - distinguish_semantic_quality_signal_from_precision_100_structural_reject
+      - do_not_tune_to_known_benchmark_literals_or_failed_draft_tokens
+
 evaluation_policies:
   - id: DQS-v1
     rubric: docs/experiments/rubric_dqs_v1.md
@@ -12,6 +31,7 @@ evaluation_policies:
       precision_100_rejectors_only: true
       no_severe_mode_collapse: true
       evaluation_policy_changes_recorded: true
+      llm_judge_components_versioned: true
     db_set:
       - mimiciv_demo
       - postgres_air
@@ -57,6 +77,11 @@ nodes:
       - diagnose_bad_db_regions
     evaluation_policy: DQS-v1
     evaluation_protocol: independent-dqs-v1
+    agent_topology:
+      builder_agents: "existing pipeline baseline"
+      evaluator_agents: "independent-dqs-v1 subagent for promotion candidates"
+      context_policy: "builder/evaluator context separated by default"
+      llm_judges: []
     quality_eval: null
     branching_notes:
       continue_from_here:

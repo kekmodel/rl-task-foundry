@@ -1,6 +1,6 @@
 # AGENTS.md
 
-이 저장소의 최상위 목표는 현재 evaluator를 통과하는 것이 아니라, 실제로 일반화 가능하고 검증 가능한 고품질 RL task dataset을 생성하는 것이다. 원칙과 평가 메트릭을 제외한 composer, solver, tools, prompt, pipeline, architecture는 모두 변경 가능하다.
+이 저장소의 최상위 목표는 현재 evaluator를 통과하는 것이 아니라, 실제로 일반화 가능하고 검증 가능한 고품질 RL task dataset을 생성하는 것이다. 원칙과 평가 메트릭을 제외한 composer, solver, tools, prompt, pipeline, architecture, SDK agent 종류/수/context 공유 방식은 모두 변경 가능하다.
 
 ## 제1원칙
 
@@ -18,6 +18,7 @@
 8. 모든 평가는 버전 기록: rubric version, solver band, solver model, solver count, DB, prompt version, architecture node, qualitative judgment를 실험 노드마다 기록한다.
 9. 단계 목표 달성 시 정지: phase target을 metric 기준으로 달성하면 자동 개선을 멈추고 사용자에게 promote/freeze/continue/branch/revise 중 무엇을 할지 물어본다.
 10. 독립 평가: promotion 후보는 builder 자신이 단독 평가하지 않는다. 사용자가 subagent 평가를 승인했거나 요청한 경우, `docs/experiments/evaluator_subagent.md` 프로토콜로 독립 DQS evaluator subagent를 만든다. 승인 없이 subagent를 만들 수 없으면 멈추고 사용자에게 평가 승인을 요청한다.
+11. LLM judge/validator 허용: LLM 기반 judge, reviewer, semantic validator는 목표 달성에 도움이 되면 사용할 수 있다. 단, versioned evaluation component로 기록해야 하며, precision-100 structural rejector인 것처럼 가장하면 안 된다. LLM 판단은 rubric/semantic quality signal이고, hard structural reject는 원칙 3을 따른다.
 
 ## 평가 메트릭
 
@@ -31,6 +32,7 @@ Hard gates:
 - severe mode collapse 없음
 - 평가 정책 변경은 별도 experiment node로 기록
 - promotion 전 독립 DQS 평가 리포트 기록
+- LLM judge/validator 사용 시 모델, prompt, context scope, decision authority 기록
 
 DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다. 단일 숫자만으로 승격하지 않는다.
 
@@ -41,6 +43,7 @@ DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다
 - `main`은 안정 snapshot이다. 실험을 직접 누적하지 않는다.
 - `baseline/current` 또는 registry의 current baseline이 연구 기준선이다.
 - 실험 노드는 `exp/<node-id>-<slug>` 형식을 사용한다.
+- 실험 노드마다 agent topology를 기록한다: agent 종류/수, shared context 여부, 독립 evaluator context 분리 여부, LLM judge/validator의 권한.
 - 후속 실험은 부모 노드 commit에서 새 branch/worktree로 분기한다.
 - 실패 노드도 삭제하지 말고 `abandoned`, `local_minimum`, `regressed`, `infra_fail` 등으로 기록한다.
 - greedy merge 금지. 좋은 노드는 candidate/frontier로 남기고, 반복 평가 후 baseline으로 promote한다.

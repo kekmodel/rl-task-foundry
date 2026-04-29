@@ -1,6 +1,6 @@
 # First Principles
 
-이 문서는 실험 그래프의 불변 원칙을 정의한다. composer, solver, tools, prompt, pipeline, architecture는 모두 변경 가능하지만, 이 원칙과 평가 메트릭은 평가 해킹을 막기 위한 고정점이다.
+이 문서는 실험 그래프의 불변 원칙을 정의한다. composer, solver, tools, prompt, pipeline, architecture, SDK agent 종류/수/context 공유 방식은 모두 변경 가능하지만, 이 원칙과 평가 메트릭은 평가 해킹을 막기 위한 고정점이다.
 
 ## 제1원칙
 
@@ -56,6 +56,13 @@ Runtime rejector는 자신이 검증하는 structural predicate에 대해 false 
 - 자연스러움, 흥미로움, 좋은 difficulty를 hard validator로 추측
 - 특정 문자열 포함 여부로 source role 또는 품질 판단
 
+LLM 기반 judge나 semantic validator는 허용된다. 다만 이것은 rubric/semantic quality signal이지 precision-100 structural rejector가 아니다. LLM 판단을 생성 pipeline의 filter, judge, reviewer, evaluator로 사용할 수 있지만, 다음을 지켜야 한다.
+
+- model, prompt, context scope, decision authority를 experiment node에 기록한다.
+- hard structural reject 권한을 주려면 해당 predicate가 LLM 판단과 무관하게 구조적으로 증명되어야 한다.
+- LLM judge의 판정은 accepted/rejected 정성평가와 DQS 집계에 사용할 수 있다.
+- LLM judge를 현재 evaluator나 known benchmark DB에 맞춘 hidden scorer로 쓰면 평가 해킹이다.
+
 ### 4. Source-of-truth 분리
 
 Durable policy는 한 surface에만 존재해야 한다.
@@ -95,6 +102,8 @@ DB 또는 DB region에 다음이 부족하면 생성 불가를 보고한다.
 
 Rubric, solver band, solver model, solver count, DB set, architecture, prompt version, qualitative judgment는 모두 실험 노드에 기록한다. Evaluation policy 변경은 별도 실험 노드다.
 
+Agent topology도 기록한다. 여러 SDK agent, subagent, planner/verifier/naturalizer 분리, shared context, isolated context, blind-ish evaluator context는 모두 자유롭게 설계할 수 있지만 평가 재현성을 위해 명시해야 한다.
+
 ### 9. 적대적 리뷰
 
 Promotion 후보는 반드시 다음 질문을 통과해야 한다.
@@ -117,4 +126,3 @@ Promotion 후보는 반드시 다음 질문을 통과해야 한다.
 2. 다음 phase로 진행
 3. 다른 노드에서 새 분기
 4. metric/rubric 수정
-

@@ -2,6 +2,8 @@
 
 이 문서는 Codex에서 독립 평가자 subagent를 만들어 builder self-bias를 줄이는 방법을 정의한다. 목표는 완전한 객관성이 아니라, 구현자 자기정당화 편향을 낮추고 평가 해킹 가능성을 드러내는 것이다.
 
+실험용 builder architecture에서는 SDK agent 종류, 수, context 공유/분리 방식을 자유롭게 바꿀 수 있다. 이 문서는 promotion 평가자에 대한 기본 독립성 프로토콜만 고정한다.
+
 ## When to use
 
 다음 상황에서는 독립 evaluator report가 필요하다.
@@ -52,6 +54,8 @@ fork_context: false
 task: DQS-v1 independent evaluation
 write_scope: none
 ```
+
+`fork_context: false`가 기본이다. 사용자가 특정 실험에서 shared-context evaluator를 승인하면 바꿀 수 있지만, report에 그 사실과 이유를 기록해야 한다. Builder와 evaluator가 context를 공유한 경우 blind-ish 평가가 아니므로 confidence를 낮추거나 별도 재평가를 요청한다.
 
 Suggested prompt:
 
@@ -141,4 +145,3 @@ Builder response must include:
 - requested action: accept evaluator finding, request re-evaluation, ask user to adjudicate
 
 Accepted low-quality 관련 이견은 사용자 판단 또는 재평가 없이는 promotion할 수 없다.
-

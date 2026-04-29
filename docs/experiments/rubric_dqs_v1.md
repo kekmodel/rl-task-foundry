@@ -14,6 +14,8 @@
 - source-of-truth 원칙 위반
 - DB/region readiness 부족을 무시하고 억지 accepted 생성
 - promotion 후보에 독립 DQS evaluator report 없음
+- LLM judge/validator의 model, prompt/version, context scope, decision authority 미기록
+- LLM semantic judgment를 precision-100 structural rejector로 사용하거나 표기
 
 ## Draft labels
 
@@ -136,6 +138,8 @@ DQS는 ranking aid다. 다음을 모두 만족해야 promotion 가능하다.
 Builder가 만든 실험을 builder가 단독으로 promotion 판단하지 않는다. Promotion 후보는 `docs/experiments/evaluator_subagent.md` 프로토콜에 따라 독립 DQS evaluator가 평가해야 한다.
 
 Evaluator는 구현 의도보다 artifact, generated drafts, solver traces, DB evidence, rubric을 우선한다. Builder는 evaluator report에 반론을 쓸 수 있지만, 단독 override할 수 없다. Accepted low-quality 판정 충돌은 사용자 판단 또는 재평가가 필요하다.
+
+LLM 기반 judge/validator는 DQS 평가를 보조하거나 semantic quality signal을 만들 수 있다. 단, 사용한 모델, prompt/version, context scope, decision authority를 evaluation policy 또는 node metadata에 기록해야 하며, 구조적으로 증명되지 않은 판단을 precision-100 hard reject로 승격할 수 없다.
 
 ## v1 target
 
