@@ -1294,7 +1294,7 @@ def test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_qu
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 
-def test_data_tool_budget_feedback_blocks_binding_only_data_repair(
+def test_data_tool_budget_feedback_blocks_contract_only_data_repair(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -1307,20 +1307,34 @@ def test_data_tool_budget_feedback_blocks_binding_only_data_repair(
         build_draft=_draft_with_task_bundle,
         max_submissions=3,
     )
-    controller._record_feedback(
-        message="FeedbackError: binding repair",
-        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
-    )
+    for error_codes in (
+        [SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
+        [SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING],
+        [
+            SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING,
+            SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING,
+        ],
+    ):
+        controller._record_feedback(
+            message="FeedbackError: contract repair",
+            error_codes=error_codes,
+        )
 
-    feedback = controller.data_tool_budget_feedback(tool_name="query")
+        feedback = controller.data_tool_budget_feedback(tool_name="query")
 
-    assert feedback is not None
-    assert feedback["error"] == "submit_draft_required"
-    assert feedback["limit"] == 0
-    assert "contract-only" in str(feedback["message"])
-    assert "Preserve the current label/query values" in str(feedback["message"])
-    assert "hard protocol boundary" in str(feedback["message"])
-    assert "The next tool call must be submit_draft" in str(feedback["message"])
+        assert feedback is not None
+        assert feedback["error"] == "submit_draft_required"
+        assert feedback["limit"] == 0
+        assert "phrase/binding-only feedback is contract-only" in str(
+            feedback["message"]
+        )
+        assert "Preserve the current label/query values" in str(
+            feedback["message"]
+        )
+        assert "hard protocol boundary" in str(feedback["message"])
+        assert "The next tool call must be submit_draft" in str(
+            feedback["message"]
+        )
 
 
 def test_data_tool_budget_feedback_blocks_repeated_query_repair_for_empty_query(

@@ -9693,6 +9693,72 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_74`는 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
 
+## Iteration 153 — Phrase/binding-only repair must use zero data tools
+
+- **질문**:
+  `trial_75`는 왜 accepted 없이 `label_changed_during_repair`로 끝났는가?
+  reasoning content가 반환되고 있으므로 composer의 판단을 tool call/diagnostics와 교차 분석한다.
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`.
+
+  composer는 `emar`에서 환자의 최근 투약 기록 5개를 만들었다.
+  `charttime desc, emar_seq asc` query는 5개 row를 안정적으로 반환했고, label 자체는
+  수리 가능한 후보였다. 그러나 제출은 다음 흐름으로 실패했다.
+
+  - first submit: `composer_submit_draft_missing`
+  - medication list submit: `answer_contract_phrase_missing`
+  - same list repair: `answer_contract_phrase_missing`, `answer_contract_binding_missing`
+  - same list repair: `answer_contract_phrase_missing`, `answer_contract_binding_missing`
+  - final submit: count aggregate로 label을 바꾸면서 `label_changed_during_repair`
+
+- **reasoning 교차 분석**:
+  composer는 처음에 duplicate time을 보고 `emar_seq` tie-break를 붙여 order를 안정화했다.
+  그 다음 문제는 data가 아니라 request/answer_contract였다. missing phrase와 duplicate/missing
+  order binding만 남았는데, reasoning은 "smaller scope"나 "simpler scalar count"로 바꿀 생각을
+  했다. 실제 마지막 query도 같은 `emar` scope의 total count였고, repair-locked label과 전혀 다른
+  canonical answer가 되어 validator가 정확히 막았다.
+
+  즉 rejected data는 어려운 좋은 문제라기보다, 수리 가능한 list draft를 contract-only 단계에서
+  새 label로 갈아탄 composer discipline 문제다. solver rollout은 없었다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 첫 list 후보는 query evidence와 row set이 괜찮았지만,
+  자연어/contract repair를 완료하지 못했다. 마지막 count는 repair 상황에서 label을 바꾼 것이므로
+  좋은 어려운 문제로 볼 수 없다.
+
+- **변경**:
+  프롬프트는 수정하지 않았다. `Feedback And Difficulty-Up Policy`에 이미
+  `phrase/binding-only: no exploration`이 source of truth로 있다.
+
+  문제는 runtime budget gate가 그 원칙을 binding-only 단독 오류에만 적용했다는 점이다.
+  `answer_contract_phrase_missing` 또는 `answer_contract_binding_missing`만 남은 경우는 모두
+  contract-only repair로 보아 data tool 예산을 0으로 맞췄다. feedback은 새 지시가 아니라 기존
+  정책의 reminder로, "current label/query values를 보존하고 user_request/answer_contract만
+  수리하라"고 알려준다.
+
+  이 변경은 오류 코드 집합만 보는 구조적 판단이다. DB 리터럴, 테이블명, 컬럼명, 값 문자열을 보지
+  않으므로 리터럴/토큰 휴리스틱 금지 원칙을 위반하지 않는다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_contract_only_data_repair tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_feedback_repair tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_allows_repair_query_after_limit -q`
+    통과 (`3 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_75`는 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

@@ -106,6 +106,14 @@ _LABEL_LOCKING_REPAIR_ERROR_VALUES = frozenset(
 )
 
 
+_CONTRACT_ONLY_REPAIR_ERROR_VALUES = frozenset(
+    {
+        SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING.value,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING.value,
+    }
+)
+
+
 _FEEDBACK_ONLY_ERROR_CODES = frozenset(
     {
         SubmitDraftErrorCode.NO_NEW_GROUNDED_OBSERVATION,
@@ -1906,14 +1914,16 @@ class SubmitDraftController:
             len(self._raw_atomic_tool_calls)
             - self._tool_call_count_at_last_protocol_boundary
         )
-        if self._last_feedback_error_codes == (
-            SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING.value,
+        last_feedback_error_codes = set(self._last_feedback_error_codes)
+        if (
+            last_feedback_error_codes
+            and last_feedback_error_codes <= _CONTRACT_ONLY_REPAIR_ERROR_VALUES
         ):
             return {
                 "error": "submit_draft_required",
                 "message": (
-                    "ToolBudgetFeedback: Binding repair reminder: "
-                    "answer_contract_binding_missing is contract-only. This is "
+                    "ToolBudgetFeedback: Contract repair reminder: "
+                    "phrase/binding-only feedback is contract-only. This is "
                     "a hard protocol boundary, not a data result. The next "
                     "tool call must be submit_draft; do not call data tools "
                     "after this message. Preserve the current label/query "
