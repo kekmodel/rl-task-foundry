@@ -188,6 +188,44 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_real_db_trial_runner_can_skip_trial_bundle_export(tmp_path: Path) -> None:
+    accepted_draft = _sample_draft(tmp_task_id="task_real_trial_no_bundle")
+    runtime = _FakeSynthesisRuntime(draft=accepted_draft)
+    registry = _FakeRegistry(
+        result=TaskRegistryCommitResult(
+            status=TaskRegistryCommitStatus.COMMITTED,
+            task_id=accepted_draft.task_bundle.task_id,
+            exact_signature="sha256:trial-no-bundle",
+            filesystem_path=tmp_path / "tasks" / accepted_draft.task_bundle.task_id,
+        )
+    )
+    exporter = _FakeExporter()
+    runner = RealDbTrialRunner(
+        _config_with_tmp_traces(tmp_path),
+        synthesis_runtime=runtime,
+        registry=registry,
+        exporter=exporter,
+        export_trial_bundle=False,
+    )
+    output_root = tmp_path / "real_trial"
+
+    try:
+        summary = await runner.run(
+            output_root,
+            db_id="sakila",
+            topic="assignment",
+        )
+    finally:
+        await runner.close()
+
+    assert summary.trial_status is RealDbTrialStatus.ACCEPTED
+    assert summary.bundle_root is None
+    assert exporter.calls == []
+    assert not (output_root / "bundle").exists()
+    assert not (output_root / "debug" / "databases").exists()
+
+
+@pytest.mark.asyncio
 async def test_real_db_trial_runner_enforces_wall_clock_timeout(tmp_path: Path) -> None:
     registry = _FakeRegistry(
         result=TaskRegistryCommitResult(

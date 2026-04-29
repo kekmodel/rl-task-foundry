@@ -183,6 +183,7 @@ class RealDbTrialRunner:
     solver_orchestrator: SolverOrchestrator | None = None
     synthesis_db: SynthesisDb | None = None
     synthesis_backends: list[_SynthesisBackendProtocol] | None = None
+    export_trial_bundle: bool = True
     _owns_solver_orchestrator: bool = field(default=False, init=False, repr=False)
     _owns_registry: bool = field(default=False, init=False, repr=False)
 
@@ -247,15 +248,16 @@ class RealDbTrialRunner:
             checks={"debug_root_ready": debug_root.exists()},
             diagnostics={},
         )
-        trial_materializer = SchemaSnapshotMaterializer(
-            root_dir=debug_root / "databases"
-        )
-        if self.synthesis_db is not None:
-            self.synthesis_db.use_snapshot_materializer(trial_materializer)
-        if hasattr(self.exporter, "snapshot_materializer"):
-            self.exporter = replace(
-                self.exporter, snapshot_materializer=trial_materializer
+        if self.export_trial_bundle:
+            trial_materializer = SchemaSnapshotMaterializer(
+                root_dir=debug_root / "databases"
             )
+            if self.synthesis_db is not None:
+                self.synthesis_db.use_snapshot_materializer(trial_materializer)
+            if hasattr(self.exporter, "snapshot_materializer"):
+                self.exporter = replace(
+                    self.exporter, snapshot_materializer=trial_materializer
+                )
         runtime = self._synthesis_runtime_for_trial(
             debug_traces_dir, phase_monitor, event_logger=event_logger
         )
@@ -490,16 +492,35 @@ class RealDbTrialRunner:
             },
             diagnostics={},
         )
-        bundle_root = output_root / "bundle"
-        self.exporter.export_bundle(bundle_root, task_id=commit_result.task_id)
-        phase_monitor.emit(
-            phase="bundle_export",
-            status="completed",
-            expected_contract={"bundle_root": bundle_root},
-            actual_data={"bundle_root": bundle_root, "task_id": commit_result.task_id},
-            checks={"bundle_root_exists": bundle_root.exists()},
-            diagnostics={},
-        )
+        bundle_root = output_root / "bundle" if self.export_trial_bundle else None
+        if self.export_trial_bundle:
+            assert bundle_root is not None
+            self.exporter.export_bundle(bundle_root, task_id=commit_result.task_id)
+            phase_monitor.emit(
+                phase="bundle_export",
+                status="completed",
+                expected_contract={"bundle_root": bundle_root},
+                actual_data={
+                    "bundle_root": bundle_root,
+                    "task_id": commit_result.task_id,
+                },
+                checks={"bundle_root_exists": bundle_root.exists()},
+                diagnostics={},
+            )
+        else:
+            phase_monitor.emit(
+                phase="bundle_export",
+                status="skipped",
+                expected_contract={"registry_is_durable_source": True},
+                actual_data={"task_id": commit_result.task_id},
+                checks={"trial_bundle_export_disabled": True},
+                diagnostics={
+                    "export_hint": (
+                        "Use export-bundle to materialize serving bundles "
+                        "from the registry."
+                    )
+                },
+            )
         final_status = (
             RealDbTrialStatus.ACCEPTED
             if commit_result.status is TaskRegistryCommitStatus.COMMITTED

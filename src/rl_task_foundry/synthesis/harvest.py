@@ -71,6 +71,7 @@ class HarvestRunner:
     registry: TaskRegistryWriter | None = None
     exporter: TaskBundleExporter | None = None
     trial_runner_factory: TrialRunnerFactory | None = None
+    export_trial_bundles: bool = False
     _shared_pools: DatabasePools | None = field(default=None, init=False, repr=False)
     _shared_solver_orchestrator: SolverOrchestrator | None = field(
         default=None, init=False, repr=False
@@ -102,6 +103,7 @@ class HarvestRunner:
             database_pools=self._shared_pools,
             solver_orchestrator=self._shared_solver_orchestrator,
             synthesis_db=self._synthesis_dbs.get(db_id),
+            export_trial_bundle=self.export_trial_bundles,
         )
 
     async def _ensure_synthesis_db(self, db_id: str) -> SynthesisDb:

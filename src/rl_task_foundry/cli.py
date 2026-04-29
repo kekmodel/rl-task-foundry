@@ -471,6 +471,14 @@ def harvest(
             "reported separately. Use 0 to disable."
         ),
     ),
+    export_trial_bundles: bool = typer.Option(
+        False,
+        "--export-trial-bundles",
+        help=(
+            "Also export a serving bundle inside each accepted trial. "
+            "Disabled by default; use export-bundle for durable registry output."
+        ),
+    ),
     workers: int | None = None,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
@@ -485,7 +493,7 @@ def harvest(
         productive_budget_seconds = (
             productive_budget_min * 60.0 if productive_budget_min > 0 else None
         )
-        runner = HarvestRunner(config)
+        runner = HarvestRunner(config, export_trial_bundles=export_trial_bundles)
         try:
             summary = await runner.run(
                 output_dir,

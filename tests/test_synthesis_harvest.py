@@ -203,6 +203,17 @@ def _summary_factory(summaries: list[RealDbTrialSummary]):
     return factory
 
 
+def test_harvest_runner_disables_per_trial_bundles_by_default(tmp_path: Path) -> None:
+    config = _config_with_tmp_traces(tmp_path)
+    registry = _RecordingRegistry()
+    exporter = _NoopExporter()
+    runner = HarvestRunner(config, registry=registry, exporter=exporter)
+
+    trial_runner = runner._build_trial_runner(db_id="sakila")
+
+    assert trial_runner.export_trial_bundle is False
+
+
 @pytest.mark.asyncio
 async def test_harvest_runner_reaches_target(tmp_path: Path) -> None:
     config = _config_with_tmp_traces(tmp_path)

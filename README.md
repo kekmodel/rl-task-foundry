@@ -71,3 +71,24 @@ uv run rl-task-foundry harvest pagila artifacts/harvest/pagila_001
 
 `harvest` defaults to the v1 production check: accepted 3 within 15 productive
 minutes.
+
+## Artifact Policy
+
+`artifacts/` is ignored by Git and is local runtime output.
+
+Durable accepted data lives in the task registry under `artifacts/tasks`,
+`artifacts/databases`, and `artifacts/task_registry.db`. Use `export-bundle` to
+materialize serving bundles from that registry.
+
+Per-trial debug output is for analysis only:
+
+- `phase_monitors.jsonl`: phase-level state transitions
+- `trial_events.jsonl`: unified composer/solver/runner event timeline
+- `reasoning_content.jsonl`: optional provider-visible reasoning sidecar
+- `traces/`: SDK/tool/session traces
+
+Single `run-real-db-trial` runs export a self-contained trial bundle by
+default, because they are often used for demos and inspection. `harvest` does
+not export per-trial bundles by default; accepted tasks are already durable in
+the registry, and repeated bundle copies make large experiments noisy. Pass
+`--export-trial-bundles` only when debugging a specific harvest run.
