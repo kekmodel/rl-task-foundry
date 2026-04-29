@@ -36,6 +36,13 @@ Hard gates:
 
 DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다. 단일 숫자만으로 승격하지 않는다.
 
+Production viability:
+
+- `trial_timeout_s <= 300`
+- accepted_good p95 wall-clock time `<= 300s`
+- elapsed_seconds는 accepted/rejected/infra 전체 trial에 대해 기록
+- 시간 최적화는 low-quality accepted를 정당화할 수 없다.
+
 ## 실험 그래프 운영
 
 - Git commit graph가 실험 탐색 그래프다.

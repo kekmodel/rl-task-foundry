@@ -295,6 +295,8 @@ def run_proof_task_cli(
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:
             console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
+        if summary.elapsed_seconds is not None:
+            console.print(f"elapsed_seconds={summary.elapsed_seconds:.3f}")
         if summary.solver_pass_rate is not None:
             console.print(f"solver_pass_rate={summary.solver_pass_rate}")
         if summary.solver_ci_low is not None:
@@ -388,6 +390,8 @@ def run_real_db_trial(
             console.print(f"flow_id={summary.flow_id}")
         if summary.phase_monitor_log_path is not None:
             console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
+        if summary.elapsed_seconds is not None:
+            console.print(f"elapsed_seconds={summary.elapsed_seconds:.3f}")
         if summary.task_id is not None:
             console.print(f"task_id={summary.task_id}")
         if summary.quality_gate_status is not None:

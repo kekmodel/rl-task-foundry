@@ -121,6 +121,12 @@ hard_gates:
   llm_judge_components_versioned: true
   llm_semantic_not_structural_reject: true
 
+production_viability:
+  trial_timeout_s: 300
+  accepted_good_p95_wall_clock_s: null
+  accepted_good_p95_within_budget: true
+  elapsed_seconds_recorded_for_all_trials: true
+
 per_draft:
   - draft_id: ""
     label: REJECTED_UNKNOWN

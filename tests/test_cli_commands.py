@@ -210,6 +210,7 @@ def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
             registry_status=TaskRegistryCommitStatus.COMMITTED,
             registry_task_id="task_itinerary_fixture",
             bundle_root=output_root / "bundle",
+            elapsed_seconds=12.345,
         )
 
     monkeypatch.setattr("rl_task_foundry.cli.run_proof_task", _fake_run_proof_task)
@@ -224,6 +225,7 @@ def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
     assert "quality_gate_status=accept" in result.stdout
     assert "flow_id=flow_proof_test" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
+    assert "elapsed_seconds=12.345" in result.stdout
     assert "bundle_root=" in result.stdout
     assert captured["output_root"] == output_dir
     assert captured["mirror_monitor_path"] is None
@@ -272,6 +274,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 registry_status=TaskRegistryCommitStatus.COMMITTED,
                 registry_task_id="task_real_trial",
                 bundle_root=output_dir / "bundle",
+                elapsed_seconds=12.345,
             )
 
         async def close(self) -> None:
@@ -309,6 +312,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "flow_id=flow_trial_test" in result.stdout
     assert "task_id=task_real_trial" in result.stdout
     assert "phase_monitor_log_path=" in result.stdout
+    assert "elapsed_seconds=12.345" in result.stdout
     assert "solver_matched_runs=10" in result.stdout
     assert "solver_planned_runs=20" in result.stdout
     assert "solver_completed_runs=21" in result.stdout

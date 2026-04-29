@@ -17,6 +17,16 @@
 - LLM judge/validator의 model, prompt/version, context scope, decision authority 미기록
 - LLM semantic judgment를 precision-100 structural rejector로 사용하거나 표기
 
+## Production viability gates
+
+이 gate는 DQS 품질 판단을 대체하지 않는다. Low-quality accepted를 줄이기 위해
+의도적으로 느린 구조를 만들면 실패다. 반대로 빠르지만 품질이 낮은 accepted도 실패다.
+
+- single real-db trial wall-clock timeout: `trial_timeout_s <= 300`
+- promotion 평가마다 accepted/rejected/infra 전체 trial의 `elapsed_seconds`를 기록
+- accepted_good 한 건의 p95 wall-clock time이 300초를 넘으면 v1 production 후보가 아님
+- provider outage, rate limit, authentication failure처럼 명확한 infra failure는 품질 라벨에서 분리하지만, 생산성 보고에는 별도 집계
+
 ## Draft labels
 
 ### ACCEPTED_GOOD
@@ -156,6 +166,7 @@ v1은 safe trustworthy generator 기준선이다.
 - batch size: 20
 - repetitions: 2
 - solver count: 8 또는 해당 evaluation policy에 기록된 값
+- trial timeout: 300 seconds
 - rubric: `DQS-v1`
 
 v1 달성 기준:
@@ -166,5 +177,6 @@ v1 달성 기준:
 - 각 DB 평균 `diversity_score >= 3.5`
 - severe mode collapse 없음
 - DB readiness diagnosis가 불가능 region/DB를 구조적으로 설명함
+- accepted_good p95 wall-clock time `<= 300s`
 
 여기서 `rejected_good`은 `rejected_good_too_easy + rejected_good_too_hard`이다.

@@ -139,6 +139,8 @@ atomic_tools:
 synthesis:
   runtime:
     max_turns: 30
+    trial_timeout_s: 300
+    run_timeout_s: 300
     tracing: true
     sdk_sessions_enabled: false
     anchor_candidates_enabled: true

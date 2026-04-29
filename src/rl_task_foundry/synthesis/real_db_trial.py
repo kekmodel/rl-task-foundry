@@ -7,6 +7,8 @@ this module is in-memory only and is not persisted as a separate JSON file.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
@@ -78,6 +80,7 @@ class RealDbTrialSummary:
     registry_status: TaskRegistryCommitStatus | None = None
     registry_task_id: str | None = None
     bundle_root: Path | None = None
+    elapsed_seconds: float | None = None
 
     def __init__(
         self,
@@ -112,6 +115,7 @@ class RealDbTrialSummary:
         registry_status: TaskRegistryCommitStatus | None = None,
         registry_task_id: str | None = None,
         bundle_root: Path | None = None,
+        elapsed_seconds: float | None = None,
     ) -> None:
         object.__setattr__(self, "db_id", db_id)
         object.__setattr__(
@@ -149,6 +153,7 @@ class RealDbTrialSummary:
         object.__setattr__(self, "registry_status", registry_status)
         object.__setattr__(self, "registry_task_id", registry_task_id)
         object.__setattr__(self, "bundle_root", bundle_root)
+        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
 
 
 def _solver_summary_from_attempt(
@@ -206,6 +211,11 @@ class RealDbTrialRunner:
         topic: str | None = None,
         mirror_monitor_path: Path | None = None,
     ) -> RealDbTrialSummary:
+        started_at = time.monotonic()
+
+        def elapsed_seconds() -> float:
+            return round(time.monotonic() - started_at, 3)
+
         if topic:
             topic = normalize_topic(topic)
         output_root.mkdir(parents=True, exist_ok=True)
@@ -268,10 +278,57 @@ class RealDbTrialRunner:
         # FileNotFoundError even though the snapshot was written into
         # ``<output_root>/debug/databases/<db_id>/``.
         try:
-            draft = await runtime.synthesize_environment_draft(
+            draft = await asyncio.wait_for(
+                runtime.synthesize_environment_draft(
+                    db_id=db_id,
+                    requested_topic=topic,
+                ),
+                timeout=float(self.config.synthesis.runtime.trial_timeout_s),
+            )
+        except asyncio.TimeoutError:
+            elapsed = elapsed_seconds()
+            phase_monitor.emit(
+                phase="trial",
+                status="failed",
+                expected_contract={
+                    "trial_timeout_s": self.config.synthesis.runtime.trial_timeout_s
+                },
+                actual_data={
+                    "db_id": db_id,
+                    "topic_experiment_hint": topic,
+                    "elapsed_seconds": elapsed,
+                },
+                checks={"within_trial_timeout": False},
+                diagnostics={
+                    "error_type": "TrialWallClockTimeout",
+                    "error_message": (
+                        "real-db trial exceeded trial_timeout_s="
+                        f"{self.config.synthesis.runtime.trial_timeout_s}"
+                    ),
+                },
+            )
+            summary = RealDbTrialSummary(
                 db_id=db_id,
                 requested_topic=topic,
+                trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+                flow_id=flow_id,
+                phase_monitor_log_path=phase_monitor_log_path,
+                debug_root=debug_root,
+                debug_traces_dir=debug_traces_dir,
+                synthesis_traces_dir=synthesis_traces_dir,
+                solver_traces_dir=solver_traces_dir,
+                synthesis_error_type="TrialWallClockTimeout",
+                synthesis_error_message=(
+                    "real-db trial exceeded trial_timeout_s="
+                    f"{self.config.synthesis.runtime.trial_timeout_s}"
+                ),
+                synthesis_phase="trial_timeout",
+                error_codes=("trial_wall_clock_timeout",),
+                elapsed_seconds=elapsed,
             )
+            phase_monitor.close()
+            event_logger.close()
+            return summary
         except SynthesisArtifactGenerationError as exc:
             last_attempt = exc.attempts[-1] if exc.attempts else None
             diagnostics = exc.last_artifact_diagnostics
@@ -313,6 +370,7 @@ class RealDbTrialRunner:
                 error_codes=error_codes,
                 feedback_events=feedback_events,
                 last_feedback_error_codes=last_feedback_error_codes,
+                elapsed_seconds=elapsed_seconds(),
                 **solver_summary,
             )
             phase_monitor.close()
@@ -346,6 +404,7 @@ class RealDbTrialRunner:
                 synthesis_error_message=str(exc),
                 synthesis_phase=exc.phase,
                 backend_failures=_encode_backend_failures(exc.backend_failures),
+                elapsed_seconds=elapsed_seconds(),
             )
             phase_monitor.close()
             event_logger.close()
@@ -376,6 +435,7 @@ class RealDbTrialRunner:
                 synthesis_error_type=type(exc).__name__,
                 synthesis_error_message=str(exc),
                 synthesis_phase=exc.phase,
+                elapsed_seconds=elapsed_seconds(),
             )
             phase_monitor.close()
             event_logger.close()
@@ -404,6 +464,7 @@ class RealDbTrialRunner:
                 solver_traces_dir=solver_traces_dir,
                 synthesis_error_type=type(exc).__name__,
                 synthesis_error_message=str(exc),
+                elapsed_seconds=elapsed_seconds(),
             )
             phase_monitor.close()
             event_logger.close()
@@ -467,6 +528,7 @@ class RealDbTrialRunner:
             registry_status=commit_result.status,
             registry_task_id=commit_result.task_id,
             bundle_root=bundle_root,
+            elapsed_seconds=elapsed_seconds(),
         )
         phase_monitor.close()
         event_logger.close()
