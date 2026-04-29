@@ -63,7 +63,7 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.synthesis.runtime.payload_preview_max_list_items == 3
     assert config.synthesis.runtime.payload_preview_max_dict_items == 6
     assert config.synthesis.coverage_planner.target_count_per_band == 3
-    assert config.calibration.lower_pass_rate == 0.2
+    assert config.calibration.lower_pass_rate == 0.5
     assert config.calibration.upper_pass_rate == 0.9
     assert config.calibration.ci_alpha == 0.1
     assert config.calibration.solver_batch_size == 4

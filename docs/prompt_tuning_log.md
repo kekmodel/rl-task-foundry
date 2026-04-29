@@ -9607,6 +9607,28 @@ Solver 30/30 완료 결과:
   또는 prompt에서 source-specific status/type fields를 자연어 request에 더 구체적으로 드러내도록
   유도하는 방향이 맞다.
 
+## Config Change 2026-04-30 — Raise accepted pass-rate floor
+
+- **결정**:
+  `trial_06`처럼 `1/4 = 0.25`가 accepted 되는 것은 현재 실험 목표에 맞지 않다. 어려운 좋은 문제를
+  살리는 것도 중요하지만, 4-solver smoke에서 1명만 맞춘 draft가 곧바로 accepted/registry commit 되는
+  것은 low-quality accepted 위험을 키운다.
+
+- **변경**:
+  모든 실행 config의 calibration band를 `lower_pass_rate: 0.5`, `upper_pass_rate: 0.9`로 맞췄다.
+  대상 config:
+  - `rl_task_foundry.yaml`
+  - `rl_task_foundry.mimiciv_demo.yaml`
+  - `rl_task_foundry.mimiciv.yaml`
+  - `rl_task_foundry.postgres_air.yaml`
+
+- **해석 기준**:
+  이후 `pass_rate=0.25`는 기본 실행 config 기준 accept가 아니라 too-hard/reject 쪽으로 간다. 단
+  `reject_too_hard`가 곧 저품질이라는 뜻은 아니므로, rejected data 정성평가는 계속 수행한다.
+
+- **검증**:
+  `uv run pytest tests/test_config_load.py` 통과 (`4 passed`).
+
 ## Iteration 149 — Temporal source roles must be requestable
 
 - **질문**:
