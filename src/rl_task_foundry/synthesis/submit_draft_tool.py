@@ -206,6 +206,10 @@ class AnswerOutputBinding(StrictModel):
             "record's category versus a referenced item's category. Do not "
             "bind note/comment/description text to broad result/value wording "
             "unless user_request asks for that text surface."
+            " The phrase must remain fluent customer wording; do not create it "
+            "by translating a label key or column-like role into a misleading "
+            "term. If the role cannot be requested naturally, omit that label "
+            "field and rerun the label query, or choose another label."
         ),
     )
 
@@ -224,7 +228,8 @@ class AnswerOrderBinding(StrictModel):
             "phrase must name that specific order key and its ordering role; "
             "include direction/recency/tie-break wording, not only the bare "
             "output noun; display-only output wording is not enough; do not "
-            "reuse one broad order phrase for multiple different keys."
+            "reuse one broad order phrase for multiple different keys. Do not "
+            "invent malformed tie-break terms to satisfy this schema."
         ),
     )
     direction: Literal["asc", "desc"] | None = Field(
@@ -395,7 +400,10 @@ class SubmitDraftPayload(StrictModel):
             "only when the hidden context naturally represents the requester "
             "or their records and the latest query is scoped to that context. "
             "Target-language wording must be fluent and must not contain "
-            "mixed-script artifacts. "
+            "mixed-script artifacts, diagnostic fragments, or malformed "
+            "terms. Exact answer_contract substring matching never relaxes "
+            "this fluency requirement; after feedback, rewrite the whole "
+            "request cleanly instead of splicing field keys or repair phrases. "
             "Scope wording must match latest query evidence: direct hidden "
             "current-record handle lookups ask for that current record's own "
             "facts; parent period, list, or history wording requires query "

@@ -9229,3 +9229,71 @@ Solver 30/30 완료 결과:
 
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
   통과.
+
+## Iteration 141 — Accepted draft can still have broken request language
+
+- **질문**:
+  `trial_63`은 pass rate `1/4 = 0.25`로 accepted됐다. accepted data가 정말 좋은가?
+
+- **실험/결과**:
+  task는 특정 ICU stay의 procedureevents에서 최근 5개 처치/검사 기록을 묻는 list였다.
+
+  - request:
+    `이번 ICU 입원 중 가장 최근에 내원받은 클리니컬 기기 및 처치 확인을 위한 검사 명칭, 분류, 시작 시각, 종료 시각, 진단 분야를 포함한 시각 순으대로 방문 내역 정보 5가지를 최신순으대로, 각 시각에서 검사 및 처치 종류가 차이나는 경우 검사 명칭 점점인을 적용해 알려주세요.`
+  - canonical row set:
+    `procedureevents` + `d_items`, `starttime desc`, `d_items.label asc`, limit 5
+  - pass: 1 solver matched, 3 solver mismatched
+
+- **reasoning 교차 분석**:
+  composer는 첫 draft에서 `start_time` 동점 때문에 order ambiguity feedback을 받았다.
+  이후 hidden `orderid`를 생각했다가, 최종적으로는 visible tie-break인 `procedure_name`
+  오름차순으로 query를 고친 점은 List Determinism 원칙과 맞다.
+
+  그러나 다음 feedback에서 `end_time`, `order_category` phrase가 누락되자, composer는
+  자연스러운 user request 전체를 다시 쓰기보다 exact substring 계약을 맞추는 데 집중했다.
+  그 결과 `순으대로`, `최신순으대로`, `점점인` 같은 malformed fragment가 들어갔다.
+
+  solver reasoning도 같은 문제를 드러낸다. solver들은 row set은 대체로 `procedureevents`로
+  찾았지만, request의 `분류`/`진단 분야`가 자연스러운 source role을 고정하지 못해
+  `category`와 `order_category`를 서로 다른 방식으로 해석했다.
+
+- **DB 교차검증**:
+  DB 쿼리로 canonical row set/order 자체는 확인했다. 상위 5개는
+  `Portable Chest X-Ray`, `20 Gauge`, `Endoscopy`, `Chest X-Ray`, `PICC Line`이고,
+  4/5번째의 같은 시작 시각은 `procedure_name asc`로 결정된다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted.
+
+  row set과 visible tie-break는 구조적으로 검증 가능하지만, 사용자 요청이 깨진 한국어이고
+  field role도 오해를 유발한다. 이는 어려운 좋은 문제가 아니라 composer가 requestability를
+  희생해 schema 계약을 맞춘 문제다. satisfactory accepted streak는 계속 `0/5`다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. malformed natural language를 100% precision으로
+  판정하는 것은 불가능하고, 리터럴/토큰 기반 휴리스틱은 금지 원칙 위반이다.
+
+  대신 prompt-first 원칙으로 durable source와 tool schema를 같은 방향으로 보강했다.
+
+  - Request Contract: exact substring binding은 broken wording, invented term, diagnostic
+    phrase, misleading column/key translation을 정당화하지 않는다고 명시했다.
+  - Label Contract: binding phrase는 patched field/key gloss가 아니라 fluent customer
+    wording이어야 한다고 명시했다.
+  - `submit_draft.user_request` schema: feedback 후 field key/repair phrase를 끼워 넣지 말고
+    전체 request를 깨끗하게 다시 쓰라고 명시했다.
+  - missing phrase feedback: label fields를 무조건 유지하라는 압력을 줄이고, fluent request가
+    안 되면 cleaner field set으로 rerun하거나 다른 label을 선택하라고 상기시킨다.
+  - prompt 길이 예산을 지키기 위해 기존 Scope Example 1개와 중복 문구를 압축했다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_rejects_binding_phrase_absent_from_request tests/test_turn_budget_prompt.py -q`
+  통과 (`9 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`111 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.

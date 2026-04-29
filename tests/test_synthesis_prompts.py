@@ -265,6 +265,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "without technical or awkward controls" in instructions
     assert "formatting quirks" in instructions
     assert "choose another label" in instructions
+    assert "Exact substring binding never justifies broken wording" in instructions
+    assert "invented terms, diagnostic phrases" in instructions
+    assert "one natural request" in instructions
     assert "Derive `user_request` and `topic` from that label" in instructions
     assert "exactly the label fields and row controls" in instructions
     assert "supplies copied label JSON" in instructions
@@ -302,12 +305,12 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Core Definitions" in instructions
     assert "Source surface" in instructions
     assert "user wording, label fields, query path" in instructions
-    assert "one phrase can map to several reachable surfaces" in instructions
+    assert "ambiguous across reachable surfaces" in instructions
     assert "request/contract must name chosen source role" in instructions
     assert "broad nouns invalid" in instructions
-    assert "label/output_schema names cannot disambiguate" in instructions
-    assert "ordinary wording points to another reachable source" in instructions
-    assert "use that source or make the chosen source role explicit" in instructions
+    assert "label/output_schema cannot disambiguate" in instructions
+    assert "ordinary wording points elsewhere" in instructions
+    assert "use that source or name the role" in instructions
     assert "If no primary key" in instructions
     assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
@@ -317,7 +320,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Preserve anchor/language" in instructions
     assert "preserve target for repair/difficulty-up" in instructions
     assert "switch target when policy says another label/scope" in instructions
-    assert "phrase repair: clean wording" in instructions
+    assert "phrase repair: rewrite one clean fluent request" in instructions
+    assert "malformed fragments" in instructions
 
     # User-facing language and ID guidance stay general and English.
     assert "# Request Contract" in instructions
@@ -355,18 +359,17 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "rewording as C-related is not enough" in instructions
     assert "entity={P.pk}; query P->siblings" in instructions
     assert "answer row set share parent scope" in instructions
-    assert "entity={R.pk}; query filters R.pk" in instructions
-    assert "hidden current record and request scope match" in instructions
     assert "Do not attach `entity` to a global report" in instructions
     assert "Copy scoped evidence values exactly" in instructions
     assert "scoped evidence" in instructions
     assert "do not translate/transliterate them" in instructions
     assert "Keep request compact" in instructions
-    assert "ordinary target-language words" in instructions
-    assert "no malformed terms" in instructions
+    assert "Exact substring binding never justifies broken wording" in instructions
+    assert "misleading column/key translations" in instructions
     assert "Field keys stay in JSON" in instructions
-    assert "long tie-breaks" in instructions
-    assert "mechanical field lists" in instructions
+    assert "fields/source roles/tie-breaks cannot fit one natural request" in (
+        instructions
+    )
     assert "do not expose it" in instructions
     assert "exact object/scope/source" in instructions
     assert not re.search(r"[가-힣]", instructions)
@@ -424,7 +427,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "output/order bindings" in instructions
     assert "No tables, columns, operators, or SQL" in instructions
     assert "every phrase must be an exact substring of `user_request`" in instructions
-    assert "Binding phrases name returned roles" in instructions
+    assert "Binding phrases name returned/order roles" in instructions
     assert "order roles" in instructions
     assert "direction/recency/tie-break wording" in instructions
     assert "not the bare output noun" in instructions

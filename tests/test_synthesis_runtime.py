@@ -2597,6 +2597,10 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "explicit row-set or representation constraints" in schema_surface
     assert "Source type/category/status filters" in schema_surface
     assert "not broad synonyms" in schema_surface
+    assert "fluent customer wording" in schema_surface
+    assert "misleading term" in schema_surface
+    assert "rewrite the whole request cleanly" in schema_surface
+    assert "malformed tie-break terms" in schema_surface
     assert "For list labels, provide one binding for every returned label field" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "Each tie-break phrase must name that specific order key" in schema_surface
@@ -3149,7 +3153,8 @@ async def test_submit_draft_rejects_binding_phrase_absent_from_request(
     assert "Missing request phrases" in message
     assert "label_field='customer_count'" in message
     assert "phrase='_customer_count_'" in message
-    assert "Keep those label fields" in message
+    assert "Keep those label fields only if they still form a fluent user request" in message
+    assert "rerun with a cleaner field set" in message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None
 

@@ -132,13 +132,12 @@ def build_synthesis_agent_instructions(
         "JSON.\n"
         "- Unique label: one correct structured answer for hidden entity/request. "
         "Handle visible ties; never rely on hidden ids/order/filters.\n"
-        "- Source surface: user wording, label fields, query path same "
-        "role. If one phrase can map to several reachable surfaces, "
-        "request/contract must name chosen source role; label/output_schema "
-        "names cannot disambiguate; broad nouns invalid. If ordinary wording "
-        "points to another reachable source, use that source or make the "
-        "chosen source role explicit. If no primary key, "
-        "use primary-key-backed path/aggregate; no hidden path guessing.",
+        "- Source surface: user wording, label fields, query path same role. "
+        "If ambiguous across reachable surfaces, request/contract must name "
+        "chosen source role; label/output_schema cannot disambiguate; broad "
+        "nouns invalid. If ordinary wording points elsewhere, use that source "
+        "or name the role. If no primary key, use "
+        "primary-key-backed path/aggregate; no hidden path guessing.",
 
         "# Request Contract\n"
         "configured target language:\n"
@@ -153,9 +152,11 @@ def build_synthesis_agent_instructions(
         "- Hidden-handle-only entity/filter: do not expose it. "
         "Copy scoped evidence values exactly; do not "
         "translate/transliterate them.\n"
-        "- Keep request compact; use ordinary target-language words, "
-        "no malformed terms. Field keys stay in JSON. If long tie-breaks/"
-        "mechanical field lists needed, choose another label.\n"
+        "- Keep request compact/fluent. Exact substring "
+        "binding never justifies broken wording, invented terms, diagnostic "
+        "phrases, or misleading column/key translations. Field keys stay in "
+        "JSON. If fields/source roles/tie-breaks cannot fit one natural "
+        "request, choose another label.\n"
         "- Bind modifiers/filters to exact object/scope/source. Non-null/status/"
         "type filters need row-set wording and matching query.where, not output "
         "names. If only returned, ask records plus field.",
@@ -190,8 +191,9 @@ def build_synthesis_agent_instructions(
         "answer_phrase, constraints, limit, output/order bindings. No tables, "
         "columns, operators, or SQL; every phrase must be an exact substring "
         "of `user_request`.\n"
-        "- Binding phrases name returned roles and order roles. For an order key, "
-        "use direction/recency/tie-break wording, not the bare output noun; "
+        "- Binding phrases name returned/order roles in fluent customer "
+        "wording, not patched field/key glosses. For an order key, use "
+        "direction/recency/tie-break wording, not the bare output noun; "
         "display-only wording is not enough. Multi-key order needs distinct "
         "request phrases; never bind one vague phrase to multiple concepts.",
 
@@ -223,16 +225,14 @@ def build_synthesis_agent_instructions(
         "</commentary></example>\n"
         "<example>entity={P.pk}; query P->siblings"
         "<commentary>answer row set share parent scope"
-        "</commentary></example>\n"
-        "<example>entity={R.pk}; query filters R.pk"
-        "<commentary>hidden current record "
-        "and request scope match</commentary></example>",
+        "</commentary></example>",
 
         "# Feedback And Difficulty-Up Policy\n"
         "FeedbackError is not a new durable instruction source; pointer to an "
         "existing named policy. Preserve anchor/language; preserve target for "
         "repair/difficulty-up; switch target when policy says another "
-        "label/scope. phrase repair: clean wording\n"
+        "label/scope. phrase repair: rewrite one clean fluent request; never "
+        "splice diagnostics/keys/malformed fragments.\n"
         "- Specificity: baseline is the last evaluated draft; preserve "
         "anchor/target. Lists preserve row set/order/limit/output fields/source "
         "meanings/phrases; scalar aggregates may add group/compare. Add the "
