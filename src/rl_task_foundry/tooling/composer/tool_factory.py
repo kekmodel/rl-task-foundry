@@ -694,7 +694,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "than two order keys total; if more are needed, choose "
                     "another label or return tied rows. A selected output "
                     "field is not an order request unless the request also "
-                    "states its direction, recency, rank, or tie-break role."
+                    "states its direction, recency, rank, or tie-break role. "
+                    "If diagnostics list handle_order_by_columns, that key is "
+                    "a handle; do not keep it as a silent tie-break."
                 ),
                 "items": {
                     "type": "object",
@@ -797,7 +799,10 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "include duplicate_order_key_in_returned_rows or "
                     "unrepresented_order_by_tie_breakers for a list, do not "
                     "submit that result as final label evidence; revise the "
-                    "request/order/output fields or choose another label."
+                    "request/order/output fields or choose another label. "
+                    "If handle_order_by_columns appears, use the handle only "
+                    "when the request explicitly asks for that record sequence "
+                    "or reference role; otherwise pick a natural visible key."
                 ),
             }
         },

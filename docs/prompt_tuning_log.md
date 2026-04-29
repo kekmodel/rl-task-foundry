@@ -6696,6 +6696,72 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_prompts.py`
   통과.
 
+## Iteration 163 — Query diagnostics should name handle order keys
+
+- **질문**:
+  Iteration 162의 binding-only data budget 개선 뒤 `trial_45`에서 composer가 repair를
+  완료하는가?
+
+- **실험/결과**:
+  `trial_45`도 solver rollout 전 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_45`
+  - topic: `ICU 중재 시술 기록`
+  - 첫 draft: ICU 입원 중 가장 먼저 시행된 procedureevent 5개
+  - 결과: `synthesis_failed`, feedback 5회
+  - 마지막 feedback: `answer_contract_order_ambiguous`, `answer_contract_binding_missing`
+  - solver 도달 없음
+
+- **reasoning 교차 분석**:
+  reasoning content는 정상 저장됐다. composer는 첫 query에서 `starttime`만 order_by로 쓰면
+  `duplicate_order_key_in_returned_rows`가 난다는 점을 읽었다. 그러나 그 다음
+  `orderid`를 silent tie-break로 쓰면 deterministic하다고 판단했다.
+
+  첫 feedback 뒤에는 `orderid`가 hidden handle이라 안 된다는 점을 이해했다. 이후 자연
+  visible tie-break로 `category`를 시도했지만, 같은 시간/같은 category 안에서도 동점이 남았다.
+  composer는 마지막 reasoning에서야 `procedure_name`을 tie-break로 써야겠다고 판단했지만,
+  이미 제출 횟수를 모두 쓴 뒤였다.
+
+  핵심 병목은 validator 부재가 아니다. submit validator는 hidden handle tie-break와 남은
+  duplicate order key를 모두 precision 100으로 잡았다. 문제는 `query` 결과의 `is_handle`
+  metadata가 깊은 referenced column payload 안에 있어, composer가 "silent handle tie-break"
+  를 좋은 수리로 오판한 점이다.
+
+- **정성 평가**:
+  accepted data: 없음. 저품질 accepted도 없음.
+
+  rejected data: low-quality rejected. row 후보는 의료적으로 자연스럽고 좋은 후보였지만,
+  제출 draft는 limited list membership/order를 자연어 request와 answer_contract로 유일하게
+  고정하지 못했다. solver가 어려워서 못 푼 문제가 아니라 composer가 hidden handle order와
+  남은 visible tie를 정리하지 못한 문제다.
+
+- **개선 판단**:
+  새 hard validator는 추가하지 않았다. 이미 정밀한 validator가 거절하고 있다.
+
+  대신 tool-local diagnostics를 보강했다. `query`는 schema metadata를 객관적으로 알고 있으므로,
+  ordering diagnostics가 발생한 경우 handle order key를 `handle_order_by_columns`로 직접
+  표면화할 수 있다. 이건 DB 리터럴/토큰 휴리스틱이 아니라 tool이 이미 아는 column metadata의
+  구조적 노출이다.
+
+  feedback도 기존 List Determinism Policy를 상기하는 쪽으로만 보강했다. query diagnostics가
+  아직 ambiguity를 말하면 wording-only submit을 하지 말고 repaired label query를 다시 실행하거나
+  다른 label로 전환하라는 문구를 추가했다.
+
+- **변경**:
+  - `query.ordering_diagnostics`에 문제가 있는 handle order key를
+    `handle_order_by_columns`로 노출한다.
+  - `query` tool schema description에 `handle_order_by_columns`의 의미와 silent handle
+    tie-break 금지를 추가했다.
+  - `answer_contract_order_ambiguous` feedback에 wording-only resubmit 금지 문구를 추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`158 passed`).
+
+  `uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

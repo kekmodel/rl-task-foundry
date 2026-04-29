@@ -3475,6 +3475,7 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
     assert "not malformed terms" in message
     assert "long/mechanical field lists" in message
     assert "choose another label instead of stacking tie-break fields" in message
+    assert "do not resubmit with wording-only changes" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []
     assert controller.accepted_draft is None

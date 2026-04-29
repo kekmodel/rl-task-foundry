@@ -361,6 +361,8 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "choose another label or return tied rows" in descriptions["query"][
         "$.spec.order_by"
     ]
+    assert "handle_order_by_columns" in descriptions["query"]["$.spec.order_by"]
+    assert "silent tie-break" in descriptions["query"]["$.spec.order_by"]
     assert "Match the direction or ranking stated in user_request" in descriptions[
         "query"
     ]["$.spec.order_by[].direction"]
@@ -376,6 +378,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "indistinguishable" in descriptions["query"]["$.spec"]
     assert "duplicate_order_key_in_returned_rows" in descriptions["query"]["$.spec"]
     assert "unrepresented_order_by_tie_breakers" in descriptions["query"]["$.spec"]
+    assert "handle_order_by_columns" in descriptions["query"]["$.spec"]
     assert "do not submit that result as final label evidence" in descriptions[
         "query"
     ]["$.spec"]

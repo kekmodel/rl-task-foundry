@@ -902,6 +902,26 @@ def _unrepresented_order_by_tie_breakers(
     return unrepresented
 
 
+def _handle_order_by_columns(
+    order_entries: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    handles: list[dict[str, object]] = []
+    for entry in order_entries:
+        if entry.get("is_handle") is not True:
+            continue
+        payload = {
+            "table": entry.get("table"),
+            "column": entry.get("column"),
+            "direction": entry.get("direction"),
+            "is_selected_output": isinstance(entry.get("output"), str),
+        }
+        output = entry.get("output")
+        if isinstance(output, str):
+            payload["output"] = output
+        handles.append(payload)
+    return handles
+
+
 def _limit_boundary_has_answer_distinguishable_tie(
     rows: list[dict[str, object]],
     *,
@@ -965,6 +985,7 @@ def _ordering_diagnostics(
         order_entries,
         answer_outputs=answer_outputs,
     )
+    handle_order_by_columns = _handle_order_by_columns(order_entries)
     limit_boundary_tie = (
         _limit_boundary_has_answer_distinguishable_tie(
             diagnostic_rows,
@@ -1004,6 +1025,8 @@ def _ordering_diagnostics(
             diagnostics["unrepresented_order_by_tie_breakers"] = (
                 unrepresented_tie_breakers
             )
+        if handle_order_by_columns:
+            diagnostics["handle_order_by_columns"] = handle_order_by_columns
         if limit_boundary_tie:
             diagnostics["limit_boundary_tie"] = True
         return diagnostics
@@ -1016,6 +1039,10 @@ def _ordering_diagnostics(
         diagnostics["limit"] = parsed.limit
     if unrepresented_tie_breakers:
         diagnostics["unrepresented_order_by_tie_breakers"] = unrepresented_tie_breakers
+    if handle_order_by_columns and (
+        duplicate_order_key or unrepresented_tie_breakers or limit_boundary_tie
+    ):
+        diagnostics["handle_order_by_columns"] = handle_order_by_columns
     if limit_boundary_tie:
         diagnostics["limit_boundary_tie"] = True
     return diagnostics

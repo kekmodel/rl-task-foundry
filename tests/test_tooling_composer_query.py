@@ -624,6 +624,14 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
                 "is_handle": True,
             }
         ],
+        "handle_order_by_columns": [
+            {
+                "table": "customer",
+                "column": "customer_id",
+                "direction": "desc",
+                "is_selected_output": False,
+            }
+        ],
         "returned_row_count": 3,
         "limit": 3,
     }
@@ -662,6 +670,14 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_without_limit():
                 "column": "customer_id",
                 "direction": "desc",
                 "is_handle": True,
+            }
+        ],
+        "handle_order_by_columns": [
+            {
+                "table": "customer",
+                "column": "customer_id",
+                "direction": "desc",
+                "is_selected_output": False,
             }
         ],
         "returned_row_count": 3,
