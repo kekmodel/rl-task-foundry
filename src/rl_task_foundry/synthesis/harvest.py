@@ -21,7 +21,6 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.db import DatabasePools, ensure_database_pools
 from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
 from rl_task_foundry.synthesis.backend_openai_agents import OpenAIAgentsSynthesisBackend
-from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
 from rl_task_foundry.synthesis.real_db_trial import (
@@ -69,9 +68,7 @@ class HarvestRunner:
 
     config: AppConfig
     registry: TaskRegistryWriter | None = None
-    exporter: TaskBundleExporter | None = None
     trial_runner_factory: TrialRunnerFactory | None = None
-    export_trial_bundles: bool = False
     _shared_pools: DatabasePools | None = field(default=None, init=False, repr=False)
     _shared_solver_orchestrator: SolverOrchestrator | None = field(
         default=None, init=False, repr=False
@@ -86,12 +83,6 @@ class HarvestRunner:
     def __post_init__(self) -> None:
         if self.registry is None:
             self.registry = TaskRegistryWriter.for_config(self.config)
-        if self.exporter is None:
-            assert self.registry.snapshot_materializer is not None
-            self.exporter = TaskBundleExporter(
-                registry=self.registry,
-                snapshot_materializer=self.registry.snapshot_materializer,
-            )
 
     def _build_trial_runner(self, *, db_id: str) -> RealDbTrialRunner:
         if self.trial_runner_factory is not None:
@@ -99,11 +90,9 @@ class HarvestRunner:
         return RealDbTrialRunner(
             self.config,
             registry=self.registry,
-            exporter=self.exporter,
             database_pools=self._shared_pools,
             solver_orchestrator=self._shared_solver_orchestrator,
             synthesis_db=self._synthesis_dbs.get(db_id),
-            export_trial_bundle=self.export_trial_bundles,
         )
 
     async def _ensure_synthesis_db(self, db_id: str) -> SynthesisDb:

@@ -87,8 +87,7 @@ Per-trial debug output is for analysis only:
 - `reasoning_content.jsonl`: optional provider-visible reasoning sidecar
 - `traces/`: SDK/tool/session traces
 
-Single `run-real-db-trial` runs export a self-contained trial bundle by
-default, because they are often used for demos and inspection. `harvest` does
-not export per-trial bundles by default; accepted tasks are already durable in
-the registry, and repeated bundle copies make large experiments noisy. Pass
-`--export-trial-bundles` only when debugging a specific harvest run.
+All trial commands are lightweight by design. They commit accepted tasks to the
+registry and write debug traces, but they do not create per-trial serving
+bundles. Run `export-bundle` explicitly when a durable registry snapshot needs
+to be materialized for serving, demos, or handoff.

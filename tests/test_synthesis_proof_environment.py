@@ -113,7 +113,7 @@ def test_proof_topic_is_itinerary_taxonomy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_proof_task_commits_and_exports_bundle(
+async def test_run_proof_task_commits_without_exporting_bundle(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -133,12 +133,9 @@ async def test_run_proof_task_commits_and_exports_bundle(
     assert summary.task_id is not None
     assert summary.flow_id is not None
     assert summary.registry_status is TaskRegistryCommitStatus.COMMITTED
-    assert summary.bundle_root is not None
+    assert summary.bundle_root is None
     assert summary.phase_monitor_log_path is not None
-    assert (summary.bundle_root / "databases" / PROOF_DB_ID / "schema_snapshot.json").exists()
-    assert (summary.bundle_root / "databases" / PROOF_DB_ID / "tooling_version.json").exists()
     assert summary.task_id is not None
-    assert (summary.bundle_root / "tasks" / summary.task_id / "task.yaml").exists()
     assert "anchor candidate seeding failed" not in caplog.text
 
     phase_monitor_lines = [

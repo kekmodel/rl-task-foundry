@@ -1,15 +1,15 @@
 """Real-database single-task trial runner.
 
-The on-disk source of truth for trial debugging is the phase monitor log plus
-debug traces and any exported bundle artifacts. The summary object returned by
-this module is in-memory only and is not persisted as a separate JSON file.
+The on-disk source of truth for trial debugging is the phase monitor log and
+debug traces. Durable accepted data lives in the registry; serving bundles are
+materialized separately with ``export-bundle``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
@@ -18,7 +18,6 @@ from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.db import DatabasePools
 from rl_task_foundry.infra.event_log import TrialEventLogger
 from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
-from rl_task_foundry.synthesis.bundle_exporter import TaskBundleExporter
 from rl_task_foundry.synthesis.contracts import normalize_topic
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.pipeline_events import build_flow_id
@@ -31,9 +30,6 @@ from rl_task_foundry.synthesis.runtime import (
     SynthesisProviderUnavailableError,
     SynthesisRuntimeError,
     _SynthesisBackendProtocol,
-)
-from rl_task_foundry.synthesis.snapshot_materializer import (
-    SchemaSnapshotMaterializer,
 )
 from rl_task_foundry.synthesis.synthesis_db import SynthesisDb
 from rl_task_foundry.synthesis.task_registry import (
@@ -178,12 +174,10 @@ class RealDbTrialRunner:
     config: AppConfig
     synthesis_runtime: SynthesisAgentRuntime | None = None
     registry: TaskRegistryWriter | None = None
-    exporter: TaskBundleExporter | None = None
     database_pools: DatabasePools | None = None
     solver_orchestrator: SolverOrchestrator | None = None
     synthesis_db: SynthesisDb | None = None
     synthesis_backends: list[_SynthesisBackendProtocol] | None = None
-    export_trial_bundle: bool = True
     _owns_solver_orchestrator: bool = field(default=False, init=False, repr=False)
     _owns_registry: bool = field(default=False, init=False, repr=False)
 
@@ -191,12 +185,6 @@ class RealDbTrialRunner:
         if self.registry is None:
             self.registry = TaskRegistryWriter.for_config(self.config)
             self._owns_registry = True
-        if self.exporter is None:
-            assert self.registry.snapshot_materializer is not None
-            self.exporter = TaskBundleExporter(
-                registry=self.registry,
-                snapshot_materializer=self.registry.snapshot_materializer,
-            )
         if self.solver_orchestrator is None and self.synthesis_runtime is None:
             self.solver_orchestrator = SolverOrchestrator(
                 self.config,
@@ -248,16 +236,6 @@ class RealDbTrialRunner:
             checks={"debug_root_ready": debug_root.exists()},
             diagnostics={},
         )
-        if self.export_trial_bundle:
-            trial_materializer = SchemaSnapshotMaterializer(
-                root_dir=debug_root / "databases"
-            )
-            if self.synthesis_db is not None:
-                self.synthesis_db.use_snapshot_materializer(trial_materializer)
-            if hasattr(self.exporter, "snapshot_materializer"):
-                self.exporter = replace(
-                    self.exporter, snapshot_materializer=trial_materializer
-                )
         runtime = self._synthesis_runtime_for_trial(
             debug_traces_dir, phase_monitor, event_logger=event_logger
         )
@@ -268,12 +246,6 @@ class RealDbTrialRunner:
         if self.solver_orchestrator is not None:
             self.solver_orchestrator.traces_dir_override = debug_traces_dir
             self.solver_orchestrator.event_logger = event_logger
-        # Synchronize the bundle exporter's snapshot source with where
-        # SynthesisDb actually materializes the schema during this
-        # trial. Without this the exporter reads the global
-        # ``artifacts/databases/<db_id>/`` path and raises
-        # FileNotFoundError even though the snapshot was written into
-        # ``<output_root>/debug/databases/<db_id>/``.
         production_loop_started_at = time.monotonic()
 
         def elapsed_seconds() -> float:
@@ -473,7 +445,6 @@ class RealDbTrialRunner:
             return summary
 
         assert self.registry is not None
-        assert self.exporter is not None
         commit_result = self.registry.commit_draft(draft)
         phase_monitor.emit(
             phase="registry_commit",
@@ -492,35 +463,19 @@ class RealDbTrialRunner:
             },
             diagnostics={},
         )
-        bundle_root = output_root / "bundle" if self.export_trial_bundle else None
-        if self.export_trial_bundle:
-            assert bundle_root is not None
-            self.exporter.export_bundle(bundle_root, task_id=commit_result.task_id)
-            phase_monitor.emit(
-                phase="bundle_export",
-                status="completed",
-                expected_contract={"bundle_root": bundle_root},
-                actual_data={
-                    "bundle_root": bundle_root,
-                    "task_id": commit_result.task_id,
-                },
-                checks={"bundle_root_exists": bundle_root.exists()},
-                diagnostics={},
-            )
-        else:
-            phase_monitor.emit(
-                phase="bundle_export",
-                status="skipped",
-                expected_contract={"registry_is_durable_source": True},
-                actual_data={"task_id": commit_result.task_id},
-                checks={"trial_bundle_export_disabled": True},
-                diagnostics={
-                    "export_hint": (
-                        "Use export-bundle to materialize serving bundles "
-                        "from the registry."
-                    )
-                },
-            )
+        phase_monitor.emit(
+            phase="bundle_export",
+            status="skipped",
+            expected_contract={"registry_is_durable_source": True},
+            actual_data={"task_id": commit_result.task_id},
+            checks={"trial_bundle_export_disabled": True},
+            diagnostics={
+                "export_hint": (
+                    "Use export-bundle to materialize serving bundles "
+                    "from the registry."
+                )
+            },
+        )
         final_status = (
             RealDbTrialStatus.ACCEPTED
             if commit_result.status is TaskRegistryCommitStatus.COMMITTED
@@ -548,7 +503,7 @@ class RealDbTrialRunner:
             solver_failed_runs=draft.task_bundle.quality_metrics.solver_failed_runs,
             registry_status=commit_result.status,
             registry_task_id=commit_result.task_id,
-            bundle_root=bundle_root,
+            bundle_root=None,
             elapsed_seconds=elapsed_seconds(),
         )
         phase_monitor.close()

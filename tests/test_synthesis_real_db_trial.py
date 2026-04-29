@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -73,26 +72,6 @@ class _FakeRegistry:
         self.closed = True
 
 
-@dataclass(slots=True)
-class _FakeExporter:
-    calls: list[tuple[Path, str | None]] | None = None
-
-    def __post_init__(self) -> None:
-        if self.calls is None:
-            self.calls = []
-
-    def export_bundle(
-        self,
-        bundle_root: Path,
-        *,
-        task_id: str | None = None,
-        **_: object,
-    ) -> object:
-        self.calls.append((bundle_root, task_id))
-        bundle_root.mkdir(parents=True, exist_ok=True)
-        return SimpleNamespace(bundle_root=bundle_root)
-
-
 def _config_with_tmp_traces(
     tmp_path: Path,
     *,
@@ -120,7 +99,9 @@ def _config_with_tmp_traces(
 
 
 @pytest.mark.asyncio
-async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -> None:
+async def test_real_db_trial_runner_commits_without_exporting_bundle(
+    tmp_path: Path,
+) -> None:
     base_draft = _sample_draft(tmp_task_id="task_real_trial")
     accepted_draft = base_draft.model_copy(
         update={
@@ -152,12 +133,10 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
             filesystem_path=tmp_path / "tasks" / accepted_draft.task_bundle.task_id,
         )
     )
-    exporter = _FakeExporter()
     runner = RealDbTrialRunner(
         _config_with_tmp_traces(tmp_path),
         synthesis_runtime=runtime,
         registry=registry,
-        exporter=exporter,
     )
     output_root = tmp_path / "real_trial"
 
@@ -173,8 +152,9 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
     assert summary.trial_status is RealDbTrialStatus.ACCEPTED
     assert summary.quality_gate_status == "accept"
     assert summary.registry_status is TaskRegistryCommitStatus.COMMITTED
-    assert summary.bundle_root == output_root / "bundle"
-    assert exporter.calls == [(output_root / "bundle", accepted_draft.task_bundle.task_id)]
+    assert summary.bundle_root is None
+    assert not (output_root / "bundle").exists()
+    assert not (output_root / "debug" / "databases").exists()
     assert not (output_root / "trial_summary.json").exists()
     assert summary.task_id == "task_real_trial"
     assert summary.solver_matched_runs == 10
@@ -188,44 +168,6 @@ async def test_real_db_trial_runner_commits_and_exports_bundle(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_real_db_trial_runner_can_skip_trial_bundle_export(tmp_path: Path) -> None:
-    accepted_draft = _sample_draft(tmp_task_id="task_real_trial_no_bundle")
-    runtime = _FakeSynthesisRuntime(draft=accepted_draft)
-    registry = _FakeRegistry(
-        result=TaskRegistryCommitResult(
-            status=TaskRegistryCommitStatus.COMMITTED,
-            task_id=accepted_draft.task_bundle.task_id,
-            exact_signature="sha256:trial-no-bundle",
-            filesystem_path=tmp_path / "tasks" / accepted_draft.task_bundle.task_id,
-        )
-    )
-    exporter = _FakeExporter()
-    runner = RealDbTrialRunner(
-        _config_with_tmp_traces(tmp_path),
-        synthesis_runtime=runtime,
-        registry=registry,
-        exporter=exporter,
-        export_trial_bundle=False,
-    )
-    output_root = tmp_path / "real_trial"
-
-    try:
-        summary = await runner.run(
-            output_root,
-            db_id="sakila",
-            topic="assignment",
-        )
-    finally:
-        await runner.close()
-
-    assert summary.trial_status is RealDbTrialStatus.ACCEPTED
-    assert summary.bundle_root is None
-    assert exporter.calls == []
-    assert not (output_root / "bundle").exists()
-    assert not (output_root / "debug" / "databases").exists()
-
-
-@pytest.mark.asyncio
 async def test_real_db_trial_runner_enforces_wall_clock_timeout(tmp_path: Path) -> None:
     registry = _FakeRegistry(
         result=TaskRegistryCommitResult(
@@ -235,7 +177,6 @@ async def test_real_db_trial_runner_enforces_wall_clock_timeout(tmp_path: Path) 
             filesystem_path=tmp_path / "unused",
         )
     )
-    exporter = _FakeExporter()
     runner = RealDbTrialRunner(
         _config_with_tmp_traces(tmp_path, trial_timeout_s=0.01),
         synthesis_runtime=_FakeSynthesisRuntime(
@@ -243,7 +184,6 @@ async def test_real_db_trial_runner_enforces_wall_clock_timeout(tmp_path: Path) 
             draft=_sample_draft(tmp_task_id="task_never_committed"),
         ),
         registry=registry,
-        exporter=exporter,
     )
 
     try:
@@ -262,7 +202,6 @@ async def test_real_db_trial_runner_enforces_wall_clock_timeout(tmp_path: Path) 
     assert summary.elapsed_seconds is not None
     assert summary.elapsed_seconds < 1.0
     assert registry.committed_drafts == []
-    assert exporter.calls == []
 
 
 @pytest.mark.asyncio
@@ -306,7 +245,6 @@ async def test_real_db_trial_runner_surfaces_generation_failure(tmp_path: Path) 
                 filesystem_path=tmp_path / "unused",
             )
         ),
-        exporter=_FakeExporter(),
     )
 
     try:

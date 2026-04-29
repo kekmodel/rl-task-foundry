@@ -89,7 +89,7 @@ class SynthesisDb:
         Derived from the cached `SchemaGraph` via `snapshot_from_graph`
         and cached per `SynthesisDb`. On first resolution the snapshot
         is also materialized to disk (see `SchemaSnapshotMaterializer`)
-        so `bundle_exporter` can ship it without touching the DB again.
+        so registry export can ship it without touching the DB again.
         """
         if self._schema_snapshot_cache is not None:
             return self._schema_snapshot_cache

@@ -273,7 +273,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
                 last_feedback_error_codes=("answer_contract_query_mismatch",),
                 registry_status=TaskRegistryCommitStatus.COMMITTED,
                 registry_task_id="task_real_trial",
-                bundle_root=output_dir / "bundle",
+                bundle_root=None,
                 elapsed_seconds=12.345,
             )
 
@@ -320,6 +320,7 @@ def test_cli_run_real_db_trial_reports_summary(monkeypatch, tmp_path) -> None:
     assert "solver_failed_runs=1" in result.stdout
     assert "feedback_events=2" in result.stdout
     assert "last_feedback_error_codes=['answer_contract_query_mismatch']" in result.stdout
+    assert "bundle_root=" not in result.stdout
     assert captured["output_dir"] == output_dir
     assert captured["db_id"] == "sakila"
     assert captured["closed"] is True
