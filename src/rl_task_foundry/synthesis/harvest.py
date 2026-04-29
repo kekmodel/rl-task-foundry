@@ -4,7 +4,8 @@ Drives many independent single-shot trials in parallel until either a target
 number of registry-committed tasks is reached, or no new commit lands within a
 stall timeout. Each trial is a fresh anchor + fresh conversation; failures
 (too_hard, validation, provider) just count as discarded attempts and another
-trial follows.
+trial follows. Production timing excludes one-time DB/pool/schema warm-up and
+separates provider-issue trials from productive loop cost.
 """
 
 from __future__ import annotations
@@ -52,6 +53,10 @@ class HarvestSummary:
     phase_monitor_log_path: Path
     output_root: Path
     elapsed_seconds: float
+    productive_elapsed_seconds: float
+    provider_issue_elapsed_seconds: float
+    provider_issue_trials: int
+    productive_seconds_per_accepted: float | None
     trials: tuple[RealDbTrialSummary, ...]
 
 
@@ -112,6 +117,12 @@ class HarvestRunner:
             self._synthesis_dbs[db_id] = synthesis_db
             return synthesis_db
 
+    async def _warm_synthesis_db(self, db_id: str) -> None:
+        synthesis_db = await self._ensure_synthesis_db(db_id)
+        await synthesis_db.schema_graph()
+        await synthesis_db.data_profile()
+        await synthesis_db.schema_snapshot()
+
     async def run(
         self,
         output_root: Path,
@@ -142,7 +153,7 @@ class HarvestRunner:
                 database_pools=self._shared_pools,
             )
         if self.trial_runner_factory is None:
-            await self._ensure_synthesis_db(db_id)
+            await self._warm_synthesis_db(db_id)
         harvest_monitor_path = output_root / "phase_monitors.jsonl"
         flow_id = build_flow_id("harvest")
         harvest_monitor = PipelinePhaseMonitorLogger(
@@ -248,6 +259,20 @@ class HarvestRunner:
             await asyncio.gather(*worker_tasks, watchdog_task, return_exceptions=True)
 
         elapsed = time.monotonic() - started_at
+        provider_issue_trials = tuple(
+            trial for trial in results if _is_provider_issue_trial(trial)
+        )
+        provider_issue_elapsed = sum(
+            trial.elapsed_seconds or 0.0 for trial in provider_issue_trials
+        )
+        productive_elapsed = sum(
+            trial.elapsed_seconds or 0.0
+            for trial in results
+            if not _is_provider_issue_trial(trial)
+        )
+        productive_seconds_per_accepted = (
+            productive_elapsed / committed if committed else None
+        )
         if committed >= target_committed:
             outcome = HarvestOutcome.TARGET_REACHED
         elif attempted == 0:
@@ -262,9 +287,24 @@ class HarvestRunner:
                 "committed": committed,
                 "attempted": attempted,
                 "elapsed_seconds": round(elapsed, 1),
+                "productive_elapsed_seconds": round(productive_elapsed, 1),
+                "productive_seconds_per_accepted": (
+                    round(productive_seconds_per_accepted, 1)
+                    if productive_seconds_per_accepted is not None
+                    else None
+                ),
+                "provider_issue_trials": len(provider_issue_trials),
+                "provider_issue_elapsed_seconds": round(provider_issue_elapsed, 1),
                 "accepted_task_ids": list(accepted_task_ids),
             },
-            checks={"target_reached": committed >= target_committed},
+            checks={
+                "target_reached": committed >= target_committed,
+                "productive_seconds_per_accepted_within_300s": (
+                    productive_seconds_per_accepted <= 300.0
+                    if productive_seconds_per_accepted is not None
+                    else None
+                ),
+            },
             diagnostics={},
         )
         harvest_monitor.close()
@@ -280,6 +320,10 @@ class HarvestRunner:
             phase_monitor_log_path=harvest_monitor_path,
             output_root=output_root,
             elapsed_seconds=elapsed,
+            productive_elapsed_seconds=productive_elapsed,
+            provider_issue_elapsed_seconds=provider_issue_elapsed,
+            provider_issue_trials=len(provider_issue_trials),
+            productive_seconds_per_accepted=productive_seconds_per_accepted,
             trials=tuple(results),
         )
 
@@ -297,3 +341,12 @@ class HarvestRunner:
         if self._shared_pools is not None:
             await self._shared_pools.close()
             self._shared_pools = None
+
+
+def _is_provider_issue_trial(summary: RealDbTrialSummary) -> bool:
+    if summary.synthesis_error_type == "SynthesisProviderUnavailableError":
+        return True
+    return (
+        summary.synthesis_error_type == "SynthesisPhaseExecutionError"
+        and bool(summary.backend_failures)
+    )

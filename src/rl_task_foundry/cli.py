@@ -489,6 +489,19 @@ def harvest(
         console.print(f"committed={summary.committed}")
         console.print(f"attempted={summary.attempted}")
         console.print(f"elapsed_seconds={summary.elapsed_seconds:.1f}")
+        console.print(
+            f"productive_elapsed_seconds={summary.productive_elapsed_seconds:.1f}"
+        )
+        if summary.productive_seconds_per_accepted is not None:
+            console.print(
+                "productive_seconds_per_accepted="
+                f"{summary.productive_seconds_per_accepted:.1f}"
+            )
+        console.print(f"provider_issue_trials={summary.provider_issue_trials}")
+        console.print(
+            "provider_issue_elapsed_seconds="
+            f"{summary.provider_issue_elapsed_seconds:.1f}"
+        )
         console.print(f"flow_id={summary.flow_id}")
         console.print(f"phase_monitor_log_path={summary.phase_monitor_log_path}")
         if summary.accepted_task_ids:

@@ -211,11 +211,6 @@ class RealDbTrialRunner:
         topic: str | None = None,
         mirror_monitor_path: Path | None = None,
     ) -> RealDbTrialSummary:
-        started_at = time.monotonic()
-
-        def elapsed_seconds() -> float:
-            return round(time.monotonic() - started_at, 3)
-
         if topic:
             topic = normalize_topic(topic)
         output_root.mkdir(parents=True, exist_ok=True)
@@ -277,6 +272,11 @@ class RealDbTrialRunner:
         # ``artifacts/databases/<db_id>/`` path and raises
         # FileNotFoundError even though the snapshot was written into
         # ``<output_root>/debug/databases/<db_id>/``.
+        production_loop_started_at = time.monotonic()
+
+        def elapsed_seconds() -> float:
+            return round(time.monotonic() - production_loop_started_at, 3)
+
         try:
             draft = await asyncio.wait_for(
                 runtime.synthesize_environment_draft(

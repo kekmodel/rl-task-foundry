@@ -15,6 +15,8 @@ from rl_task_foundry.synthesis.harvest import (
 )
 from rl_task_foundry.synthesis.real_db_trial import (
     RealDbTrialRunner,
+    RealDbTrialStatus,
+    RealDbTrialSummary,
 )
 from rl_task_foundry.synthesis.runtime import (
     SynthesisArtifactDiagnostics,
@@ -173,6 +175,34 @@ def _build_factory(config, registry, exporter, runtime_outcomes_per_trial):
     return factory
 
 
+@dataclass(slots=True)
+class _ScriptedSummaryRunner:
+    summary: RealDbTrialSummary
+    closed: bool = False
+
+    async def run(
+        self,
+        output_root: Path,
+        *,
+        db_id: str,
+        topic: str | None = None,
+        mirror_monitor_path: Path | None = None,
+    ) -> RealDbTrialSummary:
+        return self.summary
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _summary_factory(summaries: list[RealDbTrialSummary]):
+    pending = iter(summaries)
+
+    def factory():
+        return _ScriptedSummaryRunner(next(pending))
+
+    return factory
+
+
 @pytest.mark.asyncio
 async def test_harvest_runner_reaches_target(tmp_path: Path) -> None:
     config = _config_with_tmp_traces(tmp_path)
@@ -201,6 +231,9 @@ async def test_harvest_runner_reaches_target(tmp_path: Path) -> None:
     assert summary.committed == 3
     assert summary.attempted == 3
     assert summary.accepted_task_ids == ("task_h_00", "task_h_01", "task_h_02")
+    assert summary.provider_issue_trials == 0
+    assert summary.productive_elapsed_seconds >= 0.0
+    assert summary.productive_seconds_per_accepted is not None
     assert (out / "phase_monitors.jsonl").exists()
     assert (out / "trials" / "trial_0001" / "debug" / "phase_monitors.jsonl").exists()
     # mirror aggregation includes harvest events + every trial's events
@@ -240,6 +273,60 @@ async def test_harvest_runner_stalls_when_no_commits(tmp_path: Path) -> None:
     assert summary.committed == 0
     assert summary.attempted >= 1
     assert summary.accepted_task_ids == ()
+    assert summary.productive_seconds_per_accepted is None
+
+
+@pytest.mark.asyncio
+async def test_harvest_runner_excludes_provider_issues_from_productive_average(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_tmp_traces(tmp_path)
+    summaries = [
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+            synthesis_error_type="SynthesisProviderUnavailableError",
+            elapsed_seconds=10.0,
+        ),
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+            synthesis_error_type="SynthesisArtifactGenerationError",
+            elapsed_seconds=40.0,
+        ),
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.ACCEPTED,
+            registry_task_id="task_prod_1",
+            elapsed_seconds=100.0,
+        ),
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.ACCEPTED,
+            registry_task_id="task_prod_2",
+            elapsed_seconds=200.0,
+        ),
+    ]
+    runner = HarvestRunner(
+        config,
+        trial_runner_factory=_summary_factory(summaries),
+    )
+
+    summary = await runner.run(
+        tmp_path / "harvest_productivity",
+        db_id="sakila",
+        target_committed=2,
+        stall_timeout_seconds=60.0,
+        parallel_workers=1,
+    )
+    await runner.close()
+
+    assert summary.outcome is HarvestOutcome.TARGET_REACHED
+    assert summary.committed == 2
+    assert summary.provider_issue_trials == 1
+    assert summary.provider_issue_elapsed_seconds == 10.0
+    assert summary.productive_elapsed_seconds == 340.0
+    assert summary.productive_seconds_per_accepted == 170.0
 
 
 @dataclass(slots=True)

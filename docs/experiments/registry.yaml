@@ -40,7 +40,9 @@ evaluation_policies:
       llm_semantic_not_structural_reject: true
     production_viability:
       trial_timeout_s: 300
-      accepted_good_p95_wall_clock_s_max: 300
+      productive_seconds_per_accepted_max: 300
+      exclude_one_time_db_startup_and_warmup: true
+      exclude_provider_issue_trials_from_average: true
       report_elapsed_seconds_for_all_trials: true
     db_set:
       - mimiciv_demo

@@ -123,8 +123,10 @@ hard_gates:
 
 production_viability:
   trial_timeout_s: 300
-  accepted_good_p95_wall_clock_s: null
-  accepted_good_p95_within_budget: true
+  productive_seconds_per_accepted: null
+  productive_seconds_per_accepted_within_budget: true
+  excludes_one_time_db_startup_and_warmup: true
+  excludes_provider_issue_trials_from_average: true
   elapsed_seconds_recorded_for_all_trials: true
 
 per_draft:
