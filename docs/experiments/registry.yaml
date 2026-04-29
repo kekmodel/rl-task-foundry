@@ -172,3 +172,58 @@ nodes:
       avoid:
         - "Do not use smoke-proof-task as a quality signal."
         - "Do not promote on accept count without DQS-v1 qualitative review."
+  - id: N0001
+    type: experiment
+    branch: exp/N0001-structural-quality-round
+    commit: "2d5aeac"
+    parent: B0001
+    parent_commit: "b3aa244"
+    status: running
+    phase_target: v1
+    hypothesis: >
+      If query results expose structurally proven final-label blockers before
+      submit_draft, the composer should waste fewer attempts on blocked/internal
+      labels, keyless exposed row values, duplicate answer projections, and
+      unstable list evidence without adding a new hard rejector.
+    metadata_note: >
+      The Kimi reasoning tool-call compatibility fix was promoted separately to
+      main at b3aa244 because it is shared provider infrastructure, not an
+      N0001 quality result. N0001 starts from that baseline.
+    architecture_summary: >
+      Keep the existing composer/solver topology. Add advisory
+      `submission_diagnostics` to the composer query tool using only metadata
+      already returned by the query execution path. The diagnostics summarize
+      structural blockers but do not reject drafts or change scoring.
+    change_summary:
+      - "query now reports non_user_visible_label_source for selected output fields that expose blocked/internal values."
+      - "query now reports no_primary_key_label_source when exposed row values come from a source table without a primary key."
+      - "query now lifts duplicate projected answer rows and unstable list-order diagnostics into submission_diagnostics."
+      - "query tool schema/description tells the composer to inspect submission_diagnostics before submit_draft."
+    principles_touched:
+      - precision_100_rejectors_only
+      - source_of_truth_separation
+      - low_quality_accepted_hard_failure
+      - db_generalizable_generation
+    evaluation_policy: DQS-v1
+    evaluation_protocol: independent-dqs-v1
+    agent_topology:
+      builder_agents: "single Codex coding agent modifying existing composer query/tool surface"
+      evaluator_agents: "none yet; independent-dqs-v1 only required before candidate/frontier/promotion"
+      context_policy: "no subagents; no independent evaluator context used in this node yet"
+      llm_judges: []
+    quality_eval:
+      status: diagnostic_only
+      tests:
+        - "uv run pytest -q tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py"
+        - "uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py"
+      trial_notes:
+        - "Earlier diagnostic artifact artifacts/experiments/N0001/diagnostic/pagila_trial_004_kimi_normalized confirmed Kimi tool calls execute after the shared infra fix, but the trial hit trial_wall_clock_timeout at 300s."
+        - "No harvest target-3 run or DQS-v1 qualitative review has been completed for this node."
+      promotion_ready: false
+    branching_notes:
+      continue_from_here:
+        - "Run one or two run-real-db-trial samples to inspect whether submission_diagnostics changes composer recovery behavior."
+        - "Use harvest target 3 with productive budget 900s before claiming improvement."
+      avoid:
+        - "Do not treat submission_diagnostics as a hard rejector."
+        - "Do not promote this node without independent DQS-v1 evaluator report."
