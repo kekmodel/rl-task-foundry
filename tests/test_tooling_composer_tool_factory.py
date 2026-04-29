@@ -407,6 +407,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "naturally requestable distinct source role" in descriptions["query"][
         "$.spec.select"
     ]
+    assert "source sequence/reference/order numbers" in descriptions["query"][
+        "$.spec.select"
+    ]
+    assert "repair list determinism or binding" in descriptions["query"][
+        "$.spec.select"
+    ]
     assert "Do not substitute a different user-visible field" in descriptions[
         "query"
     ]["$.spec.select"]
@@ -460,6 +466,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "do not plan to reverse them" in descriptions["query"]["$.spec.order_by"]
     assert "handle_order_by_columns" in descriptions["query"]["$.spec.order_by"]
     assert "silent tie-break" in descriptions["query"]["$.spec.order_by"]
+    assert "visible sequence/reference/order key is still technical" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
+    assert "feedback repair just to make the list unique" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
     assert "exactly one of ref or output" in descriptions["query"]["$.spec.order_by"]
     assert "Match the direction or ranking stated in user_request" in descriptions[
         "query"

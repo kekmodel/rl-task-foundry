@@ -410,7 +410,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "no normalized choices" in instructions
     assert "Note/comment text needs that surface" in instructions
     assert "not broad result/value" in instructions
-    assert "Distinguish source sequence from display rank" in instructions
+    assert "Source sequence/order numbers are technical" in instructions
+    assert "tie-break/binding repair" in instructions
     assert "never add sequence/order output only to make duplicate rows unique" in (
         instructions
     )
@@ -450,9 +451,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "order leaves distinct-answer ties" in instructions
     assert "ask for a natural visible tie-break before" in instructions
     assert "if two keys still tie, switch label" in instructions
-    assert "Use sequence/rank only for named source record order" in instructions
-    assert "not generated rank" in instructions
-    assert "artificial technical sequence/id/order wording" in instructions
+    assert "Source sequence/order numbers are technical" in instructions
+    assert "unless that is the domain answer" in instructions
+    assert "never add them for tie-break/binding repair" in instructions
     assert "Max two order keys" in instructions
     assert "choose unique ordering, or return tied rows" in instructions
     assert "Do not shrink limits" in instructions

@@ -2657,6 +2657,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "misleading term" in schema_surface
     assert "rewrite the whole request cleanly" in schema_surface
     assert "malformed tie-break terms" in schema_surface
+    assert "sequence/reference/order fields during repair" in schema_surface
+    assert "source sequence/order phrase would be mechanical or awkward" in schema_surface
     assert "For list labels, provide one binding for every returned label field" in schema_surface
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "Each tie-break phrase must name that specific order key" in schema_surface
@@ -4518,6 +4520,7 @@ async def test_submit_draft_rejects_hidden_child_to_parent_sibling_scope(
     assert "parent/current-subject handle" in message
     assert "rewording as child-related is not enough" in message
     assert "rerun the label query from that scope" in message
+    assert "anchor repair does not justify adding source sequence" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_hidden_filter_unanchored",
     )

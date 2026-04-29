@@ -678,7 +678,10 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Policy and Difficulty-Up Policy. Prefer user-visible "
                     "non-handle values; expose handle-like values only when "
                     "evidence marks them user-visible and the request asks for "
-                    "that reference. Do not expose row values from a table "
+                    "that reference. Do not select source sequence/reference/"
+                    "order numbers to repair list determinism or binding "
+                    "unless that sequence is the natural domain answer. "
+                    "Do not expose row values from a table "
                     "without a primary key; choose a primary-key-backed path "
                     "or a derived aggregate instead."
                 ),
@@ -737,6 +740,10 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "generic latest/recent time wording is not enough. "
                     "If diagnostics list handle_order_by_columns, that key is "
                     "a handle; do not keep it as a silent tie-break. Each "
+                    "visible sequence/reference/order key is still technical "
+                    "unless the request naturally asks for that source "
+                    "sequence; do not add it during feedback repair just to "
+                    "make the list unique. Each "
                     "order item must contain exactly one of ref or output, "
                     "never both."
                 ),

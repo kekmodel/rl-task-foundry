@@ -10023,6 +10023,87 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_79`는 accepted지만 low-quality accepted로 보므로 만족 streak는 `0/5` 유지.
 
+## Iteration 158 — Sequence fields must not be repair crutches
+
+- **질문**:
+  table jargon 보강 뒤 `trial_80`의 request surface는 좋아졌는가? accepted라면 정말 좋은 데이터인가,
+  아니면 낮은 pass rate와 solver reasoning이 저품질을 가리키는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `accepted`, pass rate는 `1/4 = 0.25`.
+
+  제출 흐름:
+  - submit 1:
+    `현재 ICU 입원 기간 중 가장 최근에 기록된 5개의 생체 신호 측정값...`
+    - `label_no_primary_key_source`, order/binding 오류
+  - submit 3:
+    `제가 입원 중인 이 ICU에서 가장 최근에 투약된 약물 4개...`
+    - 자연어 표면은 좋아졌지만 `answer_contract_hidden_filter_unanchored`,
+      `answer_contract_phrase_missing`
+  - submit 4 accepted:
+    `제가 이 ICU에 입원 한 동안 투약된 약물 기록 중 가장 최근에 기록된 4개의 투약 은 무엇이고,
+    각 투약의 이벤트 유형과 시간, 그리고 기록 순서번호를 찥점순으로 보여주세요`
+    - canonical fields: `administered_time`, `event_type`, `medication_name`, `record_sequence`
+
+- **reasoning 교차 분석**:
+  composer는 처음에 `chartevents` list를 만들면서 hidden tie-break를 "fine"이라고 오판했다가
+  validator feedback으로 버렸다. 이후 `emar` 투약 기록으로 이동한 것은 좋아졌지만,
+  hidden filter anchoring을 고치는 과정에서 `record_sequence`를 output/order field로 추가했다.
+
+  최종 reasoning은 "no blocking diagnostics"에만 반응했고, request가 `찥점순` 같은 깨진 표현과
+  `기록 순서번호`라는 기술적 control을 포함한다는 사실을 자체적으로 거르지 못했다.
+
+  solver reasoning도 이를 뒷받침한다.
+  - 한 solver는 `record_sequence`를 실제 source sequence가 아니라 1-4 display rank로 바꿔 오답.
+  - 다른 solver는 "시간순/오름차순"으로 해석해 row order를 뒤집어 오답.
+  - 한 solver는 max turns로 실패.
+  - 한 solver만 canonical과 일치.
+
+- **정성 평가**:
+  accepted data: low-quality accepted. 요청 문구가 깨져 있고, list determinism repair를 위해
+  source sequence/order number를 노출했다. 이는 어려운 좋은 문제가 아니라 composer가 contract를
+  만족시키려고 technical control을 붙인 문제다.
+
+  rejected data: 첫 chartevents 후보는 no-PK source라 저품질 rejected. submit 3의 투약 후보는
+  자연어/도메인 방향은 좋았지만 hidden anchor repair가 필요했다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 어떤 visible sequence/order field가 실제 도메인 답인지,
+  기술적 repair crutch인지 100% precision으로 구분할 방법이 없고, 컬럼명/토큰 휴리스틱은 금지다.
+
+  대신 prompt/tool schema/feedback reminder를 같은 원칙으로 보강했다.
+  - durable prompt List Determinism Policy:
+    source sequence/order number는 그 자체가 도메인 답일 때만 쓰고, tie-break/binding repair용으로
+    추가하지 말라고 명시.
+  - `query.select` / `query.order_by` schema:
+    sequence/reference/order number를 list determinism이나 binding repair용으로 선택/정렬하지 말라고 명시.
+  - `submit_draft` answer binding schema:
+    sequence/reference/order field를 feedback 수리용으로 추가하지 말고, source sequence/order phrase가
+    기계적이거나 어색하면 다른 label을 고르라고 설명.
+  - hidden filter unanchored feedback:
+    anchor repair가 source sequence/reference/order field 추가나 malformed tie-break wording을 정당화하지
+    않는다고 기존 List Determinism Policy를 상기.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_rejects_hidden_child_to_parent_sibling_scope -q`
+    통과 (`4 passed`).
+
+  Prompt length:
+  - `build_synthesis_agent_instructions(...)` 길이 `7991`, 기존 budget `<8000` 유지.
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_80`은 accepted지만 low-quality accepted로 보므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

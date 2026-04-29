@@ -207,10 +207,9 @@ def build_synthesis_agent_instructions(
         "distinguish them, switch label. Do not shrink limits or add hidden handles.\n"
         "- If order leaves distinct-answer ties, ask for a natural visible "
         "tie-break before `query.order_by`, choose unique ordering, or return "
-        "tied rows; if two keys still tie, switch label. Use sequence/rank "
-        "only for named source record order, "
-        "not generated rank. No artificial technical "
-        "sequence/id/order wording. Max two order keys.",
+        "tied rows; if two keys still tie, switch label. Source sequence/order "
+        "numbers are technical unless that is the domain answer; never add "
+        "them for tie-break/binding repair. Max two order keys.",
 
         "# Scope Examples\n"
         "<example>{\"user_request\":\"show R\","

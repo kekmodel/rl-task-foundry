@@ -220,6 +220,8 @@ class AnswerOutputBinding(StrictModel):
             "source representation; do not turn source status text into "
             "current/derived state or boolean completion wording, or source "
             "record sequence into generated display rank. Do not add "
+            "sequence/reference/order fields during repair merely to satisfy "
+            "tie-break or binding feedback. Do not add "
             "parenthetical normalized "
             "choices for source type/category/status fields. When two "
             "reachable sources could satisfy the same broad phrase, the "
@@ -257,7 +259,9 @@ class AnswerOrderBinding(StrictModel):
             "several temporal fields are reachable or returned, generic "
             "latest/recent time wording is not enough; name the chosen time "
             "role. Do not "
-            "invent malformed tie-break terms to satisfy this schema."
+            "invent malformed tie-break terms to satisfy this schema. If a "
+            "source sequence/order phrase would be mechanical or awkward, "
+            "choose another label instead of adding that field."
         ),
     )
     direction: Literal["asc", "desc"] | None = Field(
@@ -2878,6 +2882,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If the latest query relays from a child/current record through a parent to sibling answer rows, rewording as child-related is not enough: either put the parent/current-subject handle in entity and rerun the label query from that scope, or choose a label directly scoped to the existing entity."  # noqa: E501
+                " List Determinism Policy reminder: anchor repair does not justify adding source sequence/reference/order fields or malformed tie-break wording."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
                 "Rejected. Label Contract reminder: latest query evidence must include field visibility evidence before submit_draft."  # noqa: E501
