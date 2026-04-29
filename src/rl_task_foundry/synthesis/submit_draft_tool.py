@@ -245,6 +245,8 @@ class AnswerOutputBinding(StrictModel):
             "phrases. Use distinct natural roles such as event "
             "time, value timestamp, scheduled time, or stored/entered time "
             "only when user_request can say that role fluently."
+            " Ask output field lists with include/show wording; reserve "
+            "order/sort wording for row ordering and order_bindings."
             " The phrase must remain fluent customer wording; do not create it "
             "by translating a label key or column-like role into a misleading "
             "term. If the role cannot be requested naturally, omit that label "

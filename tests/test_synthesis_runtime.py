@@ -2841,6 +2841,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "not a source table or SQL column" in schema_surface
     assert "names this field's distinct role" in schema_surface
     assert "do not reuse one vague phrase" in schema_surface
+    assert "include/show wording" in schema_surface
+    assert "reserve order/sort wording for row ordering" in schema_surface
     assert "preserve the source representation" in schema_surface
     assert "do not turn source status text into current/derived state" in schema_surface
     assert "Status/type/category fields from related sources are not interchangeable" in (
@@ -3465,6 +3467,7 @@ async def test_submit_draft_rejects_binding_phrase_absent_from_request(
     assert "label_field='customer_count'" in message
     assert "phrase='_customer_count_'" in message
     assert "Keep those label fields only if they still form a fluent user request" in message
+    assert "Add missing outputs with include/show wording" in message
     assert "rerun with a cleaner field set" in message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None

@@ -12648,3 +12648,81 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_114`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 194 — Accepted trial exposed output-list/order wording drift
+
+- **질문**:
+  `trial_115`는 pipeline accepted였지만, 정말 좋은 accepted 데이터인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `accepted`, flow_id는 `real_db_trial:20260429T132244Z:9669057a`.
+  pass rate는 `0.5` (`2/4`)였다.
+
+  최종 task는 subject `10038933`의 이상 혈액 검사 결과 list였다.
+  query는 `labevents`를 `subject_id=10038933`, `flag='abnormal'`로 필터하고
+  `charttime desc, d_labitems.label asc`, `limit=5`로 정렬했다. label은
+  `test_name`, `result_value`, `unit`, `test_time`, `ref_lower`, `ref_upper` 6개 field를 반환했다.
+
+  최종 request:
+  `나의 최근 이상 혈액 검사 결과 5개를 검사명, 검사 결과, 단위, 검사 시간, 참고 범위 최소값, 참고 범위 최대값 순으로 최근 순서로 검사명 순서로 정렬하여 보여주세요`
+
+- **reasoning 교차 분석**:
+  composer reasoning은 좋은 방향으로 움직였다.
+  - abnormal lab result 후보를 만들었다.
+  - 같은 `test_time` 동점을 보고 `test_name`을 visible tie-break로 추가했다.
+  - Iteration 192의 missing phrase surface를 보고 빠진 output phrases를 request에 추가했다.
+
+  하지만 최종 request repair가 너무 기계적이었다. output field list를 `... 순으로`라고 붙였고, 뒤에 다시
+  `최근 순서로 검사명 순서로 정렬`을 붙였다. 이 표현은 사람이 읽으면 "출력 필드 순서"와 "row 정렬 순서"가 섞여 보인다.
+
+  solver 실패도 이 문제를 뒷받침한다.
+  - matched solver 2개는 `flag is_not_null/abnormal`, `charttime desc`, `test_name asc`를 사용해 canonical rows를 맞췄다.
+  - failed solver 1개는 abnormal filter/ordering을 다르게 적용해 오래된 `2148-09-10` 검사들을 냈다.
+  - failed solver 1개는 `최근 5개`를 먼저 고른 뒤 다시 검사명 정렬을 하거나, 검사명 정렬이 row membership까지 바꾸는
+    방식으로 해석했다.
+
+  따라서 이 accepted는 "어렵지만 좋은 문제"라기보다, request wording ambiguity가 pass rate를 0.5로 만든
+  low-quality accepted에 가깝다. pipeline상 accepted라도 만족 streak에는 포함하지 않는다.
+
+- **정성 평가**:
+  accepted data:
+  - 내용 후보 자체는 좋다. abnormal lab result, visible test name, value/unit/time/reference range, visible tie-break가
+    모두 solver tool로 재현 가능하다.
+  - 하지만 최종 request wording이 저품질이다. output field list와 row-order words가 섞였고, secondary order가
+    "같은 검사 시간이면 검사명 순"처럼 tie-break 역할로 명확히 표현되지 않았다.
+  - 따라서 low-quality accepted로 분류한다.
+
+  rejected data:
+  - 초기 submit missing 2회는 protocol failure다.
+  - 중간 rejects는 `answer_contract_phrase_missing`, `answer_contract_order_ambiguous`로 올바르게 막혔다.
+  - Iteration 192의 missing contract/request phrase details는 실제로 빠진 `unit`, `test_time`, `ref_lower`, `ref_upper`
+    phrase를 surface했다.
+
+- **변경**:
+  prompt-first 원칙으로 Request Contract 표현을 보강했다.
+  - output field list는 `include/with` 계열 wording으로 요청하고, `order/sort` 단어는 row order에만 쓰라고 추가했다.
+  - 같은 내용을 `AnswerOutputBinding.requested_by_phrase` schema에도 추가했다.
+  - `answer_contract_phrase_missing`의 missing request phrase feedback도 "빠진 output은 include/show wording으로 추가하고,
+    row-order wording으로 붙이지 말라"고 상기하도록 바꾸었다.
+
+  이 변경은 hard validator가 아니다. output-list wording이 자연스러운지 여부는 precision 100으로 판정할 수 없으므로
+  prompt/schema/feedback reminder로만 처리한다. 리터럴/토큰/DB 의미 휴리스틱은 추가하지 않았다.
+
+- **검증**:
+  Prompt length:
+  `build_synthesis_agent_instructions(...)` 길이 `7991`.
+
+  Targeted:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_rejects_binding_phrase_absent_from_request tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`3 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_115`는 pipeline accepted였지만 low-quality accepted로 판단하므로 만족 accepted streak는 `0/5`.

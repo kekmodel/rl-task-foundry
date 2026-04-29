@@ -266,7 +266,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "formatting quirks" in instructions
     assert "choose another label" in instructions
     assert "Exact substring binding never justifies broken wording" in instructions
-    assert "invented terms, diagnostic phrases" in instructions
+    assert "invented/diagnostic phrases" in instructions
     assert "one natural request" in instructions
     assert "Derive `user_request`/`topic` from label" in instructions
     assert "request exact label fields/row controls" in instructions
@@ -374,16 +374,16 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "entity={P.pk}; P->sib" in instructions
     assert "Good: rows share parent" in instructions
     assert "Do not attach `entity` to a global report" in instructions
-    assert "Copy scoped evidence values exactly" in instructions
+    assert "Copy scoped evidence exactly" in instructions
     assert "scoped evidence" in instructions
-    assert "do not translate/transliterate them" in instructions
+    assert "no translate/transliterate" in instructions
     assert "Keep request compact" in instructions
     assert "Exact substring binding never justifies broken wording" in instructions
-    assert "misleading column/key translations" in instructions
-    assert "Field keys stay in JSON" in instructions
-    assert "fields/source roles/tie-breaks cannot fit one natural request" in (
-        instructions
-    )
+    assert "key translations" in instructions
+    assert "Field keys stay JSON" in instructions
+    assert "Fields use include/with" in instructions
+    assert "order/sort only for row order" in instructions
+    assert "roles/tie-breaks cannot fit one natural request" in instructions
     assert "do not expose it" in instructions
     assert "exact object/scope/source" in instructions
     assert not re.search(r"[가-힣]", instructions)

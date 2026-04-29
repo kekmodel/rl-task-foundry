@@ -102,8 +102,8 @@ def _format_missing_request_phrase_guidance(
         " Missing request phrases: "
         + "; ".join(details)
         + ". Keep those label fields only if they still form a fluent user "
-        "request; otherwise rerun with a cleaner field set or choose another "
-        "label."
+        "request. Add missing outputs with include/show wording, not row-order "
+        "wording; otherwise rerun with a cleaner field set or choose another label."
     )
 
 
