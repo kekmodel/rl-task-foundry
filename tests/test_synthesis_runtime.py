@@ -4304,6 +4304,7 @@ async def test_submit_draft_rejects_duplicate_projected_list_rows(
     assert "distinct underlying source rows are not enough" in message
     assert "Preserve the list size" in message
     assert "add one natural visible distinguishing field or aggregate" in message
+    assert "Submit only if the repaired query diagnostics no longer report" in message
     assert "Do not add source sequence/reference/order wording solely" in message
     assert "rows are still duplicate" in message
     assert "choose another label instead of stacking fields" in message

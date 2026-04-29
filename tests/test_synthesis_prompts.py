@@ -436,7 +436,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "distinguishable through requested output fields" in instructions
     assert "duplicate projected answer rows" in instructions
     assert "source rows differ" in instructions
-    assert "if only sequence/reference/record-order can distinguish them" in (
+    assert "Submit only if diagnostics clear" in instructions
+    assert "only sequence/reference/order can distinguish them" in (
         instructions
     )
     assert "Do not select helper values unless" in instructions

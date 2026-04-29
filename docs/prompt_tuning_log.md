@@ -11802,3 +11802,69 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_100`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 180 — Submit only after repaired duplicate-row diagnostics clear
+
+- **질문**:
+  `trial_101`의 duplicate projected rows 실패는 새 hard validator가 필요한 문제인가, 아니면 기존
+  List Determinism Policy를 composer가 끝까지 따르지 못한 문제인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T112523Z:ed58a70e`.
+  최종 오류는 `answer_contract_order_ambiguous`, `answer_contract_duplicate_answer_rows`였다.
+
+  composer는 처음에 `prescriptions`에서 최근 처방 5개 list를 만들었다. 이 draft는
+  `prescriptions.drug`가 blocked source였고, `starttime` 동점으로 limited row membership도 불안정했다.
+  이후 `pharmacy.medication`으로 바꿨지만 hidden `pharmacy_id`를 tie-break로 사용했고, projection
+  diagnostics가 duplicate answer rows를 보고했다. 마지막에는 visible field인 `entertime`을 추가했지만
+  재쿼리 결과에서도 4/5번째 row가 완전히 동일했고, `projection_diagnostics.duplicate_answer_rows=true`가
+  그대로 남아 있었다.
+
+- **reasoning 교차 분석**:
+  `reasoning_content.jsonl`은 composer reasoning을 반환하고 있었다. trace를 보면 composer는 feedback을
+  읽고 “visible distinguishing field를 추가해야 한다”고 이해했다. 하지만 `entertime`을 추가한 뒤 나온
+  query diagnostics를 submit 전에 다시 판독하지 않았고, duplicate가 여전히 남은 label을 제출했다.
+
+  따라서 이 문제는 새 precision-100 validator 문제가 아니다. validator는 이미 정확히 차단했다. 실패
+  원인은 기존 정책의 다음 행동, 즉 “repair query 이후 diagnostics가 clear일 때만 submit한다”가 프롬프트와
+  feedback에서 충분히 직접적으로 상기되지 않은 것이다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - `prescriptions` draft는 low-quality rejected. blocked answer source와 unstable order가 있었다.
+  - `pharmacy` draft도 low-quality rejected. hidden tie-break와 duplicate projected rows가 있었다.
+  - 최종 `entertime` 수리 draft도 low-quality rejected. visible field를 하나 더했지만 answer rows가 여전히
+    구분되지 않았다.
+
+- **변경**:
+  Prompt-first 원칙에 따라 durable `List Determinism Policy`를 압축 보강했다. duplicate projected rows가
+  나오면 visible field/aggregate를 추가하고 재쿼리하되, `diagnostics`가 clear일 때만 submit하도록 했다.
+  여전히 duplicate이거나 sequence/reference/order만으로 구분되는 경우에는 label을 바꿔야 한다.
+
+  `answer_contract_duplicate_answer_rows` feedback도 같은 정책을 상기하도록 보강했다. “rerun 후 submit”처럼
+  들릴 수 있는 문구를 “rerun 후 diagnostics가 duplicate answer rows를 더 이상 보고하지 않을 때만 submit”으로
+  바꿨다. 새 durable instruction을 feedback에 만든 것이 아니라, 기존 named policy의 적용 순서를 더 명확히
+  한 것이다.
+
+  hard validator는 추가하지 않았다. 기존 `projection_diagnostics.duplicate_answer_rows=true` 기반 rejection은
+  precision 100% 구조 검증이며, 이번 변경은 그 결과를 composer가 submit 전에 읽게 만드는 prompt/feedback
+  정렬이다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_duplicate_projected_list_rows tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+  통과 (`2 passed`).
+
+  Relevant:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py -q`
+  통과 (`108 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_101`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
