@@ -294,6 +294,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "blocking diagnostics must be fixed before submit_draft" in tools[
         "query"
     ].description
+    assert "source rows differ" in tools["query"].description
     assert any(
         "After a successful final label query, submit_draft" in description
         for description in descriptions["query"].values()
@@ -308,6 +309,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     )
     assert any(
         "If naming the chosen source role would sound awkward" in description
+        for description in descriptions["query"].values()
+    )
+    assert any(
+        "underlying source rows are distinct" in description
         for description in descriptions["query"].values()
     )
     assert any(
@@ -504,7 +509,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "do not add source sequence/reference/order fields solely" in descriptions[
         "query"
     ]["$.spec"]
-    assert "aggregate, or choose another label" in descriptions["query"]["$.spec"]
+    assert "rows still duplicate choose another label" in descriptions["query"][
+        "$.spec"
+    ]
     assert {
         tool.name: _loose_schema_paths(tool.params_json_schema)
         for tool in tools.values()

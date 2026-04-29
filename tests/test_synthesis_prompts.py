@@ -268,10 +268,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Exact substring binding never justifies broken wording" in instructions
     assert "invented terms, diagnostic phrases" in instructions
     assert "one natural request" in instructions
-    assert "Derive `user_request` and `topic` from that label" in instructions
-    assert "exactly the label fields and row controls" in instructions
-    assert "supplies copied label JSON" in instructions
-    assert "if diagnostics do not block it, submit immediately" in instructions
+    assert "Derive `user_request`/`topic` from label" in instructions
+    assert "request exact label fields/row controls" in instructions
+    assert "supplies label JSON" in instructions
+    assert "if diagnostics pass, submit immediately" in instructions
     assert "no decorative global answer" in instructions
     assert "Difficulty-Up Policy" in instructions
     assert "smallest grounded related/derived dimension" in instructions
@@ -426,6 +426,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "every selected field becomes exact answer" in instructions
     assert "distinguishable through requested output fields" in instructions
     assert "duplicate projected answer rows" in instructions
+    assert "source rows differ" in instructions
     assert "if only sequence/reference/record-order can distinguish them" in (
         instructions
     )

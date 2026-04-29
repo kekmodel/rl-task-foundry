@@ -4268,6 +4268,7 @@ async def test_submit_draft_rejects_duplicate_projected_list_rows(
 
     assert "duplicate projected answer rows" in message
     assert "not distinguishable through requested output fields" in message
+    assert "distinct underlying source rows are not enough" in message
     assert "Preserve the list size" in message
     assert "add one natural visible distinguishing field or aggregate" in message
     assert "Do not add source sequence/reference/order wording solely" in message

@@ -10591,6 +10591,94 @@ Solver 30/30 완료 결과:
   `trial_88`은 accepted가 없으므로 만족 streak는 `0/5` 유지. 다만 false reject를 수정했으므로 다음
   trial에서 too-easy 이후 related aggregate difficulty-up이 통과되는지 확인한다.
 
+## Iteration 167 — Duplicate projected rows are blocking even when source rows differ
+
+- **질문**:
+  `trial_88_recheck_01`에서 Iteration 166의 related aggregate false reject 수정이 재현되는가?
+  재현되지 않는다면, reasoning content를 기준으로 accepted/rejected 품질을 어떻게 봐야 하는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`.
+
+  이번 recheck는 `trial_88`의 admission-history related aggregate 케이스를 재현하지 못했다.
+  대신 `procedureevents` 중심 후보에서 projected answer row duplicate가 반복됐다.
+
+  제출 3:
+  `이번 입원 중에 받은 시술 목록을 최신순으로 5개 보여주세요`
+  - 오류: `answer_contract_phrase_missing`, `answer_contract_duplicate_answer_rows`
+  - `22 Gauge` 두 row가 시술명, 시작/종료 시간, 카테고리, 상태, 체중 등 projected answer field에서
+    구분되지 않았다.
+  - source row는 서로 다른 procedure event일 수 있지만, solver가 제출할 수 있는 answer row가 같으므로
+    정답 row set을 구조적으로 구분할 수 없다.
+
+  제출 5:
+  `이번 입원 정보를 알려주세요`
+  - 오류: `answer_contract_list_size_invalid`, `answer_contract_phrase_missing`
+  - admission detail 1건을 list로 제출했다. 이는 어려운 좋은 문제가 아니라 task shape 오류다.
+
+- **reasoning 교차 분석**:
+  reasoning content가 실제로 저장되어 있었고, composer의 판단 오류가 보였다.
+
+  composer는 duplicate row를 처음에는 정확히 인지했다. 그러나 이후 “두 row는 실제로 서로 다른
+  procedure event이므로 duplicate answer row도 valid하다”고 판단했다. 이 판단이 문제다.
+  원칙상 solver는 hidden source row identity를 제출하지 못하고, requested output fields만 제출한다.
+  따라서 source row가 둘이어도 projected answer row가 같으면 list answer는 indistinguishable하다.
+
+  feedback 이후 composer는 `storetime`이나 category 같은 visible field를 추가하려 했지만, duplicate가
+  해소되지 않거나 ToolBudgetFeedback boundary를 넘겼다. 마지막에는 1-row admission detail로 후퇴했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - procedure list는 low-quality rejected. 데이터가 어려운 것이 아니라 answer row uniqueness가 없다.
+  - admission detail은 low-quality rejected. 1-row detail lookup/list shape mismatch다.
+
+  이번 거절은 나쁘지 않다. 저품질 후보가 accepted되지 않았고, validator가 정확히 막았다. 다만 composer가
+  duplicate diagnostics의 의미를 잘못 해석했으므로 prompt/schema/feedback reminder를 개선한다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. `answer_contract_duplicate_answer_rows` validator는 이미 precision
+  100%로 작동하고 있다.
+
+  리터럴/컬럼명/토큰 휴리스틱은 추가하지 않았다. 이번 변경은 DB 내용이나 특정 테이블/컬럼명을 보지 않는다.
+
+  Prompt-first 원칙에 따라 List Determinism Policy를 압축 보강했다.
+  duplicate projected answer rows는 source row가 실제로 서로 달라도 blocking이며, 자연 visible
+  field/aggregate 하나로 해소되지 않으면 label을 바꾸라고 명시했다.
+
+  `query` tool schema/description도 같은 원칙을 반영했다. query diagnostics에서 duplicate projected
+  answer rows가 나오면 submit 전 blocking diagnostics로 취급해야 한다.
+
+  submit feedback은 새 지시가 아니라 같은 정책의 reminder로 보강했다.
+  “distinct underlying source rows are not enough”를 추가해 composer가 같은 오류 해석을 반복하지 않게 했다.
+
+  system prompt 길이 예산은 유지했다. 새 문구를 넣는 대신 workflow와 binding phrase 설명을 조금
+  압축했고, `Do not invent ids` 같은 hard prohibition은 유지했다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_duplicate_projected_list_rows -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_turn_budget_prompt.py::test_synthesis_instructions_contain_hard_prohibitions -q`
+    통과 (`2 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`114 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_88_recheck_01`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

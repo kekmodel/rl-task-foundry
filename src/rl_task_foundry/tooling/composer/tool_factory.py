@@ -868,9 +868,11 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "submit that result as final label evidence; revise the "
                     "request/order/output fields or choose another label. "
                     "If projection diagnostics report duplicate projected "
-                    "answer rows, do not add source sequence/reference/order "
-                    "fields solely to make rows unique; use a natural visible "
-                    "domain field, aggregate, or choose another label. "
+                    "answer rows, the result is blocking even when the "
+                    "underlying source rows are distinct; do not add source "
+                    "sequence/reference/order fields solely to make rows unique; "
+                    "use one natural visible domain field or aggregate, and if "
+                    "rows still duplicate choose another label. "
                     "If handle_order_by_columns appears, use the handle only "
                     "when the request explicitly asks for that record sequence "
                     "or reference role; otherwise pick a natural visible key."
@@ -899,7 +901,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
             "explicit or choose the ordinary matching source. "
             "Returns columns, rows, row_count, and diagnostics for list order "
             "or duplicate projected answer rows when present; blocking "
-            "diagnostics must be fixed before submit_draft."
+            "diagnostics must be fixed before submit_draft, and duplicate "
+            "projected answer rows are blocking even when source rows differ."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
