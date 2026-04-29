@@ -288,6 +288,8 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "nontrivial filters" in tools["profile"].description
     assert "reachable task paths" in tools["neighborhood"].description
     assert "exact rows that will be copied into the label" in tools["query"].description
+    assert "query path is the selected source surface" in tools["query"].description
+    assert "ordinary matching source" in tools["query"].description
     assert "duplicate projected answer rows" in tools["query"].description
     assert "blocking diagnostics must be fixed before submit_draft" in tools[
         "query"
@@ -302,6 +304,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     )
     assert any(
         "label/output field names do not disambiguate source surface" in description
+        for description in descriptions["query"].values()
+    )
+    assert any(
+        "If naming the chosen source role would sound awkward" in description
         for description in descriptions["query"].values()
     )
     assert any(
@@ -320,6 +326,13 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     )
     assert "same event/record" in descriptions["query"]["$.spec.join"]
     assert "independent sibling joins" in descriptions["query"]["$.spec.join"]
+    assert "selected source surface" in descriptions["query"]["$.spec.from.table"]
+    assert "ordinary user wording points to another reachable source" in descriptions[
+        "query"
+    ]["$.spec.from.table"]
+    assert "make this source role explicit" in descriptions["query"][
+        "$.spec.from.table"
+    ]
     assert "Filters define row membership" in descriptions["query"]["$.spec.where"]
     assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
     assert "hidden helper row-set controls" in descriptions["query"]["$.spec.where"]

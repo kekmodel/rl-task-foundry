@@ -306,6 +306,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "request/contract must name chosen source role" in instructions
     assert "broad nouns invalid" in instructions
     assert "label/output_schema names cannot disambiguate" in instructions
+    assert "ordinary wording points to another reachable source" in instructions
+    assert "use that source or make the chosen source role explicit" in instructions
     assert "If no primary key" in instructions
     assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
@@ -344,10 +346,11 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "entity needs the parent/current-subject key" in instructions
     assert "# Scope Examples" in instructions
     assert '"user_request":"show R"' in instructions
-    assert "S1.R;S2.R" in instructions
+    assert '"query":"S2.R"' in instructions
+    assert "when S1.R also fits" in instructions
     assert "Bad: hidden source choice" in instructions
-    assert '"user_request":"show S1 R"' in instructions
-    assert "Good: source/label align" in instructions
+    assert '"user_request":"show S2-source R"' in instructions
+    assert "selected source role is visible" in instructions
     assert "entity={C.pk}; query C->P->siblings" in instructions
     assert "rewording as C-related is not enough" in instructions
     assert "entity={P.pk}; query P->siblings" in instructions

@@ -2637,7 +2637,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "copy visible source values exactly" in schema_surface
     assert "instead of translating or transliterating them" in schema_surface
     assert "multiple reachable source surfaces could satisfy broad wording" in schema_surface
-    assert "name the chosen source role in ordinary language" in schema_surface
+    assert "use the ordinary matching source or name the chosen source role" in schema_surface
     assert "Scope wording must match latest query evidence" in schema_surface
     assert "direct hidden current-record handle lookups" in schema_surface
     assert "broader parent/list/history scope" in schema_surface

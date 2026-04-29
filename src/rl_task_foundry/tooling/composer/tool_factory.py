@@ -567,7 +567,13 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "table": {
                         "type": "string",
                         "enum": tables,
-                        "description": "Root table handle.",
+                        "description": (
+                            "Root table handle and selected source surface. "
+                            "If ordinary user wording points to another "
+                            "reachable source, query that source or make this "
+                            "source role explicit in user_request/topic/"
+                            "answer_contract."
+                        ),
                     },
                     "as": {
                         "type": "string",
@@ -806,7 +812,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Before submit_draft, ensure user_request/topic name the "
                     "selected source role when multiple reachable sources could "
                     "answer the broad noun; label/output field names do not "
-                    "disambiguate source surface. "
+                    "disambiguate source surface. If naming the chosen source "
+                    "role would sound awkward, choose another label/source "
+                    "instead of submitting broad wording. "
                     "Copy returned row values exactly into the label, including "
                     "spacing; do not trim, normalize, or rewrite strings. "
                     "Inspect returned diagnostics before submit_draft: ordering "
@@ -844,6 +852,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
         description=(
             "Run a structured read-only query over aliases and FK joins. Use "
             "to produce the exact rows that will be copied into the label. "
+            "The query path is the selected source surface; if broad request "
+            "wording could fit another reachable source, make this source role "
+            "explicit or choose the ordinary matching source. "
             "Returns columns, rows, row_count, and diagnostics for list order "
             "or duplicate projected answer rows when present; blocking "
             "diagnostics must be fixed before submit_draft."

@@ -7521,6 +7521,75 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 176 — Broad wording must not hide a non-ordinary source
+
+- **질문**:
+  Iteration 175의 budget enforcement 정리 뒤 다음 smoke에서 좋은 accepted가 나왔는가?
+  `trial_58`의 pass rate `0/4`는 어려운 좋은 문제인가, 아니면 저품질 문제인가?
+
+- **실험/결과**:
+  `trial_58`은 accepted 없이 `synthesis_failed`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_58`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - pass rate: `0/4 = 0.0`
+  - accepted data: 없음
+
+  첫 submit은 특정 입원의 `pharmacy` rows에서 가장 최근 시작한 약물 5개를 만들었지만,
+  `starttime` 동점 때문에 `answer_contract_order_ambiguous` feedback을 받았다. 두 번째 submit은
+  `medication asc` tie-break를 추가해 order ambiguity는 해결했지만, solver 4개가 모두
+  canonical label과 다른 답을 냈다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 `pharmacy`와 `prescriptions`가 모두 admission 아래 reachable하다는 것을
+  보았지만, label은 `pharmacy`에서 만들고 user_request는 넓은 "처방된 약물" 의미로 작성했다.
+
+  solver reasoning은 4개 모두 요청을 `prescriptions` surface로 자연스럽게 해석했다. 한 solver는
+  `prescriptions` 기준 top 5를 `Bag`, `Magnesium Sulfate`, `Potassium Chloride`,
+  `MetFORMIN (Glucophage)`, `Potassium Chloride`로 산출했다. DB 교차검증 결과도
+  `pharmacy` top 5에는 `Bag`가 없고 `Guaifenesin`이 포함되어, 두 source surface가 실제로 다른
+  label을 만든다는 점을 확인했다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - 첫 submit은 order ambiguity가 있으므로 low-quality rejected다.
+  - 두 번째 submit은 order 자체는 고쳤지만, request가 선택한 source role을 유일하게 고정하지
+    못했다. solver가 못 푼 어려운 좋은 문제가 아니라, composer가 broad wording으로 non-ordinary
+    source choice를 숨긴 low-quality rejected다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 어떤 자연어 명사가 어느 source surface를 "ordinary"하게
+  가리키는지는 DB 리터럴/도메인 의미 판단이 필요하므로 precision 100 구조 검사가 아니다.
+
+  prompt-first/tool-local contract 원칙에 맞춰 다음만 보강했다.
+
+  - Core Definitions의 Source surface: ordinary wording이 다른 reachable source를 가리키면 그
+    source를 사용하거나, 선택한 source role을 명시하라고 정리했다.
+  - Scope Example: broad `R` 요청이 `S2.R` query를 숨기고 `S1.R`도 맞는 상황을 bad example로
+    바꾸고, selected source role을 드러낸 request를 good example로 제시했다.
+  - `query.from.table` schema description: root table이 selected source surface임을 명시하고,
+    ordinary wording이 다른 reachable source를 가리키면 source를 바꾸거나 source role을
+    user_request/topic/answer_contract에 드러내라고 보강했다.
+  - `query` tool description과 `submit_draft.user_request` description도 같은 source-surface
+    계약을 상기하도록 맞췄다.
+
+  이 변경은 특정 테이블명/컬럼명/값 리터럴을 보지 않는다. feedback도 새로 만들지 않았고,
+  기존 Source surface 원칙을 더 잘 보이게 한 것이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_payload_schema_uses_strict_json_string_fields tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_turn_budget_prompt.py -q`
+  통과 (`10 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/turn_budget.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

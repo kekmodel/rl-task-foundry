@@ -10,16 +10,15 @@ def build_tool_call_budget_instruction(*, max_tool_calls: int) -> str:
     first_submit_deadline = max(1, max_tool_calls // 3)
     return (
         "# Draft Submission Budget\n"
-        f"Budget: {max_tool_calls} tool calls total: data tools + "
-        "`submit_draft`.\n"
+        f"Budget: {max_tool_calls} tool calls total: data tools + `submit_draft`.\n"
         f"- Call `submit_draft` within first {first_submit_deadline} "
         "tool calls; "
         f"max {FIRST_SUBMIT_MAX_DATA_TOOLS} data tools before first "
         "`submit_draft`.\n"
         f"- After feedback, max {FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools; "
-        "binding feedback uses none. At ToolBudgetFeedback, stop exploration "
-        "and submit next; only one final label `query` if rows missing/"
-        "blocking diagnostics; after that query, submit.\n"
+        "binding feedback uses none. ToolBudgetFeedback: stop exploration, "
+        "submit next; only one final label `query` for missing/blocking rows; "
+        "after that query, submit.\n"
         "- If `submit_draft` says the conversation is terminated, stop.\n"
         "- Plain text is invalid."
     )
