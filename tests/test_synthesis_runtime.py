@@ -3450,6 +3450,150 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_surfaces_order_binding_errors_with_ambiguous_order(
+    tmp_path: Path,
+) -> None:
+    monitor = _CollectingPhaseMonitor()
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="medications",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+        phase_monitor=monitor,  # type: ignore[arg-type]
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"hadm_id": 28710730}
+    label = [
+        {
+            "medication_name": "Acetaminophen",
+            "start_time": "2120-01-31T00:00:00",
+            "administration_route": "PO/NG",
+            "frequency": "Q6H",
+        },
+        {
+            "medication_name": "Famotidine",
+            "start_time": "2120-01-31T00:00:00",
+            "administration_route": "PO/NG",
+            "frequency": "BID",
+        },
+        {
+            "medication_name": "FoLIC Acid",
+            "start_time": "2120-01-31T00:00:00",
+            "administration_route": "IV",
+            "frequency": "Q24H",
+        },
+        {
+            "medication_name": "Heparin",
+            "start_time": "2120-01-31T00:00:00",
+            "administration_route": "SC",
+            "frequency": "BID",
+        },
+        {
+            "medication_name": "HYDROmorphone (Dilaudid)",
+            "start_time": "2120-01-31T00:00:00",
+            "administration_route": "IVPCA",
+            "frequency": "ASDIR",
+        },
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "입원 중 약물 처방 내역",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "이번 입원 중 약물 처방 5개를 시작 시간 오름차순, "
+                "약물 이름 오름차순으로 보여 주세요. 약물 이름, 시작 시간, "
+                "투여 경로, 투여 빈도를 포함해 주세요.",
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "약물 처방",
+                "constraint_phrases": ["이번 입원 중"],
+                "limit_phrase": "5개",
+                "output_bindings": [
+                    {
+                        "label_field": "medication_name",
+                        "requested_by_phrase": "약물 이름",
+                    },
+                    {
+                        "label_field": "start_time",
+                        "requested_by_phrase": "시작 시간",
+                    },
+                    {
+                        "label_field": "administration_route",
+                        "requested_by_phrase": "투여 경로",
+                    },
+                    {"label_field": "frequency", "requested_by_phrase": "투여 빈도"},
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "asc",
+                        "label_field": "start_time",
+                        "requested_by_phrase": "시작 시간 오름차순",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "pharmacy",
+                "column": "starttime",
+                "direction": "asc",
+            },
+            {
+                "usage": "order_by",
+                "table": "pharmacy",
+                "column": "medication",
+                "direction": "asc",
+            },
+        ],
+        query_params={
+            "spec": {
+                "limit": 5,
+                "order_by": [
+                    {"output": "start_time", "direction": "asc"},
+                    {"output": "medication_name", "direction": "asc"},
+                ],
+            }
+        },
+        result_extra={
+            "ordering_diagnostics": {
+                "order_by_outputs": ["start_time", "medication_name"],
+                "duplicate_order_key_in_returned_rows": False,
+                "limit_boundary_tie": True,
+                "returned_row_count": 5,
+                "limit": 5,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "List Determinism Policy reminder" in message
+    assert "answer_contract.order_bindings cover each query.order_by entry" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_order_ambiguous",
+        "answer_contract_binding_missing",
+    )
+    diagnostics = monitor.records[-1]["diagnostics"]
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["answer_contract_binding_errors"] == [
+        "missing_order_bindings",
+        "missing_order_label_bindings",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_mechanical_multi_key_list_order(
     tmp_path: Path,
 ) -> None:

@@ -1059,6 +1059,16 @@ def _answer_contract_binding_errors(
     return errors
 
 
+_ORDER_BINDING_ERROR_NAMES = frozenset(
+    {
+        "missing_order_bindings",
+        "missing_order_label_bindings",
+        "duplicate_order_binding_phrases",
+        "order_binding_reused_output_phrases",
+    }
+)
+
+
 def _referenced_predicate_signature(ref: dict[str, object]) -> str | None:
     if ref.get("usage") != "where":
         return None
@@ -2358,7 +2368,7 @@ class SubmitDraftController:
                     ]
                 )
 
-        if not error_codes and submission_diagnostics:
+        if submission_diagnostics:
             binding_diagnostics = submission_diagnostics.get(
                 "answer_contract_binding_diagnostics"
             )
@@ -2367,10 +2377,31 @@ class SubmitDraftController:
                     binding_diagnostics,
                     require_output_bindings=payload.answer_contract.kind == "list",
                 )
-                if binding_errors:
-                    error_codes.append(
-                        SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING
+                binding_can_join_existing_feedback = any(
+                    error_code
+                    in {
+                        SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING,
+                        SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
+                    }
+                    for error_code in error_codes
+                )
+                if binding_errors and (
+                    not error_codes
+                    or (
+                        binding_can_join_existing_feedback
+                        and any(
+                            error_name in _ORDER_BINDING_ERROR_NAMES
+                            for error_name in binding_errors
+                        )
                     )
+                ):
+                    if (
+                        SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING
+                        not in error_codes
+                    ):
+                        error_codes.append(
+                            SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING
+                        )
                     invalid_diagnostics["answer_contract_binding_errors"] = (
                         binding_errors[
                             : self.config.synthesis.runtime.diagnostic_item_limit

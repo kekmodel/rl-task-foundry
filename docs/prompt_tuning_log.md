@@ -6512,6 +6512,67 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 160 — Order-binding diagnostics must surface with order feedback
+
+- **질문**:
+  `trial_42`에서 reasoning content가 반환되는 상태에서, composer가 왜 같은 order/tie-break
+  결함을 반복했는가?
+
+- **실험/결과**:
+  `trial_42`도 solver rollout 전 `MaxTurnsExceeded`로 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_42`
+  - 첫 draft: ICU chartevents vital sign list
+    - `label_null_value_forbidden`, `label_no_primary_key_source`
+  - 이후 draft: admission/pharmacy medication list
+    - `answer_contract_phrase_missing`, `answer_contract_hidden_filter_unanchored`,
+      `answer_contract_order_ambiguous`
+  - 마지막 pharmacy retry:
+    - `answer_contract_phrase_missing`, `answer_contract_order_ambiguous`
+
+- **reasoning 교차 분석**:
+  composer는 첫 no-PK/null feedback 뒤 pharmacy로 바꾸는 방향은 이해했다. 그러나 pharmacy
+  query에서 `start_time`이 모두 같아서 `medication_name`을 tie-break로 추가한 뒤, reasoning에서
+  "rows are distinguishable by medication_name"이라고 판단했다. 실제 문제는 distinguishability만이
+  아니라 request/contract가 `query.order_by` 두 key를 모두 요청하고 bind해야 한다는 점이다.
+
+  기존 validator는 `answer_contract_binding_diagnostics`에 `missing_order_binding_count=1`,
+  `missing_order_label_bindings=["medication_name"]`를 이미 계산했다. 하지만 다른 오류가 있으면
+  `answer_contract_binding_missing` feedback을 숨겼다. 그래서 composer가 order ambiguity feedback을
+  받으면서도 "tie-break를 query에 넣으면 됨"으로 오해하기 쉬웠다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 첫 draft는 no-PK table row value + null answer field라
+  명백히 저품질이다. pharmacy draft도 좋은 어려움이 아니라, fixed list membership/order를
+  request/contract로 유일하게 고정하지 못한 문제다.
+
+- **개선 판단**:
+  prompt-first 원칙상 durable prompt는 이미 "multi-key order는 user_request가 구분하고
+  order_bindings가 query.order_by를 모두 cover해야 한다"고 말한다. 새 정책을 추가하지 않는다.
+
+  대신 feedback이 기존 정책을 충분히 상기하지 못한 문제다. binding diagnostics는 query metadata와
+  answer_contract 구조만 비교하므로 DB 리터럴/토큰/의미 휴리스틱이 아니다. 다른 오류가 있어도
+  order-binding 결함만은 함께 노출하는 것이 precision 100 원칙에 맞다.
+
+- **변경**:
+  - `answer_contract_phrase_missing` 또는 `answer_contract_order_ambiguous` feedback과 함께
+    order-binding 계열 diagnostics
+    (`missing_order_bindings`, `missing_order_label_bindings`,
+    `duplicate_order_binding_phrases`, `order_binding_reused_output_phrases`)가 있으면
+    `answer_contract_binding_missing`을 같이 노출한다.
+  - output binding만 빠진 경우까지 무조건 같이 노출하지는 않는다. 이번 개선은 order/tie-break
+    repair의 구조 신호에 한정한다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_surfaces_order_binding_errors_with_ambiguous_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker tests/test_synthesis_runtime.py::test_submit_draft_rejects_multirow_list_without_order_by -q`
+  통과 (`4 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
