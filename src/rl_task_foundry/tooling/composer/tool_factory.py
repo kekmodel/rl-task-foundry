@@ -35,6 +35,7 @@ from rl_task_foundry.tooling.common.tool_runtime import wrap_tool_handler as _wi
 from rl_task_foundry.tooling.composer._session import ComposerSession
 from rl_task_foundry.tooling.composer._sql import FILTER_OPS
 from rl_task_foundry.tooling.composer.neighborhood import neighborhood
+from rl_task_foundry.tooling.composer.plan_task_surface import plan_task_surface
 from rl_task_foundry.tooling.composer.profile import profile
 from rl_task_foundry.tooling.composer.query import query
 from rl_task_foundry.tooling.composer.sample import sample
@@ -66,6 +67,46 @@ def _all_edge_labels(snapshot: SchemaSnapshot) -> list[str]:
 
 def _filter_op_enum() -> list[str]:
     return sorted(FILTER_OPS)
+
+
+def _coerce_row_id(
+    snapshot: SchemaSnapshot,
+    table: str,
+    raw_row_id: object,
+) -> object:
+    if raw_row_id is None:
+        raise TypeError(
+            "'row_id' is required and cannot be null; use a primary-key "
+            "value returned by sample/query or another data tool"
+        )
+    if isinstance(raw_row_id, bool | float | dict):
+        raise TypeError(
+            "'row_id' must be a primary-key string/integer scalar or array"
+        )
+    table_spec = snapshot.table(table)
+    if len(table_spec.primary_key) == 1:
+        if isinstance(raw_row_id, list):
+            raise TypeError(
+                "'row_id' must be a scalar for a single-column primary key"
+            )
+        pk_column_spec = table_spec.column(table_spec.primary_key[0])
+        return coerce_scalar(raw_row_id, pk_column_spec.data_type)
+    if not isinstance(raw_row_id, list):
+        raise TypeError(
+            "'row_id' must be an array for a composite primary key"
+        )
+    if len(raw_row_id) != len(table_spec.primary_key):
+        raise ValueError(
+            f"'row_id' must have {len(table_spec.primary_key)} values"
+        )
+    return [
+        coerce_scalar(value, table_spec.column(pk_column).data_type)
+        for value, pk_column in zip(
+            raw_row_id,
+            table_spec.primary_key,
+            strict=True,
+        )
+    ]
 
 
 def _coerce_predicate(
@@ -472,42 +513,9 @@ def build_neighborhood_tool(session: ComposerSession) -> "FunctionTool":
 
     async def handler(payload: JsonObject) -> JsonObject:
         table = _require_str(payload, "table")
-        raw_row_id = payload.get("row_id")
-        if raw_row_id is None:
-            raise TypeError(
-                "'row_id' is required and cannot be null; use a primary-key "
-                "value returned by sample/query or another data tool"
-            )
-        if isinstance(raw_row_id, bool | float | dict):
-            raise TypeError(
-                "'row_id' must be a primary-key string/integer scalar or array"
-            )
         table_spec = session.snapshot.table(table)
         table_handle = table_spec.handle
-        if len(table_spec.primary_key) == 1:
-            if isinstance(raw_row_id, list):
-                raise TypeError(
-                    "'row_id' must be a scalar for a single-column primary key"
-                )
-            pk_column_spec = table_spec.column(table_spec.primary_key[0])
-            row_id = coerce_scalar(raw_row_id, pk_column_spec.data_type)
-        else:
-            if not isinstance(raw_row_id, list):
-                raise TypeError(
-                    "'row_id' must be an array for a composite primary key"
-                )
-            if len(raw_row_id) != len(table_spec.primary_key):
-                raise ValueError(
-                    f"'row_id' must have {len(table_spec.primary_key)} values"
-                )
-            row_id = [
-                coerce_scalar(value, table_spec.column(pk_column).data_type)
-                for value, pk_column in zip(
-                    raw_row_id,
-                    table_spec.primary_key,
-                    strict=True,
-                )
-            ]
+        row_id = _coerce_row_id(session.snapshot, table_handle, payload.get("row_id"))
         depth = _optional_int(payload, "depth")
         max_per_edge = _optional_int(payload, "max_per_edge")
         result = await neighborhood(
@@ -525,6 +533,78 @@ def build_neighborhood_tool(session: ComposerSession) -> "FunctionTool":
             "Inspect one observed row and its immediate relationship counts "
             "and sample ids. Use after choosing an entity to find reachable "
             "task paths."
+        ),
+        params_json_schema=schema,
+        on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
+        strict_json_schema=False,
+    )
+
+
+def build_plan_task_surface_tool(session: ComposerSession) -> "FunctionTool":
+    from agents import FunctionTool
+
+    tables = _all_table_names(session.snapshot)
+    schema: JsonObject = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["table", "row_id"],
+        "properties": {
+            "table": {
+                "type": "string",
+                "enum": tables,
+                "description": "Anchor table handle for an observed row.",
+            },
+            "row_id": {
+                "description": (
+                    "Primary-key value of the observed anchor row. Never null; "
+                    "copy a value returned by sample/query or another data tool."
+                ),
+                "anyOf": _ROW_ID_ANY_OF,
+            },
+            "max_candidates": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 5,
+                "description": "Maximum structural surface candidates to return.",
+            },
+            "max_sample_rows": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 5,
+                "description": (
+                    "Maximum related rows used only to count non-null visible "
+                    "fields. Raw sampled values are not returned."
+                ),
+            },
+        },
+    }
+
+    async def handler(payload: JsonObject) -> JsonObject:
+        table = _require_str(payload, "table")
+        table_spec = session.snapshot.table(table)
+        table_handle = table_spec.handle
+        row_id = _coerce_row_id(session.snapshot, table_handle, payload.get("row_id"))
+        max_candidates = _optional_int(payload, "max_candidates")
+        max_sample_rows = _optional_int(payload, "max_sample_rows")
+        result = await plan_task_surface(
+            session,
+            table=table_handle,
+            row_id=row_id,
+            max_candidates=max_candidates if max_candidates is not None else 5,
+            max_sample_rows=max_sample_rows if max_sample_rows is not None else 5,
+        )
+        return result
+
+    return FunctionTool(
+        name="plan_task_surface",
+        description=(
+            "Plan structural direct and parent-sibling task surfaces from an "
+            "observed anchor row. "
+            "Use immediately after neighborhood, before extra sampling, when "
+            "choosing a primary-key-backed "
+            "record surface, visible output fields, and possible order fields. "
+            "This is planning only: it does not write topic/user_request/label "
+            "and is not label evidence; final rows must still come from query."
         ),
         params_json_schema=schema,
         on_invoke_tool=_with_error_handling(handler, lock=session.operation_lock),
@@ -916,12 +996,13 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
 
 
 def build_composer_tools(session: ComposerSession) -> list["FunctionTool"]:
-    """Build all five composer FunctionTool instances for a session."""
+    """Build all composer FunctionTool instances for a session."""
     return [
         build_schema_map_tool(session),
         build_profile_tool(session),
-        build_sample_tool(session),
         build_neighborhood_tool(session),
+        build_plan_task_surface_tool(session),
+        build_sample_tool(session),
         build_query_tool(session),
     ]
 
@@ -929,6 +1010,7 @@ def build_composer_tools(session: ComposerSession) -> list["FunctionTool"]:
 __all__ = [
     "build_composer_tools",
     "build_neighborhood_tool",
+    "build_plan_task_surface_tool",
     "build_profile_tool",
     "build_query_tool",
     "build_sample_tool",

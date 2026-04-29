@@ -2,22 +2,15 @@
 
 from __future__ import annotations
 
-FIRST_SUBMIT_MAX_DATA_TOOLS = 3
-FEEDBACK_REPAIR_MAX_DATA_TOOLS = 3
-
 
 def build_tool_call_budget_instruction(*, max_tool_calls: int) -> str:
-    first_submit_deadline = max(1, max_tool_calls // 3)
     return (
-        "# Draft Submission Budget\n"
-        f"{max_tool_calls} tool calls total: data tools, submit_draft.\n"
-        f"- submit_draft by first {first_submit_deadline} "
-        "tool calls; "
-        f"max {FIRST_SUBMIT_MAX_DATA_TOOLS} data tools.\n"
-        f"- After feedback, max {FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools; "
-        "binding feedback uses none. ToolBudgetFeedback boundary: stop "
-        "exploration; submit next. If final query allowed, run it once "
-        "then submit.\n"
-        "- If `submit_draft` says the conversation is terminated, stop.\n"
-        "- Plain text is invalid."
+        "# Tool Budget\n"
+        f"Use tools as needed; hard cap near {max_tool_calls} tool calls "
+        "before `submit_draft`.\n"
+        "- No per-stage data-tool quota.\n"
+        "- Submit as soon as the final query evidence is ready. If a "
+        "ToolBudgetFeedback reminder appears, stop exploration and call "
+        "`submit_draft` unless one final label query is strictly needed.\n"
+        "- If `submit_draft` says terminated, stop. Plain text is invalid."
     )

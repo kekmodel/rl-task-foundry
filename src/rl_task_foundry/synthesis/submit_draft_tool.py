@@ -39,10 +39,6 @@ from rl_task_foundry.synthesis.submit_draft_validators import (
     _rebuild_anchor_connected_strings,
     _ungrounded_answer_strings,
 )
-from rl_task_foundry.synthesis.turn_budget import (
-    FEEDBACK_REPAIR_MAX_DATA_TOOLS,
-    FIRST_SUBMIT_MAX_DATA_TOOLS,
-)
 
 if TYPE_CHECKING:
     from rl_task_foundry.pipeline.solver_orchestrator import SolverOrchestrator
@@ -102,14 +98,6 @@ _LABEL_LOCKING_REPAIR_ERROR_VALUES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING.value,
         SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING.value,
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH.value,
-    }
-)
-
-
-_CONTRACT_ONLY_REPAIR_ERROR_VALUES = frozenset(
-    {
-        SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING.value,
-        SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING.value,
     }
 )
 
@@ -1970,71 +1958,28 @@ class SubmitDraftController:
     def data_tool_budget_feedback(self, *, tool_name: str) -> dict[str, object] | None:
         if self.accepted_draft is not None or self._terminated_too_hard:
             return None
-        calls_since_boundary = (
-            len(self._raw_atomic_tool_calls)
-            - self._tool_call_count_at_last_protocol_boundary
-        )
-        last_feedback_error_codes = set(self._last_feedback_error_codes)
-        if (
-            last_feedback_error_codes
-            and last_feedback_error_codes <= _CONTRACT_ONLY_REPAIR_ERROR_VALUES
-        ):
-            return {
-                "error": "submit_draft_required",
-                "message": (
-                    "ToolBudgetFeedback: Contract repair reminder: "
-                    "phrase/binding-only feedback is contract-only. This is "
-                    "a hard protocol boundary, not a data result. The next "
-                    "tool call must be submit_draft; do not call data tools "
-                    "after this message. Preserve the current label/query "
-                    "values and resubmit with repaired user_request/"
-                    "answer_contract."
-                ),
-                "calls_since_boundary": calls_since_boundary,
-                "limit": 0,
-            }
-        query_call_since_boundary = self._latest_query_call_since_protocol_boundary()
-        if not self.attempts and self._feedback_events == 0:
-            if calls_since_boundary < FIRST_SUBMIT_MAX_DATA_TOOLS:
-                return None
-            if tool_name == "query" and query_call_since_boundary is None:
-                return None
-            return {
-                "error": "submit_draft_required",
-                "message": (
-                    "ToolBudgetFeedback: Draft Submission Budget reminder: "
-                    "call submit_draft after at most "
-                    f"{FIRST_SUBMIT_MAX_DATA_TOOLS} data tools before the first "
-                    "submit_draft. This is a hard protocol boundary, not a "
-                    "data result. Your next tool call must be submit_draft "
-                    "unless no final label query exists; in that case run "
-                    "exactly one label query, then submit_draft. Do not switch "
-                    "targets or call more data tools after this message."
-                ),
-                "calls_since_boundary": calls_since_boundary,
-                "limit": FIRST_SUBMIT_MAX_DATA_TOOLS,
-            }
-        if calls_since_boundary < FEEDBACK_REPAIR_MAX_DATA_TOOLS:
-            return None
-        if tool_name == "query" and query_call_since_boundary is None:
+        del tool_name
+        total_tool_calls = len(self._raw_atomic_tool_calls)
+        max_tool_calls = max(1, self.config.synthesis.runtime.max_turns)
+        reminder_threshold = max(1, max_tool_calls - 1)
+        if total_tool_calls < reminder_threshold:
             return None
         return {
             "error": "submit_draft_required",
             "message": (
-                "ToolBudgetFeedback: Draft Submission Budget reminder: after "
-                "feedback, call submit_draft after at most "
-                f"{FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools. If the repair "
-                "query has returned label values without blocking diagnostics, "
-                "submit them now. If diagnostics still block the label, this "
-                "candidate should have been abandoned before this boundary. "
-                "This is a hard protocol boundary, not a data result. Your next tool "
-                "call must be submit_draft unless no repair query has returned "
-                "label values; in that case run exactly one final label query, "
-                "then submit_draft. Do not switch targets or call more data "
-                "tools after this message."
+                "ToolBudgetFeedback: Tool budget reminder: the exploration "
+                f"has used {total_tool_calls} tool calls, near the configured "
+                f"cap of {max_tool_calls}. This is a hard protocol boundary, "
+                "not a data result. Stop exploration and call submit_draft "
+                "unless the current candidate still lacks final label-query "
+                "evidence; in that case run exactly one final label query, "
+                "then submit_draft. Do not switch targets after this message."
             ),
-            "calls_since_boundary": calls_since_boundary,
-            "limit": FEEDBACK_REPAIR_MAX_DATA_TOOLS,
+            "calls_since_boundary": (
+                total_tool_calls - self._tool_call_count_at_last_protocol_boundary
+            ),
+            "total_tool_calls": total_tool_calls,
+            "limit": max_tool_calls,
         }
 
     def _latest_successful_query_result_since_last_submission(self) -> dict[str, object] | None:

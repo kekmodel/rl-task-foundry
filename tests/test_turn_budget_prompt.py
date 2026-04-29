@@ -8,36 +8,25 @@ from rl_task_foundry.synthesis.turn_budget import build_tool_call_budget_instruc
 def test_budget_instruction_uses_tool_call_language_not_turns() -> None:
     text = build_tool_call_budget_instruction(max_tool_calls=18)
 
-    assert "18 tool calls total" in text
+    assert "18" in text
+    assert "tool calls" in text
     assert "submit_draft" in text
-    assert "# Draft Submission Budget" in text
-    # Never say "turns" in the budget text — keep vocabulary concrete.
+    assert "# Tool Budget" in text
+    # Never say "turns" in the budget text - keep vocabulary concrete.
     assert "turn" not in text.lower().split("tool calls")[0]
-    assert "data tools" in text
-    assert "After feedback, max 3 data tools" in text
-    assert "binding feedback uses none" in text
+    assert "No per-stage data-tool quota" in text
+    assert "ToolBudgetFeedback reminder" in text
     assert "stop exploration" in text
-    assert "ToolBudgetFeedback boundary" in text
-    assert "If final query allowed" in text
-    assert "run it once" in text
-    assert "then submit" in text
+    assert "one final label query" in text
     assert "ToolBudgetFeedback" in text
-    assert "submit next" in text
     for leaked in ("composer tools", "too_easy", "too_hard", "trial"):
         assert leaked not in text
 
 
-def test_budget_instruction_derives_first_submit_deadline_as_third_of_budget() -> None:
-    text = build_tool_call_budget_instruction(max_tool_calls=18)
-
-    # 18 // 3 == 6
-    assert "first 6 tool calls" in text
-
-
-def test_budget_instruction_floor_is_at_least_one_even_for_tiny_budgets() -> None:
+def test_budget_instruction_preserves_small_budget_values() -> None:
     text = build_tool_call_budget_instruction(max_tool_calls=2)
 
-    assert "first 1 tool calls" in text
+    assert "2" in text
 
 
 def test_synthesis_instructions_embed_the_budget_block() -> None:
@@ -46,7 +35,7 @@ def test_synthesis_instructions_embed_the_budget_block() -> None:
 
     assert "21 tool calls" in text
     assert "submit_draft" in text
-    assert "# Draft Submission Budget" in text
+    assert "# Tool Budget" in text
 
 
 def test_synthesis_instructions_contain_hard_prohibitions() -> None:

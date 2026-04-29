@@ -33,6 +33,7 @@ from rl_task_foundry.tooling.composer import (
     ComposerSession,
     build_composer_tools,
     build_neighborhood_tool,
+    build_plan_task_surface_tool,
     build_profile_tool,
     build_query_tool,
     build_sample_tool,
@@ -174,13 +175,14 @@ def test_query_tool_bakes_edge_enum_and_aggregate_fns():
     assert spec["properties"]["aggregate"]["items"]["required"] == ["fn", "as"]
 
 
-def test_build_composer_tools_returns_five_tools_in_fixed_order():
+def test_build_composer_tools_returns_tools_in_fixed_order():
     tools = build_composer_tools(_stub_session())
     assert [tool.name for tool in tools] == [
         "schema_map",
         "profile",
-        "sample",
         "neighborhood",
+        "plan_task_surface",
+        "sample",
         "query",
     ]
 
@@ -194,6 +196,16 @@ def test_neighborhood_tool_row_id_schema_disallows_null():
     assert any(
         branch.get("type") == "array" for branch in row_id_schema["anyOf"]
     )
+
+
+def test_plan_task_surface_tool_schema_disallows_null_row_id():
+    tool = build_plan_task_surface_tool(_stub_session())
+    row_id_schema = tool.params_json_schema["properties"]["row_id"]
+    assert {"type": "null"} not in row_id_schema["anyOf"]
+    assert "planning only" in tool.description
+    assert "immediately after neighborhood" in tool.description
+    assert "not label evidence" in tool.description
+    assert "topic/user_request/label" in tool.description
 
 
 def test_composer_tool_surface_is_db_native_without_internal_framing():
@@ -287,6 +299,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "the draft is grounded" in tools["sample"].description
     assert "nontrivial filters" in tools["profile"].description
     assert "reachable task paths" in tools["neighborhood"].description
+    assert "structural direct and parent-sibling task surfaces" in tools[
+        "plan_task_surface"
+    ].description
+    assert "not label evidence" in tools["plan_task_surface"].description
     assert "exact rows that will be copied into the label" in tools["query"].description
     assert "query path is the selected source surface" in tools["query"].description
     assert "ordinary matching source" in tools["query"].description
@@ -328,6 +344,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert any(
         "Each column is scoped to the selected table" in description
         for description in descriptions["profile"].values()
+    )
+    assert any(
+        "Raw sampled values are not returned" in description
+        for description in descriptions["plan_task_surface"].values()
     )
     assert "same event/record" in descriptions["query"]["$.spec.join"]
     assert "independent sibling joins" in descriptions["query"]["$.spec.join"]
@@ -564,6 +584,14 @@ async def test_neighborhood_tool_surfaces_not_implemented_for_depth_two():
 @pytest.mark.asyncio
 async def test_neighborhood_tool_rejects_null_row_id_before_querying():
     tool = build_neighborhood_tool(_stub_session())
+    response = await _invoke(tool, {"table": "customer", "row_id": None})
+    assert response["error_type"] == "TypeError"
+    assert "cannot be null" in response["error"]
+
+
+@pytest.mark.asyncio
+async def test_plan_task_surface_tool_rejects_null_row_id_before_querying():
+    tool = build_plan_task_surface_tool(_stub_session())
     response = await _invoke(tool, {"table": "customer", "row_id": None})
     assert response["error_type"] == "TypeError"
     assert "cannot be null" in response["error"]

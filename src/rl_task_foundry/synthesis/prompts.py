@@ -34,8 +34,9 @@ def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
             _render_context_block(
                 "candidate_tool_instruction",
                 "If you choose one, first call `neighborhood` with that "
-                "candidate's `table` and `row_id`, then use data tools and a "
-                "final `query(spec)` to produce the exact label. Copy only the "
+                "candidate's `table` and `row_id`, then call "
+                "`plan_task_surface` before extra samples. Use final "
+                "`query(spec)` to produce the exact label. Copy only the "
                 "chosen candidate's `entity` object, encoded as JSON, into "
                 "`submit_draft.entity_json`.",
             ),
@@ -65,7 +66,8 @@ def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
             "anchor_tool_instruction",
             f"When calling `neighborhood`, use `table` = {table!r} and "
             f"`row_id` = {_json.dumps(row_id, ensure_ascii=False)}; "
-            "never pass `row_id: null`.",
+            "never pass `row_id: null`. Then call `plan_task_surface` before "
+            "extra samples.",
         ),
     ])
 
@@ -106,15 +108,16 @@ def build_synthesis_agent_instructions(
 ) -> str:
     return "\n\n".join([
         "# Role\n"
-        "Make grounded customer-facing task drafts; submit_draft",
+        "Make grounded customer-facing task drafts.",
 
         build_tool_call_budget_instruction(
             max_tool_calls=runtime_config.max_turns,
         ),
 
         "# Workflow\n"
-        "1. Map; choose a plausible root; the DB decides the domain\n"
+        "1. Map; choose root; the DB decides the domain\n"
         "2. Observe; Do not invent ids; hidden entity values must be grounded.\n"
+        "Plan not label evidence.\n"
         "3. Build a requestable label candidate: interesting, unique, "
         "verifiable, scoped.\n"
         "4. Check requestability: realistic customer can ask without technical "

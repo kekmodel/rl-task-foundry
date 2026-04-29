@@ -136,7 +136,7 @@ class AtomicToolConfig(StrictModel):
 
 
 class SynthesisRuntimeConfig(StrictModel):
-    max_turns: int = Field(default=50, ge=1)
+    max_turns: int = Field(default=30, ge=1)
     run_timeout_s: int = Field(default=300, ge=1)
     tracing: bool = True
     sdk_sessions_enabled: bool = False

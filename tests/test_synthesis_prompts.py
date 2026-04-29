@@ -240,8 +240,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
         assert primitive not in instructions
 
     # Tool-call budget is explicit; callable shape lives in SDK tool schemas.
-    assert "# Draft Submission Budget" in instructions
+    assert "# Tool Budget" in instructions
     assert "tool calls" in instructions
+    assert "No per-stage data-tool quota" in instructions
     assert "submit_draft" in instructions
     assert "Plain text is invalid" in instructions
     assert "# Tools" not in instructions
@@ -258,6 +259,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Why:" not in instructions
     assert "the DB decides the domain" in instructions
     assert "hidden entity values must be grounded" in instructions
+    assert "choose root" in instructions
+    assert "Plan not label evidence" in instructions
     assert "Build a requestable label candidate" in instructions
     assert "interesting, unique, verifiable, scoped" in instructions
     assert "Check requestability" in instructions
@@ -298,7 +301,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "<draft_before>list R fields A,B" in instructions
     assert "<commentary>Good: changes what must be found" in instructions
     assert "<commentary>Bad: passive width" in instructions
-    assert "If `submit_draft` says the conversation is terminated" in instructions
+    assert "If `submit_draft` says terminated" in instructions
 
     # Durable policies are named so feedback/tool descriptions can reference
     # them without restating broad strategy.
@@ -529,6 +532,7 @@ def test_synthesis_input_can_include_tool_only_anchor_hint() -> None:
     assert "<anchor_primary_key_column>\nfilm_id\n</anchor_primary_key_column>" in prompt
     assert "<submit_draft_entity_json>" in prompt
     assert "never pass `row_id: null`" in prompt
+    assert "Then call `plan_task_surface` before extra samples" in prompt
     assert prompt.index("<starting_entity>") < prompt.index("<session_context>")
 
 
@@ -567,6 +571,7 @@ def test_synthesis_input_can_include_candidate_anchor_pool() -> None:
     assert "do not attach a candidate to an otherwise global task" in prompt
     assert "smallest id" in prompt
     assert "first call `neighborhood`" in prompt
+    assert "then call `plan_task_surface` before extra samples" in prompt
     assert "`preview` and `relationship_summary` are orientation context" in prompt
     assert "not final label evidence" in prompt
     assert "must never expose raw primary-key or row_id values" in prompt
@@ -589,6 +594,6 @@ def test_synthesis_input_defaults_to_schema_map_entity_selection() -> None:
     assert "<candidate_starting_points>" not in prompt
     assert "<topic_experiment_hint>" not in prompt
     assert "<requested_topic>" not in prompt
-    assert "choose a plausible root" in instructions
+    assert "choose root" in instructions
     assert "hidden entity values must be grounded" in instructions
     assert "follow that tool's schema exactly" in instructions

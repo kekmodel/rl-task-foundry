@@ -9427,6 +9427,101 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Iteration 173 — Tool budget is total-only; `plan_task_surface` remains advisory
+
+- **질문**:
+  `plan_task_surface`를 추가한 뒤에도 기존 3-data-tool `ToolBudgetFeedback`가 composer의 탐색을
+  너무 일찍 막고 있지 않은가? 사용자가 요구한 대로 tool 수는 넉넉히 두되, 과도한 사용만
+  30-tool 근처에서 막으면 실제 accepted 품질이 좋아지는가?
+
+- **변경**:
+  hard feedback의 역할을 축소했다.
+  - `plan_task_surface_required` 강제 피드백 제거.
+  - 첫 submit 전/feedback 후 `3 data tools` 제한 제거.
+  - phrase/binding-only feedback 뒤 data-tool 호출을 runtime에서 막던 budget gate 제거.
+  - `ToolBudgetFeedback`는 총 tool 사용량이 `synthesis.runtime.max_turns` 근처에 도달했을 때만
+    submit reminder를 낸다.
+  - 기본 synthesis `max_turns`와 main DB config들을 `20 -> 30`으로 완화.
+
+  프롬프트도 같은 원칙으로 압축했다.
+  - `# Draft Submission Budget` -> `# Tool Budget`.
+  - “No per-stage data-tool quota”를 명시.
+  - callable shape는 SDK tool schema에 맡기고, 프롬프트는 총량과 submit protocol만 말한다.
+
+- **실험**:
+  `artifacts/trial_20260429_mimiciv_demo_plan_surface_kimi_4solver_no_topic_smoke_01/trial_05`
+  - DB: `mimiciv_demo`
+  - Composer/Solver: OpenRouter `moonshotai/kimi-k2.5`
+  - Solver batch: 4
+  - Topic hint: 없음
+  - Synthesis max turns: 30
+
+- **결과**:
+  Accepted.
+  - task: `입원 중 미생물 검사 요약`
+  - request: 특정 입원 중 미생물 검사 결과를 검체 종류별로 묶어 검사 횟수와 가장 최근 검사 날짜를
+    묻고, 검체 종류 알파벳순 정렬을 요청.
+  - pass rate: `3/4 = 0.75`
+  - solver failed runs: `0`
+  - composer tool calls: 15 total, data tools 12, submit 3
+
+  기존 문제였던 3-tool cap은 사라졌다. trial_04에서는 4번째 query가
+  `submit_draft_required`에 막혔지만, trial_05는 9개 data tools 뒤 첫 submit까지 자유롭게
+  진행했다.
+
+- **accepted data 정성 평가**:
+  좋은 accepted로 판정한다.
+  - DB 원본으로 cross-check한 결과 `hadm_id=26275841`의 `microbiologyevents`를
+    `spec_type_desc` 기준으로 group/count/max(chartdate) 하면 canonical answer와 일치한다.
+  - row set/order/filter는 user request에 보이는 기준과 일치한다. hidden tie-break/order/filter는
+    없다.
+  - 문제는 solver tool에 직접 group-by count가 없어서, solver가 9개 row를 list한 뒤 검체 종류별로
+    직접 세어야 한다. atomic tool 철학상 multi-step reasoning을 유도하므로 좋은 난이도다.
+  - 1개 solver mismatch는 SPUTUM row를 4개가 아니라 5개로 잘못 센 단순 추론 오류였다. 같은 도구와
+    같은 row evidence로 3개 solver는 맞췄으므로 저품질 문제라기보다 어려운 문제로 본다.
+
+  약한 점:
+  - “검사 횟수”는 실제로 `microevent_id` row count다. 의료 사용자 문구로는 “검사 결과 건수”가
+    더 정밀할 수 있다. 다만 현재 request/label은 validator와 DB cross-check 기준으로는 일관된다.
+  - composer는 `plan_task_surface`를 쓰지 않았다. advisory tool로 둔 상태에서는 adoption이 보장되지
+    않는다. 강제 feedback은 제거했으므로, 다음 개선은 tool description/order 또는 prompt의 짧은
+    workflow wording에서 해결해야 한다.
+
+- **rejected data 정성 평가**:
+  제출 1/2는 good repair path다.
+  - 제출 1: `test_count desc`, `latest_test_date desc` order가 request에 묶였지만 동점 order가
+    ambiguous해서 reject. 저품질 accepted가 되지 않고 정확히 막혔다.
+  - 제출 2: order를 제거했지만 answer row order와 request/order contract가 아직 맞지 않아 reject.
+  - 제출 3: `specimen_type asc`로 정렬 기준을 자연어 request에 명시하고 accepted.
+
+- **reasoning 교차 분석**:
+  Composer는 admissions anchor의 microbiology 관계를 보고, row-level list에서 grouped aggregate로
+  전환했다. 첫 두 submit feedback 이후에도 같은 label을 유지하며 order contract만 좁혀 수리했다.
+  이는 feedback handling 원칙에 맞다.
+
+  Solver reasoning은 이 문제가 왜 난이도가 있는지 보여준다. 여러 solver가 “group-by가 직접 없으니
+  list_records로 row를 모두 가져와 직접 집계해야 한다”고 판단했다. 실패한 solver도 같은 row evidence를
+  봤지만 SPUTUM count를 잘못 세었다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_turn_budget_prompt.py tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_allows_free_exploration_before_total_budget tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_uses_only_total_tool_budget tests/test_synthesis_prompts.py tests/test_config_load.py tests/test_cli_commands.py -q`
+    통과 (`29 passed`).
+
+  Broader relevant:
+  - `uv run pytest tests/test_tooling_composer_plan_task_surface.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_config_load.py tests/test_cli_commands.py -q`
+    통과 (`130 passed`).
+
+  Ruff:
+  - `uv run ruff check src/rl_task_foundry/tooling/composer/plan_task_surface.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py src/rl_task_foundry/config/models.py tests/test_tooling_composer_plan_task_surface.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_config_load.py tests/test_cli_commands.py`
+    통과.
+
+- **다음 방향**:
+  `plan_task_surface`는 기능 자체보다 adoption이 문제다. precision 100이 아닌 강제 feedback은 쓰지
+  않는다. 다음 실험은 prompt/tool description의 짧은 wording으로 “neighborhood 이후 plan은 후보
+  선택용이고 label evidence가 아니다”를 더 자연스럽게 유도하되, 실제 사용률과 accepted 품질을 함께
+  본다.
+
 ## Iteration 149 — Temporal source roles must be requestable
 
 - **질문**:
