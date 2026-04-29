@@ -7261,3 +7261,497 @@ Solver 30/30 완료 결과:
 
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
+
+## Iteration 131 — Source surface ambiguity from reasoning traces
+
+- **질문**:
+  reasoning content가 반환/저장되는 상황에서, 실패한 smoke의 composer/solver reasoning을
+  함께 보면 low-quality 원인을 더 정확히 분류할 수 있는가?
+- **실험**:
+  기존 no-topic MIMIC demo 반복 smoke의 `trial_30`을 분석했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_30`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver target: 4 evaluable runs, provider 실패는 replacement retry 포함
+  - 결과: `synthesis_failed`, `calibration_inconclusive`, pass rate `0/4`
+
+- **reasoning 교차 분석**:
+  composer는 admission `hadm_id=20437651`의 `pharmacy` rows를 final label로 만들었다.
+  request는 "이번 입원동안 가장 최근에 처방된 약물 3가지..."였다.
+
+  solver reasoning은 이 문구를 보고 `prescriptions` table을 선택했다. 실제 solver
+  output도 `prescriptions`의 `drug`, `starttime`, `route`, `doses_per_24_hrs`를
+  기반으로 했고, canonical은 `pharmacy.medication`, `pharmacy.starttime`,
+  `pharmacy.route`, `pharmacy.frequency`였다. 따라서 단순 solver 실수가 아니라
+  user_request가 label의 실제 source surface를 충분히 고정하지 못한 low-quality
+  draft였다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 사용자가 "처방된 약물"이라고 말하면 여러
+  reachable source surface가 자연스럽게 후보가 될 수 있는데, composer가 선택한
+  source role을 자연어 요청에 고정하지 않았다. 이 실패는 DB 리터럴 기반 validator로
+  잡으면 안 된다. "약물" 같은 단어를 특정 table에 매핑하는 휴리스틱은 forbidden이다.
+
+- **변경**:
+  prompt-first 원칙에 따라 durable Source Surface Policy를 보강했다.
+
+  - 시스템 프롬프트 `# Scope Examples`에 DB-neutral `S1/S2` 예시를 추가했다.
+    broad noun이 여러 source에 맞으면 bad, request가 선택한 source role을 이름 붙이면
+    good이라는 구조만 제시한다.
+  - `submit_draft.user_request` tool schema description에 "여러 reachable source
+    surfaces가 broad wording을 만족할 수 있으면 선택한 source role을 ordinary
+    language로 이름 붙이라"는 인자 수준 계약을 추가했다.
+  - hard validator는 추가하지 않았다. 이 판단은 semantic ambiguity라 precision 100
+    rule로 만들 수 없고, literal/token heuristic을 쓰면 원칙 위반이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+## Iteration 132 — Avoid single-record detail lookup as initial task shape
+
+- **질문**:
+  Iteration 131 변경 후 smoke에서 Source Surface 문제는 줄었지만, composer가 너무 쉬운
+  단일 record 상세 조회를 첫 draft로 제출하는가?
+- **실험**:
+  같은 no-topic MIMIC demo smoke를 `trial_31`로 실행했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_31`
+  - 결과: `synthesis_failed`, 최종 pass rate `1.0`
+  - 첫 draft: 단일 `emar_id=10039708-198`의 medication/chart_time/status/scheduled_time
+  - 첫 solver result: `4/4` 정답, too easy
+
+- **reasoning 교차 분석**:
+  composer reasoning은 첫 label이 단일 eMAR record detail lookup임을 인지했지만 그대로
+  제출했다. too-easy feedback 후에는 admission 전체 eMAR list/aggregate로 난이도를
+  올리려 했고, 이후 feedback을 literal child anchor 보존으로 읽어 단일 record에
+  `admission_type`만 추가하는 same-row/passive 확장으로 회귀했다.
+
+  저장된 reasoning은 solver 쪽뿐 아니라 composer 쪽도 포함됐다. composer의 핵심 오해는
+  "specificity repair에서 single-record detail을 유지하면서 필드만 더 붙이면 된다"는
+  해석이었다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: hard-good이 아니라 too-easy / recovery failure. 단일 현재-record 상세
+  조회는 solver가 주어진 툴로 너무 쉽게 찾는 label이다. low-quality accepted는 없었고,
+  rejection은 바람직했다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 단일-record detail lookup 여부를 항상 precision 100으로
+  품질 판정하기는 어렵고, 일부 DB에서는 current-record fact lookup도 유효할 수 있다.
+  대신 Task Shapes durable prompt에 짧은 일반 원칙을 추가했다.
+
+  - `Avoid single-record detail lookup.`
+
+  이 변경은 DB literal/token heuristic이 아니며, composer의 초기 label 선택 품질을 올리는
+  prompt-first 개선이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+  통과 (`1 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py tests/test_synthesis_prompts.py`
+  통과.
+
+## Iteration 133 — Reject mechanical multi-key list ordering
+
+- **질문**:
+  `trial_32`에서 단일-record detail lookup은 줄었지만, composer가 긴 multi-key sort를
+  만들어 solver가 submit 없이 멈추는가?
+- **실험**:
+  `trial_32` 최종 draft를 분석했다.
+
+  - request: 검체 채취 일시, 검체 종류, 검사 순서, 검사명 기준으로 모두 오름차순 정렬한
+    미생물 검사 상위 5건
+  - canonical: `microbiologyevents` 5 rows
+  - solver: 4/4 `invalid_submit`, `missing_submit_result`
+  - pass rate: `0/4`
+
+- **reasoning 교차 분석**:
+  solver reasoning은 모두 같은 방향으로 진행했다. `microbiologyevents`를 만들고,
+  `hadm_id=25508812`로 filter한 뒤, 다중 정렬을 수행하려 했다. 하지만 4개 order key와
+  긴 한국어 정렬 계약 때문에 4개 solver 모두 `submit_result`까지 도달하지 못했다.
+
+  이는 데이터 자체가 불가능한 것은 아니지만, composer가 solver에게 과도하게 기계적인
+  list-order contract를 준 저품질 rejected 케이스다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: too-hard/low-quality 경계지만, 원인은 "어려운 좋은 문제"라기보다
+  mechanical sort contract다. 사용자가 자연스럽게 요청할 가능성이 낮고, atomic solver의
+  단계적 문제 해결을 학습시키기보다는 정렬 key 나열을 따라가게 만든다.
+
+- **변경**:
+  이번에는 precision 100 hard guard를 추가했다. DB 리터럴이나 의미 추측이 아니라,
+  실제 `query.order_by` 구조에서 order key 개수를 세는 방식이다.
+
+  - Durable policy: list order는 자연 order + 최대 1개 visible tie-break, 즉 order key
+    총 2개까지만 허용한다.
+  - `submit_draft` validation: list query의 `order_by` reference count가 2를 초과하면
+    `answer_contract_order_too_complex` feedback으로 reject한다.
+  - `query.order_by` schema description에도 같은 계약을 추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_mechanical_multi_key_list_order tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+## Iteration 134 — Reject output-only list difficulty-up
+
+- **질문**:
+  `trial_33`이 accepted됐지만, accepted data가 정말 좋은가?
+- **실험/결과**:
+  `trial_33`은 최종 pass rate `2/4 = 0.5`로 accepted됐다.
+
+  - task: ICU stay의 처음 5개 procedureevents
+  - initial valid list는 solver `4/4`라 too easy
+  - 최종 accepted는 기존 list에 `item_category`와 `patient_weight` 출력 필드를 추가
+  - solver 오답 2건은 `item_category`를 `null` 또는 `ContinuousProcess`로 제출
+
+- **정성 평가**:
+  accepted data: borderline/low-quality accepted.
+
+  row set, order, limit, hidden scope는 명확하고 null도 없다. 하지만 난이도 상승의 핵심이
+  row reasoning 변화가 아니라 output-only passive fields 추가였다. `patient_weight`는
+  procedure row의 반복 display field이고, `item_category`는 `procedure_category`와
+  source-surface가 헷갈리기 쉽다. 이건 "좋은 어려움"이라기보다 우리가 이미 금지한
+  passive width 강화가 accepted된 것이다.
+
+- **변경**:
+  prompt에 이미 있던 Difficulty-Up Policy를 validator가 따르도록 고쳤다.
+
+  - list retry에서 이전 solver-evaluated draft 대비 output source만 추가된 경우
+    `answer_contract_not_incremental`로 reject한다.
+  - scalar aggregate output 확장은 기존처럼 허용한다.
+  - 진단에는 `list_output_only`와 `no_new_structural_constraint`를 남긴다.
+
+  이 검사는 query evidence signature의 구조 비교만 사용하므로 precision 100이다. DB
+  리터럴/토큰/컬럼 의미 휴리스틱은 쓰지 않는다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_incremental_evidence_allows_added_scalar_output_fields tests/test_synthesis_runtime.py::test_incremental_evidence_rejects_list_output_only_field_additions tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+## Iteration 135 — Source role ambiguity after accepted trial
+
+- **질문**:
+  `trial_34`는 pass rate `2/4 = 0.5`로 accepted됐지만, accepted data가 정말 좋은가?
+
+- **실험/결과**:
+  최종 task는 ICU stay의 의료 절차 5개를 시작 시간 순서로, 동일 시간이면 절차 이름
+  순서로 나열하는 list였다.
+
+  - row set/order/limit/hidden scope: 명확함
+  - solver 2건 정답: `procedure_category`를 `procedureevents.ordercategoryname`에서 가져옴
+  - solver 2건 오답: `procedure_category`를 `d_items.category`에서 가져옴
+  - composer canonical: `Peripheral Lines`, `Invasive Lines`, `Tubes`
+  - 오답 solver output: `Access Lines - Peripheral`, `Access Lines - Invasive`, `GI/GU`
+
+- **reasoning 교차 분석**:
+  composer reasoning은 feedback 후 hidden `orderid` tie-break를 버리고, 요청에 자연스러운
+  visible tie-break인 절차 이름 순서를 넣는 방향으로 잘 수정했다. 이 부분은 이전 개선이
+  작동했다.
+
+  하지만 composer는 `카테고리`라는 broad output phrase가 두 reachable source에 걸릴 수
+  있다는 문제를 인지하지 못했다. solver reasoning은 둘로 갈렸다. 일부 solver는 procedure
+  event row의 category 역할을 골랐고, 일부 solver는 related item definition의 category
+  역할을 골랐다. 둘 다 도구상 가능한 해석이므로 이는 어려운 좋은 문제가 아니라
+  source-surface ambiguity다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted.
+
+  row membership 문제는 없지만, request/label/source role이 유일하게 고정되지 않았다.
+  solver가 틀린 이유는 추론 실패라기보다 composer가 애매한 label surface를 제출했기
+  때문이다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 특정 단어를 보고 reject하는 방식은 DB
+  리터럴/토큰/컬럼 의미 휴리스틱이므로 금지 원칙 위반이다. 대신 prompt-first 원칙에 따라
+  Source Surface Policy를 보강했다.
+
+  - phrase가 여러 reachable surface에 매핑될 수 있으면 request/contract가 선택한 source
+    role을 직접 이름 붙여야 한다.
+  - label/output_schema 이름은 source ambiguity를 해소하지 못한다고 명시했다.
+  - Scope Example을 submit_draft에 가까운 미니 JSON 형태로 바꿔, broad request phrase가
+    hidden source choice를 만드는 bad case를 보여준다.
+  - `query.select[].as` tool description에도 output alias가 competing reachable sources를
+    disambiguate하지 못한다는 tool-local 계약을 추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+## Iteration 136 — Reject 1-2 row list labels
+
+- **질문**:
+  `trial_35`는 pass rate `3/4 = 0.75`로 accepted됐지만, accepted data가 정말 좋은가?
+
+- **실험/결과**:
+  composer는 처음에 microbiology list를 만들었으나 null field, ambiguous date ordering,
+  duplicate answer rows 때문에 두 번 reject됐다. 이후 `patient_admission_history`로
+  topic을 바꾸고, 환자의 입원 기록을 최근 입원순으로 보여주는 draft를 제출했다.
+
+  최종 accepted canonical answer는 admissions row 1개였다.
+
+  - solver 3건 정답
+  - solver 1건 오답: `PHYSICIAN REFERRAL`을 `PHYSICER REFERRAL`로 오타 제출
+  - solver 1건 timeout은 infra-excluded 후 재시도되어 총 completed 5, evaluable 4
+  - 최종 pass rate: `0.75`
+
+- **reasoning 교차 분석**:
+  composer reasoning은 중요한 단서를 남겼다. admissions query 후 “이 환자는 admission이
+  1개뿐이니 다른 entity를 보자”라고 스스로 인지했다. 하지만 그 뒤 feedback이
+  `answer_contract_phrase_missing`으로 오자, label을 바꾸지 않고 같은 단일 admission
+  list에 “최근 입원순” 문구만 추가해 accepted시켰다.
+
+  즉 composer는 Task Shapes의 “list는 3-5 rows”를 알고도, phrase repair feedback을
+  더 좁은 수정 지시처럼 해석했다. 이는 프롬프트만으로는 반복될 수 있는 low-quality
+  accepted다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted.
+
+  데이터 접근은 너무 직접적이다. row set은 환자별 admissions이고 결과가 1개뿐이라,
+  사실상 single-record detail lookup이다. solver 오답도 탐색 실패가 아니라 복사 오타였고,
+  timeout을 제외하면 모든 solver가 같은 단순 경로를 찾았다.
+
+- **변경**:
+  precision 100 hard validator를 추가했다.
+
+  - `answer_contract.kind == list`이고 canonical answer row 수가 1-2개이면
+    `answer_contract_list_size_invalid`로 reject한다.
+  - 기존 6개 이상 list는 `answer_contract_list_limit_too_wide`로 유지한다.
+  - 이 검사는 실제 제출된 structured answer의 row count만 보므로 DB 리터럴/토큰/컬럼
+    의미 휴리스틱이 아니다.
+
+  feedback은 Task Shapes를 상기시키는 역할로만 작성했다. 지시는 새 정책이 아니라 이미
+  durable prompt에 있는 “List: homogeneous ordered 3-5 rows”의 적용이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_single_row_list_as_too_direct tests/test_synthesis_runtime.py::test_submit_draft_rejects_limited_single_row_before_order_repair tests/test_synthesis_runtime.py::test_submit_draft_treats_list_limit_one_as_rows_array tests/test_synthesis_runtime.py::test_submit_draft_rejects_list_limit_above_task_shape_policy -q`
+  통과 (`4 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+## Iteration 137 — Allow scalar aggregate to grouped aggregate difficulty-up
+
+- **질문**:
+  `trial_36`은 low-quality accepted 없이 실패했다. 이 실패는 바람직한 reject인가, 아니면
+  좋은 복구 후보를 validator가 너무 세게 막은 것인가?
+
+- **실험/결과**:
+  흐름은 다음과 같았다.
+
+  1. `icu_transfer_history`: null output과 phrase mismatch로 reject
+  2. `icu_output_measurements`: 최근 outputevents 5개 list, order ambiguity로 reject
+  3. `total_output_count`: ICU stay의 outputevents 총 count, solver `4/4`로 too easy
+  4. `icu_output_summary_by_type`: 같은 ICU stay/outputevents를 유형별로 group-by하여 count/avg
+     top 5 list를 제출했지만 `answer_contract_not_incremental`
+  5. `most_common_output_type`: 마지막 attempt에서 evidence/phrase mismatch와
+     not_incremental로 budget exhausted
+
+- **reasoning 교차 분석**:
+  composer는 too-easy feedback 후 “scalar count가 너무 직접적이므로 grouped summary가 더
+  의미 있는 work”라고 판단했다. 이 판단은 원칙적으로 맞다. 총 count 하나를 맞히는 문제보다,
+  같은 target row set을 유지하면서 유형별 group, count, avg, order, top-k를 요구하는 문제는
+  atomic tool reasoning을 더 많이 요구한다.
+
+  기존 validator는 `kind_changed`와 `operation_changed`를 무조건 막았기 때문에
+  scalar aggregate count → grouped aggregate list도 reject했다. 이는 too-hard jump 방지라는
+  목적은 이해되지만, aggregate/group/order를 difficulty-up 수단으로 인정한 원칙과 충돌했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - transfer/output list 초기 draft는 low-quality rejected가 맞다.
+  - total count는 too-easy rejected가 맞다.
+  - grouped output summary는 어려운 좋은 문제 후보였다. 같은 ICU stay/outputevents target과
+    predicate를 유지하고, group/order/aggregate work를 추가했기 때문이다.
+
+- **변경**:
+  validator를 좁게 완화했다.
+
+  - 기본적으로 kind/operation drift는 계속 reject한다.
+  - 단, scalar aggregate baseline에서 list grouped aggregate로 갈 때는 허용한다.
+  - 조건:
+    - 이전 kind는 `scalar`, 현재 kind는 `list`
+    - 이전/현재 모두 aggregate output을 포함
+    - 현재 output에 `group_by`가 있음
+    - aggregate function이 하나 이상 공유됨
+    - 이전 query table set이 현재 query table set의 subset
+    - 기존 predicate 제거가 없어야 함
+
+  이 검사는 query evidence 구조와 query spec table set만 비교하므로 precision 100이다.
+  DB 리터럴/토큰/컬럼 의미 휴리스틱은 쓰지 않는다.
+
+  Prompt도 `preserve kind` 대신 `preserve anchor/target`으로 조정하고, scalar aggregates는
+  group/compare를 추가할 수 있다고 명시했다. feedback은 여전히 이 durable policy를
+  상기시키는 역할만 한다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_incremental_evidence_allows_scalar_count_to_grouped_aggregate_list tests/test_synthesis_runtime.py::test_incremental_evidence_allows_added_scalar_output_fields tests/test_synthesis_runtime.py::test_incremental_evidence_rejects_list_output_only_field_additions tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract tests/test_synthesis_runtime.py::test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+  통과 (`6 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+## Iteration 138 — Status/type wording must match row membership
+
+- **질문**:
+  `trial_37`은 pass rate `1/4 = 0.25`로 accepted됐다. accepted data가 정말 좋은가?
+
+- **실험/결과**:
+  최종 task는 특정 환자의 최근 약물 투여 기록 5개였다.
+
+  - request: 가장 최근에 투여된 약물 5개, 같은 투여 시간이면 약물 이름 순
+  - canonical: `emar` rows 5개
+  - pass: 1 solver matched
+  - 3 solver는 `missing_submit_result`
+  - 1 solver는 timeout infra-excluded 후 재시도됨
+
+- **reasoning 교차 분석**:
+  composer는 order ambiguity feedback 후 technical sequence가 아니라 medication name을
+  natural visible tie-break로 선택했다. 이 부분은 이전 List Determinism 개선과 맞다.
+
+  하지만 request가 “투여된 약물”이라고 row membership을 암시했는데 query에는
+  `event_txt = Administered` 같은 status filter가 없었다. canonical에는 `Assessed` 상태도
+  포함됐다. 즉 사용자는 “administered rows”를 기대할 수 있는데 실제 label은 “medication
+  event records with status field”였다.
+
+  solver failures는 주로 tool protocol 실패였지만, data quality 자체도 source/request
+  surface가 어긋났다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted.
+
+  row count/order/tie-break는 구조적으로 괜찮다. 그러나 row-set wording이 status membership을
+  암시하면서 query.where가 그 status membership을 구현하지 않았다. 이건 어려운 좋은 문제가
+  아니라 자연어 request와 label row membership이 어긋난 문제다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. status/type membership을 문자 리터럴로 판별하면 금지된
+  token/semantic heuristic이 된다. 대신 prompt-first 원칙을 따른다.
+
+  - Request Contract: non-null/status/type filters는 row-set wording과 matching query.where가
+    필요하다고 명시했다.
+  - status/type이 filter가 아니라 출력 field일 뿐이면 records plus that field로 요청하라고
+    명시했다.
+  - `query.where` tool description에도 status/type membership을 암시하는 wording은 where로
+    구현해야 하며, 아니면 status/type field를 함께 반환하는 records request로 써야 한다고
+    추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+## Iteration 139 — Phrase repair must rewrite clean sentences
+
+- **질문**:
+  `trial_38`은 accepted 없이 실패했다. 실패 원인은 좋은 reject인가, 아니면 composer가
+  feedback을 잘못 처리한 것인가?
+
+- **실험/결과**:
+  composer는 입원 중 투약 기록 list를 만들었다. 첫 draft는 order ambiguity로 reject됐고,
+  이후 `emar_seq`를 `sequence_number`로 추가하여 tie-break를 만들려 했다. 그러나
+  phrase repair 과정에서 Korean request가 망가졌다.
+
+  발생한 malformed request:
+  - `투약된 약물그리고 투약 시간과 투약 상태 기록`
+  - `투약된 약물 와 투약 시간`
+  - `5망까지`
+
+- **reasoning 교차 분석**:
+  composer reasoning은 누락된 `투약 시간`, `투약 상태` phrase를 exact substring으로 맞추는
+  데 집중했다. 이 과정에서 자연스러운 문장 전체를 다시 쓰지 않고, 기존 문장에 단어를
+  끼워 넣는 식으로 repair했다. 기존 prompt에는 `no malformed terms`가 있었지만, phrase
+  repair feedback 상황에서 “문장 전체를 깨끗하게 다시 쓰라”는 압력이 부족했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. row/order 자체도 sequence tie-break가 어색했고,
+  최종 request는 사용자에게 보여줄 수 없는 문장 품질이었다. rejection은 바람직하다.
+
+- **변경**:
+  prompt-first 원칙으로 Feedback And Difficulty-Up Policy를 보강했다.
+
+  - phrase repair는 clean natural wording이어야 한다고 durable prompt에 명시했다.
+  - `answer_contract_phrase_missing` feedback도 같은 정책을 상기시키도록 수정했다.
+  - feedback 문구는 새 정책이 아니라 기존 Request Contract의 `ordinary target-language
+    words`, `no malformed terms`를 구체적으로 상기하는 역할이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_rejects_binding_phrase_absent_from_request -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+## Iteration 140 — Result fields need source representation
+
+- **질문**:
+  `trial_39` 마지막 draft는 pass rate `0/4`로 failed됐다. 이건 어려운 좋은 문제인가,
+  아니면 저품질 문제인가?
+
+- **실험/결과**:
+  task는 입원 중 가장 먼저 받은 microbiology test 3건의 검체 종류, 검사 시간, 검사 항목,
+  결과를 묻는 list였다. composer canonical은 `test_result`를 comments/result text로
+  구성했다.
+
+  solver들은 같은 row set과 time order는 대체로 찾았지만, `test_result`를 `org_name` 또는
+  다른 result-like field로 제출했다. 일부 solver는 `"null"` 문자열을 냈고, 한 solver는
+  comments를 일부 제출했다.
+
+- **reasoning 교차 분석**:
+  composer는 `결과`라는 broad phrase를 comments text로 해석했다. solver들은 microbiology
+  table에서 더 직접적인 result-like surface인 organism/result fields를 선택했다. 즉
+  solver가 못 푼 것이 아니라, request/label이 결과 representation을 유일하게 고정하지
+  못했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: hard-good이 아니라 low-quality rejected. row ordering 자체도 boundary tie로
+  여러 번 흔들렸고, 최종적으로는 result source representation이 불명확했다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. `result`라는 단어를 보고 특정 column/source를 금지하는
+  방식은 리터럴/의미 휴리스틱이므로 금지 원칙 위반이다.
+
+  - Label Contract의 source-sensitive rule을 `result/status/type` 필드까지 명시했다.
+  - `AnswerOutputBinding.requested_by_phrase` schema description도
+    `result/status/type/category/sequence-like` field는 source representation을 보존해야
+    한다고 보강했다.
+
+  이 변경은 DB 특화가 아니라 source representation 일반 원칙이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.

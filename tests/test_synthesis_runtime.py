@@ -265,6 +265,174 @@ def test_incremental_evidence_allows_added_scalar_output_fields() -> None:
     ) == []
 
 
+def test_incremental_evidence_rejects_list_output_only_field_additions() -> None:
+    previous = _query_evidence_signature(
+        {
+            "column_sources": [
+                {"output": "started_at", "kind": "select", "table": "event", "column": "start"},
+                {"output": "status", "kind": "select", "table": "event", "column": "status"},
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "event",
+                    "column": "stay_id",
+                    "op": "eq",
+                    "value": 1,
+                },
+                {
+                    "usage": "order_by",
+                    "table": "event",
+                    "column": "start",
+                    "direction": "asc",
+                },
+            ],
+            "rows": [{"started_at": "2026-01-01", "status": "done"}],
+        },
+        answer_kind="list",
+    )
+    current = _query_evidence_signature(
+        {
+            "column_sources": [
+                {"output": "started_at", "kind": "select", "table": "event", "column": "start"},
+                {"output": "status", "kind": "select", "table": "event", "column": "status"},
+                {"output": "display_only", "kind": "select", "table": "event", "column": "note"},
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "event",
+                    "column": "stay_id",
+                    "op": "eq",
+                    "value": 1,
+                },
+                {
+                    "usage": "order_by",
+                    "table": "event",
+                    "column": "start",
+                    "direction": "asc",
+                },
+            ],
+            "rows": [
+                {
+                    "started_at": "2026-01-01",
+                    "status": "done",
+                    "display_only": "note",
+                }
+            ],
+        },
+        answer_kind="list",
+    )
+
+    errors = _query_evidence_incremental_errors(previous=previous, current=current)
+
+    assert "list_output_only" in errors
+    assert "no_new_structural_constraint" in errors
+
+
+def test_incremental_evidence_allows_scalar_count_to_grouped_aggregate_list() -> None:
+    previous = _query_evidence_signature(
+        {
+            "column_sources": [
+                {
+                    "output": "total_events",
+                    "kind": "aggregate",
+                    "fn": "count",
+                    "value_exposes_source": False,
+                }
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "stay",
+                    "column": "stay_id",
+                    "op": "eq",
+                    "value": 1,
+                }
+            ],
+            "rows": [{"total_events": 246}],
+        },
+        answer_kind="scalar",
+        query_params={
+            "spec": {
+                "from": {"table": "stay", "as": "s"},
+                "join": [
+                    {
+                        "from": "s",
+                        "via_edge": "stay<-event.stay_id",
+                        "as": "e",
+                    }
+                ],
+            }
+        },
+    )
+    current = _query_evidence_signature(
+        {
+            "column_sources": [
+                {
+                    "output": "event_type",
+                    "kind": "group_by",
+                    "table": "event_type",
+                    "column": "label",
+                    "value_exposes_source": True,
+                },
+                {
+                    "output": "event_count",
+                    "kind": "aggregate",
+                    "fn": "count",
+                    "table": "event",
+                    "column": "event_id",
+                    "value_exposes_source": False,
+                },
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "stay",
+                    "column": "stay_id",
+                    "op": "eq",
+                    "value": 1,
+                },
+                {
+                    "usage": "order_by",
+                    "table": "event",
+                    "column": "event_id",
+                    "direction": "desc",
+                    "output": "event_count",
+                },
+            ],
+            "rows": [
+                {"event_type": "A", "event_count": 10},
+                {"event_type": "B", "event_count": 8},
+                {"event_type": "C", "event_count": 6},
+            ],
+        },
+        answer_kind="list",
+        query_params={
+            "spec": {
+                "from": {"table": "stay", "as": "s"},
+                "join": [
+                    {
+                        "from": "s",
+                        "via_edge": "stay<-event.stay_id",
+                        "as": "e",
+                    },
+                    {
+                        "from": "e",
+                        "via_edge": "event.type_id->event_type",
+                        "as": "t",
+                    },
+                ],
+            }
+        },
+    )
+
+    assert _query_evidence_incremental_errors(
+        previous=previous,
+        current=current,
+    ) == []
+
+
 def test_incremental_evidence_rejects_replaced_output_fields() -> None:
     previous = _signature_from_sources([
         _aggregate_source("sum"),
@@ -912,11 +1080,12 @@ def test_data_tool_budget_feedback_blocks_late_feedback_repair(tmp_path: Path) -
         result={"distinct_count": 2},
     )
     assert controller.data_tool_budget_feedback(tool_name="profile") is None
-    controller.record_atomic_tool_call(
-        tool_name="query",
-        params={"spec": {}},
-        result={"rows": [{"value": 1}]},
-    )
+    for index in range(FEEDBACK_REPAIR_MAX_DATA_TOOLS - 1):
+        controller.record_atomic_tool_call(
+            tool_name="query",
+            params={"spec": {"index": index}},
+            result={"rows": [{"value": index}]},
+        )
 
     feedback = controller.data_tool_budget_feedback(tool_name="sample")
 
@@ -1174,7 +1343,7 @@ async def test_submit_draft_records_answer_contract_binding_diagnostics(
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_accepts_single_row_list_without_order_binding(
+async def test_submit_draft_rejects_single_row_list_as_too_direct(
     tmp_path: Path,
 ) -> None:
     monitor = _CollectingPhaseMonitor()
@@ -1253,19 +1422,19 @@ async def test_submit_draft_accepts_single_row_list_without_order_binding(
 
     message = await controller.submit(payload)
 
-    assert "Draft accepted" in message
-    assert controller.accepted_draft is not None
+    assert "list labels must return 3-5 rows" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_list_size_invalid",
+    )
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
     diagnostics = monitor.records[-1]["diagnostics"]
     assert isinstance(diagnostics, dict)
-    binding_diagnostics = diagnostics["answer_contract_binding_diagnostics"]
-    assert isinstance(binding_diagnostics, dict)
-    assert binding_diagnostics["order_reference_count"] == 1
-    assert binding_diagnostics["required_order_reference_count"] == 0
-    assert binding_diagnostics["missing_order_binding_count"] == 0
+    assert diagnostics["submitted_list_row_count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_still_requires_order_binding_for_limited_single_row(
+async def test_submit_draft_rejects_limited_single_row_before_order_repair(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -1324,13 +1493,15 @@ async def test_submit_draft_still_requires_order_binding_for_limited_single_row(
 
     message = await controller.submit(payload)
 
-    assert "answer_contract.order_bindings" in message
-    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+    assert "list labels must return 3-5 rows" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_list_size_invalid",
+    )
     assert controller.attempts == []
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_allows_redundant_limit_for_primary_key_lookup(
+async def test_submit_draft_rejects_primary_key_detail_list_as_too_direct(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -1422,8 +1593,11 @@ async def test_submit_draft_allows_redundant_limit_for_primary_key_lookup(
 
     message = await controller.submit(payload)
 
-    assert "Draft accepted" in message
-    assert controller.accepted_draft is not None
+    assert "list labels must return 3-5 rows" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_list_size_invalid",
+    )
+    assert controller.accepted_draft is None
 
 
 @pytest.mark.asyncio
@@ -1441,25 +1615,58 @@ async def test_submit_draft_feedbacks_missing_list_output_binding(
         max_submissions=3,
     )
     _seed_min_initial_exploration(controller)
-    label = [{"test_time": "2024-01-02T00:00:00", "result": "positive"}]
+    label = [
+        {"test_time": "2024-01-03T00:00:00", "result": "negative"},
+        {"test_time": "2024-01-02T00:00:00", "result": "positive"},
+        {"test_time": "2024-01-01T00:00:00", "result": "pending"},
+    ]
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "results",
             "label": label,
             "entity": {"customer_id": 1},
-            "user_request": "최근 검사 결과 1개와 검사 시간을 보여 주세요.",
+            "user_request": (
+                "최근 검사 결과 3개와 검사 시간을 검사 시간 내림차순으로 보여 주세요."
+            ),
             "answer_contract": {
                 "kind": "list",
                 "answer_phrase": "검사 결과",
-                "constraint_phrases": ["최근"],
-                "limit_phrase": "1개",
+                "constraint_phrases": ["최근", "검사 시간 내림차순"],
+                "limit_phrase": "3개",
                 "output_bindings": [
                     {"label_field": "result", "requested_by_phrase": "검사 결과"},
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "desc",
+                        "label_field": "test_time",
+                        "requested_by_phrase": "검사 시간 내림차순",
+                    }
                 ],
             },
         }
     )
-    _record_query_evidence(controller, payload.label)
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "test",
+                "column": "test_time",
+                "direction": "desc",
+            }
+        ],
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 3,
+                "order_by_outputs": ["test_time"],
+                "returned_row_count": 3,
+            }
+        },
+    )
 
     message = await controller.submit(payload)
 
@@ -1485,27 +1692,60 @@ async def test_submit_draft_feedbacks_duplicate_output_binding_phrase(
         phase_monitor=monitor,  # type: ignore[arg-type]
     )
     _seed_min_initial_exploration(controller)
-    label = [{"dose": "650", "unit": "mg", "route": "PO"}]
+    label = [
+        {"dose": "650", "unit": "mg", "route": "IV"},
+        {"dose": "650", "unit": "mg", "route": "PO"},
+        {"dose": "325", "unit": "mg", "route": "SC"},
+    ]
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
             "label": label,
             "entity": {"customer_id": 1},
-            "user_request": "최근 처방 약물 1개의 용량과 투여 경로를 보여 주세요.",
+            "user_request": (
+                "최근 처방 약물 3개의 용량과 투여 경로를 투여 경로 순서대로 보여 주세요."
+            ),
             "answer_contract": {
                 "kind": "list",
                 "answer_phrase": "처방 약물",
-                "constraint_phrases": ["최근"],
-                "limit_phrase": "1개",
+                "constraint_phrases": ["최근", "투여 경로 순서대로"],
+                "limit_phrase": "3개",
                 "output_bindings": [
                     {"label_field": "dose", "requested_by_phrase": "용량"},
                     {"label_field": "unit", "requested_by_phrase": "용량"},
                     {"label_field": "route", "requested_by_phrase": "투여 경로"},
                 ],
+                "order_bindings": [
+                    {
+                        "direction": "asc",
+                        "label_field": "route",
+                        "requested_by_phrase": "투여 경로 순서대로",
+                    }
+                ],
             },
         }
     )
-    _record_query_evidence(controller, payload.label)
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "medication",
+                "column": "route",
+                "direction": "asc",
+            }
+        ],
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 3,
+                "order_by_outputs": ["route"],
+                "returned_row_count": 3,
+            }
+        },
+    )
 
     message = await controller.submit(payload)
 
@@ -1562,7 +1802,8 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     second_message = await controller.submit(second_payload)
 
     assert "Feedback Handling Policy reminder" in second_message
-    assert "preserve the previous canonical label" in second_message
+    assert "restore the repair-locked canonical label" in second_message
+    assert "Do not keep the last failed modified label" in second_message
     assert controller.last_feedback_error_codes == ("label_changed_during_repair",)
     assert controller.attempts == []
     assert controller.accepted_draft is None
@@ -1704,6 +1945,11 @@ async def test_submit_draft_feedbacks_duplicate_order_binding_phrase(
             "start_time": "2024-01-02T00:00:00",
             "order_id": 8,
         },
+        {
+            "procedure_name": "C",
+            "start_time": "2024-01-01T00:00:00",
+            "order_id": 7,
+        },
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -1711,14 +1957,14 @@ async def test_submit_draft_feedbacks_duplicate_order_binding_phrase(
             "label": label,
             "entity": {"stay_id": 1},
             "user_request": (
-                "최근 시술 2건의 시술명, 시작 시간, 주문 ID를 "
+                "최근 시술 3건의 시술명, 시작 시간, 주문 ID를 "
                 "최근 시행된 순서대로 보여 주세요."
             ),
             "answer_contract": {
                 "kind": "list",
                 "answer_phrase": "시술",
                 "constraint_phrases": ["최근 시행된 순서대로"],
-                "limit_phrase": "2건",
+                "limit_phrase": "3건",
                 "output_bindings": [
                     {"label_field": "procedure_name", "requested_by_phrase": "시술명"},
                     {"label_field": "start_time", "requested_by_phrase": "시작 시간"},
@@ -1756,13 +2002,13 @@ async def test_submit_draft_feedbacks_duplicate_order_binding_phrase(
                 "direction": "desc",
             },
         ],
-        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
         result_extra={
             "ordering_diagnostics": {
                 "duplicate_order_key_in_returned_rows": False,
-                "limit": 2,
+                "limit": 3,
                 "order_by_outputs": ["start_time", "order_id"],
-                "returned_row_count": 2,
+                "returned_row_count": 3,
             }
         },
     )
@@ -1807,18 +2053,19 @@ async def test_submit_draft_feedbacks_order_binding_reusing_output_phrase(
     label = [
         {"test_time": "2024-01-02T00:00:00", "result": "negative"},
         {"test_time": "2024-01-01T00:00:00", "result": "positive"},
+        {"test_time": "2023-12-31T00:00:00", "result": "pending"},
     ]
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "results",
             "label": label,
             "entity": {"customer_id": 1},
-            "user_request": "최근 검사 결과 2개와 검사 시간을 보여 주세요.",
+            "user_request": "최근 검사 결과 3개와 검사 시간을 보여 주세요.",
             "answer_contract": {
                 "kind": "list",
                 "answer_phrase": "검사 결과",
                 "constraint_phrases": ["최근"],
-                "limit_phrase": "2개",
+                "limit_phrase": "3개",
                 "output_bindings": [
                     {"label_field": "test_time", "requested_by_phrase": "검사 시간"},
                     {"label_field": "result", "requested_by_phrase": "검사 결과"},
@@ -1844,13 +2091,13 @@ async def test_submit_draft_feedbacks_order_binding_reusing_output_phrase(
                 "direction": "desc",
             }
         ],
-        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
         result_extra={
             "ordering_diagnostics": {
                 "duplicate_order_key_in_returned_rows": False,
-                "limit": 2,
+                "limit": 3,
                 "order_by_outputs": ["test_time"],
-                "returned_row_count": 2,
+                "returned_row_count": 3,
             }
         },
     )
@@ -1902,18 +2149,23 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
             "starttime": "2024-01-01T00:00:00",
             "stoptime": "2024-01-02T00:00:00",
         },
+        {
+            "medication": "C",
+            "starttime": "2023-12-31T00:00:00",
+            "stoptime": "2024-01-01T00:00:00",
+        },
     ]
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "medications",
             "label": label,
             "entity": {"customer_id": 1},
-            "user_request": "최근 약물 2개를 시작 시간순으로 알려 주세요.",
+            "user_request": "최근 약물 3개를 시작 시간순으로 알려 주세요.",
             "answer_contract": {
                 "kind": "list",
                 "answer_phrase": "약물",
                 "constraint_phrases": ["시작 시간순"],
-                "limit_phrase": "2개",
+                "limit_phrase": "3개",
                 "output_bindings": [
                     {"label_field": "medication", "requested_by_phrase": "약물"},
                     {"label_field": "starttime", "requested_by_phrase": "시작 시간순"},
@@ -1946,13 +2198,13 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
                 "direction": "desc",
             },
         ],
-        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
         result_extra={
             "ordering_diagnostics": {
                 "duplicate_order_key_in_returned_rows": False,
-                "limit": 2,
+                "limit": 3,
                 "order_by_outputs": ["starttime", "stoptime"],
-                "returned_row_count": 2,
+                "returned_row_count": 3,
             }
         },
     )
@@ -1985,18 +2237,19 @@ async def test_submit_draft_feedbacks_missing_order_binding_by_query_order_count
     label = [
         {"test_time": "2024-01-02T00:00:00", "result": "negative"},
         {"test_time": "2024-01-01T00:00:00", "result": "positive"},
+        {"test_time": "2023-12-31T00:00:00", "result": "pending"},
     ]
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "results",
             "label": label,
             "entity": {"customer_id": 1},
-            "user_request": "최근 검사 결과 2개를 보여 주세요.",
+            "user_request": "최근 검사 결과 3개를 보여 주세요.",
             "answer_contract": {
                 "kind": "list",
                 "answer_phrase": "검사 결과",
                 "constraint_phrases": ["최근"],
-                "limit_phrase": "2개",
+                "limit_phrase": "3개",
                 "output_bindings": [
                     {"label_field": "test_time", "requested_by_phrase": "최근"},
                     {"label_field": "result", "requested_by_phrase": "검사 결과"},
@@ -2028,12 +2281,12 @@ async def test_submit_draft_feedbacks_missing_order_binding_by_query_order_count
                 "direction": "asc",
             },
         ],
-        query_params={"spec": {"limit": 2, "where": [{"value": 1}]}},
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
         result_extra={
             "ordering_diagnostics": {
                 "duplicate_order_key_in_returned_rows": False,
-                "limit": 2,
-                "returned_row_count": 2,
+                "limit": 3,
+                "returned_row_count": 3,
             }
         },
     )
@@ -2120,6 +2373,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "JSON string for the canonical submit_result payload" in schema_surface
     assert "decorative anchor" in schema_surface
     assert "observed values derived from it" in schema_surface
+    assert "parent or current-subject key in entity" in schema_surface
     assert "global answer that can be produced without the hidden entity" in schema_surface
     assert "Include only answer fields the user_request asks to receive" in schema_surface
     assert "rerun query with only the fields intended for submit_result" in schema_surface
@@ -2133,6 +2387,17 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "Good: 'my account'" not in schema_surface
     assert "hidden structural handles" in schema_surface
     assert "visible value only when it appeared in tool evidence" in schema_surface
+    assert "copy visible source values exactly" in schema_surface
+    assert "instead of translating or transliterating them" in schema_surface
+    assert "multiple reachable source surfaces could satisfy broad wording" in schema_surface
+    assert "name the chosen source role in ordinary language" in schema_surface
+    assert "Scope wording must match latest query evidence" in schema_surface
+    assert "direct hidden current-record handle lookups" in schema_surface
+    assert "broader parent/list/history scope" in schema_surface
+    assert "same row-selection boundary as query.order_by" in schema_surface
+    assert "do not imply a different boundary from the query order" in schema_surface
+    assert "this ordering also selects row membership" in schema_surface
+    assert "one hidden selection order and another display order" in schema_surface
     assert "copied exactly from the latest successful query result" in schema_surface
     for leaked in ("solver", "actor", "RLVR", "pass_rate", "training"):
         assert leaked not in schema_surface
@@ -2291,6 +2556,90 @@ async def test_submit_draft_requires_exact_observed_string_values(
         "answer_contract_evidence_missing",
     )
 
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_null_list_output_field(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="procedures",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    label = [
+        {"procedure_name": "Chest X-Ray", "location_category": None},
+        {"procedure_name": "Intubation", "location_category": "Airway"},
+        {"procedure_name": "Line Placement", "location_category": "Access"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "procedures",
+            "label": label,
+            "entity": {"stay_id": 1},
+            "user_request": (
+                "시술 3건의 시술명과 위치 카테고리를 시술명 순서대로 알려 주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "시술 3건",
+                "constraint_phrases": [],
+                "limit_phrase": "3건",
+                "output_bindings": [
+                    {
+                        "label_field": "procedure_name",
+                        "requested_by_phrase": "시술명",
+                    },
+                    {
+                        "label_field": "location_category",
+                        "requested_by_phrase": "위치 카테고리",
+                    },
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "asc",
+                        "label_field": "procedure_name",
+                        "requested_by_phrase": "시술명 순서대로",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "procedure",
+                "column": "procedure_name",
+                "direction": "asc",
+            }
+        ],
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 3,
+                "order_by_outputs": ["procedure_name"],
+                "returned_row_count": 3,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "null answer values" in message
+    assert "informative non-null fields" in message
+    assert controller.last_feedback_error_codes == ("label_null_value_forbidden",)
+    assert controller.accepted_draft is None
+
+
 @pytest.mark.asyncio
 async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     tmp_path: Path,
@@ -2366,10 +2715,18 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "needs more specificity" in message
     assert "Policy reminder: Difficulty-Up Policy" in message
     assert "specificity feedback on the current draft" in message
-    assert "Preserve the current anchor, target, row set/query path" in message
+    assert "Preserve the current anchor and target" in message
+    assert "for list labels preserve row set, order, limit" in message
     assert "source meanings" in message
     assert "one grounded meaningful dimension" in message
-    assert "Passive display-only fields are weak" in message
+    assert "changes lookup, comparison, order, or row reasoning" in message
+    assert "Do not only add display fields for the same selected row" in message
+    assert "same-row display/derived fields alone are still too direct" in message
+    assert "switch answer work with aggregate, comparison, grouping" in message
+    assert "related-row selection, or row membership" in message
+    assert "Request Contract reminder" in message
+    assert "copy visible context/source values exactly" in message
+    assert "do not translate/transliterate them while strengthening" in message
     assert "Do not switch topic or table family" in message
     assert "Current answer kind: scalar" in message
     assert "append, do not replace, any new answer field" not in message
@@ -2424,9 +2781,17 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "needs more specificity" in message
     assert "Policy reminder: Difficulty-Up Policy" in message
     assert "specificity feedback on the current draft" in message
-    assert "Preserve the current anchor, target, row set/query path" in message
+    assert "Preserve the current anchor and target" in message
+    assert "for list labels preserve row set, order, limit" in message
     assert "one grounded meaningful dimension" in message
-    assert "Passive display-only fields are weak" in message
+    assert "changes lookup, comparison, order, or row reasoning" in message
+    assert "Do not only add display fields for the same selected row" in message
+    assert "same-row display/derived fields alone are still too direct" in message
+    assert "switch answer work with aggregate, comparison, grouping" in message
+    assert "related-row selection, or row membership" in message
+    assert "Request Contract reminder" in message
+    assert "copy visible context/source values exactly" in message
+    assert "do not translate/transliterate them while strengthening" in message
     assert "Do not switch topic or table family" in message
     assert "Current answer kind: list" in message
     assert "append, do not replace, any new answer field" not in message
@@ -2470,6 +2835,10 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
     message = await controller.submit(payload)
 
     assert "every answer_contract phrase" in message
+    assert "preserve the natural user_request wording" in message
+    assert "prior label_json fields/values" in message
+    assert "rewrite the full sentence cleanly" in message
+    assert "splicing label fields" in message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None
 
@@ -2510,6 +2879,12 @@ async def test_submit_draft_rejects_binding_phrase_absent_from_request(
     message = await controller.submit(payload)
 
     assert "every answer_contract phrase" in message
+    assert "rewrite the full sentence cleanly" in message
+    assert "splicing label fields" in message
+    assert "Missing request phrases" in message
+    assert "label_field='customer_count'" in message
+    assert "phrase='_customer_count_'" in message
+    assert "Keep those label fields" in message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None
 
@@ -2763,8 +3138,11 @@ async def test_submit_draft_treats_list_limit_one_as_rows_array(
 
     message = await controller.submit(payload)
 
-    assert "needs more specificity" in message
+    assert "list labels must return 3-5 rows" in message
     assert "label must exactly match the latest successful query result" not in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_list_size_invalid",
+    )
     assert controller.accepted_draft is None
 
 
@@ -2893,6 +3271,10 @@ async def test_submit_draft_rejects_list_limit_above_task_shape_policy(
     message = await controller.submit(payload)
 
     assert "fixed list labels must stay at 3-5 rows" in message
+    assert "List Determinism Policy reminder" in message
+    assert "same row boundary as query.order_by" in message
+    assert "rerun the query with matching order" in message
+    assert "one hidden selection order with another display order" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_list_limit_too_wide",
     )
@@ -2964,7 +3346,170 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
     assert "natural visible tie-break" in message
     assert "source record sequence instead of a generated display rank" in message
     assert "hidden handles" in message
+    assert "ordinary target-language words" in message
+    assert "not malformed terms" in message
+    assert "long/mechanical field lists" in message
+    assert "choose another label instead of stacking tie-break fields" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_rejects_mechanical_multi_key_list_order(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="microbiology",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    anchor_entity = {"hadm_id": 25508812}
+    label = [
+        {
+            "collection_time": "2155-05-23T13:12:00",
+            "specimen_type": "Rapid Respiratory Viral Screen & Culture",
+            "test_name": "Respiratory Viral Culture",
+            "test_sequence": 1,
+        },
+        {
+            "collection_time": "2155-05-23T13:12:00",
+            "specimen_type": "Rapid Respiratory Viral Screen & Culture",
+            "test_name": "Respiratory Viral Antigen Screen",
+            "test_sequence": 2,
+        },
+        {
+            "collection_time": "2155-05-23T14:05:00",
+            "specimen_type": "Blood Culture",
+            "test_name": "Blood Culture",
+            "test_sequence": 3,
+        },
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "microbiology_list",
+            "label": label,
+            "entity": anchor_entity,
+            "question": _wrap_user_prompt(
+                anchor_entity,
+                "이번 입원 중 미생물 검사 목록을 검체 채취 일시 기준으로 오름차순, "
+                "검체 종류 기준으로 오름차순, 검사 순서 기준으로 오름차순 "
+                "정렬하여 상위 3건 보여주세요.",
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "미생물 검사 목록",
+                "constraint_phrases": ["이번 입원 중"],
+                "limit_phrase": "상위 3건",
+                "output_bindings": [
+                    {
+                        "label_field": "collection_time",
+                        "requested_by_phrase": "검체 채취 일시",
+                    },
+                    {
+                        "label_field": "specimen_type",
+                        "requested_by_phrase": "검체 종류",
+                    },
+                    {
+                        "label_field": "test_name",
+                        "requested_by_phrase": "미생물 검사",
+                    },
+                    {
+                        "label_field": "test_sequence",
+                        "requested_by_phrase": "검사 순서",
+                    },
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "asc",
+                        "label_field": "collection_time",
+                        "requested_by_phrase": "검체 채취 일시 기준으로 오름차순",
+                    },
+                    {
+                        "direction": "asc",
+                        "label_field": "specimen_type",
+                        "requested_by_phrase": "검체 종류 기준으로 오름차순",
+                    },
+                    {
+                        "direction": "asc",
+                        "label_field": "test_sequence",
+                        "requested_by_phrase": "검사 순서 기준으로 오름차순",
+                    },
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        referenced_columns=[
+            {
+                "usage": "where",
+                "table": "microbiologyevents",
+                "column": "hadm_id",
+                "visibility": "blocked",
+                "is_handle": True,
+                "op": "eq",
+                "value": 25508812,
+            },
+            {
+                "usage": "order_by",
+                "table": "microbiologyevents",
+                "column": "charttime",
+                "direction": "asc",
+            },
+            {
+                "usage": "order_by",
+                "table": "microbiologyevents",
+                "column": "spec_type_desc",
+                "direction": "asc",
+            },
+            {
+                "usage": "order_by",
+                "table": "microbiologyevents",
+                "column": "test_seq",
+                "direction": "asc",
+            },
+        ],
+        query_params={
+            "spec": {
+                "limit": 3,
+                "where": [{"value": 25508812}],
+                "order_by": [
+                    {"output": "collection_time", "direction": "asc"},
+                    {"output": "specimen_type", "direction": "asc"},
+                    {"output": "test_sequence", "direction": "asc"},
+                ],
+            }
+        },
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 3,
+                "order_by_outputs": [
+                    "collection_time",
+                    "specimen_type",
+                    "test_sequence",
+                ],
+                "returned_row_count": 3,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert "at most one natural visible tie-break" in message
+    assert "no more than two keys total" in message
+    assert "long mechanical sort contract" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_order_too_complex",
+    )
     assert controller.attempts == []
     assert controller.accepted_draft is None
 
@@ -3048,6 +3593,8 @@ async def test_submit_draft_rejects_duplicate_projected_list_rows(
     assert "not distinguishable through requested output fields" in message
     assert "Preserve the list size" in message
     assert "add one natural visible distinguishing field or aggregate" in message
+    assert "rows are still duplicate" in message
+    assert "choose another label instead of stacking fields" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_duplicate_answer_rows",
     )
@@ -3074,6 +3621,7 @@ async def test_submit_draft_rejects_multirow_list_without_order_by(
     label = [
         {"amount": "3.99", "payment_date": "2022-03-15T23:11:18+00:00"},
         {"amount": "4.99", "payment_date": "2022-03-06T17:31:26+00:00"},
+        {"amount": "5.99", "payment_date": "2022-03-01T09:10:11+00:00"},
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -3136,6 +3684,11 @@ async def test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker(
             "administration_time": "2149-10-25T11:28:00",
             "event_status": "Administered",
         },
+        {
+            "medication": "Acetaminophen",
+            "administration_time": "2149-10-24T08:20:00",
+            "event_status": "Administered",
+        },
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -3144,11 +3697,11 @@ async def test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker(
             "entity": anchor_entity,
             "question": _wrap_user_prompt(
                 anchor_entity,
-                "내가 가장 최근에 투약받은 약물 2가지를 알려줘.",
+                "내가 가장 최근에 투약받은 약물 3가지를 알려줘.",
             ),
             "answer_contract": _list_answer_contract(
                 phrase="가장 최근에 투약받은 약물",
-                limit_phrase="2가지",
+                limit_phrase="3가지",
             ),
         }
     )
@@ -3157,7 +3710,7 @@ async def test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker(
         label,
         query_params={
             "spec": {
-                "limit": 2,
+                "limit": 3,
                 "where": [{"value": 10005866}],
                 "order_by": [
                     {"output": "administration_time", "direction": "desc"},
@@ -3176,8 +3729,8 @@ async def test_submit_draft_rejects_unrepresented_list_order_by_tie_breaker(
                         "is_handle": True,
                     }
                 ],
-                "returned_row_count": 2,
-                "limit": 2,
+                "returned_row_count": 3,
+                "limit": 3,
             }
         },
     )
@@ -3213,7 +3766,17 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
             "medication": "Sodium Chloride 0.9%  Flush",
             "administration_time": "2201-12-17T08:12:00",
             "status": "Flushed",
-        }
+        },
+        {
+            "medication": "Acetaminophen",
+            "administration_time": "2201-12-16T08:00:00",
+            "status": "Administered",
+        },
+        {
+            "medication": "Heparin",
+            "administration_time": "2201-12-15T08:00:00",
+            "status": "Administered",
+        },
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -3222,11 +3785,11 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
             "entity": anchor_entity,
             "question": _wrap_user_prompt(
                 anchor_entity,
-                "이 약물 투여 기록의 최근 투약 정보 1개를 알려주세요.",
+                "이 약물 투여 기록의 최근 투약 정보 3개를 알려주세요.",
             ),
             "answer_contract": _list_answer_contract(
                 phrase="최근 투약 정보",
-                limit_phrase="1개",
+                limit_phrase="3개",
             ),
         }
     )
@@ -3242,9 +3805,31 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
                 "is_handle": True,
                 "op": "eq",
                 "value": 10027602,
+            },
+            {
+                "usage": "order_by",
+                "table": "emar",
+                "column": "charttime",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "direction": "desc",
             }
         ],
-        query_params={"spec": {"limit": 1, "where": [{"value": 10027602}]}},
+        query_params={
+            "spec": {
+                "limit": 3,
+                "where": [{"value": 10027602}],
+                "order_by": [{"output": "administration_time", "direction": "desc"}],
+            }
+        },
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 3,
+                "order_by_outputs": ["administration_time"],
+                "returned_row_count": 3,
+            }
+        },
     )
 
     message = await controller.submit(payload)
@@ -3277,6 +3862,7 @@ async def test_submit_draft_rejects_hidden_child_to_parent_sibling_scope(
     label = [
         {"record_time": "2026-01-01T10:00:00", "record_name": "A"},
         {"record_time": "2026-01-01T11:00:00", "record_name": "B"},
+        {"record_time": "2026-01-01T12:00:00", "record_name": "C"},
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -3285,11 +3871,11 @@ async def test_submit_draft_rejects_hidden_child_to_parent_sibling_scope(
             "entity": {"child_id": 10},
             "question": _wrap_user_prompt(
                 {"child_id": 10},
-                "이 항목과 관련된 최근 기록 2건을 시간순으로 알려주세요.",
+                "이 항목과 관련된 최근 기록 3건을 시간순으로 알려주세요.",
             ),
             "answer_contract": _list_answer_contract(
-                phrase="최근 기록 2건",
-                limit_phrase="2건",
+                phrase="최근 기록 3건",
+                limit_phrase="3건",
             ),
         }
     )
@@ -3363,7 +3949,7 @@ async def test_submit_draft_rejects_hidden_child_to_parent_sibling_scope(
                         "direction": "asc",
                     }
                 ],
-                "limit": 2,
+                "limit": 3,
             }
         },
     )
@@ -3372,6 +3958,8 @@ async def test_submit_draft_rejects_hidden_child_to_parent_sibling_scope(
 
     assert "hidden row-scope handles" in message
     assert "parent/current-subject handle" in message
+    assert "rewording as child-related is not enough" in message
+    assert "rerun the label query from that scope" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_hidden_filter_unanchored",
     )
@@ -3711,7 +4299,15 @@ async def test_submit_draft_rejects_unbound_visible_non_null_filter(
         {
             "medication": "Sodium Bicarbonate",
             "start_time": "2123-02-20T05:00:00",
-        }
+        },
+        {
+            "medication": "Potassium Chloride",
+            "start_time": "2123-02-21T05:00:00",
+        },
+        {
+            "medication": "Vancomycin",
+            "start_time": "2123-02-22T05:00:00",
+        },
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -3793,7 +4389,17 @@ async def test_submit_draft_rejects_unbound_visible_equality_filter(
             "admission_time": "2175-04-05T15:36:00",
             "discharge_time": "2175-04-10T16:55:00",
             "admission_source": "EMERGENCY ROOM",
-        }
+        },
+        {
+            "admission_time": "2176-04-05T15:36:00",
+            "discharge_time": "2176-04-10T16:55:00",
+            "admission_source": "EMERGENCY ROOM",
+        },
+        {
+            "admission_time": "2177-04-05T15:36:00",
+            "discharge_time": "2177-04-10T16:55:00",
+            "admission_source": "EMERGENCY ROOM",
+        },
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -3833,6 +4439,14 @@ async def test_submit_draft_rejects_unbound_visible_equality_filter(
                 "is_handle": False,
                 "op": "eq",
                 "value": "EW EMER.",
+            },
+            {
+                "usage": "order_by",
+                "table": "admissions",
+                "column": "admittime",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "direction": "asc",
             }
         ],
     )
@@ -3863,7 +4477,15 @@ async def test_submit_draft_allows_bound_visible_non_null_filter(
         {
             "medication": "Sodium Bicarbonate",
             "start_time": "2123-02-20T05:00:00",
-        }
+        },
+        {
+            "medication": "Potassium Chloride",
+            "start_time": "2123-02-21T05:00:00",
+        },
+        {
+            "medication": "Vancomycin",
+            "start_time": "2123-02-22T05:00:00",
+        },
     ]
     payload = SubmitDraftPayload.model_validate(
         {
@@ -3948,9 +4570,13 @@ async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
     payload = SubmitDraftPayload.model_validate(
         {
             "topic": "assignment",
-            "label": [{"first_name": "JULIA"}],
+            "label": [
+                {"first_name": "JULIA"},
+                {"first_name": "NICK"},
+                {"first_name": "TOM"},
+            ],
             "entity": {"film_reference": 830},
-            "user_request": "배우 이름을 첫 1명만 알려 주세요.",
+            "user_request": "배우 이름을 첫 3명만 알려 주세요.",
             "answer_contract": {
                 **_list_answer_contract(
                     phrase="배우 이름",
@@ -3961,11 +4587,11 @@ async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
                             "table": "actor",
                             "column": "actor_id",
                             "direction": "asc",
-                            "phrase": "첫 1명",
+                            "phrase": "첫 3명",
                         }
                     ],
-                    limit=1,
-                    limit_phrase="첫 1명",
+                    limit=3,
+                    limit_phrase="첫 3명",
                 ),
                 "output_bindings": [
                     {
@@ -3977,7 +4603,7 @@ async def test_submit_draft_allows_handle_order_by_when_label_is_visible(
                     {
                         "direction": "asc",
                         "label_field": None,
-                        "requested_by_phrase": "첫 1명",
+                        "requested_by_phrase": "첫 3명",
                     }
                 ],
             },
@@ -4061,9 +4687,13 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
     assert "Difficulty-Up Policy reminder" in second_message
     assert "preserving the evaluated task" in second_message
     assert "one grounded strengthening" in second_message
+    assert "baseline is the last solver-evaluated draft" in second_message
+    assert "not later failed detours" in second_message
+    assert "Restore that evaluated task's target scope" in second_message
+    assert "predicates, row set, and output sources" in second_message
+    assert "Scalar aggregate retries may become grouped aggregate lists" in second_message
     assert "keep every prior output field/source" in second_message
     assert "including fields already added by earlier too-easy retries" in second_message
-    assert "Do not roll back to an earlier label" in second_message
     assert controller.accepted_draft is None
 
 
@@ -4227,6 +4857,9 @@ async def test_submit_draft_too_easy_monitor_keeps_evaluated_label_baseline(
     assert "Difficulty-Up Policy reminder" in second_message
     assert "preserving the evaluated task" in second_message
     assert "one grounded strengthening" in second_message
+    assert "baseline is the last solver-evaluated draft" in second_message
+    assert "not later failed detours" in second_message
+    assert "Restore that evaluated task's target scope" in second_message
     assert "keep every prior output field/source" in second_message
     assert "including fields already added by earlier too-easy retries" in second_message
     drifted_label = [

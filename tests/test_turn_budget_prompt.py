@@ -14,7 +14,7 @@ def test_budget_instruction_uses_tool_call_language_not_turns() -> None:
     # Never say "turns" in the budget text — keep vocabulary concrete.
     assert "turn" not in text.lower().split("tool calls")[0]
     assert "data tools" in text
-    assert "After feedback, use at most 2 data tools" in text
+    assert "After feedback, use at most 3 data tools" in text
     assert "only label `query`" in text
     assert "submit when rows return" in text
     for leaked in ("composer tools", "too_easy", "too_hard", "trial"):

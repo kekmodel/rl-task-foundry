@@ -72,6 +72,39 @@ def _format_ungrounded_value_guidance(diagnostics: dict[str, object] | None) -> 
     return f" Ungrounded values included: {preview}."
 
 
+def _format_missing_request_phrase_guidance(
+    diagnostics: dict[str, object] | None,
+) -> str:
+    if diagnostics is None:
+        return ""
+    binding_diagnostics = diagnostics.get("answer_contract_binding_diagnostics")
+    if not isinstance(binding_diagnostics, dict):
+        return ""
+    raw_bindings = binding_diagnostics.get("missing_requested_by_phrase_bindings")
+    if not isinstance(raw_bindings, list):
+        return ""
+    details: list[str] = []
+    for item in raw_bindings[:3]:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        label_field = item.get("label_field")
+        phrase = item.get("requested_by_phrase")
+        if not isinstance(path, str) or not isinstance(phrase, str):
+            continue
+        if isinstance(label_field, str) and label_field:
+            details.append(f"{path} label_field={label_field!r} phrase={phrase!r}")
+        else:
+            details.append(f"{path} phrase={phrase!r}")
+    if not details:
+        return ""
+    return (
+        " Missing request phrases: "
+        + "; ".join(details)
+        + ". Keep those label fields and add natural request wording for them."
+    )
+
+
 def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
     kind_note = ""
     if answer_kind in {"scalar", "list"}:
@@ -80,7 +113,15 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
         " This draft failed specificity."
         f"{kind_note} Policy reminder: Difficulty-Up Policy is the repair "
         "source for specificity feedback on the current draft. Preserve the "
-        "current anchor, target, row set/query path, and source meanings; add "
-        "one grounded meaningful dimension supported by new evidence. Passive "
-        "display-only fields are weak. Do not switch topic or table family."
+        "current anchor and target; for list labels preserve row set, order, "
+        "limit, and source meanings. Add one grounded meaningful dimension "
+        "supported by new evidence that changes lookup, comparison, order, or "
+        "row reasoning. Do not only add display fields for the same selected "
+        "row; same-row display/derived fields alone are still too direct. If "
+        "that was just tried, switch answer work with aggregate, comparison, "
+        "grouping, visible ordering, related-row selection, or row membership "
+        "instead of adding another field. "
+        "Request Contract reminder: keep user_request fluent and copy visible "
+        "context/source values exactly; do not translate/transliterate them "
+        "while strengthening. Do not switch topic or table family."
     )

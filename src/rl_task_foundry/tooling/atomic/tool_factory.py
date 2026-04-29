@@ -119,6 +119,12 @@ _ROW_ID_SCALAR_ANY_OF: list[JsonObject] = [
     {"type": "boolean"},
 ]
 
+_RECORD_SET_ID_DESCRIPTION = (
+    "Existing record_set resource id copied exactly from a prior tool output. "
+    "Do not invent ids, template variables, or ids expected from another tool "
+    "call in the same message; wait for that output first."
+)
+
 
 def _row_id_any_of() -> list[JsonObject]:
     return [
@@ -636,7 +642,7 @@ def build_filter_record_set_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of an existing record_set resource.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "column": {
                 "type": "string",
@@ -721,7 +727,7 @@ def build_filter_record_set_by_values_tool(session: AtomicSession) -> "FunctionT
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of an existing record_set resource.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "column": {
                 "type": "string",
@@ -797,7 +803,7 @@ def build_filter_record_set_by_pattern_tool(session: AtomicSession) -> "Function
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of an existing record_set resource.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "column": {
                 "type": "string",
@@ -866,7 +872,7 @@ def build_filter_record_set_by_null_tool(session: AtomicSession) -> "FunctionToo
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of an existing record_set resource.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "column": {
                 "type": "string",
@@ -936,7 +942,7 @@ def build_filter_record_set_by_related_tool(session: AtomicSession) -> "Function
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of an existing source record_set resource.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "path": {
                 "type": "array",
@@ -1064,7 +1070,7 @@ def build_follow_relation_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "source_record_set_id": {
                 "type": "string",
-                "description": "ID of the record_set resource to traverse from.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "edge_label": {
                 "type": "string",
@@ -1125,11 +1131,11 @@ def build_intersect_record_sets_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "left_record_set_id": {
                 "type": "string",
-                "description": "ID of the first record_set resource.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "right_record_set_id": {
                 "type": "string",
-                "description": "ID of the second record_set resource.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
         },
     }
@@ -1212,7 +1218,7 @@ def build_sort_record_set_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of the record_set resource to order.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "keys": {
                 "type": "array",
@@ -1289,7 +1295,7 @@ def build_list_record_refs_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of the record_set resource to list from.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "limit": {
                 "type": "integer",
@@ -1407,7 +1413,7 @@ def build_list_records_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of the record_set resource to list from.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "limit": {
                 "type": "integer",
@@ -1554,7 +1560,7 @@ def build_count_records_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of the record_set resource to count.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
         },
     }
@@ -1591,7 +1597,7 @@ def build_aggregate_records_tool(session: AtomicSession) -> "FunctionTool":
         "properties": {
             "record_set_id": {
                 "type": "string",
-                "description": "ID of the record_set resource to aggregate.",
+                "description": _RECORD_SET_ID_DESCRIPTION,
             },
             "fn": {
                 "type": "string",

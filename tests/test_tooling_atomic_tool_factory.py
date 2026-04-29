@@ -474,6 +474,18 @@ def test_v2_list_records_schema_distinguishes_paths_from_columns():
     assert "related display" in text
 
 
+def test_v2_record_set_id_schema_requires_prior_resource_output():
+    tools = {tool.name: tool for tool in build_atomic_tools(_stub_session())}
+    descriptions: list[str] = []
+    for tool in tools.values():
+        descriptions.extend(_schema_descriptions(tool.params_json_schema))
+    text = " ".join(descriptions)
+
+    assert "prior tool output" in text
+    assert "Do not invent ids" in text
+    assert "same message" in text
+
+
 def test_v2_follow_relation_schema_warns_when_source_alignment_matters():
     tools = {tool.name: tool for tool in build_atomic_tools(_stub_session())}
     descriptions = _schema_descriptions(tools["follow_relation"].params_json_schema)

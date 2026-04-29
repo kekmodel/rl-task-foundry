@@ -620,7 +620,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "or a customer-visible constraint stated in user_request "
                     "and submit_draft.answer_contract. Do not use filters as "
                     "hidden helper row-set controls; keep scope aligned with "
-                    "the Source Surface Policy."
+                    "the Source Surface Policy. If wording implies status or "
+                    "type membership, implement it here; otherwise request "
+                    "records plus that status/type field."
                 ),
                 "items": {
                     "type": "object",
@@ -670,10 +672,13 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                             "type": "string",
                             "description": (
                                 "Stable output field name that preserves the "
-                                "selected source column meaning; do not make "
-                                "note/comment/description text look like a "
-                                "result/status/value field unless the request "
-                                "names that surface."
+                                "selected source column meaning. Output aliases "
+                                "do not disambiguate competing reachable "
+                                "sources; user_request and answer_contract "
+                                "phrases must name the selected source role. "
+                                "Do not make note/comment/description text "
+                                "look like a result/status/value field unless "
+                                "the request names that surface."
                             ),
                         },
                     },
@@ -685,7 +690,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Deterministic ordering. Direction must match user_request "
                     "wording exactly. Follow the List Determinism Policy for "
                     "ties and limited lists; order_by must not introduce "
-                    "unrequested or hidden row-order controls."
+                    "unrequested or hidden row-order controls. Use no more "
+                    "than two order keys total; if more are needed, choose "
+                    "another label or return tied rows."
                 ),
                 "items": {
                     "type": "object",

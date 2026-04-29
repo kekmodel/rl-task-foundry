@@ -307,6 +307,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
     assert "hidden helper row-set controls" in descriptions["query"]["$.spec.where"]
     assert "Source Surface Policy" in descriptions["query"]["$.spec.where"]
+    assert "implies status or type membership" in descriptions["query"][
+        "$.spec.where"
+    ]
+    assert "records plus that status/type field" in descriptions["query"][
+        "$.spec.where"
+    ]
     assert "Blocked or internal handle values" in descriptions["query"][
         "$.spec.where[].value"
     ]
@@ -324,6 +330,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "preserves the selected source column meaning" in descriptions[
         "query"
     ]["$.spec.select[].as"]
+    assert "Output aliases do not disambiguate competing reachable sources" in (
+        descriptions["query"]["$.spec.select[].as"]
+    )
+    assert "phrases must name the selected source role" in descriptions[
+        "query"
+    ]["$.spec.select[].as"]
     assert "note/comment/description text" in descriptions[
         "query"
     ]["$.spec.select[].as"]
@@ -338,6 +350,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "$.spec.order_by"
     ]
     assert "unrequested or hidden row-order controls" in descriptions["query"][
+        "$.spec.order_by"
+    ]
+    assert "no more than two order keys total" in descriptions["query"][
+        "$.spec.order_by"
+    ]
+    assert "choose another label or return tied rows" in descriptions["query"][
         "$.spec.order_by"
     ]
     assert "Match the direction or ranking stated in user_request" in descriptions[

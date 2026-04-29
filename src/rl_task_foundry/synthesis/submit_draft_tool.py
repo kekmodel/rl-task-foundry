@@ -26,6 +26,7 @@ from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.contracts import StrictModel
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.submit_draft_messages import (
+    _format_missing_request_phrase_guidance,
     _format_ungrounded_value_guidance,
     _render_structured_message,
     _too_easy_retry_guidance,
@@ -60,6 +61,7 @@ class SubmitDraftErrorCode(StrEnum):
     QUESTION_ENTITY_BLOCK_MISMATCH = "question_entity_block_mismatch"
     QUESTION_BODY_REQUIRED = "question_body_required"
     LABEL_BLANK_STRING_FORBIDDEN = "label_blank_string_forbidden"
+    LABEL_NULL_VALUE_FORBIDDEN = "label_null_value_forbidden"
     LABEL_VALUES_NOT_GROUNDED = "label_values_not_grounded"
     LABEL_NOT_STRENGTHENED = "label_not_strengthened"
     LABEL_CHANGED_DURING_REPAIR = "label_changed_during_repair"
@@ -70,9 +72,11 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_EVIDENCE_MISMATCH = "answer_contract_evidence_mismatch"
     ANSWER_CONTRACT_QUERY_MISMATCH = "answer_contract_query_mismatch"
     ANSWER_CONTRACT_ORDER_AMBIGUOUS = "answer_contract_order_ambiguous"
+    ANSWER_CONTRACT_ORDER_TOO_COMPLEX = "answer_contract_order_too_complex"
     ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS = (
         "answer_contract_duplicate_answer_rows"
     )
+    ANSWER_CONTRACT_LIST_SIZE_INVALID = "answer_contract_list_size_invalid"
     ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE = "answer_contract_list_limit_too_wide"
     ANSWER_CONTRACT_FILTER_UNBOUND = "answer_contract_filter_unbound"
     ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED = (
@@ -110,6 +114,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.QUESTION_ENTITY_BLOCK_MISMATCH,
         SubmitDraftErrorCode.QUESTION_BODY_REQUIRED,
         SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN,
+        SubmitDraftErrorCode.LABEL_NULL_VALUE_FORBIDDEN,
         SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED,
         SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED,
         SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR,
@@ -119,7 +124,9 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH,
         SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_TOO_COMPLEX,
         SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_SIZE_INVALID,
         SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND,
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
@@ -185,7 +192,7 @@ class AnswerOutputBinding(StrictModel):
             "Exact contiguous substring from user_request that asks for this "
             "label field. Use wording that names this field's distinct role; "
             "do not reuse one vague phrase for different returned concepts. "
-            "For status/type/category/sequence-like fields, preserve the "
+            "For result/status/type/category/sequence-like fields, preserve the "
             "source representation; do not turn source status text into "
             "boolean completion wording, or source record sequence into "
             "generated display rank. Do not add parenthetical normalized "
@@ -274,7 +281,10 @@ class AnswerContract(StrictModel):
     limit_phrase: str | None = Field(
         description=(
             "Exact user_request substring for a fixed requested list size, "
-            "such as '3 items', or null when there is no fixed size phrase."
+            "such as '3 items', or null when there is no fixed size phrase. "
+            "For ordered limited lists, the limit phrase and order bindings "
+            "must communicate the same row-selection boundary as query.order_by; "
+            "do not imply a different boundary from the query order."
         ),
     )
     output_bindings: list[AnswerOutputBinding] | None = Field(
@@ -293,7 +303,9 @@ class AnswerContract(StrictModel):
             "For ordered lists, provide one request-to-order binding for each "
             "query.order_by entry, in the same order. Use label_field when the "
             "order key is returned in label_json; otherwise use null. Omit or "
-            "use null only when the query has no ordering."
+            "use null only when the query has no ordering. For limited lists, "
+            "this ordering also selects row membership; avoid drafts requiring "
+            "one hidden selection order and another display order."
         ),
     )
 
@@ -352,7 +364,10 @@ class SubmitDraftPayload(StrictModel):
             '{"<pk_name>": 123}. It may contain observed primary-key values; '
             "those values should stay hidden from user_request. This is not a "
             "decorative anchor: the canonical label must be scoped to this "
-            "context, either directly or through observed values derived from it."
+            "context, either directly or through observed values derived from it. "
+            "If the answer rows come from a parent/list/history scope, put that "
+            "parent or current-subject key in entity instead of only a child "
+            "record key."
         ),
     )
     user_request: str = Field(
@@ -363,9 +378,19 @@ class SubmitDraftPayload(StrictModel):
             "Do not include the hidden <entity> block; provide only the request "
             "body. The user does not know DB tables, rows, primary keys, "
             "foreign keys, or hidden structural handles. Use a visible value "
-            "only when it appeared in tool evidence. Use 'my'/'own' wording "
+            "only when it appeared in tool evidence; copy visible source "
+            "values exactly instead of translating or transliterating them. "
+            "When multiple reachable source surfaces could satisfy broad "
+            "wording, name the chosen source role in ordinary language. "
+            "Use 'my'/'own' wording "
             "only when the hidden context naturally represents the requester "
-            "or their records and the latest query is scoped to that context."
+            "or their records and the latest query is scoped to that context. "
+            "Target-language wording must be fluent and must not contain "
+            "mixed-script artifacts. "
+            "Scope wording must match latest query evidence: direct hidden "
+            "current-record handle lookups ask for that current record's own "
+            "facts; parent period, list, or history wording requires query "
+            "evidence at that broader parent/list/history scope."
         ),
     )
     answer_contract: AnswerContract = Field(
@@ -592,6 +617,30 @@ def _single_field_scalar_value_signature(value: object) -> str | None:
     if isinstance(scalar_value, (dict, list)):
         return None
     return canonical_json(scalar_value, default=str)
+
+
+def _null_answer_fields(value: object) -> list[str]:
+    if isinstance(value, dict):
+        return sorted(str(key) for key, field_value in value.items() if field_value is None)
+    if not isinstance(value, list):
+        return []
+    field_names = sorted(
+        {
+            str(key)
+            for item in value
+            if isinstance(item, dict)
+            for key in item
+        }
+    )
+    null_fields: list[str] = []
+    for field_name in field_names:
+        if any(
+            item.get(field_name) is None
+            for item in value
+            if isinstance(item, dict) and field_name in item
+        ):
+            null_fields.append(field_name)
+    return null_fields
 
 
 def _monitor_label_data(
@@ -864,6 +913,10 @@ def _query_order_reference_count(query_result: dict[str, object]) -> int:
     return sum(1 for ref in referenced_columns if ref.get("usage") == "order_by")
 
 
+def _query_order_is_too_complex(query_result: dict[str, object]) -> bool:
+    return _query_order_reference_count(query_result) > 2
+
+
 def _answer_contract_binding_diagnostics(
     contract: AnswerContract,
     *,
@@ -902,21 +955,34 @@ def _answer_contract_binding_diagnostics(
         if field_name in label_field_set
     ]
     missing_requested_by_phrases: list[str] = []
+    missing_requested_by_phrase_bindings: list[dict[str, object]] = []
     for index, binding in enumerate(output_bindings):
+        path = f"output_bindings[{index}].requested_by_phrase"
         if not _phrase_is_in_request(
             phrase=binding.requested_by_phrase,
             user_request=user_request,
         ):
-            missing_requested_by_phrases.append(
-                f"output_bindings[{index}].requested_by_phrase"
+            missing_requested_by_phrases.append(path)
+            missing_requested_by_phrase_bindings.append(
+                {
+                    "path": path,
+                    "label_field": binding.label_field,
+                    "requested_by_phrase": binding.requested_by_phrase,
+                }
             )
     for index, binding in enumerate(order_bindings):
+        path = f"order_bindings[{index}].requested_by_phrase"
         if not _phrase_is_in_request(
             phrase=binding.requested_by_phrase,
             user_request=user_request,
         ):
-            missing_requested_by_phrases.append(
-                f"order_bindings[{index}].requested_by_phrase"
+            missing_requested_by_phrases.append(path)
+            missing_requested_by_phrase_bindings.append(
+                {
+                    "path": path,
+                    "label_field": binding.label_field,
+                    "requested_by_phrase": binding.requested_by_phrase,
+                }
             )
 
     return {
@@ -946,6 +1012,9 @@ def _answer_contract_binding_diagnostics(
             set(bound_order_label_fields) - label_field_set
         )[:item_limit],
         "missing_requested_by_phrases": missing_requested_by_phrases[:item_limit],
+        "missing_requested_by_phrase_bindings": (
+            missing_requested_by_phrase_bindings[:item_limit]
+        ),
         "duplicate_output_binding_phrases": duplicate_output_binding_phrases[
             :item_limit
         ],
@@ -1046,9 +1115,12 @@ def _query_output_signature(source: dict[str, object]) -> str | None:
 class QueryEvidenceSignature:
     kind: str
     output_sources: tuple[str, ...]
+    output_kinds: tuple[str, ...]
+    aggregate_fns: tuple[str, ...]
     predicates: tuple[str, ...]
     order_by: tuple[str, ...]
     item_count: int | None
+    query_tables: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1061,6 +1133,7 @@ def _query_evidence_signature(
     query_result: dict[str, object],
     *,
     answer_kind: str,
+    query_params: dict[str, object] | None = None,
 ) -> QueryEvidenceSignature:
     column_sources = _as_object_list(query_result.get("column_sources")) or []
     referenced_columns = _as_object_list(query_result.get("referenced_columns")) or []
@@ -1072,6 +1145,21 @@ def _query_evidence_signature(
             signature
             for source in column_sources
             if (signature := _query_output_signature(source)) is not None
+        ),
+        output_kinds=tuple(
+            sorted({
+                kind
+                for source in column_sources
+                if isinstance(kind := source.get("kind"), str)
+            })
+        ),
+        aggregate_fns=tuple(
+            sorted({
+                fn
+                for source in column_sources
+                if source.get("kind") == "aggregate"
+                and isinstance(fn := source.get("fn"), str)
+            })
         ),
         predicates=tuple(
             sorted(
@@ -1088,6 +1176,45 @@ def _query_evidence_signature(
             )
         ),
         item_count=item_count,
+        query_tables=_query_spec_tables(query_params),
+    )
+
+
+def _query_spec_tables(query_params: dict[str, object] | None) -> tuple[str, ...]:
+    if not isinstance(query_params, dict):
+        return ()
+    spec = query_params.get("spec")
+    if not isinstance(spec, dict):
+        return ()
+    tables: set[str] = set()
+    from_spec = spec.get("from")
+    if isinstance(from_spec, dict) and isinstance(from_spec.get("table"), str):
+        tables.add(from_spec["table"])
+    for join in _as_object_list(spec.get("join")) or []:
+        edge = _parse_query_edge(join.get("via_edge"))
+        if edge is None:
+            continue
+        for key in ("source_table", "destination_table"):
+            table = edge.get(key)
+            if isinstance(table, str):
+                tables.add(table)
+    return tuple(sorted(tables))
+
+
+def _allows_scalar_to_grouped_aggregate(
+    previous: QueryEvidenceSignature,
+    current: QueryEvidenceSignature,
+) -> bool:
+    previous_tables = set(previous.query_tables)
+    current_tables = set(current.query_tables)
+    return (
+        previous.kind == "scalar"
+        and current.kind == "list"
+        and "aggregate" in previous.output_kinds
+        and "aggregate" in current.output_kinds
+        and "group_by" in current.output_kinds
+        and bool(set(previous.aggregate_fns) & set(current.aggregate_fns))
+        and (not previous_tables or previous_tables.issubset(current_tables))
     )
 
 
@@ -1097,11 +1224,12 @@ def _query_evidence_incremental_errors(
     current: QueryEvidenceSignature,
 ) -> list[str]:
     errors: list[str] = []
-    if current.kind != previous.kind:
+    scalar_to_grouped = _allows_scalar_to_grouped_aggregate(previous, current)
+    if current.kind != previous.kind and not scalar_to_grouped:
         errors.append("kind_changed")
     previous_outputs = set(previous.output_sources)
     current_outputs = set(current.output_sources)
-    if not previous_outputs.issubset(current_outputs):
+    if not scalar_to_grouped and not previous_outputs.issubset(current_outputs):
         errors.append("operation_changed")
 
     previous_predicates = set(previous.predicates)
@@ -1136,10 +1264,19 @@ def _query_evidence_incremental_errors(
         ):
             errors.append("cardinality_weakened")
 
+    output_only_list_retry = (
+        current.kind == "list"
+        and added_output_source
+        and not (added_predicate or added_order or strengthened_cardinality)
+    )
+    if output_only_list_retry:
+        errors.append("list_output_only")
+
+    output_source_strengthens = added_output_source and current.kind != "list"
     if not (
         added_predicate
         or added_order
-        or added_output_source
+        or output_source_strengthens
         or strengthened_cardinality
     ):
         errors.append("no_new_structural_constraint")
@@ -1967,6 +2104,13 @@ class SubmitDraftController:
         if (
             payload.answer_contract.kind == "list"
             and isinstance(canonical_answer, list)
+            and len(canonical_answer) < 3
+        ):
+            error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_SIZE_INVALID)
+            invalid_diagnostics["submitted_list_row_count"] = len(canonical_answer)
+        elif (
+            payload.answer_contract.kind == "list"
+            and isinstance(canonical_answer, list)
             and len(canonical_answer) > 5
         ):
             error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE)
@@ -1975,6 +2119,12 @@ class SubmitDraftController:
         if blank_paths:
             error_codes.append(SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN)
             invalid_diagnostics["blank_string_paths"] = blank_paths[
+                : self.config.synthesis.runtime.diagnostic_item_limit
+            ]
+        null_fields = _null_answer_fields(canonical_answer)
+        if null_fields:
+            error_codes.append(SubmitDraftErrorCode.LABEL_NULL_VALUE_FORBIDDEN)
+            invalid_diagnostics["null_answer_fields"] = null_fields[
                 : self.config.synthesis.runtime.diagnostic_item_limit
             ]
         ungrounded_strings = _ungrounded_answer_strings(
@@ -2045,6 +2195,9 @@ class SubmitDraftController:
             current_query_evidence_signature = _query_evidence_signature(
                 latest_query_result,
                 answer_kind=payload.answer_contract.kind,
+                query_params=(
+                    latest_query_params if isinstance(latest_query_params, dict) else None
+                ),
             )
             if not _canonical_label_matches_query_result(
                 label=canonical_answer,
@@ -2117,6 +2270,17 @@ class SubmitDraftController:
                 invalid_diagnostics["ordering_diagnostics"] = latest_query_result.get(
                     "ordering_diagnostics"
                 )
+            if (
+                payload.answer_contract.kind == "list"
+                and _query_order_is_too_complex(latest_query_result)
+            ):
+                error_codes.append(
+                    SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_TOO_COMPLEX
+                )
+                invalid_diagnostics["order_reference_count"] = (
+                    _query_order_reference_count(latest_query_result)
+                )
+                invalid_diagnostics["max_order_reference_count"] = 2
             if (
                 payload.answer_contract.kind == "list"
                 and _query_projection_has_duplicate_answer_rows(latest_query_result)
@@ -2504,6 +2668,9 @@ class SubmitDraftController:
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
                 "Rejected. Label Grounding Policy reminder: the canonical answer contains blank string fields; answer fields require grounded, non-empty values observed in tool results."  # noqa: E501
             ),
+            SubmitDraftErrorCode.LABEL_NULL_VALUE_FORBIDDEN: (
+                "Rejected. Label Grounding Policy reminder: answer fields require grounded non-null evidence. Do not submit null answer values; rerun the label query with informative non-null fields or choose another scoped label."  # noqa: E501
+            ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
                 "Rejected. Label Grounding Policy reminder: some label values were not directly grounded in observed tool results, or were reformatted from observed values."  # noqa: E501
             ),
@@ -2511,7 +2678,7 @@ class SubmitDraftController:
                 "Rejected. Difficulty-Up Policy reminder: after specificity feedback, the canonical answer itself must change through a grounded strengthening step. Use the last evaluated too-easy label as the baseline; keep fields already added and add one new grounded field, relationship, or coherent constraint."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR: (
-                "Rejected. Feedback Handling Policy reminder: this feedback only requires contract repair, so preserve the previous canonical label/query target and change only the failing request/answer_contract wording or rerun that same label query."  # noqa: E501
+                "Rejected. Feedback Handling Policy reminder: this feedback only requires contract repair, so restore the repair-locked canonical label/query target and change only the failing request/answer_contract wording or rerun that same label query. Do not keep the last failed modified label."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_REQUIRED: (
                 "Rejected. Tool schema reminder: answer_contract is required."
@@ -2520,7 +2687,7 @@ class SubmitDraftController:
                 "Rejected. Tool schema reminder: answer_contract is a valid JSON object with kind, answer_phrase, constraint_phrases, and limit_phrase; it is not query result JSON, SQL structure, or a malformed JSON string."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING: (
-                "Rejected. Label Contract reminder: every answer_contract phrase must be an exact contiguous substring copied from user_request."  # noqa: E501
+                "Rejected. Label Contract reminder: every answer_contract phrase must be an exact contiguous substring copied from user_request. Feedback Handling Policy reminder: preserve the natural user_request wording and prior label_json fields/values; rewrite the full sentence cleanly when adding missing natural phrases to user_request/answer_contract instead of deleting, renaming, or splicing label fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING: (
                 "Rejected. Label Contract reminder: final query evidence must immediately precede submit_draft, and the canonical label is copied from the latest successful query result."  # noqa: E501
@@ -2532,19 +2699,25 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: the latest successful query must contain structural evidence for this answer; if a list query limit fixes membership, that fixed size must be bound in user_request and answer_contract.limit_phrase."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
-                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. If the tie-break is sequence/rank-like, request wording must name source record sequence instead of a generated display rank. Do not repair this with hidden handles or artificial id wording."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. If the tie-break is sequence/rank-like, request wording must name source record sequence instead of a generated display rank. Do not repair this with hidden handles or artificial id wording. Request Contract reminder: preserve fluent request wording; use ordinary target-language words, not malformed terms. If a repair needs long/mechanical field lists, choose another label instead of stacking tie-break fields."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_TOO_COMPLEX: (
+                "Rejected. List Determinism Policy reminder: list order may use at most one natural visible tie-break, so query.order_by must have no more than two keys total. If more order keys are needed, choose another label or return tied rows instead of building a long mechanical sort contract."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_DUPLICATE_ANSWER_ROWS: (
-                "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query and submit_draft."  # noqa: E501
+                "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query and submit_draft. Request Contract reminder: if rows are still duplicate or the repair needs long/mechanical field lists, choose another label instead of stacking fields."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_SIZE_INVALID: (
+                "Rejected. Task Shapes reminder: list labels must return 3-5 rows. A 1-2 row list is too direct; choose another scoped list with 3-5 distinguishable rows, or use a scalar aggregate when the request asks for a summary."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE: (
-                "Rejected. Task Shapes reminder: fixed list labels must stay at 3-5 rows. Do not use 6+ rows to add difficulty; keep the same target/query scope and resubmit a smaller natural 3-5 row limit."  # noqa: E501
+                "Rejected. Task Shapes reminder: fixed list labels must stay at 3-5 rows. Do not use 6+ rows to add difficulty; keep the same target/query scope and resubmit a smaller natural 3-5 row limit. List Determinism Policy reminder: when adding the smaller limit, the limit phrase must select the same row boundary as query.order_by; rerun the query with matching order if needed, and do not mix one hidden selection order with another display order."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND: (
                 "Rejected. Request Contract reminder: user-visible row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
-                "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If a parent/list/history request broadens from a child record, keep that parent/current-subject handle in entity or choose a label scoped to the existing entity."  # noqa: E501
+                "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If the latest query relays from a child/current record through a parent to sibling answer rows, rewording as child-related is not enough: either put the parent/current-subject handle in entity and rerun the label query from that scope, or choose a label directly scoped to the existing entity."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (
                 "Rejected. Label Contract reminder: latest query evidence must include field visibility evidence before submit_draft."  # noqa: E501
@@ -2561,7 +2734,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
-                " For list retries, keep every prior output field/source and prior order binding, including fields already added by earlier too-easy retries, then append exactly one grounded user-visible field or tie-break. Do not roll back to an earlier label."  # noqa: E501
+                " The baseline is the last solver-evaluated draft, not later failed detours. Restore that evaluated task's target scope, predicates, row set, and output sources, then append one grounded dimension that changes lookup, comparison, order, or row reasoning. Scalar aggregate retries may become grouped aggregate lists only when they keep the same target and predicates. For list retries, keep every prior output field/source and prior order binding, including fields already added by earlier too-easy retries. Output-only list field additions and same-row passive display/derived fields are still too direct."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. Tool schema reminder: submit_draft arguments did "
@@ -2591,6 +2764,11 @@ class SubmitDraftController:
                     else None
                 )
             )
+        if (
+            error_codes
+            and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING
+        ):
+            primary += _format_missing_request_phrase_guidance(diagnostics)
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (

@@ -263,6 +263,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Check requestability" in instructions
     assert "realistic customer" in instructions
     assert "without technical or awkward controls" in instructions
+    assert "formatting quirks" in instructions
     assert "choose another label" in instructions
     assert "Derive `user_request` and `topic` from that label" in instructions
     assert "exactly the label fields and row controls" in instructions
@@ -271,7 +272,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Difficulty-Up Policy" in instructions
     assert "smallest single structural strengthening" in instructions
     assert "there is no fixed ladder" in instructions
-    assert "preserve kind, anchor, target, row set/query path" in instructions
+    assert "preserve anchor/target" in instructions
+    assert "Lists preserve row set/order/limit" in instructions
+    assert "scalar aggregates may add group/compare" in instructions
+    assert "one grounded related/derived dimension" in instructions
+    assert "Real strengthening changes answer work" in instructions
+    assert "not same-row fields, even via join" in instructions
+    assert "If just tried, switch work" in instructions
     assert "keep filters, order, limit" in instructions
     assert "output fields/source meanings" in instructions
     assert "Append one grounded dimension" in instructions
@@ -292,18 +299,19 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     # them without restating broad strategy.
     assert "# Core Definitions" in instructions
     assert "Source surface" in instructions
-    assert "user wording, label fields, and query path" in instructions
-    assert "one phrase can map to several surfaces" in instructions
-    assert "name chosen source in request/contract" in instructions
+    assert "user wording, label fields, query path" in instructions
+    assert "one phrase can map to several reachable surfaces" in instructions
+    assert "request/contract must name chosen source role" in instructions
+    assert "broad nouns invalid" in instructions
+    assert "label/output_schema names cannot disambiguate" in instructions
     assert "If no primary key" in instructions
     assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
-    assert "Shared everyday nouns need lifecycle/source role" in instructions
-    assert "do not depend on output_schema field names" in instructions
     assert "# Feedback And Difficulty-Up Policy" in instructions
     assert "not a new durable instruction source" in instructions
     assert "pointer to an existing named policy" in instructions
     assert "Preserve anchored need/language" in instructions
+    assert "phrase repair: clean natural wording" in instructions
     assert "change the smallest failing part" in instructions
     assert "one policy source prevents split guidance" in instructions
 
@@ -322,17 +330,37 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "hidden handle" in instructions
     assert "hidden current subject/context" in instructions
     assert "Bind modifiers/filters to exact object/scope" in instructions
-    assert "Non-null filters need row-set wording" in instructions
+    assert "Non-null/status/type filters need row-set wording" in instructions
+    assert "matching query.where" in instructions
     assert "not output names" in instructions
+    assert "If only returned, ask records plus field" in instructions
     assert "Match hidden scope" in instructions
     assert "parent/list/history requests query that scope" in instructions
     assert "not one child event/record unless asked" in instructions
+    assert "current-record handle lookup" in instructions
+    assert "child->parent->sibling rows" in instructions
+    assert "entity needs the parent/current-subject key" in instructions
+    assert "# Scope Examples" in instructions
+    assert '"user_request":"show R"' in instructions
+    assert "S1.R;S2.R" in instructions
+    assert "Bad: hidden source choice" in instructions
+    assert '"user_request":"show S1 R"' in instructions
+    assert "Good: source/label align" in instructions
+    assert "entity={C.pk}; query C->P->siblings" in instructions
+    assert "rewording as C-related is not enough" in instructions
+    assert "entity={P.pk}; query P->siblings" in instructions
+    assert "answer row set share parent scope" in instructions
+    assert "entity={R.pk}; query filters R.pk" in instructions
+    assert "hidden current record and request scope match" in instructions
     assert "Do not attach `entity` to a global report" in instructions
-    assert "Copy visible context values" in instructions
-    assert "latest scoped query evidence" in instructions
+    assert "Copy scoped evidence values exactly" in instructions
+    assert "scoped evidence" in instructions
+    assert "do not translate/transliterate them" in instructions
     assert "Keep request compact" in instructions
+    assert "ordinary target-language words" in instructions
+    assert "no malformed terms" in instructions
     assert "Field keys stay in JSON" in instructions
-    assert "avoid aliases/choices in parentheses" in instructions
+    assert "no aliases/choices in parentheses" in instructions
     assert "long tie-breaks" in instructions
     assert "mechanical field lists" in instructions
     assert "do not expose it" in instructions
@@ -351,6 +379,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Label Grounding Policy" in instructions
     assert "copy label values from latest successful `query(spec)` result" in instructions
     assert "Do not reformat" in instructions
+    assert "no null fields" in instructions
     assert "unrelated global answer is invalid" in instructions
     assert "semantic API-style field names" in instructions
     assert "not raw DB aliases" in instructions
@@ -360,15 +389,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "source-field-to-related-field upgrade" in instructions
     assert "user_request names role/representation" in instructions
     assert "multiple answer surfaces are valid" in instructions
-    assert "Source-sensitive fields/filters" in instructions
-    assert "same source role used by the query path" in instructions
-    assert "request wording must name it" in instructions
+    assert "Source-sensitive result/status/type fields/filters" in instructions
+    assert "same source role used by query path" in instructions
+    assert "request must name it" in instructions
     assert "no normalized choices" in instructions
     assert "Distinguish source sequence from display rank" in instructions
-    assert "Broad words are invalid" in instructions
     assert "Keep output names faithful" in instructions
-    assert "do not relabel surfaces" in instructions
-    assert "Vague words are invalid" in instructions
+    assert "broad/vague words are invalid" in instructions
     assert "several reachable sources fit" in instructions
     assert "`query.select` includes only returned label fields" in instructions
     assert "every selected field becomes exact answer" in instructions
@@ -378,7 +405,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "answer item combines facts from the same event/record" in instructions
     assert "Avoid independent sibling joins" in instructions
     assert "never make a raw handle the main answer" in instructions
-    assert "query marks them user-visible" in instructions
+    assert "handle refs need query/user visibility" in instructions
     assert "`answer_contract` only binds request phrases" in instructions
     assert "output/order bindings" in instructions
     assert "No tables, columns, operators, or SQL" in instructions
@@ -398,29 +425,24 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Use sequence/rank only for named source record order" in instructions
     assert "not generated rank" in instructions
     assert "artificial technical sequence/id/order wording" in instructions
+    assert "Max two order keys" in instructions
     assert "choose unique ordering, or return tied rows" in instructions
     assert "Do not shrink limits" in instructions
     assert "or add hidden handles" in instructions
 
     # Task shape is domain-agnostic and concise.
     assert "# Task Shapes" in instructions
-    assert "data-service tasks" in instructions
-    assert "plan-like list" in instructions
-    assert "eligibility check" in instructions
-    assert "Scalar tasks" in instructions
-    assert "List tasks" in instructions
-    assert "avoid trivial 0/1 results" in instructions
-    assert "homogeneous ordered list" in instructions
-    assert "Prefer natural orders needing zero or one visible tie-break" in instructions
-    assert "fixed limit of 3-5 rows" in instructions
-    assert "avoid all matching when observed count exceeds 5" in instructions
-    assert "at least one non-handle visible field" in instructions
+    assert "Scalar: count/min/max/sum/avg" in instructions
+    assert "avoid trivial 0/1" in instructions
+    assert "Avoid single-record detail lookup" in instructions
+    assert "List: homogeneous ordered 3-5 rows" in instructions
+    assert "prefer natural orders with <=1 visible tie-break" in instructions
+    assert "avoid all matching when count >5" in instructions
+    assert "visible non-handle field" in instructions
     assert "Initial row/list labels" in instructions
     assert "prefer 3-4 fields" in instructions
     assert "max 5 before feedback" in instructions
     assert "add one meaningful dimension" in instructions
-    assert "Open-ended recommendations" in instructions
-    assert "filters, thresholds, ordering, limit, and tie-breaks" in instructions
 
     # Common system instructions stay database-neutral. Concrete table/column
     # names may still appear in per-request schema summaries, not here.
