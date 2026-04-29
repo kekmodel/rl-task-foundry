@@ -11925,3 +11925,49 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_102`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 182 — trial_103 accepted qualitative check
+
+- **질문**:
+  sequence/order repair feedback 정렬 이후 첫 smoke trial이 만족 가능한 accepted data를 만들었는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `accepted`, flow_id는 `real_db_trial:20260429T113933Z:928dfc3a`.
+  task_id는 `task_patient_admission_history_9950e0e6c7ffd6b0`이고 pass rate는 `3/4 = 0.75`였다.
+
+  최종 user_request:
+  `나의 병원 입원 기록 중 가장 최근 것 3개를 보여줘. 입원 시각, 퇴원 시각, 입원 종류, 그리고 퇴원 장소를 알려줘.`
+
+  최종 label:
+  - `2117-12-03T17:07:00` / `2117-12-06T17:30:00` / `EW EMER.` / `HOME`
+  - `2117-10-25T22:22:00` / `2117-10-29T14:40:00` / `EW EMER.` / `HOME`
+  - `2117-07-16T07:15:00` / `2117-07-25T12:34:00` / `ELECTIVE` / `HOME`
+
+- **reasoning 교차 분석**:
+  composer는 처음 `microbiologyevents`에서 최근 세균 검사 결과 5개를 시도했다. 그 draft는 date-only
+  reformatting, duplicate projected rows, ambiguous order, missing order binding이 동시에 있었고 거절됐다.
+  중요하게는, 이후 composer가 sequence/order key를 계속 밀지 않고 `admissions` 이력으로 label을 전환했다.
+  이는 Iteration 181의 feedback 정렬 방향과 맞다.
+
+  solver reasoning 4개 중 3개는 같은 절차로 풀었다:
+  `admissions` record set 생성 → `subject_id=10021487` 필터 → `admittime desc` 정렬 → 3개 row의
+  `admittime`, `dischtime`, `admission_type`, `discharge_location` materialize → submit.
+
+  실패한 1개는 `invalid_submit/missing_submit_result`였다. reasoning상 올바른 계획은 세웠지만 tool-call 형식이
+  깨져 최종 submit_result까지 가지 못했다. 데이터가 풀 수 없어서 실패한 것이 아니므로 저품질 신호로 보지 않는다.
+
+- **정성 평가**:
+  accepted data: 좋은 데이터로 판단한다. 자연스러운 환자 요청이고, hidden patient scope가 명확하며, solver tool
+  surface로 재현 가능한 필터/정렬/list task다. 난이도는 높지 않지만 smoke trial 목표에는 적합하다.
+
+  rejected data:
+  - microbiology 후보는 low-quality rejected. 동일 visible answer rows와 date reformatting이 있었고, ordered
+    list membership도 안정적이지 않았다.
+  - 이 거절은 좋은 방향이다. 저품질 후보가 accept되지 않았고, composer가 다른 label로 전환했다.
+
+- **변경**:
+  코드 변경 없음. 현재 개선 방향이 기대대로 작동했는지 확인한 실험 기록이다.
+
+- **현재 streak**:
+  `trial_103` accepted는 만족 가능한 데이터로 판단하므로 연속 만족 accepted streak는 `1/5`.
