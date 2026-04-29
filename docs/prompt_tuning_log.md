@@ -10365,6 +10365,57 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_84_retry_01`은 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
 
+## Iteration 163 — Trial 85 rejected low-quality null/list-shape drafts
+
+- **질문**:
+  Iteration 162의 broad source-role ambiguity 보강 뒤 다음 smoke에서 accepted 품질이 좋아지는가?
+  accepted가 없다면 rejected data는 어려운 좋은 문제였는가, 아니면 저품질이 잘 거절된 것인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, solver rollout 없음.
+
+  제출 흐름:
+  - submit 1/2: `composer_submit_draft_missing`
+  - submit 3:
+    `환자의 병원 내 이동 기록 중 가장 최근 5건을 보여주세요. 각 이동 기록 입실 시간,
+    퇴실 시간, 진료과(병동), 이벤트 유형을 포함해주세요.`
+    - 오류: `label_null_value_forbidden`
+    - 최신 discharge transfer row의 `transfer_out_time`, `care_unit`이 null이었다.
+  - submit 4: `composer_submit_draft_missing`
+  - submit 5 budget exhausted:
+    `환자의 입원 정보를 알려주세요. 입원 시간, 입원 유형, 퇴원 시간, 퇴원 장소를 포함해주세요.`
+    - 오류: `answer_contract_list_size_invalid`
+    - 실제 admission row가 1개인데 detail lookup을 list로 제출했다.
+
+- **reasoning 교차 분석**:
+  composer는 EMAR 후보에서 duplicate-looking rows를 보고 `emar_seq`/`emar_id`를 쓰지 않고 다른 label로
+  전환했다. 이 부분은 sequence/order field 금지 정책을 어느 정도 따른 신호다.
+
+  lab 후보에서는 `labevent_id` tie-break를 생각했지만, 해당 query는 ToolBudgetFeedback에 막혔고
+  submit까지 가지 않았다. 이후 transfers 후보는 row/order는 괜찮았지만 null output field 때문에
+  정확히 reject됐다. feedback 뒤 composer는 nullable field를 제거하거나 non-null field로 rerun해야
+  한다고 reasoning했지만, 여러 새 target으로 이동하다가 최종적으로 1-row admission list를 제출했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. transfers는 null answer field 문제, admissions는 1-row detail
+  lookup/list-shape 문제다. solver가 풀기 어려운 좋은 문제가 아니라 composer가 제출하지 말아야 할
+  draft였다.
+
+- **변경**:
+  코드 변경 없음. `label_null_value_forbidden` feedback은 이미 nullable output field 제거, informative
+  non-null field로 rerun, 또는 다른 scoped label 선택을 안내한다. `answer_contract.kind` schema도
+  1-2 row detail lookup을 list fallback으로 제출하지 말라고 말한다. 새 hard rule을 추가할 정밀도
+  100% 근거는 없다.
+
+- **검증**:
+  코드 변경 없음.
+
+- **현재 streak**:
+  `trial_85`는 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
