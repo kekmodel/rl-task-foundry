@@ -1,8 +1,8 @@
-"""Synthetic proof-task vertical slice.
+"""Synthetic proof fixture smoke slice.
 
-The proof task drives the full synthesis-through-registry pipeline (composer
-conversation, solver rollout, quality gate, registry commit, bundle export)
-without consuming provider quota.
+The proof fixture drives the full synthesis-through-registry pipeline
+(composer conversation, solver rollout, quality gate, registry commit) without
+consuming provider quota.
 
 Shape:
 1. Provision an ephemeral Postgres schema from the packaged fixture DDL/seed.
@@ -12,8 +12,7 @@ Shape:
    composer-tool observations and submits the canonical itinerary draft.
 4. Inject a solver runtime that alternates matched/unmatched answers so the
    observed pass rate lands inside the quality-gate band.
-5. Delegate to ``RealDbTrialRunner`` so the registry and bundle paths are
-   identical to real-DB runs.
+5. Delegate to ``RealDbTrialRunner`` so smoke behavior matches real-DB trials.
 6. Drop the ephemeral schema on teardown.
 """
 
@@ -764,7 +763,8 @@ async def _empty_proof_sdk_tools(_task_bundle: TaskBundleContract) -> list[objec
 def _proof_provider_name(config: AppConfig) -> str:
     if not config.providers:
         raise RuntimeError(
-            "proof task requires at least one configured provider in AppConfig.providers"
+            "proof smoke fixture requires at least one configured provider "
+            "in AppConfig.providers"
         )
     return next(iter(config.providers))
 

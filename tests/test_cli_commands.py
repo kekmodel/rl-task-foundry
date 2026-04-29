@@ -184,7 +184,7 @@ def test_cli_run_synthesis_registry_reports_summary(monkeypatch, tmp_path):
     assert captured["closed"] is True
 
 
-def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
+def test_cli_smoke_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
 
     async def _fake_run_proof_task(
@@ -216,10 +216,10 @@ def test_cli_run_proof_task_reports_summary(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("rl_task_foundry.cli.run_proof_task", _fake_run_proof_task)
 
     output_dir = tmp_path / "proof_output"
-    result = CliRunner().invoke(app, ["run-proof-task", str(output_dir)])
+    result = CliRunner().invoke(app, ["smoke-proof-task", str(output_dir)])
 
     assert result.exit_code == 0
-    assert "proof task run complete" in result.stdout
+    assert "proof smoke check complete" in result.stdout
     assert "db_id=proof_trip_fixture" in result.stdout
     assert "task_id=task_itinerary_fixture" in result.stdout
     assert "quality_gate_status=accept" in result.stdout

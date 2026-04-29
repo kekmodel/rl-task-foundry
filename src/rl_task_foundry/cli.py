@@ -274,18 +274,18 @@ def export_bundle(
         console.print(f"task_ids={list(summary.task_ids)}")
 
 
-@app.command("run-proof-task")
-def run_proof_task_cli(
+@app.command("smoke-proof-task")
+def smoke_proof_task_cli(
     output_dir: Path,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
-    """Run the synthetic proof-task vertical slice."""
+    """Run the synthetic proof fixture smoke check."""
 
     async def _run() -> None:
         config = load_config(config_path)
         summary = await run_proof_task(config, output_root=output_dir)
 
-        console.print(f"[green]proof task run complete[/green]: {output_dir}")
+        console.print(f"[green]proof smoke check complete[/green]: {output_dir}")
         console.print(f"db_id={summary.db_id}")
         if summary.task_id is not None:
             console.print(f"task_id={summary.task_id}")

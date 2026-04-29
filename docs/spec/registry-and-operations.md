@@ -64,14 +64,16 @@ Useful review targets:
 - topic distribution
 - difficulty drift
 
-## Proof Task
+## Proof Smoke Fixture
 
-A deterministic proof task is kept as a vertical-slice fixture for end-to-end validation of:
+A deterministic proof fixture is kept as a developer smoke check for end-to-end validation of:
 
 - synthesis flow
 - solver rollout
 - registry commit
-- bundle export
+
+It is exposed as `smoke-proof-task` so it is not confused with real data
+generation commands.
 
 ## Success Criteria
 

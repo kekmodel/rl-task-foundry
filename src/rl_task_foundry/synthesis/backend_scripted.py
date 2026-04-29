@@ -2,7 +2,7 @@
 
 Replays a fixed sequence of atomic tool calls on the conversation
 controller and submits a pre-built `SubmitDraftPayload`. Used by the
-proof-task smoke test and by unit tests that need to exercise the
+proof smoke fixture and by unit tests that need to exercise the
 synthesis runtime without hitting a model provider.
 """
 
