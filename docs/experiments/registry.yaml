@@ -62,13 +62,13 @@ nodes:
   - id: B0000
     type: baseline
     branch: main
-    commit: "5dd5a78"
+    commit: "9b71ffa"
     parent: null
     parent_commit: null
     status: current
     phase_target: v1
     hypothesis: >
-      Main through 5dd5a78 is the root baseline for the next experiment graph.
+      Main through 9b71ffa is the root baseline for the next experiment graph.
     metadata_note: >
       Node commit is the artifact snapshot. Registry commits that record or
       revise node metadata may be descendants of the artifact snapshot.
