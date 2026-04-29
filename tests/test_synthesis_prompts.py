@@ -330,8 +330,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
 
     # User-facing language and ID guidance stay general and English.
     assert "# Request Contract" in instructions
-    assert "configured target language" in instructions
-    assert "customer does not know DB tables" in instructions
+    assert "Target language" in instructions
+    assert "No DB/table/column jargon" in instructions
+    assert "domain roles" in instructions
     assert "technical sequences" in instructions
     assert "Hidden filter ids go in `entity`" in instructions
     assert "Use first-person only" in instructions

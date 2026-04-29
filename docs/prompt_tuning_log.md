@@ -9955,6 +9955,74 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_78`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 157 — User request must not translate table jargon
+
+- **질문**:
+  `trial_79`는 accepted지만 정말 만족할 만한 데이터인가? reasoning content가 반환되므로,
+  composer가 왜 list를 버리고 scalar count로 갔는지와 solver 실패 원인을 함께 확인한다.
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `accepted`.
+
+  제출 흐름:
+  - submit 1/2: `composer_submit_draft_missing`
+  - submit 3 accepted:
+    `내 중환자실 입원 기간 동안 입력 이벤트 총 개수를 알려줘`
+  - canonical answer: `{"total_input_records": 903}`
+  - pass rate: `3/4 = 0.75`
+  - infra excluded: solver 1개가 `max_episode_duration_ms=240000`으로 제외
+  - evaluable miss: solver 1개가 `inputevents`를 filter한 뒤 `count_records`를 호출하지 않고
+    `{"total_input_records": 0}`을 제출
+
+- **reasoning 교차 분석**:
+  composer는 처음에 ICU stay의 `inputevents` 최신 list를 만들려 했다. `starttime` 동점과
+  hidden `orderid` tie-break 문제를 보고 list determinism을 포기했고, 마지막에 같은 scope에서
+  scalar aggregate count로 전환했다. 이 전환 자체는 이전 원칙에 맞다.
+
+  문제는 request surface다. `입력 이벤트`는 실제 고객 자연어라기보다 `inputevents` source name을
+  그대로 번역한 표현이다. answer는 유일하고 solver가 도구로 풀 수 있지만, customer-facing request가
+  도메인 역할로 번역되지 않았으므로 low-quality accepted로 판정한다.
+
+  solver miss 1건은 tool 설계 결함으로 보지 않는다. reasoning은 `count_records`가 필요하다고 말했지만
+  실제 tool call 없이 0을 제출했다. atomic tool 철학상 도구 호출을 생략하면 틀리는 것이 맞고,
+  evaluator가 이를 잡았다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted. 유일성/검증성은 충족하지만 사용자 문구가 테이블 jargon에 가깝다.
+
+  rejected data: 없음. 이전 list 후보들은 ordering diagnostics 때문에 abandon됐고, 이는 올바른 방향이었다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 특정 단어가 테이블 jargon인지, 실제 도메인 용어인지 100% precision으로
+  판정할 수 없고, 리터럴/토큰 기반 휴리스틱 금지 원칙에도 걸린다.
+
+  대신 prompt/schema를 같은 원칙으로 보강했다.
+  - durable prompt `Request Contract`: DB/table/column jargon이나 technical sequence/ref를 쓰지 말고
+    도메인 역할로 표현하라고 압축해 명시.
+  - `submit_draft.user_request` schema: table/source jargon과 table/column name 직역을 피하라고 설명.
+
+  이는 특정 DB 리터럴을 막는 규칙이 아니라, user_request surface의 일반 원칙을 상기시키는 수정이다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_prompts.py::test_synthesis_input_defaults_to_schema_map_entity_selection tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_payload_schema_does_not_require_constraint_summary -q`
+    통과 (`4 passed`).
+
+  Prompt length:
+  - `build_synthesis_agent_instructions(...)` 길이 `7993`, 기존 budget `<8000` 유지.
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_79`는 accepted지만 low-quality accepted로 보므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

@@ -424,8 +424,9 @@ class SubmitDraftPayload(StrictModel):
         description=(
             "Natural user-facing request body in the configured task language. "
             "Do not include the hidden <entity> block; provide only the request "
-            "body. The user does not know DB tables, rows, primary keys, "
-            "foreign keys, or hidden structural handles. Use a visible value "
+            "body. The user does not know DB tables/columns, rows, PK/FK "
+            "handles, hidden structural handles, or table/source jargon; do "
+            "not merely translate table or column names. Use a visible value "
             "only when it appeared in tool evidence; copy visible source "
             "values exactly instead of translating or transliterating them. "
             "When multiple reachable source surfaces could satisfy broad "

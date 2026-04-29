@@ -140,9 +140,9 @@ def build_synthesis_agent_instructions(
         "time, scheduled time; generic time/date wording is invalid.",
 
         "# Request Contract\n"
-        "configured target language:\n"
+        "Target language:\n"
         "- Use first-person only for requester records; otherwise use neutral wording.\n"
-        "- customer does not know DB tables or technical sequences/refs. "
+        "- No DB/table/column jargon or technical sequences/refs; use domain roles. "
         "Hidden filter ids go in `entity`, never raw wording.\n"
         "- Match hidden scope: parent/list/history requests query that scope, "
         "not one child event/record unless asked. child->parent->sibling rows: "

@@ -2700,6 +2700,8 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "Bad: '<entity type> 38'" not in schema_surface
     assert "Good: 'my account'" not in schema_surface
     assert "hidden structural handles" in schema_surface
+    assert "table/source jargon" in schema_surface
+    assert "not merely translate table or column names" in schema_surface
     assert "visible value only when it appeared in tool evidence" in schema_surface
     assert "copy visible source values exactly" in schema_surface
     assert "instead of translating or transliterating them" in schema_surface
