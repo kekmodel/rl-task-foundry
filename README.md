@@ -65,12 +65,24 @@ uv run rl-task-foundry validate-config
 Useful trial entrypoints:
 
 ```bash
+uv run rl-task-foundry smoke-proof-task artifacts/smoke/proof_001
 uv run rl-task-foundry run-real-db-trial pagila artifacts/trials/pagila_001
-uv run rl-task-foundry harvest pagila artifacts/harvest/pagila_001
+uv run rl-task-foundry harvest pagila artifacts/experiments/N0001/pagila \
+  --target 3 \
+  --workers 4 \
+  --productive-budget-min 15
 ```
 
+Command roles:
+
+- `smoke-proof-task`: plumbing smoke check only; not a quality metric.
+- `run-real-db-trial`: single-sample microscope; inspect `analysis.jsonl`.
+- `harvest`: default improvement experiment and DQS/production viability input.
+- `export-bundle`: explicit registry-to-serving materialization after data is accepted.
+
 `harvest` defaults to the v1 production check: accepted 3 within 15 productive
-minutes.
+minutes. A method that cannot produce 3 accepted tasks inside that productive
+budget is a failed production-viability node.
 
 ## Artifact Policy
 

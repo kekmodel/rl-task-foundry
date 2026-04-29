@@ -60,6 +60,20 @@
 
 후속 실험은 부모 노드 commit에서 새 branch/worktree로 만든다. 한 경로가 local minimum에 빠지면 임의의 이전 노드로 돌아가 새 분기를 만들 수 있다.
 
+## Evaluation command roles
+
+- `smoke-proof-task`: developer smoke check for pipeline wiring only. Do not use it as an experiment quality metric.
+- `run-real-db-trial`: single-sample microscope for reading `analysis.jsonl` and diagnosing one accept/reject path.
+- `harvest`: default improvement experiment entrypoint. Use its target/budget output plus DQS-v1 qualitative review to compare nodes.
+- `export-bundle`: explicit post-accept registry export. It is not part of trial quality evaluation.
+
+Default improvement sequence:
+
+1. Run `smoke-proof-task` after risky plumbing changes.
+2. Run one or two `run-real-db-trial` samples to inspect behavior.
+3. Run `harvest --target 3 --productive-budget-min 15`.
+4. Evaluate accepted and rejected samples with DQS-v1 before promotion.
+
 권장 branch 이름:
 
 ```text

@@ -1,6 +1,6 @@
 schema_version: 1
 
-current_baseline: B0000
+current_baseline: B0001
 current_phase_target: v1
 
 architecture_policy:
@@ -74,7 +74,7 @@ nodes:
     commit: "d5784a1"
     parent: null
     parent_commit: null
-    status: current
+    status: promoted
     phase_target: v1
     hypothesis: >
       Main through d5784a1 is the root baseline for the next experiment graph.
@@ -108,4 +108,54 @@ nodes:
         - "Prefer thin slices for label-first, verifier-first, or DB readiness gates."
       avoid:
         - "Do not encode benchmark DB literals or known failed draft strings."
+        - "Do not promote on accept count without DQS-v1 qualitative review."
+  - id: B0001
+    type: baseline
+    branch: main
+    commit: "f0a965e"
+    parent: B0000
+    parent_commit: "d5784a1"
+    status: current
+    phase_target: v1
+    hypothesis: >
+      Current main is the baseline for the next improvement graph after
+      production viability gating, lightweight trial artifacts, unified
+      analysis logs, and proof smoke command cleanup.
+    metadata_note: >
+      Other AI agents should start new experiment branches from this commit
+      unless the user explicitly asks to branch from an older node.
+    architecture_summary: >
+      Trial commands are lightweight. `smoke-proof-task` is a developer wiring
+      check, `run-real-db-trial` is a single-sample analysis microscope, and
+      `harvest` is the default improvement experiment entrypoint. Trials write
+      `analysis.jsonl` as the unified timeline and accepted serving bundles are
+      produced only by explicit `export-bundle`.
+    fixed_principles:
+      - no_evaluation_hacking
+      - db_generalizable_generation
+      - no_db_specific_literal_or_token_heuristics
+      - precision_100_rejectors_only
+      - source_of_truth_separation
+      - low_quality_accepted_hard_failure
+      - diversity_required
+      - diagnose_bad_db_regions
+    evaluation_policy: DQS-v1
+    evaluation_protocol: independent-dqs-v1
+    agent_topology:
+      builder_agents: "experiment variable"
+      evaluator_agents: "independent-dqs-v1 subagent for promotion candidates"
+      context_policy: "builder/evaluator context separated by default"
+      llm_judges: []
+    command_roles:
+      smoke-proof-task: "plumbing smoke check only; not a quality metric"
+      run-real-db-trial: "single trial microscope; inspect analysis.jsonl"
+      harvest: "default improvement experiment and production viability entrypoint"
+      export-bundle: "post-accept registry materialization only"
+    quality_eval: null
+    branching_notes:
+      continue_from_here:
+        - "Use harvest target 3 with DQS-v1 qualitative review for improvement comparisons."
+        - "Use run-real-db-trial only for diagnosis before aggregate harvest evaluation."
+      avoid:
+        - "Do not use smoke-proof-task as a quality signal."
         - "Do not promote on accept count without DQS-v1 qualitative review."

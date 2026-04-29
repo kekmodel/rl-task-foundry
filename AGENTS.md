@@ -48,6 +48,22 @@ Production viability:
 - elapsed_seconds는 accepted/rejected/provider issue 전체 trial에 대해 기록
 - 시간 최적화는 low-quality accepted를 정당화할 수 없다.
 
+## 실험 명령 역할
+
+다른 AI가 이 repo에 들어오면 아래 역할 구분을 current policy로 따른다.
+
+- `smoke-proof-task`: 개발용 배관 smoke check다. composer/solver/registry 연결이 깨졌는지만 확인한다. 품질 개선 실험이나 promotion metric으로 사용하지 않는다.
+- `run-real-db-trial`: 단일 trial 현미경이다. 변경 직후 한 샘플의 `analysis.jsonl`을 읽고 accept/reject 원인, composer/solver 행동, reasoning, phase transition을 정성 분석한다. 승패 판단용 aggregate metric으로 쓰지 않는다.
+- `harvest`: 개선 실험의 기본 평가 entrypoint다. target, workers, productive budget을 둔 반복 생산 루프이며, DQS-v1 평가와 production viability 판단은 harvest 산출물 기준으로 한다.
+- `export-bundle`: registry에 commit된 accepted data를 serving/demo/handoff bundle로 materialize하는 별도 단계다. trial이나 harvest의 품질 판단에 bundle 생성을 섞지 않는다.
+
+표준 개선 루프:
+
+1. 큰 변경 후 `smoke-proof-task`로 배관을 확인한다.
+2. `run-real-db-trial` 한두 개로 `analysis.jsonl`을 읽고 원인을 파악한다.
+3. 개선 승패는 `harvest` target 3, productive budget 900초, DQS-v1 전수 정성평가로 판단한다.
+4. promotion 후보는 독립 DQS evaluator report 없이는 baseline으로 올리지 않는다.
+
 ## 실험 그래프 운영
 
 - Git commit graph가 실험 탐색 그래프다.
