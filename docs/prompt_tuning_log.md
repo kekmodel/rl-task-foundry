@@ -9897,6 +9897,64 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_77`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 156 — Single-row detail fallback must stay unattractive
+
+- **질문**:
+  `trial_78`은 fixed limit wording 개선 뒤 좋아졌는가? 마지막 `answer_contract_list_size_invalid`는
+  어려운 좋은 문제였는가, 아니면 저품질 fallback인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, solver rollout 없음.
+
+  제출 흐름:
+  - first submit: `composer_submit_draft_missing`
+  - microbiology list: null organism, evidence mismatch, order ambiguity, binding error
+  - admission list: row_count=1인데 list로 제출, `answer_contract_list_size_invalid`
+  - lab list: null unit/flag와 order phrase mismatch
+  - final patient info: row_count=1 기본정보 detail을 list로 제출, `answer_contract_list_size_invalid`
+
+- **reasoning 교차 분석**:
+  composer는 microbiology/labevents의 null과 ordering 문제를 본 뒤 "simpler label"로 가려 했다.
+  그러나 마지막 선택은 aggregate가 아니라 단일 patient row의 demographic fields였다. 이는
+  Task Shapes의 "Avoid single-record detail lookup" 위반이며, solver가 못 푼 어려운 문제가 아니다.
+
+  admission query도 같은 패턴이었다. query가 실제로 1 row만 반환했는데 request는 입원 기록 확인
+  list처럼 작성했다. validator가 정확히 막았다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. null 값과 order ambiguity는 정상적으로 거절됐고,
+  마지막 두 single-row detail fallback도 좋은 어려운 문제가 아니라 composer가 쉬운 단일 record
+  detail로 도망간 케이스다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 이미 1-2 row list는 precision 100으로 reject되고 있다.
+
+  프롬프트에는 이미 Task Shapes로 "Avoid single-record detail lookup"이 있다. 이번에는
+  `submit_draft.answer_contract.kind` schema를 같은 원칙의 reminder로 보강했다. `list`가 query rows
+  array라는 설명 옆에, 1-2 row detail lookup을 list fallback으로 제출하지 말고 3-5 rows나 aggregate를
+  선택하라고 명시했다.
+
+  이 변경은 DB 내용이나 리터럴을 보지 않고 answer_contract shape만 설명한다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_payload_schema_does_not_require_constraint_summary tests/test_synthesis_runtime.py::test_submit_draft_rejects_single_row_list_as_too_direct tests/test_synthesis_runtime.py::test_submit_draft_rejects_limited_single_row_before_order_repair -q`
+    통과 (`3 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_78`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

@@ -1417,6 +1417,10 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
         "scalar",
         "list",
     ]
+    assert "1-2 row detail lookup" in contract_properties["kind"]["description"]
+    assert "choose 3-5 rows or an aggregate" in contract_properties["kind"][
+        "description"
+    ]
 
 def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     schema = SubmitDraftPayload.model_json_schema()

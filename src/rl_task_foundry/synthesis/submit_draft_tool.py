@@ -294,7 +294,8 @@ class AnswerContract(StrictModel):
         description=(
             "Answer shape copied from the latest query: scalar means one "
             "aggregate row object; list means the query rows array, even when "
-            "one row is returned."
+            "one row is returned. Do not submit a 1-2 row detail lookup as a "
+            "list fallback; choose 3-5 rows or an aggregate."
         ),
     )
     answer_phrase: str = Field(
