@@ -643,6 +643,7 @@ def _column_source_payload(
     resolved: _ResolvedRef | None,
     value_exposes_source: bool,
     fn: str | None = None,
+    source_tables: list[TableSpec] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "output": output,
@@ -653,6 +654,15 @@ def _column_source_payload(
         payload["fn"] = fn
     if resolved is None:
         payload["visibility"] = "derived"
+        if source_tables is not None:
+            payload["source_tables"] = [
+                {
+                    "table": table.handle,
+                    "table_primary_key": list(table.primary_key),
+                    "table_has_primary_key": bool(table.primary_key),
+                }
+                for table in source_tables
+            ]
         return payload
     column = resolved.table.column(resolved.column)
     payload.update(
@@ -1114,6 +1124,11 @@ async def query(
                     fn=aggregate.fn,
                     resolved=resolved_ref,
                     value_exposes_source=aggregate.fn != "count",
+                    source_tables=(
+                        [entry.table for entry in chain]
+                        if resolved_ref is None
+                        else None
+                    ),
                 )
             )
     elif parsed.select is not None:

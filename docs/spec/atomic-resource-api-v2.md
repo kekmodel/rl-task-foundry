@@ -87,7 +87,7 @@ useful than others, but the runtime must handle the following cases explicitly.
 |---|---|
 | Table has a primary key | `list_record_refs` emits record references that can be used by `get_record`. |
 | Table has a composite primary key | record reference `id` is an array in primary-key column order. |
-| Table has no primary key | record-set creation/filtering/count/aggregate may work, but record-reference materialization and `get_record` for that table fail with `action_error` unless a stable synthetic record id policy is added later. |
+| Table has no primary key | record-set creation can name the table, but materialization, filtering, count, aggregate, record-reference listing, and `get_record` fail with `action_error` unless a stable synthetic record id policy is added later. |
 | Table has no outgoing/incoming FK | `follow_relation` simply has no valid edge from that table; wrong-edge attempts fail with `action_error`. |
 | Database has no FKs | record_set `relations` is empty; all single-table tools still generate. |
 | FK is composite | exposed as a v2 relation when source/target column lists are non-empty and have the same length. |

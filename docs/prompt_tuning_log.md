@@ -11726,3 +11726,79 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_99`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 179 — Reject aggregates from no-primary-key answer sources
+
+- **질문**:
+  `trial_100`의 최종 scalar count는 어려운 좋은 문제였나, 아니면 solver tool surface로 재현할 수 없는
+  저품질 문제였나?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T111255Z:b0d80bbd`.
+
+  composer는 `icustays` `stay_id=39623478`에서 시작해 `chartevents` 측정값 list를 만들었다.
+  첫 list draft는 `chartevents` row values를 직접 노출했고, `chartevents`가 no-primary-key table이라
+  `label_no_primary_key_source`로 거절됐다. 동시에 모든 row가 같은 `charttime`이라
+  `answer_contract_order_ambiguous`도 발생했고, `numeric_value`와 `unit`을 모두 `수치` phrase에 묶어
+  `answer_contract_binding_missing`도 발생했다.
+
+  마지막 수리는 list를 버리고 `chartevents` count scalar로 바꿨다:
+  `이번 중환자실 입원 기간 동안 기록된 측정값 총 개수가 몇 개야?`
+  canonical answer는 `{"measurement_count": 869}`였다. Solver 4개는 모두 실패했고 pass_rate는 `0/4`.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 no-PK row values 문제를 인지하고 aggregate count로 바꾸면 안전하다고
+  판단했다. 하지만 solver reasoning은 모두 같은 지점에서 막혔다. atomic solver는 `chartevents` 같은
+  no-PK table을 stable `record_set`으로 materialize할 수 없고, count/aggregate도 그 record_set
+  materialization을 전제로 한다. 실제 `sql_compile._pk_expression`도 no-primary-key table에서 row-set
+  materialization을 막는다.
+
+  따라서 이 문제는 “너무 어려운 좋은 count 문제”가 아니다. composer query DSL은 `COUNT(*)`를 실행할 수
+  있지만, solver에게 제공된 atomic tool surface로는 같은 답을 재현할 수 없다. accepted되면 저품질
+  데이터가 되는 유형이다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - 초기 chartevents list는 low-quality rejected. no-PK row values, 동점 order, 중복 output binding이
+    동시에 있었다.
+  - 최종 count scalar도 low-quality rejected. 숫자 자체는 DB query로 맞지만 solver tool로 풀 수 없는
+    source surface다.
+
+- **변경**:
+  hard validator를 보강했다. `column_sources`가 no-primary-key source table을 가리키면, row value뿐
+  아니라 aggregate도 `label_no_primary_key_source`로 거절한다. count(*)처럼 column ref가 없는 aggregate도
+  `query` 결과의 `source_tables` metadata에 source table PK 여부를 기록하게 했다.
+
+  이 변경은 precision 100% 조건을 만족한다. DB literal, table/column 이름의 의미, 자연어 token을 보지
+  않는다. atomic tool의 구조적 제약인 “record_set materialization requires a primary key”와 query
+  metadata의 `table_has_primary_key=false`만 사용한다.
+
+  함께 정리한 내용:
+  - 시스템 프롬프트: no-PK table에서는 row values뿐 아니라 aggregates도 금지하고
+    primary-key-backed source/path를 쓰라고 수정.
+  - `query.aggregate` tool description: aggregate source rows는 primary-key-backed table이어야 한다고 명시.
+  - `submit_draft` feedback: “derived aggregate over no-PK table” 문구 제거.
+  - atomic API spec과 pipeline lifecycle decision table도 같은 원칙으로 갱신해 지침 이원화를 막았다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_from_table_without_primary_key tests/test_synthesis_runtime.py::test_submit_draft_rejects_count_from_table_without_primary_key tests/test_synthesis_runtime.py::test_submit_draft_rejects_aggregate_from_table_without_primary_key tests/test_tooling_composer_query.py::test_query_aggregate_count_without_group_by tests/test_tooling_composer_query.py::test_query_aggregate_count_reports_no_primary_key_source_table tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+  통과 (`7 passed`).
+
+  Broader relevant:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`165 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_query.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+  Full:
+  `uv run pytest -q`
+  통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_100`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

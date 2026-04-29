@@ -690,8 +690,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "order numbers to repair list determinism or binding "
                     "unless that sequence is the natural domain answer. "
                     "Do not expose row values from a table "
-                    "without a primary key; choose a primary-key-backed path "
-                    "or a derived aggregate instead."
+                    "without a primary key; choose a primary-key-backed path."
                 ),
                 "items": {
                     "type": "object",
@@ -830,6 +829,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "description": (
                     "Aggregate outputs. For scalar submit_draft labels, use "
                     "an aggregate query without group_by so it returns one row. "
+                    "Aggregate source rows must come from primary-key-backed "
+                    "tables; do not aggregate over a table without a primary "
+                    "key because the answering tool surface cannot reproduce it. "
                     "Do not combine aggregate with select; grouped aggregate "
                     "lists use group_by plus aggregate only."
                 ),

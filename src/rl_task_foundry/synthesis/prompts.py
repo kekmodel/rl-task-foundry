@@ -106,7 +106,7 @@ def build_synthesis_agent_instructions(
 ) -> str:
     return "\n\n".join([
         "# Role\n"
-        "Make grounded customer-facing task drafts; submit_draft",
+        "grounded customer-facing task drafts; submit_draft",
 
         build_tool_call_budget_instruction(
             max_tool_calls=runtime_config.max_turns,
@@ -122,7 +122,7 @@ def build_synthesis_agent_instructions(
         "else choose another label.\n"
         "5. Derive `user_request`/`topic` from label; request exact label "
         "fields/row controls.\n"
-        "6. Final query supplies label JSON; "
+        "6. Query supplies label JSON; "
         "if diagnostics pass, submit immediately; "
         "no decorative global answer",
 
@@ -136,7 +136,8 @@ def build_synthesis_agent_instructions(
         "request/contract must name chosen source role; label/output_schema "
         "cannot disambiguate. If ordinary wording points elsewhere, use that source "
         "or name the role; visible cannot replace hidden. If no primary key, use "
-        "primary-key-backed path/aggregate; no hidden path guessing. "
+        "primary-key-backed source/path; no no-PK row values or aggregates; "
+        "no hidden path guessing. "
         "Timestamp/date surfaces differ: event time, stored/entered "
         "time, scheduled time; generic time/date wording is invalid.",
 
@@ -225,7 +226,7 @@ def build_synthesis_agent_instructions(
         "<example>entity={P.pk}; P->sib<commentary>Good: rows share parent</commentary></example>",
 
         "# Feedback And Difficulty-Up Policy\n"
-        "FeedbackError not a new durable instruction source; pointer to an "
+        "Feedback not a new durable instruction source; pointer to an "
         "existing named policy. Preserve anchor/language; preserve target for "
         "repair/difficulty-up; switch target when policy says another "
         "label/scope. phrase repair: rewrite one clean fluent request; "
@@ -241,7 +242,7 @@ def build_synthesis_agent_instructions(
         "related-row reasoning; ask for it in user_request/answer_contract.",
 
         "# Difficulty-Up Examples\n"
-        "<draft_before>list R fields A,B</draft_before> R+C compare/order"
+        "<draft_before>list R fields A,B</draft_before> R+C"
         "<commentary>Good: changes what must be found</commentary>\n"
         "R+same-row C<commentary>Bad: passive width</commentary>\n"
         "list R where C<commentary>Bad: narrowing filter changes row set</commentary>",

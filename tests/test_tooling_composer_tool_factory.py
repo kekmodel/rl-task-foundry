@@ -514,6 +514,13 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"
     ]
+    assert "primary-key-backed tables" in descriptions["query"]["$.spec.aggregate"]
+    assert "do not aggregate over a table without a primary key" in descriptions[
+        "query"
+    ]["$.spec.aggregate"]
+    assert "answering tool surface cannot reproduce it" in descriptions["query"][
+        "$.spec.aggregate"
+    ]
     assert "Do not combine aggregate with select" in descriptions["query"][
         "$.spec.aggregate"
     ]

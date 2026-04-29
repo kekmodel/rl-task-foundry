@@ -4825,11 +4825,10 @@ async def test_submit_draft_rejects_label_from_table_without_primary_key(
 
     message = await controller.submit(payload)
 
-    assert "table without a primary key" in message
-    assert "stable records" in message
+    assert "table without a primary key as an answer source" in message
+    assert "Downstream answer tools require primary-key-backed tables" in message
     assert "primary-key-backed path" in message
-    assert "derived aggregate" in message
-    assert "do not resubmit the same row-value label" in message
+    assert "row values or aggregates from the no-primary-key table" in message
     assert controller.last_feedback_error_codes == (
         "label_no_primary_key_source",
         "answer_contract_scalar_not_aggregate",
@@ -4838,7 +4837,7 @@ async def test_submit_draft_rejects_label_from_table_without_primary_key(
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_allows_count_from_table_without_primary_key(
+async def test_submit_draft_rejects_count_from_table_without_primary_key(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -4874,11 +4873,14 @@ async def test_submit_draft_allows_count_from_table_without_primary_key(
                 "output": "detail_count",
                 "kind": "aggregate",
                 "fn": "count",
-                "table": "event_detail",
-                "column": "event_id",
-                "visibility": "user_visible",
-                "is_handle": False,
-                "table_has_primary_key": False,
+                "visibility": "derived",
+                "source_tables": [
+                    {
+                        "table": "event_detail",
+                        "table_primary_key": [],
+                        "table_has_primary_key": False,
+                    }
+                ],
                 "value_exposes_source": False,
             }
         ],
@@ -4886,12 +4888,13 @@ async def test_submit_draft_allows_count_from_table_without_primary_key(
 
     message = await controller.submit(payload)
 
-    assert "Draft accepted" in message
-    assert controller.accepted_draft is not None
+    assert "Downstream answer tools require primary-key-backed tables" in message
+    assert controller.last_feedback_error_codes == ("label_no_primary_key_source",)
+    assert controller.accepted_draft is None
 
 
 @pytest.mark.asyncio
-async def test_submit_draft_allows_aggregate_from_table_without_primary_key(
+async def test_submit_draft_rejects_aggregate_from_table_without_primary_key(
     tmp_path: Path,
 ) -> None:
     controller = SubmitDraftController(
@@ -4939,8 +4942,9 @@ async def test_submit_draft_allows_aggregate_from_table_without_primary_key(
 
     message = await controller.submit(payload)
 
-    assert "Draft accepted" in message
-    assert controller.accepted_draft is not None
+    assert "row values or aggregates from the no-primary-key table" in message
+    assert controller.last_feedback_error_codes == ("label_no_primary_key_source",)
+    assert controller.accepted_draft is None
 
 
 @pytest.mark.asyncio

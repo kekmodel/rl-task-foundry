@@ -315,7 +315,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "use that source or name the role" in instructions
     assert "visible cannot replace hidden" in instructions
     assert "If no primary key" in instructions
-    assert "primary-key-backed path/aggregate" in instructions
+    assert "primary-key-backed source/path" in instructions
+    assert "no no-PK row values or aggregates" in instructions
     assert "hidden path guessing" in instructions
     assert "Timestamp/date surfaces differ" in instructions
     assert "event time, stored/entered time, scheduled time" in instructions

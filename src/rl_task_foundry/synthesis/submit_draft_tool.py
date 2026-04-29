@@ -1818,8 +1818,6 @@ def _query_visibility_errors(
     label_sources: list[dict[str, object]] = []
     unstable_record_sources: list[dict[str, object]] = []
     for source in column_sources:
-        if source.get("value_exposes_source") is not True:
-            continue
         source_payload = {
             key: source.get(key)
             for key in (
@@ -1829,18 +1827,31 @@ def _query_visibility_errors(
                 "column",
                 "visibility",
                 "table_has_primary_key",
+                "source_tables",
             )
             if key in source
         }
+        no_primary_key_sources: list[object] = []
+        if source.get("table_has_primary_key") is False:
+            table = source.get("table")
+            no_primary_key_sources.append(table if isinstance(table, str) else source_payload)
+        raw_source_tables = source.get("source_tables")
+        if isinstance(raw_source_tables, list):
+            for source_table in raw_source_tables:
+                if (
+                    isinstance(source_table, dict)
+                    and source_table.get("table_has_primary_key") is False
+                ):
+                    no_primary_key_sources.append(source_table)
+        if no_primary_key_sources:
+            source_payload["no_primary_key_sources"] = no_primary_key_sources[
+                :3
+            ]
+            unstable_record_sources.append(source_payload)
+        if source.get("value_exposes_source") is not True:
+            continue
         if blocks_direct_label_exposure(source.get("visibility")):
             label_sources.append(source_payload)
-        # Aggregates are reproducible from their query row set; they do not
-        # require revisiting one source row as a stable record.
-        if (
-            source.get("table_has_primary_key") is False
-            and source.get("kind") != "aggregate"
-        ):
-            unstable_record_sources.append(source_payload)
 
     codes: list[SubmitDraftErrorCode] = []
     diagnostics: dict[str, object] = {}
@@ -2969,7 +2980,7 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata. Rerun query with only user-visible non-handle answer fields, use an aggregate, or choose another label; do not expose the blocked field under a new alias, and do not substitute a different visible field unless user_request naturally asks for that selected source role. Request Contract reminder: rewrite the full user_request cleanly in the target language when replacing fields or source surfaces; do not splice malformed phrases."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE: (
-                "Rejected. Source Surface Policy reminder: the latest query exposes row values from a table without a primary key, so those rows cannot be revisited as stable records. Choose a primary-key-backed path for row values, or use a derived aggregate over the no-primary-key table; do not resubmit the same row-value label from that surface."  # noqa: E501
+                "Rejected. Source Surface Policy reminder: the latest query uses a table without a primary key as an answer source. Downstream answer tools require primary-key-backed tables for row values and aggregates, so choose a primary-key-backed path/source instead of row values or aggregates from the no-primary-key table."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
