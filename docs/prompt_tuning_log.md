@@ -6456,6 +6456,62 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
   통과.
 
+## Iteration 151 — Binding feedback should lock label repair
+
+- **질문**:
+  `trial_41`에서 Iteration 150의 target-switch guidance가 작동했는가? 남은 실패 원인은 무엇인가?
+
+- **실험/결과**:
+  `trial_41`도 solver rollout 전 `MaxTurnsExceeded`로 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_41`
+  - 첫 draft: 환자 `subject_id=10008287`의 최근 eMAR 5개
+  - 첫 feedback: `answer_contract_binding_missing`
+  - 이후 drafts: 1-row admission details, transfer list with null fields
+
+- **reasoning 교차 분석**:
+  첫 eMAR draft는 row count 5, null 없음, row set 자체는 나쁘지 않았다. 문제는
+  `query.order_by`가 `charttime desc, emar_seq desc` 두 key인데 `answer_contract.order_bindings`는
+  `charttime`만 묶어서 `missing_order_binding_count=1`이 난 것이다.
+
+  이 feedback은 label data를 버릴 상황이 아니라 contract/order binding repair 상황이다.
+  그런데 composer reasoning은 "secondary sort key를 request에 자연스럽게 묶거나 tied rows를
+  반환하라"는 방향으로 고치지 않고, admissions로 target을 바꿨다. 그 결과 1-row list로 다시
+  feedback됐다.
+
+  이후 transfers target은 5 rows라 shape는 맞았지만 discharge row의 `care_unit`과 `outtime`이
+  null이었다. composer는 order ambiguity는 고쳤지만 nullable output field를 계속 label/request에
+  들고 가서 `label_null_value_forbidden`을 반복했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 첫 eMAR draft는 contract repair만 하면 좋은 후보가 될
+  수 있었고, 이후 drafts는 target drift / null preflight 실패로 품질이 낮았다. 좋은 어려움이
+  아니라 composer repair discipline 문제다.
+
+- **개선 판단**:
+  `answer_contract_binding_missing`은 precision 100으로 contract repair feedback이다. trigger가
+  binding diagnostics에 기반하므로 DB 리터럴/토큰 휴리스틱이 아니다. 따라서 phrase/query mismatch와
+  마찬가지로 repair-locked label을 보존시켜도 원칙 위반이 아니다.
+
+  null feedback도 이미 precision 100 validator가 잡고 있다. 추가 hard validator는 필요 없고,
+  feedback reminder가 "nullable output field를 제거하거나 non-null query로 바꾸라"는 기존
+  Label Grounding Policy를 더 직접적으로 상기하면 된다.
+
+- **변경**:
+  - `answer_contract_binding_missing`을 repair-lock 대상에 추가했다.
+  - binding feedback 뒤 canonical label이 바뀌면 `label_changed_during_repair`로 reject한다.
+  - null answer feedback에 nullable output field를 label/request에서 제거하라는 문구를 추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_reset_after_binding_feedback tests/test_synthesis_runtime.py::test_submit_draft_rejects_null_list_output_field tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_list_output_binding -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

@@ -98,6 +98,7 @@ class SubmitDraftErrorCode(StrEnum):
 
 _LABEL_LOCKING_REPAIR_ERROR_VALUES = frozenset(
     {
+        SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING.value,
         SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING.value,
         SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH.value,
     }
@@ -2672,7 +2673,7 @@ class SubmitDraftController:
                 "Rejected. Label Grounding Policy reminder: the canonical answer contains blank string fields; answer fields require grounded, non-empty values observed in tool results."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NULL_VALUE_FORBIDDEN: (
-                "Rejected. Label Grounding Policy reminder: answer fields require grounded non-null evidence. Do not submit null answer values; rerun the label query with informative non-null fields or choose another scoped label."  # noqa: E501
+                "Rejected. Label Grounding Policy reminder: answer fields require grounded non-null evidence. Do not submit null answer values; remove that nullable output field from label/request, rerun the label query with informative non-null fields, or choose another scoped label."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_VALUES_NOT_GROUNDED: (
                 "Rejected. Label Grounding Policy reminder: some label values were not directly grounded in observed tool results, or were reformatted from observed values."  # noqa: E501

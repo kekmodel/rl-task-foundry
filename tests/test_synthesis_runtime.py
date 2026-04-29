@@ -1810,6 +1810,99 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_label_reset_after_binding_feedback(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    first_label = [
+        {"test_time": "2024-01-03T00:00:00", "result": "negative"},
+        {"test_time": "2024-01-02T00:00:00", "result": "positive"},
+        {"test_time": "2024-01-01T00:00:00", "result": "pending"},
+    ]
+    first_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "results",
+            "label": first_label,
+            "entity": {"customer_id": 1},
+            "user_request": (
+                "최근 검사 결과 3개와 검사 시간을 검사 시간 내림차순으로 보여 주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "검사 결과",
+                "constraint_phrases": ["최근", "검사 시간 내림차순"],
+                "limit_phrase": "3개",
+                "output_bindings": [
+                    {"label_field": "result", "requested_by_phrase": "검사 결과"},
+                ],
+                "order_bindings": [
+                    {
+                        "direction": "desc",
+                        "label_field": "test_time",
+                        "requested_by_phrase": "검사 시간 내림차순",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        first_payload.label,
+        referenced_columns=[
+            {
+                "usage": "order_by",
+                "table": "test",
+                "column": "test_time",
+                "direction": "desc",
+            }
+        ],
+        query_params={"spec": {"limit": 3, "where": [{"value": 1}]}},
+        result_extra={
+            "ordering_diagnostics": {
+                "duplicate_order_key_in_returned_rows": False,
+                "limit": 3,
+                "order_by_outputs": ["test_time"],
+                "returned_row_count": 3,
+            }
+        },
+    )
+
+    first_message = await controller.submit(first_payload)
+
+    assert "answer_contract.output_bindings" in first_message
+    assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
+
+    second_payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "admission_details",
+            "label": {"admission_count": 1},
+            "entity": {"customer_id": 1},
+            "user_request": "내 입원 기록 수를 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(phrase="입원 기록 수"),
+        }
+    )
+    _record_query_evidence(controller, second_payload.label)
+
+    second_message = await controller.submit(second_payload)
+
+    assert "Feedback Handling Policy reminder" in second_message
+    assert "restore the repair-locked canonical label" in second_message
+    assert controller.last_feedback_error_codes == ("label_changed_during_repair",)
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_task_reset_after_list_limit_feedback(
     tmp_path: Path,
 ) -> None:
@@ -2635,6 +2728,7 @@ async def test_submit_draft_rejects_null_list_output_field(
     message = await controller.submit(payload)
 
     assert "null answer values" in message
+    assert "remove that nullable output field" in message
     assert "informative non-null fields" in message
     assert controller.last_feedback_error_codes == ("label_null_value_forbidden",)
     assert controller.accepted_draft is None
