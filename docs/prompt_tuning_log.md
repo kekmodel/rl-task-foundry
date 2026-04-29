@@ -12398,3 +12398,46 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_110`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 190 — trial_111 rejected as low-quality escape, no code change
+
+- **질문**:
+  `trial_111`의 마지막 `answer_contract_scalar_not_aggregate`는 새로운 개선 신호인가, 아니면 기존 정책이
+  저품질 후보를 정상 거절한 것인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T125042Z:c79e6bff`.
+  마지막 오류는 `answer_contract_scalar_not_aggregate`였다.
+
+  composer는 ICU stay `38559363`에서 outputevents 배출량 list를 만들었다. 첫 list는 `charttime desc`로 정렬하고
+  `value`, `valueuom`, `storetime`을 반환했다. 그런데 returned rows 안에 projected answer duplicates가 있었고,
+  `charttime`은 query metadata상 blocked handle이었다. query diagnostics는 `selected_visible_tie_breaker_candidates`
+  로 `output_amount`, `recorded_time`을 보여주었지만, 중복 row 자체가 남아 있었다.
+
+  composer는 `charttime`을 output으로 추가해 중복을 구분하려 했지만, 이번에 추가된
+  `label_source_diagnostics.submit_blocked=true`가 정확히 표시했다. 이후 procedureevents로 전환하려다 tool budget을
+  소모했고, 최종적으로 ICU admission detail 단일 row를 `scalar`로 제출했다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 duplicate projected rows와 blocked `charttime` 문제를 인지했다. 이 판단은 맞다.
+  이후 선택지는 aggregate 또는 다른 valid list여야 했지만, 실제 final은
+  `admission_type`, `first_careunit`, `last_careunit`, `length_of_stay` selected row를 scalar로 제출했다.
+
+  따라서 이 문제는 solver가 풀기 어려운 좋은 문제가 아니다. composer가 실패한 list repair에서 빠져나오며 단일
+  ICU detail lookup을 scalar처럼 제출한 저품질 rejected다. 기존 `answer_contract_scalar_not_aggregate` validator와
+  missing-submit boundary 정책이 의도대로 막았다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - outputevents list는 low-quality rejected. duplicate projected rows와 hidden/blocked time key가 있었다.
+  - blocked `charttime` output 시도도 low-quality rejected. Iteration 186의 `label_source_diagnostics`가 잘 작동했다.
+  - final ICU detail scalar도 low-quality rejected. selected row detail은 scalar aggregate가 아니다.
+
+- **변경**:
+  코드 변경 없음. 기존 policies와 validators가 이번 저품질 후보를 정확히 차단했다.
+
+- **현재 streak**:
+  `trial_111`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
