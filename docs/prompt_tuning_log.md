@@ -12204,3 +12204,71 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_107`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 187 — Show selected visible tie-break candidates in query diagnostics
+
+- **질문**:
+  `trial_108`의 마지막 실패는 어려운 좋은 문제였나, 아니면 composer가 이미 선택한 visible field로 tie를 풀 수
+  있었는데 hidden handle tie-break로 빠진 저품질 rejected였나?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T122927Z:fd9eaca9`.
+  마지막 오류는 `answer_contract_order_ambiguous`, `answer_contract_binding_missing`이었다.
+
+  composer는 `inputevents` anchor에서 시작했다. 첫 query는 특정 `orderid,itemid` 한 row를 가져와
+  `Dextrose 5%`, 투약량, 단위, 투약 시간, 입원 시간을 label로 제출했다. 하지만 `entity`는 admission scope인데
+  query는 hidden current inputevent handles로 row를 골랐고, 단일 selected row를 scalar처럼 제출했다.
+  submit feedback은 이를 `answer_contract_hidden_filter_unanchored`, `answer_contract_scalar_not_aggregate`,
+  phrase missing으로 거절했다.
+
+  이후 composer는 admission-scoped 최근 inputevents 5개 list로 전환했다. 최종 query는 `hadm_id = 22130791`,
+  `starttime desc`, `orderid desc`를 사용했다. returned rows에는 `administration_time`이 같은 약물들이 있었고,
+  hidden `orderid`가 unrepresented tie-break로 들어갔다. submit validator가 이를 정확히 거절했다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 문제를 부분적으로 이해했다. “orderid는 handle이고 hidden tie-break라 안 된다”는 점까지
+  인지했고, “tie rows를 그대로 반환하거나 visible tie-break를 찾아야 한다”고 말한다. 하지만 실제 final
+  submission은 이미 실행된 hidden `orderid` query 결과를 그대로 제출했다. budget상 다시 query할 기회가 없어
+  accepted에 도달하지 못했다.
+
+  중요한 관찰은 최종 query의 selected output 안에 이미 visible non-handle tie-break 후보가 있었다는 점이다.
+  같은 `administration_time` 안에서 `medication_name` 또는 `amount_given`은 answer-distinguishable tie를 실제로
+  나눌 수 있었다. 이 후보를 “자연스러운 요청 tie-break”로 쓸지는 composer가 판단해야 하지만, 현재 query result는
+  그 구조적 후보를 명시적으로 보여주지 않는다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - single inputevent detail은 low-quality rejected. list/scalar shape와 hidden filter anchor가 맞지 않았다.
+  - final admission-scoped inputevents list도 low-quality rejected. task 자체는 좋은 list 후보에 가까웠지만,
+    hidden `orderid` tie-break를 사용한 순간 exact verification용 customer request가 아니다.
+  - 이 거절은 올바르다. 다만 composer가 visible tie-break 후보를 찾는 데 실패한 것은 tool diagnostic 개선 여지가 있다.
+
+- **변경**:
+  `query.ordering_diagnostics`에 `selected_visible_tie_breaker_candidates`를 추가했다. 이 값은 이미 selected output인
+  user-visible non-handle field 중, 현재 represented order prefix 아래에서 answer-distinguishable tie를 실제로
+  나눌 수 있는 field만 구조화해 반환한다.
+
+  이 진단은 “이 field가 자연어로 좋은 tie-break다”라고 판정하지 않는다. 자연스러운 request/order phrase가 가능한지는
+  여전히 composer 판단과 기존 List Determinism Policy가 결정한다. 따라서 literal/token/table-name 휴리스틱이 아니고,
+  data result와 visibility metadata만 사용하는 100% 정밀도 보조 정보다.
+
+  `query` tool description에도 이 diagnostic은 이미 선택된 visible output 후보일 뿐이며, natural requested
+  tie-break가 될 때만 사용하라고 명시했다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_query.py::test_query_reports_duplicate_limited_order_key_diagnostics tests/test_tooling_composer_query.py::test_query_reports_limit_boundary_tie_diagnostics tests/test_tooling_composer_query.py::test_query_reports_unrepresented_order_by_tie_breaker_diagnostics tests/test_tooling_composer_query.py::test_query_reports_unrepresented_order_by_tie_breaker_without_limit tests/test_tooling_composer_query.py::test_query_reports_duplicate_order_key_without_limit tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`6 passed`).
+
+  Related:
+  `uv run pytest tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py -q`
+  통과 (`68 passed`).
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_108`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

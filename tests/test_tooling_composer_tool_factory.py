@@ -543,6 +543,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "do not submit that result as final label evidence" in descriptions[
         "query"
     ]["$.spec"]
+    assert "selected_visible_tie_breaker_candidates" in descriptions["query"]["$.spec"]
+    assert "already selected visible outputs" in descriptions["query"]["$.spec"]
+    assert "natural requested tie-break" in descriptions["query"]["$.spec"]
     assert "do not add source sequence/reference/order fields solely" in descriptions[
         "query"
     ]["$.spec"]

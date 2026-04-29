@@ -620,6 +620,14 @@ async def test_query_reports_limit_boundary_tie_diagnostics():
         "returned_row_count": 3,
         "limit": 3,
         "limit_boundary_tie": True,
+        "selected_visible_tie_breaker_candidates": [
+            {
+                "output": "store_id",
+                "table": "customer",
+                "column": "store_id",
+                "visibility": "user_visible",
+            }
+        ],
     }
     assert len(conn.calls) == 2
     diagnostic_sql, _ = conn.calls[1]
@@ -672,6 +680,14 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_diagnostics():
         ],
         "returned_row_count": 3,
         "limit": 3,
+        "selected_visible_tie_breaker_candidates": [
+            {
+                "output": "store_id",
+                "table": "customer",
+                "column": "store_id",
+                "visibility": "user_visible",
+            }
+        ],
     }
 
 
@@ -719,6 +735,14 @@ async def test_query_reports_unrepresented_order_by_tie_breaker_without_limit():
             }
         ],
         "returned_row_count": 3,
+        "selected_visible_tie_breaker_candidates": [
+            {
+                "output": "store_id",
+                "table": "customer",
+                "column": "store_id",
+                "visibility": "user_visible",
+            }
+        ],
     }
 
 
