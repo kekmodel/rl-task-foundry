@@ -456,17 +456,23 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "choose another label or return tied rows" in descriptions["query"][
         "$.spec.order_by"
     ]
+    assert "canonical label order" in descriptions["query"]["$.spec.order_by"]
+    assert "do not plan to reverse them" in descriptions["query"]["$.spec.order_by"]
     assert "handle_order_by_columns" in descriptions["query"]["$.spec.order_by"]
     assert "silent tie-break" in descriptions["query"]["$.spec.order_by"]
     assert "exactly one of ref or output" in descriptions["query"]["$.spec.order_by"]
     assert "Match the direction or ranking stated in user_request" in descriptions[
         "query"
     ]["$.spec.order_by[].direction"]
+    assert "opposite display-order phrase" in descriptions["query"][
+        "$.spec.order_by[].direction"
+    ]
     assert "same N in user_request" in descriptions["query"]["$.spec.limit"]
     assert "answer_contract.limit_phrase" in descriptions["query"]["$.spec.limit"]
     assert "List Determinism Policy" in descriptions["query"]["$.spec.limit"]
     assert "final list query with limit" in descriptions["query"]["$.spec.limit"]
     assert "same fixed size requested and bound" in descriptions["query"]["$.spec.limit"]
+    assert "different order to display" in descriptions["query"]["$.spec.limit"]
     assert "group_by replaces select" in descriptions["query"]["$.spec.group_by"]
     assert "without group_by so it returns one row" in descriptions["query"][
         "$.spec.aggregate"

@@ -719,7 +719,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Deterministic ordering. Direction must match user_request "
                     "wording exactly. Follow the List Determinism Policy for "
                     "ties and limited lists; order_by must not introduce "
-                    "unrequested or hidden row-order controls. Use no more "
+                    "unrequested or hidden row-order controls. Returned rows "
+                    "are the canonical label order; do not plan to reverse "
+                    "them through request or answer_contract wording. Use no more "
                     "than two order keys total; if more are needed, choose "
                     "another label or return tied rows. A selected output "
                     "field is not an order request unless the request also "
@@ -757,7 +759,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                             "description": (
                                 "Sort direction. Match the direction or ranking "
                                 "stated in user_request before using the rows as "
-                                "the canonical label."
+                                "the canonical label; do not use an opposite "
+                                "display-order phrase in submit_draft."
                             ),
                         },
                     },
@@ -772,7 +775,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "submit_draft.answer_contract.limit_phrase. Follow the "
                     "List Determinism Policy when a limit shapes membership; "
                     "a final list query with limit must have the same fixed "
-                    "size requested and bound before submit_draft."
+                    "size requested and bound before submit_draft. Do not "
+                    "request one order to select limited membership and a "
+                    "different order to display the returned rows."
                 ),
             },
             "group_by": {

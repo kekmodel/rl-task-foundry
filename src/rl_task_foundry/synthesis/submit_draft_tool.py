@@ -264,7 +264,9 @@ class AnswerOrderBinding(StrictModel):
         default=None,
         description=(
             "Requested direction when the wording fixes it, or null when the "
-            "direction is not explicit."
+            "direction is not explicit. When set, this must match both "
+            "requested_by_phrase and the copied label row order; do not use "
+            "an opposite phrase to request a separate display order."
         ),
     )
     label_field: str | None = Field(
@@ -346,7 +348,9 @@ class AnswerContract(StrictModel):
             "use null only when the query has no ordering. For limited lists, "
             "this ordering also selects row membership; avoid drafts requiring "
             "one hidden selection order and another display order. A bare field "
-            "noun that only asks to display the field is not an order binding."
+            "noun that only asks to display the field is not an order binding. "
+            "Each direction must match its requested_by_phrase and the "
+            "label_json row order."
         ),
     )
 
@@ -2833,6 +2837,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING: (
                 "Rejected. Label Contract reminder: every answer_contract phrase must be an exact contiguous substring copied from user_request. Feedback Handling Policy reminder: preserve the natural user_request wording and prior label_json fields/values; rewrite the full sentence cleanly when adding missing natural phrases to user_request/answer_contract instead of deleting, renaming, or splicing label fields. When only phrase/binding errors remain, do not call data tools; repair the same label in place."  # noqa: E501
+                " List Determinism Policy reminder: order wording must keep the same query/label row order; do not add an opposite display-order phrase during repair."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING: (
                 "Rejected. Label Contract reminder: final query evidence must immediately precede submit_draft, and the canonical label is copied from the latest successful query result."  # noqa: E501
@@ -2875,7 +2880,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
                 "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request. If an order key is only a tie-break, user_request still needs natural visible tie-break wording before that key can be bound; otherwise rerun query without that order key or return tied rows."  # noqa: E501
-                " Each returned output field also needs its own natural role phrase; rewrite user_request so every binding phrase appears exactly there, instead of repairing only answer_contract. Do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different order keys. When only phrase/binding errors remain, do not call data tools; repair the same label in place."  # noqa: E501
+                " Each returned output field also needs its own natural role phrase; rewrite user_request so every binding phrase appears exactly there, instead of repairing only answer_contract. Do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different keys or add an opposite display-order phrase. When only phrase/binding errors remain, do not call data tools; repair the same label in place."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata. Rerun query with only user-visible non-handle answer fields, use an aggregate, or choose another label; do not expose the blocked field under a new alias, and do not substitute a different visible field unless user_request naturally asks for that selected source role. Request Contract reminder: rewrite the full user_request cleanly in the target language when replacing fields or source surfaces; do not splice malformed phrases."  # noqa: E501

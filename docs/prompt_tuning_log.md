@@ -9759,6 +9759,79 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_75`는 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 154 — Limited-list order must not split selection and display
+
+- **질문**:
+  `trial_76`은 contract-only repair gate 이후 개선됐는가? accepted/rejected 품질을 reasoning과 함께
+  판정한다.
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, `calibration_inconclusive`, solver pass rate `0/4`.
+
+  composer는 ICU stay의 `inputevents`에서 수액/약물 입력 3개를 만들었다.
+  첫 list submit은 output binding phrase가 request에 없어서 `answer_contract_phrase_missing`으로
+  rejected됐다. Iteration 153 변경 뒤 composer는 새 data tool 탐색 없이 같은 label을 수리했고,
+  solver rollout까지 갔다.
+
+  최종 request:
+  `나의 ICU 입원 시 투여 받은 수액 및 약물 입력 항목명, 투여량, 단위, 투여 시작 시간 중 가장 최근 3개를 시작 시간이 빠른 순으로 보여줘`
+
+  canonical query는 `starttime desc limit 3` 결과를 그대로 label로 복사했다.
+  canonical answer order는 `18:07`, `17:53`, `17:12`였다.
+
+- **reasoning 교차 분석**:
+  solver 3개는 request를 "가장 최근 3개를 먼저 고른 뒤 시작 시간이 빠른 순으로 보여달라"로 해석해
+  `17:12`, `17:53`, `18:07` 순서로 제출했다. 한 solver는 이중 order를 더 혼동해 전체에서 earliest
+  3개를 골랐다.
+
+  핵심 문제는 solver 난이도가 아니다. request가 limited row membership은 latest로 고르라고 말하면서,
+  display order는 earliest-first로 말한다. 그런데 현재 composer query/canonical label은 하나의 list
+  order만 표현한다. 더 나쁘게는 `answer_contract.order_bindings`가 phrase는 `시작 시간이 빠른 순`,
+  direction은 `desc`로 제출했다. 자연어 방향을 validator가 언어별 토큰으로 해석해 막는 것은
+  precision 100%가 아니므로 금지한다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. solver가 못 푼 어려운 좋은 문제가 아니라, composer가 하나의
+  list에 selection order와 display order를 분리해서 요청한 저품질 문제다.
+
+- **변경**:
+  Prompt-first 원칙에 따라 List Determinism Policy를 보강했다.
+  한 list에는 하나의 order만 있어야 하며, selection/display split을 요청하지 말라고 명시했다.
+
+  tool schema/desc도 같은 원칙의 reminder로 맞췄다.
+  `query.order_by`는 반환 rows가 canonical label order이며 request/answer_contract로 뒤집을 계획을
+  세우면 안 된다고 설명한다. `query.limit`는 limited membership을 고르는 order와 표시 order를
+  다르게 요청하지 말라고 설명한다. `submit_draft.answer_contract.order_bindings`와
+  `AnswerOrderBinding.direction`은 requested_by_phrase, label_json row order, direction이 서로
+  맞아야 한다고 설명한다.
+
+  `answer_contract_phrase_missing`/`answer_contract_binding_missing` feedback은 새 지시가 아니라
+  같은 List Determinism Policy의 reminder로, repair 중 반대 display-order phrase를 추가하지 말라고
+  상기한다.
+
+  hard validator는 추가하지 않았다. `빠른 순` 같은 자연어 방향을 리터럴/토큰 휴리스틱으로 판정하면
+  금지 원칙 위반이고 모든 DB/언어에서 precision 100%를 보장할 수 없다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_payload_schema_does_not_require_constraint_summary tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_reset_after_contract_repair_feedback tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+    통과 (`4 passed`).
+  - prompt length `7993`, 8000자 예산 안에 유지.
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+- **현재 streak**:
+  `trial_76`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

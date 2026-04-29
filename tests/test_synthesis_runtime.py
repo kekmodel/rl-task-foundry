@@ -1402,6 +1402,14 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
     assert "order_bindings" not in contract_required
     assert answer_contract_schema["$ref"] == "#/$defs/AnswerContract"
     assert "Do not restate tables" in answer_contract_schema["description"]
+    assert "label_json row order" in contract_properties["order_bindings"][
+        "description"
+    ]
+    order_direction_schema = schema["$defs"]["AnswerOrderBinding"]["properties"][
+        "direction"
+    ]
+    assert "requested_by_phrase" in order_direction_schema["description"]
+    assert "separate display order" in order_direction_schema["description"]
     assert contract_properties["kind"]["enum"] == [
         "scalar",
         "list",
@@ -1966,6 +1974,8 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     assert "exact contiguous substring" in first_message
     assert "When only phrase/binding errors remain" in first_message
     assert "repair the same label in place" in first_message
+    assert "same query/label row order" in first_message
+    assert "opposite display-order phrase" in first_message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
 
     second_payload = SubmitDraftPayload.model_validate(

@@ -444,6 +444,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Row-set controls must be in entity/request/contract" in instructions
     assert "boundary words and direction agree" in instructions
     assert "newest/latest vs oldest/earliest" in instructions
+    assert "One list order" in instructions
+    assert "selection/display split" in instructions
     assert "order leaves distinct-answer ties" in instructions
     assert "ask for a natural visible tie-break before" in instructions
     assert "if two keys still tie, switch label" in instructions
