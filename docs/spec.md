@@ -8,7 +8,6 @@ This file is the entrypoint to the RL Task Foundry specification. Normative cont
 2. [Task Bundle Model](./spec/environment-bundle-model.md)
 3. [Difficulty and Actor Interface](./spec/difficulty-and-actor-interface.md)
 4. [Atomic Tools](./spec/atomic-tools.md)
-   and [Atomic Resource API v2](./spec/atomic-resource-api-v2.md)
 5. [Synthesis Pipeline](./spec/synthesis-pipeline.md)
 6. [Pipeline Lifecycle and State Boundaries](./spec/pipeline-lifecycle.md)
 7. [Reward and Task Runtime](./spec/reward-and-environment-runtime.md)
@@ -20,8 +19,7 @@ This file is the entrypoint to the RL Task Foundry specification. Normative cont
 - [Foundation](./spec/foundation.md): goals, principles, clean-break rationale, architecture
 - [Task Bundle Model](./spec/environment-bundle-model.md): task bundle as the core unit, metadata, materialization model
 - [Difficulty and Actor Interface](./spec/difficulty-and-actor-interface.md): topic model, difficulty model, rendered prompt, `submit_result`
-- [Atomic Tools](./spec/atomic-tools.md): current tool families, compression, SQL contract, completeness boundary
-- [Atomic Resource API v2](./spec/atomic-resource-api-v2.md): implemented resource-oriented solver surface and hidden trace AST for long-trace RL actor training
+- [Atomic Tools](./spec/atomic-tools.md): current solver-facing tool surface, response contract, SQL boundary
 - [Synthesis Pipeline](./spec/synthesis-pipeline.md): label-first phases, prompt constraints, retry behavior
 - [Pipeline Lifecycle and State Boundaries](./spec/pipeline-lifecycle.md): end-to-end runtime state transitions, feedback vs terminal discard boundaries, and change checklist
 - [Reward and Task Runtime](./spec/reward-and-environment-runtime.md): canonicalization, reward, environment server, episode semantics

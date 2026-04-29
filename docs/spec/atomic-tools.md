@@ -1,8 +1,6 @@
 # Atomic Tools
 
-This page summarizes the current solver-facing atomic tool contract. The
-historical v2 design details live in
-[`atomic-resource-api-v2.md`](./atomic-resource-api-v2.md).
+This page summarizes the current solver-facing atomic tool contract.
 
 ## Architecture
 
@@ -15,7 +13,7 @@ configuration and introspection, not hand-written Python tools.
 
 ## Current Solver Surface
 
-The solver receives twelve resource-oriented tools:
+The solver receives fourteen resource-oriented tools:
 
 ```text
 create_record_set(table) -> record_set resource
@@ -23,10 +21,12 @@ filter_record_set(record_set_id, column, op, value) -> record_set resource
 filter_record_set_by_values(record_set_id, column, values) -> record_set resource
 filter_record_set_by_pattern(record_set_id, column, pattern) -> record_set resource
 filter_record_set_by_null(record_set_id, column, op) -> record_set resource
+filter_record_set_by_related(record_set_id, relation_path, related_column, op, value) -> record_set resource
 follow_relation(source_record_set_id, edge_label) -> record_set resource
 intersect_record_sets(left_record_set_id, right_record_set_id) -> record_set resource
-sort_record_set(record_set_id, column, direction) -> record_set resource
+sort_record_set(record_set_id, keys) -> record_set resource
 list_record_refs(record_set_id, limit, offset?) -> record_ref list
+list_records(record_set_id, columns, limit, offset?) -> row list
 count_records(record_set_id) -> count
 aggregate_records(record_set_id, fn, column) -> scalar
 get_record(table, record_id, columns) -> object
@@ -91,10 +91,12 @@ Allowed:
 
 - creating a record-set resource from one table
 - applying one scalar, value-list, pattern, or null filter to an existing record set
+- filtering source records by one related-field condition
 - traversing one FK relation per call
 - intersecting two record sets with the same target table
-- annotating a record set with one sort column per call
+- annotating a record set with explicit sort keys
 - listing paginated record references
+- listing selected fields from paginated records
 - counting or aggregating one record set
 - getting selected columns from one record
 
@@ -128,10 +130,10 @@ Within the intended SQL subset, actors should be able to reach values by
 composition:
 
 - whole table scan: `create_record_set`
-- conjunction: repeated filter endpoints or `intersect_record_sets`
+- conjunction: repeated filter endpoints, related-field filters, or `intersect_record_sets`
 - FK joins: chained `follow_relation`
 - deterministic selection: `sort_record_set` + `list_record_refs`
-- scalar facts: `count_records`, `aggregate_records`, or `list_record_refs` + `get_record`
+- scalar facts: `count_records`, `aggregate_records`, `list_records`, or `list_record_refs` + `get_record`
 - later records: `list_record_refs` with pagination
 
 Out of scope:

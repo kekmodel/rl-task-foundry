@@ -1,9 +1,9 @@
 """Composer analytic DSL — high-bandwidth authoring tools.
 
-See docs/spec/tooling-redesign.md. Philosophy is deliberately separate
-from the atomic calculus: composer primitives are coarse one-call tools
-designed for schema orientation, column profiling, and canonical-answer
-authoring. Not an RL target.
+See docs/spec/synthesis-pipeline.md. Philosophy is deliberately separate from
+the atomic calculus: composer primitives are coarse one-call tools designed for
+schema orientation, column profiling, and canonical-answer authoring. Not an RL
+target.
 """
 
 from rl_task_foundry.tooling.composer._session import ComposerSession
