@@ -11406,3 +11406,57 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_94`는 accepted가 없으므로 연속 만족 accepted streak는 `0/5`로 리셋.
+
+## Iteration 174 — Trial 95 accepted a good medication-administration list
+
+- **질문**:
+  `trial_95` accepted data는 정말 좋은 데이터인가? rejected 단계는 어려운 문제였는가, 저품질이었는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `accepted`, `quality_gate_status=accept`, `pass_rate=3/4`.
+  flow_id는 `real_db_trial:20260429T102917Z:c4588888`.
+
+  최종 request:
+  `환자의 투약 시간과 약물명이 포함된 최근 투약 기록 3개를 보여주세요`
+
+  canonical:
+  - source: `emar`
+  - hidden scope: `subject_id=10010471`
+  - order/limit: `charttime desc`, `limit=3`
+  - fields: `administration_time = emar.charttime`, `medication_name = emar.medication`
+  - answer:
+    1. `2155-12-07T14:08:00` — `HYDROmorphone Infusion – Comfort Care Guidelines`
+    2. `2155-12-07T12:59:00` — `Sodium Chloride 0.9%  Flush`
+    3. `2155-12-07T12:58:00` — `HYDROmorphone (Dilaudid)`
+
+- **reasoning 교차 분석**:
+  composer는 eMAR 후보를 고르고 환자/입원 context를 확인한 뒤, 최근 투약 기록 3건을 만들었다.
+  첫 query는 `event_txt`를 함께 반환했지만 세 번째 row가 `null`이라 `label_null_value_forbidden`으로
+  거절됐다. 이후 같은 label target을 유지하고 `event_txt`를 제거한 query를 다시 실행한 점은
+  Label Grounding Policy에 맞다.
+
+  phrase/binding feedback 뒤에는 새 탐색 없이 request/contract만 수리했다. 최종 request에는
+  `투약 시간`과 `약물명`이 직접 들어가서 output bindings가 자연스럽게 고정됐다.
+
+  solver 3개는 eMAR를 선택하고 `subject_id`, `charttime desc`, `medication`으로 정확히 맞췄다.
+  1개 solver는 prescriptions를 투약 기록으로 해석해 다른 row set을 냈다. 다만 최종 request의
+  `투약 시간` 표현은 실제 투약 기록인 eMAR 쪽을 충분히 가리키고, 다수 solver가 같은 경로를 찾았으므로
+  accepted data 품질 결함보다는 단일 solver 경로 선택 실패로 본다.
+
+- **정성 평가**:
+  accepted data: good. hidden patient scope가 자연스럽고, 요청 field가 명시적이며, `charttime desc`
+  top-3 order가 진단상 unique하다. null field도 제거되어 label이 간결하다.
+
+  rejected data:
+  - 제출 2는 low-quality rejected. null `event_description`을 label field로 포함했고, request에 없는
+    `투약 상태`/보조 order binding까지 넣었다.
+  - 제출 3/4는 data 자체는 수리 가능했지만 request/contract phrase가 미완성인 contract-repair 단계다.
+    solver가 풀기 어려운 좋은 문제라기보다 submit 전 request binding이 부족한 상태였다.
+
+- **변경**:
+  코드 변경 없음. 이전 Iteration 173의 source classification 보강 뒤 첫 trial이며, 이번 accepted는
+  별도 정책 수정 없이 만족 기준을 충족했다.
+
+- **현재 streak**:
+  `trial_95`는 좋은 accepted로 판정하므로 연속 만족 accepted streak는 `1/5`.
