@@ -1737,7 +1737,12 @@ def _query_visibility_errors(
         }
         if blocks_direct_label_exposure(source.get("visibility")):
             label_sources.append(source_payload)
-        if source.get("table_has_primary_key") is False:
+        # Aggregates are reproducible from their query row set; they do not
+        # require revisiting one source row as a stable record.
+        if (
+            source.get("table_has_primary_key") is False
+            and source.get("kind") != "aggregate"
+        ):
             unstable_record_sources.append(source_payload)
 
     codes: list[SubmitDraftErrorCode] = []
@@ -2821,13 +2826,13 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
                 "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request. If an order key is only a tie-break, user_request still needs natural visible tie-break wording before that key can be bound; otherwise rerun query without that order key or return tied rows."  # noqa: E501
-                " Each returned output field also needs its own natural role phrase; do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
+                " Each returned output field also needs its own natural role phrase; rewrite user_request so every binding phrase appears exactly there, instead of repairing only answer_contract. Do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata. Rerun query with only user-visible non-handle answer fields, use an aggregate, or choose another label; do not expose the blocked field under a new alias. Request Contract reminder: rewrite the full user_request cleanly in the target language when replacing fields or source surfaces; do not splice malformed phrases."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NO_PRIMARY_KEY_SOURCE: (
-                "Rejected. Source Surface Policy reminder: the latest query exposes label values from a table without a primary key, so those rows cannot be revisited as stable records. Choose a primary-key-backed path for row values, or use a derived aggregate over the no-primary-key table; do not resubmit the same row-value label from that surface."  # noqa: E501
+                "Rejected. Source Surface Policy reminder: the latest query exposes row values from a table without a primary key, so those rows cannot be revisited as stable records. Choose a primary-key-backed path for row values, or use a derived aggregate over the no-primary-key table; do not resubmit the same row-value label from that surface."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501

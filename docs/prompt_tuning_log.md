@@ -9297,3 +9297,74 @@ Solver 30/30 완료 결과:
   Ruff:
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
   통과.
+
+## Iteration 142 — no-PK aggregate and binding repair reminders
+
+- **질문**:
+  `trial_64`는 accepted 없이 synthesis_failed로 끝났다. reject가 저품질을 잘 막은 것인가,
+  아니면 좋은 데이터가 불필요하게 막혔는가?
+
+- **실험/결과**:
+  다섯 번의 submit 시도가 있었다.
+
+  1. `"Temperature Celsius"` 평균 측정값 scalar:
+     `label_no_primary_key_source`
+  2. 환자 ICU stay 2건 list:
+     `answer_contract_list_size_invalid`, `label_non_user_visible_source`
+  3. microbiology 최근 5건 list:
+     null `org_name`, duplicate rows, order ambiguity
+  4. admission 최근 5건 list:
+     row set/label은 좋아 보였으나 broad `입원 이력` phrase를 모든 output field에 재사용하여
+     `answer_contract_binding_missing`
+  5. admission repair:
+     `입원일자`, `퇴원일자`, `입원 유형`, `입원 경로`를 answer_contract에는 넣었지만
+     user_request 본문에 넣지 않아 `answer_contract_phrase_missing`으로 budget exhausted
+
+- **reasoning 교차 분석**:
+  solver rollout은 없었다. composer reasoning은 두 가지를 보여준다.
+
+  - 첫 draft에서 composer는 avg aggregate이므로 no-PK row stability 문제가 없다고 판단했다.
+    이 판단은 구조적으로 타당했다. 기존 validator는 aggregate source까지 no-PK row-value처럼
+    막고 있었고, feedback의 “derived aggregate over no-PK table” 문구와도 맞지 않았다.
+  - 마지막 admission draft에서 composer는 좋은 row set을 찾았지만, binding_missing feedback을
+    받고도 user_request에 output role phrase를 모두 넣지 않았다. 즉 answer_contract만 고치고
+    request를 같이 고치지 않는 repair failure다.
+
+- **DB 교차검증**:
+  admission 최종 row set은 직접 DB 쿼리로 확인했다.
+  `subject_id=10015860`의 최근 입원 5건을 `admittime desc`로 조회하면 canonical label과
+  같은 `admittime`, `dischtime`, `admission_type`, `admission_location`이 나온다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - 2번 ICU stay 2건 list와 3번 microbiology list는 low-quality rejected가 맞다.
+  - 4/5번 admission draft는 어려운 좋은 문제가 아니라 거의 좋은 데이터가 request/contract
+    repair 실패로 막힌 케이스다. row set은 좋았고, user_request만
+    `내 입원 이력 중 최근 입원일자 기준 5건의 입원일자, 퇴원일자, 입원 유형, 입원 경로를 보여주세요`
+    같은 식으로 고치면 자연스럽고 검증 가능한 task가 된다.
+
+- **변경**:
+  1. no-PK hard validator를 정밀도 100% 구조 기준으로 조정했다.
+     `kind == "aggregate"`인 column source는 source row를 stable record로 재방문할 필요가
+     없으므로 `label_no_primary_key_source`에서 제외한다. 이건 DB 리터럴/컬럼 의미 휴리스틱이
+     아니라 query evidence의 구조 필드만 보는 검사다.
+
+  2. `answer_contract_binding_missing` feedback을 보강했다.
+     각 output binding phrase가 user_request 안에 정확히 나타나도록 user_request를 다시 쓰라고
+     명시하고, answer_contract만 고치는 repair를 피하라고 상기시킨다. 이는 기존 Label Contract
+     원칙의 reminder이며 새 durable instruction이 아니다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_list_output_binding tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_from_table_without_primary_key tests/test_synthesis_runtime.py::test_submit_draft_allows_count_from_table_without_primary_key tests/test_synthesis_runtime.py::test_submit_draft_allows_aggregate_from_table_without_primary_key -q`
+  통과 (`5 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`112 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.

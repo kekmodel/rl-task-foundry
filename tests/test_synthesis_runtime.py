@@ -1809,6 +1809,8 @@ async def test_submit_draft_feedbacks_missing_list_output_binding(
     message = await controller.submit(payload)
 
     assert "answer_contract.output_bindings" in message
+    assert "rewrite user_request so every binding phrase appears exactly there" in message
+    assert "instead of repairing only answer_contract" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 
@@ -2349,6 +2351,7 @@ async def test_submit_draft_feedbacks_order_binding_reusing_output_phrase(
 
     assert "bare output noun" in message
     assert "Display-only output wording is not enough" in message
+    assert "rewrite user_request so every binding phrase appears exactly there" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
     diagnostics = monitor.records[-1]["diagnostics"]
@@ -4584,6 +4587,59 @@ async def test_submit_draft_allows_count_from_table_without_primary_key(
                 "is_handle": False,
                 "table_has_primary_key": False,
                 "value_exposes_source": False,
+            }
+        ],
+    )
+
+    message = await controller.submit(payload)
+
+    assert "Draft accepted" in message
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_allows_aggregate_from_table_without_primary_key(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "assignment",
+            "label": {"average_detail_amount": 12.5},
+            "entity": {"event_id": 1},
+            "user_request": "이 이벤트의 평균 상세 금액을 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(
+                phrase="평균 상세 금액",
+                table="event_detail",
+                fn="avg",
+                column="amount",
+            ),
+        }
+    )
+    _record_query_evidence(
+        controller,
+        payload.label,
+        column_sources=[
+            {
+                "output": "average_detail_amount",
+                "kind": "aggregate",
+                "fn": "avg",
+                "table": "event_detail",
+                "column": "amount",
+                "visibility": "user_visible",
+                "is_handle": False,
+                "table_has_primary_key": False,
+                "value_exposes_source": True,
             }
         ],
     )
