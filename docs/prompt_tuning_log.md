@@ -10755,6 +10755,64 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_89`는 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
 
+## Iteration 169 — Trial 90 rejected sequence-tie repair, no accepted data
+
+- **질문**:
+  Iteration 168의 source-specific status 보강 뒤 다음 smoke에서 accepted 품질이 좋아지는가?
+  accepted가 없다면, 거절 데이터는 hard-good인가 low-quality인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`.
+
+  제출 3:
+  `최근 투약 기록 5개를 투약시각과 이벤트 내역 순서로 보여주세요.`
+  - 오류: `answer_contract_binding_missing`
+  - label fields: `medication`, `event`, `charttime`, `sequence`
+  - query는 `emar.charttime desc`, `emar.emar_seq asc`로 정렬했고 `sequence`도 output에 포함했다.
+  - binding error의 직접 원인은 order phrase가 bare output phrase로 재사용된 점이다.
+
+  제출 5:
+  `투약 기록 5개를 최신순으로 약물명, 투약 이벤트, 기록시각을 보여주세요.`
+  - 오류: `answer_contract_evidence_mismatch`
+  - composer가 `sequence` field를 제거한 label로 바꾸었지만, 그 label을 뒷받침하는 successful query evidence가
+    없었다. 직전 query call은 ToolBudgetFeedback에 막혔다.
+
+- **reasoning 교차 분석**:
+  좋은 변화가 하나 있었다. composer는 먼저 pharmacy 후보에서 duplicate projected answer rows를 보고
+  “underlying row가 달라도 projected answer가 같으면 blocking”이라고 정확히 판단했다. Iteration 167의
+  보강은 의도대로 작동한 것으로 보인다.
+
+  이후 EMAR 후보에서는 `emar_seq`를 tie-break/order output으로 사용했다. feedback 후 composer는 sequence가
+  technical field라 제거해야 한다고 판단했지만, phrase/binding-only boundary에서 query를 다시 만들지 못했고
+  마지막 submit은 latest successful query와 불일치했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - pharmacy 후보는 low-quality rejected. duplicate projected rows가 명확했고 composer가 올바르게 버렸다.
+  - EMAR 후보는 잠재적으로 괜찮은 medication administration list였지만, `sequence` tie-break/output이
+    자연스럽지 않고 evidence mismatch로 끝났다. hard-good이 아니라 repair/protocol 실패다.
+
+- **변경**:
+  코드 변경 없음.
+
+  이유: 이번 문제를 precision 100% validator로 고치려면 `emar_seq` 같은 필드가 “technical sequence”인지
+  일반화해서 알아야 하는데, 컬럼명/토큰 기반 휴리스틱은 금지 원칙 위반이다. 기존 validator는 저품질을
+  accepted하지 않고 정확히 막았다.
+
+  다만 관찰 사항은 다음 개선 후보로 남긴다. binding feedback 문구에는 “field/order key를 제거하려면 query
+  evidence를 다시 맞춰야 한다”는 원칙과 “phrase/binding-only면 data tool을 쓰지 말라”는 reminder가 섞일 수
+  있으므로, 같은 패턴이 반복되면 feedback/message 구조를 더 명확히 재검토한다.
+
+- **검증**:
+  별도 코드 변경이 없으므로 추가 테스트는 실행하지 않았다. 직전 Iteration 168에서 관련 suite
+  `114 passed`와 ruff 통과를 확인했다.
+
+- **현재 streak**:
+  `trial_90`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
