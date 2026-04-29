@@ -426,6 +426,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "naturally requestable distinct source role" in descriptions["query"][
         "$.spec.select"
     ]
+    assert "Process/status/type/category outputs are not passive width" in (
+        descriptions["query"]["$.spec.select"]
+    )
+    assert "exact source/lifecycle surface" in descriptions["query"]["$.spec.select"]
     assert "source sequence/reference/order numbers" in descriptions["query"][
         "$.spec.select"
     ]

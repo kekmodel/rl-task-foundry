@@ -12084,3 +12084,58 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_105`는 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 185 — Avoid passive source-specific processing/type outputs
+
+- **질문**:
+  `trial_106`의 pass rate `0/4`는 어려운 좋은 pharmacy 문제였나, 아니면 source surface ambiguity가 있는
+  저품질 문제였나?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T120918Z:24217ec8`.
+  최종 draft는 solver pass rate `0/4`로 `calibration_inconclusive` rejected였다.
+
+  최종 user_request:
+  `해당 입원 기간 동안 조제된 약물 목록과 조제 시작일, 조제 종료일, 조제 유형을 최근 조제 시작일 순, 약물명 오름차순으로 5개만 보여줘`
+
+  composer label은 `pharmacy` source에서 `medication`, `starttime`, `stoptime`, `proc_type`을 사용했다.
+  answer의 `processing_type`은 모두 `Unit Dose`였다.
+
+- **reasoning 교차 분석**:
+  solver 4개 모두 `prescriptions` source를 선택했고 `drug_type`을 조제/처방 유형으로 해석해 `MAIN`을 반환했다.
+  즉 solver가 단순히 못 푼 것이 아니라, user-facing wording이 `pharmacy.proc_type`과 `prescriptions.drug_type`을
+  충분히 구분하지 못했다. “조제 유형”이라는 말은 broad medication/prescription surface에서도 자연스럽게 해석된다.
+
+  composer는 이전 feedback을 잘 반영해 blocked `prescriptions.drug`에서 `pharmacy.medication`으로 옮겼고
+  phrase_missing도 수리했다. 하지만 마지막에 source-specific processing/type field를 passive width로 포함했다.
+  값도 전부 `Unit Dose`로 동일해서 label 난이도를 좋은 방향으로 높이지 못했다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - 첫 prescriptions draft는 low-quality rejected. blocked answer source, phrase missing, order ambiguity가 있었다.
+  - 최종 pharmacy draft도 low-quality rejected. source-specific `processing_type`이 broad wording으로 표현되어
+    solvers가 ordinary prescription surface로 간다.
+  - 이건 어려운 좋은 문제라기보다 user_request/source surface 불일치다.
+
+- **변경**:
+  `query.select` tool schema description을 보강했다. process/status/type/category output은 passive width가 아니며,
+  user_request가 exact source/lifecycle surface를 이름 붙일 때만 포함해야 한다고 명시했다. 그 wording이 어색하면
+  ordinary source를 선택하거나 해당 field를 빼야 한다.
+
+  이는 새 hard validator가 아니다. source-specific type/category의 자연어 ambiguity는 DB literal 없이 precision
+  100%로 판정할 수 없으므로, tool schema/description에서 composer의 field 선택 판단을 돕는 방향이 맞다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+- **현재 streak**:
+  `trial_106`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
