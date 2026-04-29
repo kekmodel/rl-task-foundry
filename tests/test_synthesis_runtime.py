@@ -704,6 +704,56 @@ def _config_with_synthesis_output(
         deep=True,
     )
 
+
+def test_synthesis_runtime_uses_solver_episode_timeout_override(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_synthesis_output(tmp_path)
+    solver_runtime = config.solver_runtime.model_copy(
+        update={"max_episode_duration_ms": 45000}
+    )
+    config = config.model_copy(update={"solver_runtime": solver_runtime})
+    runtime = SynthesisAgentRuntime(
+        config,
+        synthesis_backends=[],
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+    )
+
+    constraints = runtime._build_rollout_constraints()
+
+    assert constraints.max_turns == config.solver_runtime.max_turns
+    assert constraints.max_episode_duration_ms == 45000
+
+
+def test_synthesis_runtime_derives_solver_episode_timeout_from_db_statement_timeout(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_synthesis_output(tmp_path)
+    solver_runtime = config.solver_runtime.model_copy(
+        update={"max_episode_duration_ms": None}
+    )
+    config = config.model_copy(update={"solver_runtime": solver_runtime})
+    runtime = SynthesisAgentRuntime(
+        config,
+        synthesis_backends=[],
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+    )
+
+    constraints = runtime._build_rollout_constraints()
+
+    assert constraints.max_turns == config.solver_runtime.max_turns
+    assert (
+        constraints.max_episode_duration_ms
+        == config.database.statement_timeout_ms * config.solver_runtime.max_turns
+    )
+
+
 def _seed_min_initial_exploration(
     controller: SubmitDraftController,
     *,

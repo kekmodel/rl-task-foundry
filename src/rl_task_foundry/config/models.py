@@ -171,7 +171,8 @@ class SynthesisConfig(StrictModel):
 
 
 class SolverRuntimeConfig(StrictModel):
-    max_turns: int = 16
+    max_turns: int = Field(default=16, ge=1)
+    max_episode_duration_ms: int | None = Field(default=120_000, ge=1)
     tracing: bool = True
     sdk_sessions_enabled: bool = True
 

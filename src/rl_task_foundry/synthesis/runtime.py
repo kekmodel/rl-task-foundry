@@ -1030,11 +1030,19 @@ class SynthesisAgentRuntime:
         return TaskBundleContract.model_validate(payload)
 
     def _build_rollout_constraints(self) -> RolloutConstraintsContract:
+        max_episode_duration_ms = getattr(
+            self.config.solver_runtime,
+            "max_episode_duration_ms",
+            None,
+        )
+        if max_episode_duration_ms is None:
+            max_episode_duration_ms = (
+                self.config.database.statement_timeout_ms
+                * self.config.solver_runtime.max_turns
+            )
         return RolloutConstraintsContract(
             max_turns=self.config.solver_runtime.max_turns,
-            max_episode_duration_ms=(
-                self.config.database.statement_timeout_ms * self.config.solver_runtime.max_turns
-            ),
+            max_episode_duration_ms=max_episode_duration_ms,
             max_tool_rows=self.config.atomic_tools.bounded_result_limit,
         )
 

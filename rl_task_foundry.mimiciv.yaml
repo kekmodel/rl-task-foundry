@@ -112,6 +112,7 @@ synthesis:
 
 solver_runtime:
   max_turns: 16
+  max_episode_duration_ms: 120000
   tracing: true
   sdk_sessions_enabled: true
 

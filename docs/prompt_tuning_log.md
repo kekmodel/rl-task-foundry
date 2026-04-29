@@ -9427,6 +9427,52 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Infrastructure Note — Solver episode timeout cap
+
+- **질문**:
+  `trial_01`이 solver rollout에서 너무 오래 멈추는 이유가 무엇인가?
+
+- **실험/결과**:
+  `artifacts/trial_20260430_mimiciv_demo_lower05_kimi_4solver_no_topic_smoke_01/trial_01`
+  은 Kimi/OpenRouter, no topic hint, 4-solver smoke로 실행했다. Composer는 ICU
+  procedure/history draft를 만들었지만, solver rollout 중 한 solver가 SDK/provider timeout
+  240초에 걸렸고 replacement attempt도 같은 timeout에 걸렸다. 이 trial은 품질 판정 전에
+  인프라 실패로 오염됐다.
+
+  같은 설정에 solver episode cap을 120초로 둔
+  `artifacts/trial_20260430_mimiciv_demo_lower05_kimi_4solver_no_topic_smoke_01/trial_02`
+  는 인프라 실패 없이 종료됐다. 결과는 `accepted`, pass rate `0.5` (`2/4` matched)였다.
+
+- **정성 평가**:
+  accepted data: clean accept로 보지 않는다. 최종 request는 ICU outputevents 최근 5건의
+  `기록 시간`을 요구했고 canonical은 `storetime`을 `recorded_time`으로 썼다. 하지만 실패한
+  solver 2개는 같은 자연어를 `charttime`으로 해석했다. 즉 row set 자체는 나쁘지 않지만,
+  request가 선택된 visible source role을 충분히 고정하지 못해 정답이 하나로 안정되지 않았다.
+  어려운 좋은 문제라기보다 source-surface ambiguity가 통과한 low-quality accepted다.
+
+  rejected data: 첫 submit에서 `charttime`을 직접 label에 넣은 draft는
+  `label_non_user_visible_source`로 거절됐다. 이 reject는 정확했다. 문제는 repair가
+  `charttime`을 의미가 다른 visible field인 `storetime`으로 대체한 뒤에도 request가 여전히
+  generic `기록 시간`으로 남은 점이다.
+
+- **변경**:
+  인프라 오염을 줄이기 위해 solver episode timeout을 DB statement timeout에서 분리했다.
+  `solver_runtime.max_episode_duration_ms`를 추가하고 기본/runtime config를 120초로 고정했다.
+  MIMIC처럼 `statement_timeout_ms=60000`인 DB에서 기존 fallback은 solver 1회 cap을
+  `60초 * 16턴 = 960초`까지 늘릴 수 있었다.
+
+  source-surface 문제에는 hard validator를 추가하지 않았다. `charttime`/`storetime` 같은
+  literal/token/semantic guess로 잡으면 precision 100% 원칙을 깬다. 이 케이스는 이미
+  Source Surface Policy의 프롬프트/툴 설명 대상이며, 다음 개선은 solver trace에서 실제
+  non-user-visible source 사용을 어떻게 tool contract로 다룰지 별도 실험으로 판단한다.
+
+- **검증**:
+  `uv run pytest tests/test_config_load.py tests/test_synthesis_runtime.py::test_synthesis_runtime_uses_solver_episode_timeout_override tests/test_synthesis_runtime.py::test_synthesis_runtime_derives_solver_episode_timeout_from_db_statement_timeout`
+  통과 (`6 passed`).
+
+- **현재 streak**:
+  `trial_02`는 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 173 — Tool budget is total-only; `plan_task_surface` remains advisory
 
 - **질문**:
