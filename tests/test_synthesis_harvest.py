@@ -224,6 +224,7 @@ async def test_harvest_runner_reaches_target(tmp_path: Path) -> None:
         target_committed=3,
         stall_timeout_seconds=60.0,
         parallel_workers=1,
+        productive_budget_seconds=900.0,
     )
     await runner.close()
 
@@ -232,8 +233,10 @@ async def test_harvest_runner_reaches_target(tmp_path: Path) -> None:
     assert summary.attempted == 3
     assert summary.accepted_task_ids == ("task_h_00", "task_h_01", "task_h_02")
     assert summary.provider_issue_trials == 0
+    assert summary.productive_budget_seconds == 900.0
     assert summary.productive_elapsed_seconds >= 0.0
     assert summary.productive_seconds_per_accepted is not None
+    assert summary.production_viability_passed is True
     assert (out / "phase_monitors.jsonl").exists()
     assert (out / "trials" / "trial_0001" / "debug" / "phase_monitors.jsonl").exists()
     # mirror aggregation includes harvest events + every trial's events
@@ -306,6 +309,12 @@ async def test_harvest_runner_excludes_provider_issues_from_productive_average(
             registry_task_id="task_prod_2",
             elapsed_seconds=200.0,
         ),
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.ACCEPTED,
+            registry_task_id="task_prod_3",
+            elapsed_seconds=150.0,
+        ),
     ]
     runner = HarvestRunner(
         config,
@@ -315,18 +324,67 @@ async def test_harvest_runner_excludes_provider_issues_from_productive_average(
     summary = await runner.run(
         tmp_path / "harvest_productivity",
         db_id="sakila",
-        target_committed=2,
+        target_committed=3,
         stall_timeout_seconds=60.0,
         parallel_workers=1,
+        productive_budget_seconds=900.0,
     )
     await runner.close()
 
     assert summary.outcome is HarvestOutcome.TARGET_REACHED
-    assert summary.committed == 2
+    assert summary.committed == 3
     assert summary.provider_issue_trials == 1
     assert summary.provider_issue_elapsed_seconds == 10.0
-    assert summary.productive_elapsed_seconds == 340.0
-    assert summary.productive_seconds_per_accepted == 170.0
+    assert summary.productive_elapsed_seconds == 490.0
+    assert summary.productive_seconds_per_accepted == pytest.approx(490.0 / 3)
+    assert summary.production_viability_passed is True
+
+
+@pytest.mark.asyncio
+async def test_harvest_runner_excludes_method_when_three_accepts_miss_budget(
+    tmp_path: Path,
+) -> None:
+    config = _config_with_tmp_traces(tmp_path)
+    summaries = [
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+            synthesis_error_type="SynthesisArtifactGenerationError",
+            elapsed_seconds=500.0,
+        ),
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.ACCEPTED,
+            registry_task_id="task_slow_1",
+            elapsed_seconds=200.0,
+        ),
+        RealDbTrialSummary(
+            db_id="sakila",
+            trial_status=RealDbTrialStatus.SYNTHESIS_FAILED,
+            synthesis_error_type="SynthesisArtifactGenerationError",
+            elapsed_seconds=201.0,
+        ),
+    ]
+    runner = HarvestRunner(
+        config,
+        trial_runner_factory=_summary_factory(summaries),
+    )
+
+    summary = await runner.run(
+        tmp_path / "harvest_slow_method",
+        db_id="sakila",
+        target_committed=3,
+        stall_timeout_seconds=60.0,
+        parallel_workers=1,
+        productive_budget_seconds=900.0,
+    )
+    await runner.close()
+
+    assert summary.outcome is HarvestOutcome.PRODUCTIVE_BUDGET_EXCEEDED
+    assert summary.committed == 1
+    assert summary.productive_elapsed_seconds == 901.0
+    assert summary.productive_seconds_per_accepted == 901.0
+    assert summary.production_viability_passed is False
 
 
 @dataclass(slots=True)

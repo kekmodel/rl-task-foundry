@@ -39,7 +39,9 @@ DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다
 Production viability:
 
 - `trial_timeout_s <= 300`
-- accepted 데이터 1개당 평균 productive loop time `<= 300s`
+- standard production check는 accepted 3개 생성이다.
+- productive loop time 900초 안에 accepted 3개를 만들지 못하면 해당 방법은 production 후보에서 제외한다.
+- accepted 3개 기준 평균 productive loop time `<= 300s`
 - productive loop time은 DB 서버 기동, pool 생성, schema/profile warm-up 같은 DB별 1회성 준비 시간을 제외한다.
 - quality reject trial은 accepted 1개를 만들기 위한 반복 생산 비용이므로 포함한다.
 - provider outage, rate limit, authentication failure 같은 명확한 provider issue trial은 평균 계산에서 제외하되 별도 집계한다.

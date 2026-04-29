@@ -24,7 +24,9 @@
 
 - single real-db trial wall-clock timeout: `trial_timeout_s <= 300`
 - promotion 평가마다 accepted/rejected/provider issue 전체 trial의 `elapsed_seconds`를 기록
-- accepted 데이터 1개당 평균 productive loop time이 300초를 넘으면 v1 production 후보가 아님
+- standard production check는 accepted 3개 생성이다.
+- productive loop time 900초 안에 accepted 3개를 만들지 못하면 해당 방법은 v1 production 후보가 아님
+- accepted 3개 기준 평균 productive loop time이 300초를 넘으면 v1 production 후보가 아님
 - productive loop time은 DB 서버 기동, pool 생성, schema/profile warm-up 같은 DB별 1회성 준비 시간을 제외
 - quality reject trial은 accepted 1개를 만들기 위한 반복 생산 비용이므로 포함
 - provider outage, rate limit, authentication failure처럼 명확한 provider issue trial은 평균 계산에서 제외하지만, 생산성 보고에는 별도 집계
@@ -169,6 +171,8 @@ v1은 safe trustworthy generator 기준선이다.
 - repetitions: 2
 - solver count: 8 또는 해당 evaluation policy에 기록된 값
 - trial timeout: 300 seconds
+- production check target: accepted 3
+- production check budget: productive loop 900 seconds
 - rubric: `DQS-v1`
 
 v1 달성 기준:
@@ -179,6 +183,7 @@ v1 달성 기준:
 - 각 DB 평균 `diversity_score >= 3.5`
 - severe mode collapse 없음
 - DB readiness diagnosis가 불가능 region/DB를 구조적으로 설명함
-- accepted 데이터 1개당 평균 productive loop time `<= 300s`
+- productive loop time 900초 안에 accepted 3개 생성
+- accepted 3개 기준 평균 productive loop time `<= 300s`
 
 여기서 `rejected_good`은 `rejected_good_too_easy + rejected_good_too_hard`이다.

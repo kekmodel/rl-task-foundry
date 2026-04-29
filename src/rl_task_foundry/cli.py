@@ -457,8 +457,20 @@ def run_real_db_trial(
 def harvest(
     db_id: str,
     output_dir: Path,
-    target: int = 20,
-    stall_timeout_min: float = 10.0,
+    target: int = typer.Option(
+        3,
+        "--target",
+        help="Accepted task count for the run. Production viability uses 3.",
+    ),
+    stall_timeout_min: float = 15.0,
+    productive_budget_min: float = typer.Option(
+        15.0,
+        "--productive-budget-min",
+        help=(
+            "Productive loop budget in minutes. Provider issue trials are "
+            "reported separately. Use 0 to disable."
+        ),
+    ),
     workers: int | None = None,
     config_path: Path = Path("rl_task_foundry.yaml"),
 ) -> None:
@@ -470,6 +482,9 @@ def harvest(
     async def _run() -> None:
         config = load_config(config_path)
         worker_count = workers or config.synthesis.parallel_workers
+        productive_budget_seconds = (
+            productive_budget_min * 60.0 if productive_budget_min > 0 else None
+        )
         runner = HarvestRunner(config)
         try:
             summary = await runner.run(
@@ -478,6 +493,7 @@ def harvest(
                 target_committed=target,
                 stall_timeout_seconds=stall_timeout_min * 60.0,
                 parallel_workers=worker_count,
+                productive_budget_seconds=productive_budget_seconds,
             )
         finally:
             await runner.close()
@@ -492,11 +508,15 @@ def harvest(
         console.print(
             f"productive_elapsed_seconds={summary.productive_elapsed_seconds:.1f}"
         )
+        if summary.productive_budget_seconds is not None:
+            console.print(f"productive_budget_seconds={summary.productive_budget_seconds:.1f}")
         if summary.productive_seconds_per_accepted is not None:
             console.print(
                 "productive_seconds_per_accepted="
                 f"{summary.productive_seconds_per_accepted:.1f}"
             )
+        if summary.production_viability_passed is not None:
+            console.print(f"production_viability_passed={summary.production_viability_passed}")
         console.print(f"provider_issue_trials={summary.provider_issue_trials}")
         console.print(
             "provider_issue_elapsed_seconds="

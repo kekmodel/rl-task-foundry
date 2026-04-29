@@ -37,6 +37,7 @@ TrialRunnerFactory = Callable[[], RealDbTrialRunner]
 
 class HarvestOutcome(StrEnum):
     TARGET_REACHED = "target_reached"
+    PRODUCTIVE_BUDGET_EXCEEDED = "productive_budget_exceeded"
     STALLED = "stalled"
     EMPTY = "empty"
 
@@ -54,9 +55,11 @@ class HarvestSummary:
     output_root: Path
     elapsed_seconds: float
     productive_elapsed_seconds: float
+    productive_budget_seconds: float | None
     provider_issue_elapsed_seconds: float
     provider_issue_trials: int
     productive_seconds_per_accepted: float | None
+    production_viability_passed: bool | None
     trials: tuple[RealDbTrialSummary, ...]
 
 
@@ -131,6 +134,7 @@ class HarvestRunner:
         target_committed: int,
         stall_timeout_seconds: float,
         parallel_workers: int = 1,
+        productive_budget_seconds: float | None = None,
     ) -> HarvestSummary:
         if target_committed < 1:
             raise ValueError("target_committed must be >= 1")
@@ -138,6 +142,8 @@ class HarvestRunner:
             raise ValueError("stall_timeout_seconds must be > 0")
         if parallel_workers < 1:
             raise ValueError("parallel_workers must be >= 1")
+        if productive_budget_seconds is not None and productive_budget_seconds <= 0:
+            raise ValueError("productive_budget_seconds must be > 0")
 
         output_root.mkdir(parents=True, exist_ok=True)
         if self._shared_pools is None and self.trial_runner_factory is None:
@@ -181,6 +187,7 @@ class HarvestRunner:
                 "target_committed": target_committed,
                 "stall_timeout_seconds": stall_timeout_seconds,
                 "parallel_workers": parallel_workers,
+                "productive_budget_seconds": productive_budget_seconds,
             },
             actual_data={"output_root": str(output_root)},
             checks={},
@@ -219,6 +226,7 @@ class HarvestRunner:
 
                 async with results_lock:
                     results.append(summary)
+                    productive_so_far = _productive_elapsed_seconds(results)
 
                 if summary.trial_status == RealDbTrialStatus.ACCEPTED:
                     async with commit_state_lock:
@@ -230,6 +238,12 @@ class HarvestRunner:
                     if target_hit:
                         done.set()
                         return
+                if (
+                    productive_budget_seconds is not None
+                    and productive_so_far >= productive_budget_seconds
+                ):
+                    done.set()
+                    return
 
         async def watchdog() -> None:
             poll = max(1.0, min(stall_timeout_seconds / 4, 30.0))
@@ -262,18 +276,25 @@ class HarvestRunner:
         provider_issue_trials = tuple(
             trial for trial in results if _is_provider_issue_trial(trial)
         )
-        provider_issue_elapsed = sum(
-            trial.elapsed_seconds or 0.0 for trial in provider_issue_trials
-        )
-        productive_elapsed = sum(
-            trial.elapsed_seconds or 0.0
-            for trial in results
-            if not _is_provider_issue_trial(trial)
-        )
+        provider_issue_elapsed = _provider_issue_elapsed_seconds(results)
+        productive_elapsed = _productive_elapsed_seconds(results)
         productive_seconds_per_accepted = (
             productive_elapsed / committed if committed else None
         )
-        if committed >= target_committed:
+        production_viability_passed = (
+            committed >= target_committed
+            and productive_elapsed <= productive_budget_seconds
+            if productive_budget_seconds is not None
+            else None
+        )
+        productive_budget_exceeded = (
+            productive_budget_seconds is not None
+            and productive_elapsed >= productive_budget_seconds
+            and production_viability_passed is not True
+        )
+        if productive_budget_exceeded:
+            outcome = HarvestOutcome.PRODUCTIVE_BUDGET_EXCEEDED
+        elif committed >= target_committed:
             outcome = HarvestOutcome.TARGET_REACHED
         elif attempted == 0:
             outcome = HarvestOutcome.EMPTY
@@ -288,6 +309,7 @@ class HarvestRunner:
                 "attempted": attempted,
                 "elapsed_seconds": round(elapsed, 1),
                 "productive_elapsed_seconds": round(productive_elapsed, 1),
+                "productive_budget_seconds": productive_budget_seconds,
                 "productive_seconds_per_accepted": (
                     round(productive_seconds_per_accepted, 1)
                     if productive_seconds_per_accepted is not None
@@ -295,10 +317,18 @@ class HarvestRunner:
                 ),
                 "provider_issue_trials": len(provider_issue_trials),
                 "provider_issue_elapsed_seconds": round(provider_issue_elapsed, 1),
+                "production_viability_passed": production_viability_passed,
+                "productive_budget_exceeded": productive_budget_exceeded,
                 "accepted_task_ids": list(accepted_task_ids),
             },
             checks={
                 "target_reached": committed >= target_committed,
+                "accepted_3_within_productive_15_min": (
+                    production_viability_passed
+                    if productive_budget_seconds is not None
+                    and target_committed == 3
+                    else None
+                ),
                 "productive_seconds_per_accepted_within_300s": (
                     productive_seconds_per_accepted <= 300.0
                     if productive_seconds_per_accepted is not None
@@ -321,9 +351,11 @@ class HarvestRunner:
             output_root=output_root,
             elapsed_seconds=elapsed,
             productive_elapsed_seconds=productive_elapsed,
+            productive_budget_seconds=productive_budget_seconds,
             provider_issue_elapsed_seconds=provider_issue_elapsed,
             provider_issue_trials=len(provider_issue_trials),
             productive_seconds_per_accepted=productive_seconds_per_accepted,
+            production_viability_passed=production_viability_passed,
             trials=tuple(results),
         )
 
@@ -349,4 +381,20 @@ def _is_provider_issue_trial(summary: RealDbTrialSummary) -> bool:
     return (
         summary.synthesis_error_type == "SynthesisPhaseExecutionError"
         and bool(summary.backend_failures)
+    )
+
+
+def _provider_issue_elapsed_seconds(summaries: list[RealDbTrialSummary]) -> float:
+    return sum(
+        summary.elapsed_seconds or 0.0
+        for summary in summaries
+        if _is_provider_issue_trial(summary)
+    )
+
+
+def _productive_elapsed_seconds(summaries: list[RealDbTrialSummary]) -> float:
+    return sum(
+        summary.elapsed_seconds or 0.0
+        for summary in summaries
+        if not _is_provider_issue_trial(summary)
     )

@@ -123,6 +123,9 @@ hard_gates:
 
 production_viability:
   trial_timeout_s: 300
+  accepted_sample_count: 3
+  productive_budget_seconds: 900
+  three_accepts_reached_within_budget: true
   productive_seconds_per_accepted: null
   productive_seconds_per_accepted_within_budget: true
   excludes_one_time_db_startup_and_warmup: true
