@@ -42,6 +42,7 @@ docs/*_schema_large.svg
 
 # Worktrees
 .worktrees/
+.dev/
 
 # Environment
 .env
