@@ -11868,3 +11868,60 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_101`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 181 — Do not imply sequence/order repair is acceptable
+
+- **질문**:
+  `trial_102`의 실패는 duplicate-row feedback 보강이 부족해서인가, 아니면 다른 feedback 문구가
+  composer에게 source sequence/order repair를 허용하는 것처럼 읽힌 문제인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T113354Z:e1af5279`.
+  최종 오류는 `answer_contract_duplicate_answer_rows`였다.
+
+  composer는 `emar` anchor에서 입원 기간의 투약 기록 list를 만들었다. 최초 label은 투약 시간,
+  약물명, 투약 결과, 예정 시간을 포함했지만 동일 투약 시간/약물/결과 row가 반복되어 list order와
+  projected answer rows가 불안정했다. 이후 composer는 `emar_seq`를 “preview에 보였으니 user-visible”로
+  해석하고 `sequence_number` output 또는 `emar_seq` order tie-break로 수리하려 했다.
+
+- **reasoning 교차 분석**:
+  trace상 composer는 duplicate projected rows 정책 자체는 읽었다. 하지만 “source sequence/reference/order
+  numbers are technical unless that is the domain answer”보다, `answer_contract_order_ambiguous` feedback의
+  “tie-break가 sequence/rank-like이면 source record sequence를 request wording에 이름 붙여라”라는 문구를
+  더 허용적으로 해석했다. 그 결과 “기록된 순서대로” 같은 wording으로 sequence/order tie-break를 정당화하려고 했다.
+
+  이건 hard validator로 precision 100% 처리할 수 있는 문제가 아니다. 어떤 visible field가 자연 도메인 sequence인지,
+  단순 record order인지 DB literal 없이 완전히 판정할 수 없다. 대신 기존 prompt-first 원칙에 따라 feedback이
+  durable List Determinism Policy와 충돌하지 않도록 맞추는 것이 맞다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - 투약 기록 list는 low-quality rejected. 동일한 visible answer rows가 반복되고, sequence/order만이 row를
+    구분하는 수리 방향이었다.
+  - 이 문제는 어려운 좋은 문제가 아니다. solver가 풀 수 있느냐 이전에, user-facing label 자체가 “자연스러운
+    투약 기록”이 아니라 technical record sequence에 의존한다.
+
+- **변경**:
+  `answer_contract_order_ambiguous` feedback을 수정했다. 기존 문구는 sequence/rank-like tie-break를 쓰려면
+  source record sequence를 request에 이름 붙이라고 말해, repair 과정에서 sequence/order wording을 추가해도 되는
+  것처럼 읽힐 수 있었다.
+
+  새 문구는 sequence/rank-like key가 “이미 자연 도메인 답”일 때만 유효하고, 그렇지 않으면 label을 바꾸라고
+  말한다. 또한 hidden handle, artificial id wording뿐 아니라 새 sequence/order wording으로 repair하지 말라고
+  명시했다. 이는 새 정책이 아니라 기존 List Determinism Policy의 `Source sequence/order numbers are technical
+  unless that is the domain answer; never add them for tie-break/binding repair`와 feedback을 정렬한 것이다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order tests/test_synthesis_runtime.py::test_submit_draft_rejects_duplicate_projected_list_rows -q`
+  통과 (`2 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_102`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

@@ -3907,7 +3907,8 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
     assert "does not uniquely determine" in message
     assert "preserve the current anchor and target" in message
     assert "natural visible tie-break" in message
-    assert "source record sequence instead of a generated display rank" in message
+    assert "source record sequence is already the natural domain answer" in message
+    assert "new sequence/order wording" in message
     assert "hidden handles" in message
     assert "ordinary target-language words" in message
     assert "not malformed terms" in message
