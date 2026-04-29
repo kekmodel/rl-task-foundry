@@ -158,7 +158,9 @@ def _format_missing_order_label_binding_guidance(
         + ". Tool schema reminder: when a query.order_by key is returned in "
         "label_json, the matching answer_contract.order_bindings item must "
         "set label_field to that returned label field; use null only for an "
-        "ordered key that is not returned."
+        "ordered key that is not returned. Display/include wording for that "
+        "field is not enough; user_request needs a separate natural row-order "
+        "phrase for the primary order or tie-break."
     )
 
 

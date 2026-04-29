@@ -12726,3 +12726,81 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_115`는 pipeline accepted였지만 low-quality accepted로 판단하므로 만족 accepted streak는 `0/5`.
+
+## Iteration 195 — Tie-break display wording is not row-order wording
+
+- **질문**:
+  `trial_116` 실패는 어떤 성격인가? reasoning 내용까지 보면 composer가 무엇을 이해했고 어디서 실패했나?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T133334Z:7b4508ea`.
+  solver 단계까지 가지 못했고 최종 error는 `submit_payload_invalid`, 마지막 유효 feedback은
+  `answer_contract_binding_missing`이었다.
+
+  제출 흐름:
+  - 첫 실제 draft는 ICU observation list였다. `chartevents`는 primary-key-backed source가 아니어서
+    `label_no_primary_key_source`로 거절됐다.
+  - 다음 draft는 ICU procedure list였지만 `location`에 null이 섞였고, "가장 최근 시술 시작 시각순" 표현이
+    order ambiguity로 잡혔다.
+  - composer는 reasoning에서 `orderid` handle tie-break는 부적절하다고 판단하고 visible한 `procedure_end_time`을
+    secondary order key로 바꿨다.
+  - 마지막 draft는 `procedure_start_time desc, procedure_end_time asc` query였지만 user_request는
+    "가장 최근에 시작된 시술 기록"만 row order로 요청하고, `procedure_end_time`은 출력 field로만 포함했다.
+    따라서 `answer_contract.order_bindings`가 `procedure_end_time` order key를 커버하지 못했다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 일부 정책을 제대로 실행했다.
+  - no-PK `chartevents` 거절 후 `procedureevents`로 이동했다.
+  - null `location`을 제거하고 `duration_value`, `duration_unit`처럼 grounded field로 바꿨다.
+  - hidden handle `orderid`를 tie-break로 쓰려는 시도를 중단하고 visible `procedure_end_time`을 선택했다.
+
+  실패 지점은 출력 field와 row-order phrase의 분리다. composer는 `procedure_end_time`이 label에 있으므로
+  order key도 자연스럽게 커버된다고 착각했다. 하지만 List Determinism Policy상 fixed limit list에서
+  secondary order key는 row membership/order를 결정하므로, "종료 시각을 포함해주세요" 같은 display wording만으로는
+  부족하다. user_request에는 "시작 시각이 같으면 종료 시각이 이른 순"처럼 row-order 역할을 분리해 말해야 한다.
+
+  이건 precision 100 validator를 새로 만들 문제가 아니다. 이미 `answer_contract_binding_missing`이
+  query.order_by와 answer_contract.order_bindings의 구조 불일치를 정확히 잡았다. 개선 대상은 composer가 submit 전에
+  이 원칙을 더 잘 떠올리게 하는 prompt/schema/feedback reminder다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - observation draft는 low-quality rejected다. no-PK source row values라 solver tool로 exact reproduction을
+    보장할 수 없다.
+  - procedure draft 자체는 좋은 방향의 후보였다. primary-key-backed source, 5 rows, grounded values, visible
+    temporal tie-break를 갖췄다.
+  - 하지만 최종 request/contract가 row-order tie-break를 명시하지 않아 저품질 rejected다. 어려운 좋은 문제라기보다
+    composer가 자기 query의 ordering contract를 완성하지 못한 케이스다.
+
+- **변경**:
+  prompt-first 원칙에 따라 durable List Determinism Policy를 압축 보강했다.
+  - returned/display field wording은 row-order wording이 아니며, 모든 `query.order_by` key는 user_request와
+    `answer_contract.order_bindings`에 별도 order phrase가 있어야 한다고 명시했다.
+  - `answer_contract_binding_missing`의 missing returned order label binding guidance도 display/include wording만으로는
+    부족하고 primary order/tie-break용 row-order phrase가 필요하다고 상기한다.
+  - prompt 길이 예산을 유지하기 위해 주변 중복 표현과 scope example wrapper를 압축했다. `turn_budget` 문구도 의미를
+    유지한 채 짧게 줄였다.
+
+  hard validator는 추가하지 않았다. 기존 structural validator가 이미 precision 100으로 잡는 조건을 composer가
+  사전에 따르도록 상기한 것이다. DB 리터럴/토큰/테이블/컬럼 의미 휴리스틱은 추가하지 않았다.
+
+- **검증**:
+  Prompt length:
+  `build_synthesis_agent_instructions(...)` 길이 `7985`.
+
+  Targeted:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_turn_budget_prompt.py tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_by_query_order_count -q`
+  통과 (`9 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_116`은 accepted가 없으므로 만족 accepted streak는 `0/5`.
