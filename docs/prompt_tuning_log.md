@@ -9426,3 +9426,56 @@ Solver 30/30 완료 결과:
   Ruff:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
+
+## Iteration 144 — Generic value fields must be requestable
+
+- **질문**:
+  `trial_66`은 accepted 없이 synthesis_failed로 끝났다. 마지막 procedure list는 좋은 데이터였는가,
+  아니면 field 선택 자체가 저품질이었는가?
+
+- **실험/결과**:
+  composer는 특정 입원 기간의 최근 procedureevents 5건을 만들었다.
+
+  canonical fields:
+  - `procedure_name`
+  - `procedure_time`
+  - `procedure_status`
+  - `procedure_value`
+
+  request는 여러 번 수리됐지만, `procedure_value`를 자연스럽게 묻지 못했다. 최종 request는
+  `시술명, 시술 시각, 완료 상태 값`을 요청했는데, answer_contract에서는 `procedure_value`를
+  `시술 시각` phrase에 다시 묶어 `duplicate_output_binding_phrases`와 binding error가 남았다.
+
+- **reasoning 교차 분석**:
+  solver rollout은 없었다. composer reasoning은 `procedure_value`를 “시술 횟수”나 procedure
+  name에 묶을 수 있을지 고민했지만, 실제 값은 procedureevents의 generic numeric source value라
+  사용자에게 어떤 의미인지 자연스럽게 설명되지 않았다. 이 경우 좋은 수리는 `procedure_value`를
+  label에서 제거하고 final query를 다시 실행하는 것이다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. row set과 order는 좋지만, generic value field를 출력에
+  포함한 순간 requestability가 무너졌다. 어려운 좋은 문제가 아니라 field selection 문제다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 어떤 numeric field가 자연스러운 측정값인지 여부를
+  리터럴/컬럼명으로 판정하면 금지 원칙 위반이다.
+
+  대신 `query.select` tool schema description을 보강했다.
+  selected field는 전부 label field가 되므로, generic measurement/value field는 요청이 그
+  measured amount 또는 source value role을 ordinary language로 이름 붙일 수 있을 때만 선택하고,
+  그렇지 않으면 omit하라고 명시했다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`112 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.

@@ -381,6 +381,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
     assert "without a primary key" in descriptions["query"]["$.spec.select"]
     assert "primary-key-backed path" in descriptions["query"]["$.spec.select"]
+    assert "generic measurement/value fields" in descriptions["query"][
+        "$.spec.select"
+    ]
+    assert "source value role in ordinary language" in descriptions["query"][
+        "$.spec.select"
+    ]
     assert "For aggregate queries, do not use select" in descriptions["query"][
         "$.spec.select"
     ]
