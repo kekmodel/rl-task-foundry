@@ -9634,6 +9634,65 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_73`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 152 — Do not relabel lifecycle surfaces
+
+- **질문**:
+  `trial_74`는 accepted였지만 pass rate가 `1/4 = 0.25`였다. 이것은 어려운 좋은 문제인가,
+  아니면 low-quality accepted인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `accepted`, quality gate도 accept였다.
+
+  최종 request:
+  `이번 입원 기간 동안 처방된 처방 순서 5개 약물과 각각의 상태를 처방 시작 시간 순서대로 약물 이름 순서로 보여주세요`
+
+  canonical answer는 pharmacy table의 `medication`, `starttime`, `status`를 사용했다.
+  정렬은 `starttime asc`, `medication asc`였다.
+
+  solver 결과:
+  - 1개 solver만 pharmacy의 `status`를 사용해 정답과 일치했다.
+  - 다른 solver들은 request의 `처방된/처방` wording을 보고 prescriptions table로 갔다.
+  - 일부 solver는 prescriptions의 `stoptime` 또는 `drug_type`에서 상태를 유도했다.
+
+- **reasoning 교차 분석**:
+  composer는 pharmacy source를 쓰면서 자연어 request에서는 `처방된 약물`, `처방 순서`라고 표현했다.
+  이는 solver 입장에서 prescriptions source로 가는 것이 더 자연스럽다.
+  문제는 solver 난이도가 아니라 source surface mismatch다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted. 저품질이 accept된 경우이므로 만족 streak에 넣지 않는다.
+
+  rejected data:
+  - 앞선 제출들은 fixed size, order ambiguity, field rename mismatch를 정상적으로 reject했다.
+  - 최종 accepted도 request/source role이 불안정해서 좋은 데이터로 보지 않는다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. lifecycle surface를 자연어로 어떻게 부르는지는 100% precision
+  validator로 판정할 수 없다.
+
+  Source Surface 원칙은 이미 prompt에 있으므로, tool schema/submit schema에서 같은 원칙을 더 직접적으로
+  상기했다.
+  `query.from.table` description은 order/request/event/fulfillment/log 같은 lifecycle surface를
+  field가 겹친다는 이유로 서로 바꿔 부르지 말라고 설명한다.
+  `submit_draft.user_request` schema도 같은 reminder를 포함한다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_payload_schema_uses_strict_json_string_fields -q`
+    통과 (`2 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_74`는 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

@@ -1407,6 +1407,12 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     assert "hidden context naturally represents the requester" in (
         schema["properties"]["user_request"]["description"]
     )
+    assert "Do not call one lifecycle surface another" in (
+        schema["properties"]["user_request"]["description"]
+    )
+    assert "order/request/event/fulfillment/log" in (
+        schema["properties"]["user_request"]["description"]
+    )
     assert "entity scope" in schema["properties"]["answer_contract"]["description"]
     assert "Do not restate tables" in schema["properties"]["answer_contract"]["description"]
     assert SubmitDraftPayload.model_validate(

@@ -572,7 +572,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                             "If ordinary user wording points to another "
                             "reachable source, query that source or make this "
                             "source/lifecycle role explicit in user_request/topic/"
-                            "answer_contract."
+                            "answer_contract. Do not relabel one lifecycle "
+                            "surface as another, such as order/request/event/"
+                            "fulfillment/log, just because fields overlap."
                         ),
                     },
                     "as": {

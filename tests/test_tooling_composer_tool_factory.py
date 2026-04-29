@@ -333,6 +333,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "make this source/lifecycle role explicit" in descriptions["query"][
         "$.spec.from.table"
     ]
+    assert "Do not relabel one lifecycle surface as another" in descriptions["query"][
+        "$.spec.from.table"
+    ]
+    assert "order/request/event/fulfillment/log" in descriptions["query"][
+        "$.spec.from.table"
+    ]
     assert "Filters define row membership" in descriptions["query"]["$.spec.where"]
     assert "customer-visible constraint" in descriptions["query"]["$.spec.where"]
     assert "hidden helper row-set controls" in descriptions["query"]["$.spec.where"]
