@@ -45,6 +45,8 @@
 
 Runtime rejector는 자신이 검증하는 structural predicate에 대해 false positive가 없다고 주장할 수 있을 때만 reject 권한을 가진다.
 
+배경: 이 원칙은 rule-based code가 benchmark DB, 이미 본 실패 케이스, 특정 모델 약점에 맞춘 편협한 힌트가 되는 것을 막기 위한 평가 해킹 방지 장치다. 코드로 막는 로직은 "현재 실험 샘플에서는 맞았다"가 아니라 "임의의 DB에서도 이 structural predicate가 참이면 reject가 항상 타당하다"를 만족해야 한다. 이 보장을 못 하면 hard reject가 아니라 rubric/semantic quality signal로만 사용한다.
+
 허용:
 
 - duplicate projected answer rows가 query result로 증명됨

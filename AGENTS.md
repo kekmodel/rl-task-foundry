@@ -10,7 +10,7 @@
 
 1. 직접 누설 금지: 알려진 정답, row id, anchor, 특정 DB 리터럴, 테이블명, 컬럼명, 관찰된 bad draft 토큰을 prompt, validator, scoring, generation policy에 넣지 않는다.
 2. 구조로만 일반화: 실패 케이스는 schema metadata, PK/FK, profile, query spec, visibility metadata, live evidence 위의 DB-agnostic structural rule로 일반화될 때만 수정 근거가 된다.
-3. Precision-100 rejector만 허용: runtime reject logic은 available evidence에서 구조적으로 증명 가능한 조건만 reject할 수 있다. 의미/품질 판단은 hard validator가 아니라 rubric 평가에 둔다.
+3. Precision-100 rejector만 허용: runtime reject logic은 available evidence에서 구조적으로 증명 가능한 조건만 reject할 수 있다. 이 원칙은 rule-based code가 benchmark나 관찰 실패에 편협한 힌트를 주는 평가 해킹을 막기 위한 장치다. 임의의 DB에서도 false positive가 없다고 주장할 수 없는 로직은 hard rejector가 아니라 rubric/semantic 평가에 둔다.
 4. source-of-truth 분리: durable policy는 한 surface에만 둔다. feedback은 named policy와 현재 실패 evidence를 상기할 수 있지만 두 번째 durable prompt가 되면 안 된다.
 5. 품질이 yield보다 우선: low-quality accepted는 hard failure다. accept 수, pass rate, throughput 증가로 보상할 수 없다.
 6. 다양성은 필수 품질이다: 하나의 안전한 task shape, path, answer surface, request template만 반복하는 dataset은 고품질이 아니다.
