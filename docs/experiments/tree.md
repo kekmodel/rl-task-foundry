@@ -42,6 +42,7 @@
 - `abandoned`: 더 진행하지 않음
 - `local_minimum`: 이 경로가 막혔지만 기록 가치 있음
 - `regressed`: baseline 대비 악화
+- `production_viability_failed`: accepted 3개를 900 productive seconds 안에 만들지 못함
 - `infra_fail`: 인프라 실패로 평가 불가
 
 ## Promotion protocol

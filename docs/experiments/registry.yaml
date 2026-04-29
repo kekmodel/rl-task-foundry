@@ -71,19 +71,20 @@ nodes:
   - id: B0000
     type: baseline
     branch: main
-    commit: "9b71ffa"
+    commit: "d5784a1"
     parent: null
     parent_commit: null
     status: current
     phase_target: v1
     hypothesis: >
-      Main through 9b71ffa is the root baseline for the next experiment graph.
+      Main through d5784a1 is the root baseline for the next experiment graph.
     metadata_note: >
       Node commit is the artifact snapshot. Registry commits that record or
       revise node metadata may be descendants of the artifact snapshot.
     architecture_summary: >
       Existing synthesis pipeline after composer prompt, submit_draft validation,
-      entity_json contract, and KISS prompt plumbing cleanup.
+      entity_json contract, KISS prompt plumbing cleanup, trial wall-clock budget,
+      and accepted-3-within-900s production viability gate.
     fixed_principles:
       - no_evaluation_hacking
       - db_generalizable_generation
