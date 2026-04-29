@@ -9427,6 +9427,52 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Experiment Note — lower=0.5 rerun after solver timeout cap
+
+- **질문**:
+  solver episode cap을 120초로 고정한 뒤 같은 MIMIC demo no-topic 4-solver smoke가
+  인프라 실패 없이 다시 도는가?
+
+- **실험/결과**:
+  `artifacts/trial_20260430_mimiciv_demo_lower05_kimi_4solver_no_topic_smoke_01/trial_03`
+  을 Kimi/OpenRouter, no topic hint, 4 solver, lower pass-rate `0.5`로 실행했다.
+
+  결과는 `synthesis_failed / artifact_invalid`였다. solver rollout 자체는 정상이다.
+  solver 4개가 모두 완료했고 failed run은 0개였다. 유일한 solver-evaluated draft는
+  `이번 입원 중 받은 시술 횟수를 알려주세요.`였고, `procedure_count=4`를 4/4 solver가 맞춰
+  pass rate `1.0`으로 rejected됐다. 이는 lower/upper calibration 기준상 정상 reject다.
+
+- **제출별 정성 평가**:
+  1. `admission procedures`: 입원 중 수술 기록 3개 list. `procedure_code`와
+     `sequence_number`가 blocked handle/source였고 요청 문구에도 `수술 코드`, `순서 번호`가
+     없었다. low-quality rejected.
+  2. `admission details`: 입원/퇴원 시간과 입원 유형 object를 `scalar`로 제출했다.
+     aggregate scalar가 아니므로 rejected. request phrase도 맞지 않았다. low-quality rejected.
+  3. `admission procedure count`: procedure count scalar aggregate. 데이터는 grounded이고
+     request도 자연스럽지만 4/4 matched로 too easy. good-but-too-easy rejected.
+  4. `admission procedures by date`: 날짜별 procedure count list. row가 2개뿐이라 list shape
+     기준을 못 맞추고, `시술 수`/`오래된 순으로` phrase가 request에 없었다.
+     low-quality rejected.
+  5. `admission medications`: 약물 3개 list. output fields는 visible이지만 hidden
+     `pharmacy_id` tie-break로 order/membership을 정했고, request/contract phrase도
+     부족했다. budget exhausted 시점의 low-quality rejected.
+
+- **accepted/rejected 데이터 평가**:
+  accepted data: 없음. 따라서 low-quality accepted는 발생하지 않았다.
+
+  rejected data: 대부분 저품질 또는 too easy였다. solver가 못 풀어서 거절된 어려운 좋은 문제는
+  이번 trial에 없었다. rejection 자체는 대체로 올바르다.
+
+- **속도/비용 관찰**:
+  이번 지연은 solver timeout 문제가 아니었다. `synthesis_completed` 로그 기준 composer는
+  26 turn, latency 약 560초, input tokens 약 2.1M을 사용했다. `schema_map`과 feedback의
+  recent tool-call payload가 큰 상태로 반복되어 composer context가 급격히 커진 것이 직접
+  병목으로 보인다. 다음 개선 후보는 품질 validator가 아니라 composer feedback/context surface
+  축소와 phrase-only repair 시 data tool 호출 억제다.
+
+- **현재 streak**:
+  accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Infrastructure Note — Solver episode timeout cap
 
 - **질문**:
