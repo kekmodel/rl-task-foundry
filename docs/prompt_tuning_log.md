@@ -12505,3 +12505,73 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_112`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 192 — Contract repair feedback should surface exact missing parts
+
+- **질문**:
+  `trial_113`의 `answer_contract_phrase_missing` + `answer_contract_binding_missing` 반복은 새 정책이 필요한가,
+  아니면 기존 Label Contract/tool schema를 composer가 못 따라간 contract repair 실패인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T130240Z:0b30c8cb`.
+  마지막 오류는 `answer_contract_phrase_missing`, `answer_contract_binding_missing`이었다.
+
+  composer는 subject `10015272`의 eMAR 투약 기록을 선택했다. 첫 label query는
+  `charttime desc`, `limit=5`로 `medication_name`, `administration_time`, `event_status`를 반환했다.
+  query diagnostics는 같은 투약 시간 동점과 `limit_boundary_tie=true`를 표시했고,
+  `selected_visible_tie_breaker_candidates`로 `medication_name`을 제시했다.
+
+  composer는 이후 `charttime desc, medication asc`로 query를 rerun하여 ordering diagnostics를 clear했다.
+  하지만 submit payload repair가 끝까지 깨졌다:
+  - `answer_phrase`를 `"최근 투약 내역"`으로 유지했는데, user_request에는 `"최근 5건의 투약 내역"`만 있어 exact
+    contiguous substring이 아니었다.
+  - secondary order key는 returned label field `medication_name`인데,
+    `answer_contract.order_bindings[1].label_field`를 계속 `null`로 제출했다.
+
+- **reasoning 교차 분석**:
+  reasoning content는 반환되고 있었고 composer 항목 7개가 저장됐다. 초반 reasoning은 투약 기록이 현실적인 질문 후보라고
+  판단했고, 첫 feedback 뒤에는 duplicate time 문제와 tie-break 필요성을 이해했다.
+
+  중요한 점은 reasoning이 데이터 선택 실패를 가리키지 않는다는 것이다. composer는 visible tie-break 후보까지 이해했지만,
+  마지막 contract-only repair에서 자기 payload의 `answer_phrase`와 `order_bindings.label_field`를 구조적으로 맞추지
+  못했다. 즉 문제는 solver가 못 푸는 어려운 좋은 task가 아니라, 좋은 후보를 최종 submit 형식으로 못 고친
+  low-quality rejected다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - 투약 list 후보 자체는 좋은 데이터에 가깝다. hidden subject scope, eMAR row set, 투약 시간 최신순,
+    같은 시간에서 약물명 tie-break, 5-row limit이 모두 solver tool로 재현 가능하다.
+  - final submitted draft는 low-quality rejected다. request/contract가 row membership/order를 정확히 고정하지 못했고,
+    특히 returned order key를 `label_field:null`로 둔 것은 tool schema 위반이다.
+  - 이 저품질이 solver rollout 전에 submit validator에서 거절된 것은 올바른 동작이다.
+
+- **변경**:
+  새 hard validator는 추가하지 않았다. 기존 validator가 이미 precision 100으로 잡는 구조적 불일치이기 때문이다.
+
+  대신 feedback surface를 보강했다.
+  - `answer_contract_missing_phrase_details`를 diagnostics에 추가하여 빠진 path와 phrase 값을 함께 남긴다.
+  - phrase feedback에 `Missing contract phrases: answer_phrase='...'`를 표시한다.
+  - returned order key가 label field인데 `order_bindings[*].label_field`에서 빠진 경우
+    `Missing returned order label bindings: '...'`를 표시한다.
+
+  이는 새 지시가 아니라 기존 Label Contract와 `AnswerOrderBinding.label_field` schema의 reminder다.
+  리터럴/토큰/DB 의미 휴리스틱은 사용하지 않는다. 제출된 contract phrase와 user_request의 exact substring 비교,
+  그리고 latest query evidence의 returned order output과 label field binding 비교만 사용한다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_reset_after_contract_repair_feedback tests/test_synthesis_runtime.py::test_submit_draft_rejects_answer_contract_phrase_absent_from_request tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key -q`
+  통과 (`3 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_113`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

@@ -2141,6 +2141,8 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     assert "exact contiguous substring" in first_message
     assert "When only phrase/binding errors remain" in first_message
     assert "repair the same label in place" in first_message
+    assert "Missing contract phrases" in first_message
+    assert "answer_phrase='요청에 없는 문구'" in first_message
     assert "same query/label row order" in first_message
     assert "opposite display-order phrase" in first_message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
@@ -2678,6 +2680,9 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
     assert "Do not reuse one broad order phrase" in message
     assert "split wording into distinct request substrings" in message
     assert "one primary order phrase and one tie-break phrase" in message
+    assert "Missing returned order label bindings" in message
+    assert "'stoptime'" in message
+    assert "set label_field to that returned label field" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 
@@ -3403,6 +3408,8 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
     assert "preserve the natural user_request wording" in message
     assert "prior label_json fields/values" in message
     assert "rewrite the full sentence cleanly" in message
+    assert "Missing contract phrases" in message
+    assert "answer_phrase='대여 횟수'" in message
     assert "ordinary target-language direction words" in message
     assert "malformed order phrase" in message
     assert "splicing label fields" in message

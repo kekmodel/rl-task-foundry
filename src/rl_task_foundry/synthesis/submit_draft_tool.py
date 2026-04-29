@@ -27,6 +27,8 @@ from rl_task_foundry.synthesis.contracts import StrictModel
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.submit_draft_messages import (
     _format_duplicate_output_binding_guidance,
+    _format_missing_contract_phrase_guidance,
+    _format_missing_order_label_binding_guidance,
     _format_missing_request_phrase_guidance,
     _format_ungrounded_value_guidance,
     _render_structured_message,
@@ -840,7 +842,22 @@ def _contract_component_phrase_errors(
     *,
     user_request: str,
 ) -> list[str]:
-    missing_phrases: list[str] = []
+    return [
+        detail["path"]
+        for detail in _contract_component_phrase_error_details(
+            contract,
+            user_request=user_request,
+        )
+        if isinstance(detail.get("path"), str)
+    ]
+
+
+def _contract_component_phrase_error_details(
+    contract: AnswerContract,
+    *,
+    user_request: str,
+) -> list[dict[str, str]]:
+    missing_phrases: list[dict[str, str]] = []
     components: list[tuple[str, str | None]] = [
         ("answer_phrase", contract.answer_phrase),
         ("limit", contract.limit_phrase),
@@ -868,7 +885,7 @@ def _contract_component_phrase_errors(
             phrase=phrase,
             user_request=user_request,
         ):
-            missing_phrases.append(path)
+            missing_phrases.append({"path": path, "phrase": phrase})
     return missing_phrases
 
 
@@ -2383,6 +2400,12 @@ class SubmitDraftController:
                     : self.config.synthesis.runtime.diagnostic_item_limit
                 ]
             )
+            invalid_diagnostics["answer_contract_missing_phrase_details"] = (
+                _contract_component_phrase_error_details(
+                    payload.answer_contract,
+                    user_request=payload.user_request,
+                )[: self.config.synthesis.runtime.diagnostic_item_limit]
+            )
 
         latest_query_call = self._latest_successful_query_call_since_last_submission()
         latest_query_result = (
@@ -3024,11 +3047,14 @@ class SubmitDraftController:
             error_codes
             and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING
         ):
+            primary += _format_missing_contract_phrase_guidance(diagnostics)
             primary += _format_missing_request_phrase_guidance(diagnostics)
+            primary += _format_missing_order_label_binding_guidance(diagnostics)
         if (
             error_codes
             and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING
         ):
+            primary += _format_missing_order_label_binding_guidance(diagnostics)
             primary += _format_duplicate_output_binding_guidance(diagnostics)
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:

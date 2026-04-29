@@ -107,6 +107,61 @@ def _format_missing_request_phrase_guidance(
     )
 
 
+def _format_missing_contract_phrase_guidance(
+    diagnostics: dict[str, object] | None,
+) -> str:
+    if diagnostics is None:
+        return ""
+    raw_details = diagnostics.get("answer_contract_missing_phrase_details")
+    details: list[str] = []
+    if isinstance(raw_details, list):
+        for item in raw_details[:3]:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            phrase = item.get("phrase")
+            if isinstance(path, str) and isinstance(phrase, str):
+                details.append(f"{path}={phrase!r}")
+    if not details:
+        raw_paths = diagnostics.get("answer_contract_missing_phrases")
+        if isinstance(raw_paths, list):
+            details = [str(path) for path in raw_paths[:3] if isinstance(path, str)]
+    if not details:
+        return ""
+    return (
+        " Missing contract phrases: "
+        + "; ".join(details)
+        + ". Label Contract reminder: each contract phrase must be copied as "
+        "one contiguous substring from user_request; if a natural phrase was "
+        "split by limit or order words, use a contiguous target substring or "
+        "rewrite the request and contract together."
+    )
+
+
+def _format_missing_order_label_binding_guidance(
+    diagnostics: dict[str, object] | None,
+) -> str:
+    if diagnostics is None:
+        return ""
+    binding_diagnostics = diagnostics.get("answer_contract_binding_diagnostics")
+    if not isinstance(binding_diagnostics, dict):
+        return ""
+    raw_fields = binding_diagnostics.get("missing_order_label_bindings")
+    if not isinstance(raw_fields, list):
+        return ""
+    fields = [repr(field) for field in raw_fields[:3] if isinstance(field, str)]
+    if not fields:
+        return ""
+    return (
+        " Missing returned order label bindings: "
+        + ", ".join(fields)
+        + ". Tool schema reminder: when a query.order_by key is returned in "
+        "label_json, the matching answer_contract.order_bindings item must "
+        "set label_field to that returned label field; use null only for an "
+        "ordered key that is not returned."
+    )
+
+
 def _format_duplicate_output_binding_guidance(
     diagnostics: dict[str, object] | None,
 ) -> str:
