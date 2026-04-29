@@ -153,15 +153,14 @@ def build_synthesis_agent_instructions(
         "path. Copy scoped evidence values exactly; do not "
         "translate/transliterate them.\n"
         "- Keep request compact; use ordinary target-language words, "
-        "no malformed terms. Field keys stay in JSON; no aliases/choices in "
-        "parentheses. If long tie-breaks/mechanical field lists needed, "
-        "choose another label.\n"
+        "no malformed terms. Field keys stay in JSON. If long tie-breaks/"
+        "mechanical field lists needed, choose another label.\n"
         "- Bind modifiers/filters to exact object/scope/source. Non-null/status/"
         "type filters need row-set wording and matching query.where, not output "
         "names. If only returned, ask records plus field.",
 
         "# Label Contract\n"
-        "Label structured result, not final prose.\n"
+        "Structured label, not prose.\n"
         "- `answer_contract.kind='scalar'` only for aggregate answers; "
         "`list` for selected rows.\n"
         "- Label Grounding Policy: copy label values from latest successful "
@@ -230,20 +229,18 @@ def build_synthesis_agent_instructions(
         "existing named policy. Preserve anchor/language; preserve target for "
         "repair/difficulty-up; switch target when policy says another "
         "label/scope. phrase repair: clean wording\n"
-        "- Specificity: preserve anchor/target. Lists preserve "
-        "row set/order/limit; scalar aggregates may add group/compare. Add "
-        "one grounded related/derived dimension. smallest single structural "
-        "strengthening; there is no fixed "
-        "ladder; no difficulty jump.\n"
+        "- Specificity: baseline is the last evaluated draft; preserve "
+        "anchor/target. Lists preserve row set/order/limit/output fields/source "
+        "meanings/phrases; scalar aggregates may add group/compare. Add the "
+        "smallest grounded related/derived dimension; there is no fixed ladder "
+        "or difficulty jump.\n"
         "- Real strengthening changes answer work: aggregate/compare/group/"
-        "order/related-row selection/row membership; not same-row fields, "
-        "even via join. If just tried, switch work.\n"
-        "- For lists, keep filters, order, limit, output "
-        "fields/source meanings/phrases. Append one grounded dimension that changes "
-        "lookup, comparison, order, or row reasoning; passive display fields are "
-        "weak; ask for it in user_request/answer_contract.\n"
-        "- Do not shrink the fixed list, remove/rename/replace fields, or "
-        "combine a row-excluding filter with new outputs/order/cardinality.",
+        "visible order/related-row selection, not passive same-row fields. "
+        "If just tried, switch work.\n"
+        "- For evaluated lists, do not add narrowing filters, remove filters, "
+        "shrink the fixed list, or replace fields. Add one dimension that keeps "
+        "the same rows but changes lookup, comparison, visible ordering, or "
+        "related-row reasoning; ask for it in user_request/answer_contract.",
 
         "# Difficulty-Up Examples\n"
         "<example><draft_before>list R fields A,B</draft_before>"
@@ -251,7 +248,10 @@ def build_synthesis_agent_instructions(
         "</draft_after><commentary>Good: changes what must be found"
         "</commentary></example>\n"
         "<example><draft_after>R+same-row C</draft_after>"
-        "<commentary>Bad: passive width</commentary></example>",
+        "<commentary>Bad: passive width</commentary></example>\n"
+        "<example><draft_after>list R where C</draft_after>"
+        "<commentary>Bad after too-easy: narrowing filter changes row set"
+        "</commentary></example>",
 
         "# Task Shapes\n"
         "- Scalar: count/min/max/sum/avg over filters; avoid trivial 0/1.\n"
@@ -259,8 +259,8 @@ def build_synthesis_agent_instructions(
         "- List: ordered 3-5 homogeneous rows; if query count is outside range, "
         "switch target/scalar; natural order <=1 visible tie-break; "
         "avoid all matching when count >5.\n"
-        "- Initial row/list labels: prefer 3-4 fields; max 5 before feedback; "
-        "add one meaningful dimension; "
+        "- Row/list labels: prefer 3-4 fields; <=5 before feedback; "
+        "meaningful dimension; "
         "follow that tool's schema exactly.",
     ])
 

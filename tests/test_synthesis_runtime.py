@@ -349,6 +349,78 @@ def test_incremental_evidence_rejects_list_output_only_field_additions() -> None
     assert "no_new_structural_constraint" in errors
 
 
+def test_incremental_evidence_rejects_added_list_row_filter() -> None:
+    previous = _query_evidence_signature(
+        {
+            "column_sources": [
+                {"output": "started_at", "kind": "select", "table": "event", "column": "start"},
+                {"output": "status", "kind": "select", "table": "event", "column": "status"},
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "event",
+                    "column": "stay_id",
+                    "op": "eq",
+                    "value": 1,
+                },
+                {
+                    "usage": "order_by",
+                    "table": "event",
+                    "column": "start",
+                    "direction": "asc",
+                },
+            ],
+            "rows": [
+                {"started_at": "2026-01-01", "status": "done"},
+                {"started_at": "2026-01-02", "status": "done"},
+                {"started_at": "2026-01-03", "status": "open"},
+            ],
+        },
+        answer_kind="list",
+    )
+    current = _query_evidence_signature(
+        {
+            "column_sources": [
+                {"output": "started_at", "kind": "select", "table": "event", "column": "start"},
+                {"output": "status", "kind": "select", "table": "event", "column": "status"},
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "event",
+                    "column": "stay_id",
+                    "op": "eq",
+                    "value": 1,
+                },
+                {
+                    "usage": "where",
+                    "table": "event",
+                    "column": "status",
+                    "op": "eq",
+                    "value": "done",
+                },
+                {
+                    "usage": "order_by",
+                    "table": "event",
+                    "column": "start",
+                    "direction": "asc",
+                },
+            ],
+            "rows": [
+                {"started_at": "2026-01-01", "status": "done"},
+                {"started_at": "2026-01-02", "status": "done"},
+                {"started_at": "2026-01-04", "status": "done"},
+            ],
+        },
+        answer_kind="list",
+    )
+
+    errors = _query_evidence_incremental_errors(previous=previous, current=current)
+
+    assert "list_row_filter_added" in errors
+
+
 def test_incremental_evidence_allows_scalar_count_to_grouped_aggregate_list() -> None:
     previous = _query_evidence_signature(
         {
@@ -2891,15 +2963,17 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "Policy reminder: Difficulty-Up Policy" in message
     assert "specificity feedback on the current draft" in message
     assert "Preserve the current anchor and target" in message
-    assert "for list labels preserve row set, order, limit" in message
+    assert "for list labels preserve the evaluated row set, order, limit" in message
     assert "source meanings" in message
     assert "existing output field request phrases" in message
+    assert "Do not add a narrowing row filter or lower the row count" in message
     assert "one grounded meaningful dimension" in message
-    assert "changes lookup, comparison, order, or row reasoning" in message
+    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in message
     assert "Do not only add display fields for the same selected row" in message
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
-    assert "related-row selection, or row membership" in message
+    assert "related-row selection instead of adding another field" in message
+    assert "row membership" not in message
     assert "Request Contract reminder" in message
     assert "copy visible context/source values exactly" in message
     assert "do not translate/transliterate them while strengthening" in message
@@ -2958,14 +3032,16 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "Policy reminder: Difficulty-Up Policy" in message
     assert "specificity feedback on the current draft" in message
     assert "Preserve the current anchor and target" in message
-    assert "for list labels preserve row set, order, limit" in message
+    assert "for list labels preserve the evaluated row set, order, limit" in message
     assert "existing output field request phrases" in message
+    assert "Do not add a narrowing row filter or lower the row count" in message
     assert "one grounded meaningful dimension" in message
-    assert "changes lookup, comparison, order, or row reasoning" in message
+    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in message
     assert "Do not only add display fields for the same selected row" in message
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
-    assert "related-row selection, or row membership" in message
+    assert "related-row selection instead of adding another field" in message
+    assert "row membership" not in message
     assert "Request Contract reminder" in message
     assert "copy visible context/source values exactly" in message
     assert "do not translate/transliterate them while strengthening" in message

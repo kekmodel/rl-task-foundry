@@ -271,24 +271,25 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "if diagnostics do not block it, submit immediately" in instructions
     assert "no decorative global answer" in instructions
     assert "Difficulty-Up Policy" in instructions
-    assert "smallest single structural strengthening" in instructions
+    assert "smallest grounded related/derived dimension" in instructions
     assert "there is no fixed ladder" in instructions
+    assert "baseline is the last evaluated draft" in instructions
     assert "preserve anchor/target" in instructions
     assert "Lists preserve row set/order/limit" in instructions
     assert "scalar aggregates may add group/compare" in instructions
-    assert "one grounded related/derived dimension" in instructions
+    assert "smallest grounded related/derived dimension" in instructions
     assert "Real strengthening changes answer work" in instructions
-    assert "not same-row fields, even via join" in instructions
+    assert "not passive same-row fields" in instructions
     assert "If just tried, switch work" in instructions
-    assert "keep filters, order, limit" in instructions
+    assert "do not add narrowing filters" in instructions
+    assert "remove filters" in instructions
     assert "output fields/source meanings/phrases" in instructions
-    assert "Append one grounded dimension" in instructions
-    assert "changes lookup, comparison, order, or row reasoning" in instructions
-    assert "passive display fields are weak" in instructions
+    assert "Add one dimension that keeps the same rows" in instructions
+    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in instructions
     assert "ask for it in user_request/answer_contract" in instructions
-    assert "Do not shrink the fixed list" in instructions
-    assert "remove/rename/replace fields" in instructions
-    assert "or combine a row-excluding filter" in instructions
+    assert "shrink the fixed list" in instructions
+    assert "replace fields" in instructions
+    assert "narrowing filter changes row set" in instructions
     assert "difficulty jump" in instructions
     assert "# Difficulty-Up Examples" in instructions
     assert "<draft_before>list R fields A,B" in instructions
@@ -361,7 +362,6 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "ordinary target-language words" in instructions
     assert "no malformed terms" in instructions
     assert "Field keys stay in JSON" in instructions
-    assert "no aliases/choices in parentheses" in instructions
     assert "long tie-breaks" in instructions
     assert "mechanical field lists" in instructions
     assert "do not expose it" in instructions
@@ -370,8 +370,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
 
     # Label and contract rules preserve exact verifiability.
     assert "# Label Contract" in instructions
-    assert "structured result" in instructions
-    assert "not final prose" in instructions
+    assert "Structured label" in instructions
+    assert "not prose" in instructions
     assert "Verifiable label: final `query(spec)` exactly reproduces" in instructions
     assert "Unique label: one correct structured answer" in instructions
     assert "never rely on hidden ids/order/filters" in instructions
@@ -448,10 +448,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "if query count is outside range, switch target/scalar" in instructions
     assert "natural order <=1 visible tie-break" in instructions
     assert "avoid all matching when count >5" in instructions
-    assert "Initial row/list labels" in instructions
+    assert "Row/list labels" in instructions
     assert "prefer 3-4 fields" in instructions
-    assert "max 5 before feedback" in instructions
-    assert "add one meaningful dimension" in instructions
+    assert "<=5 before feedback" in instructions
+    assert "meaningful dimension" in instructions
 
     # Common system instructions stay database-neutral. Concrete table/column
     # names may still appear in per-request schema summaries, not here.

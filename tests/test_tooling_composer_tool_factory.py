@@ -387,6 +387,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]
     assert "handle_order_by_columns" in descriptions["query"]["$.spec.order_by"]
     assert "silent tie-break" in descriptions["query"]["$.spec.order_by"]
+    assert "exactly one of ref or output" in descriptions["query"]["$.spec.order_by"]
     assert "Match the direction or ranking stated in user_request" in descriptions[
         "query"
     ]["$.spec.order_by[].direction"]

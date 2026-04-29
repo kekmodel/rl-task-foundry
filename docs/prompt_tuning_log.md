@@ -7368,6 +7368,84 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 174 — List difficulty-up must not narrow the evaluated row set
+
+- **질문**:
+  Iteration 173의 aggregate query schema 보강 뒤 다음 smoke에서 좋은 accepted가 나왔는가?
+  그리고 reasoning은 composer가 too-easy feedback을 어떻게 해석하는지 보여주는가?
+
+- **실험/결과**:
+  `trial_56`은 accepted 없이 `synthesis_failed`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_56`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - accepted data: 없음
+
+  submit 흐름은 다음과 같았다.
+
+  1. 단일 입원 정보 lookup: list row 1개, `discharge_location=null`, phrase mismatch로 feedback.
+  2. 최근 입원 이력 5건: 처음에는 hidden `hadm_id`를 query select에 포함해 non-user-visible
+     source 문제가 났고, 최종적으로 hidden field를 제거했다.
+  3. 최근 입원 이력 5건: solver `4/4 = 1.0`으로 너무 쉬워 rejected.
+  4. 퇴원 완료 입원 이력: 기존 5건 list에서 non-null discharge filter를 추가해 4건으로 줄었고,
+     `cardinality_weakened`/`answer_contract_not_incremental`.
+  5. 응급 입원 이력: admission type filter를 추가해 3건으로 줄었고,
+     `answer_contract_not_incremental` 후 budget exhausted.
+
+- **reasoning 교차 분석**:
+  reasoning content는 실제로 반환되고 있었고, composer 판단 흐름을 확인할 수 있었다.
+
+  composer는 첫 too-easy feedback 뒤 "난이도를 올려야 한다"는 신호는 이해했다. 하지만
+  Difficulty-Up Policy 내부에 "list는 row set/order/limit 보존"과 "row membership도 난이도 상승
+  수단"이 함께 있어, non-null filter나 status/type filter를 추가해 row set을 좁히는 방향을
+  합리화했다. reasoning에는 "filter for only admissions where discharge_location is not null",
+  "admission_type = EW EMER." 같은 row-excluding repair 계획이 명시적으로 나타났다.
+
+  즉 solver가 못 푼 문제가 아니라, composer가 too-easy list를 difficulty-up하면서 기존 evaluated
+  list의 row set/limit을 보존하지 못한 문제다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - 단일 입원 정보는 low-quality rejected다. list task로는 1 row이고 null field도 있었다.
+  - 최근 입원 이력 5건은 clean하지만 solver 4/4가 맞춘 too-easy rejected다.
+  - 퇴원 완료/응급 입원 이력 retry는 low-quality rejected다. 기존 evaluated list의 fixed size와
+    row set을 좁히면서 난이도를 올리려 했고, 한국어 문장에도 `순으부터`, `익급실` 같은 어색한
+    표기가 남았다.
+
+- **변경**:
+  prompt-first 원칙에 따라 durable Difficulty-Up Policy의 모순을 먼저 제거했다.
+
+  - too-easy 이후 evaluated list는 row set/order/limit/output/source meanings/phrases를 보존해야
+    한다고 명시했다.
+  - evaluated list retry에서는 narrowing filter 추가, filter 제거, fixed list 축소, field 교체를
+    금지했다.
+  - 좋은 difficulty-up은 같은 row를 유지한 채 lookup/comparison/visible ordering/related-row
+    reasoning을 바꾸는 한 가지 grounded dimension이라고 정리했다.
+  - feedback은 이 durable policy를 상기하도록만 맞췄다. 새 지시 원천을 feedback에 따로 만들지
+    않았다.
+
+  추가로 precision 100 구조 검증을 하나 넣었다. too-easy 이후 list retry에서 새 `where` predicate가
+  추가됐는지는 query evidence 구조로 정확히 판정할 수 있으므로, `list_row_filter_added`를
+  `answer_contract_not_incremental` 원인으로 기록한다. 문자열/컬럼 의미 리터럴 휴리스틱은 사용하지
+  않았다.
+
+  `trial_56`에서 반복된 `order_by[0] must include exactly one of 'ref' or 'output'` 툴 사용 오류는
+  tool schema description에 "order item은 ref/output 중 정확히 하나만"이라고 추가해 보강했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py -q`
+  통과 (`105 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

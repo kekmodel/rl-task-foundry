@@ -699,7 +699,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "field is not an order request unless the request also "
                     "states its direction, recency, rank, or tie-break role. "
                     "If diagnostics list handle_order_by_columns, that key is "
-                    "a handle; do not keep it as a silent tie-break."
+                    "a handle; do not keep it as a silent tie-break. Each "
+                    "order item must contain exactly one of ref or output, "
+                    "never both."
                 ),
                 "items": {
                     "type": "object",

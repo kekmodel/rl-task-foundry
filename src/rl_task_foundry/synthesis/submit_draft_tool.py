@@ -1262,6 +1262,8 @@ def _query_evidence_incremental_errors(
     added_predicate = bool(current_predicates - previous_predicates)
     added_order = bool(current_order - previous_order)
     added_output_source = bool(current_outputs - previous_outputs)
+    if current.kind == "list" and added_predicate:
+        errors.append("list_row_filter_added")
     strengthened_cardinality = False
     if current.kind == "list":
         if previous.item_count is None and current.item_count is not None:
@@ -2753,7 +2755,7 @@ class SubmitDraftController:
                 "Rejected. Label Grounding Policy reminder: some label values were not directly grounded in observed tool results, or were reformatted from observed values."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NOT_STRENGTHENED: (
-                "Rejected. Difficulty-Up Policy reminder: after specificity feedback, the canonical answer itself must change through a grounded strengthening step. Use the last evaluated too-easy label as the baseline; keep fields already added and add one new grounded field, relationship, or coherent constraint."  # noqa: E501
+                "Rejected. Difficulty-Up Policy reminder: after specificity feedback, the canonical answer itself must change through a grounded strengthening step. Use the last evaluated too-easy label as the baseline; keep fields already added and add one new grounded related, aggregate, comparison, visible-order, or related-row selection dimension."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR: (
                 "Rejected. Feedback Handling Policy reminder: this feedback only requires contract repair, so restore the repair-locked canonical label/query target and change only the failing request/answer_contract wording or rerun that same label query. Do not keep the last failed modified label."  # noqa: E501
@@ -2816,7 +2818,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL: (
                 "Rejected. Difficulty-Up Policy reminder: this retry changed the prior answer kind, query shape, row set, or output source meanings instead of preserving the evaluated task and adding one grounded strengthening."  # noqa: E501
-                " The baseline is the last solver-evaluated draft, not later failed detours. Restore that evaluated task's target scope, predicates, row set, and output sources, then append one grounded dimension that changes lookup, comparison, order, or row reasoning. Scalar aggregate retries may become grouped aggregate lists only when they keep the same target and predicates. For list retries, keep every prior output field/source and prior order binding, including fields already added by earlier too-easy retries. Output-only list field additions and same-row passive display/derived fields are still too direct."  # noqa: E501
+                " The baseline is the last solver-evaluated draft, not later failed detours. Restore that evaluated task's target scope, predicates, row set, and output sources, then append one grounded dimension that changes lookup, comparison, visible order, or related-row reasoning. Scalar aggregate retries may become grouped aggregate lists only when they keep the same target and predicates. For list retries, keep every prior output field/source and prior order binding, including fields already added by earlier too-easy retries; do not add narrowing row filters or lower row count. Output-only list field additions and same-row passive display/derived fields are still too direct."  # noqa: E501
             ),
             SubmitDraftErrorCode.SUBMIT_PAYLOAD_INVALID: (
                 "Rejected. Tool schema reminder: submit_draft arguments did "
