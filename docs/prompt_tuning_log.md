@@ -10679,6 +10679,82 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_88_recheck_01`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 168 — Source status must not collapse into broad object status
+
+- **질문**:
+  `trial_89`는 accepted였지만 pass_rate가 `0.25`였다. 이 데이터는 어려운 좋은 문제인가,
+  아니면 low-quality accepted인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 accepted, pass_rate `0.25` (`1/4` matched).
+
+  accepted request:
+  `이번 입원 기간 동안 처방된 약물 5개의 이름, 처방 시작 시간, 종료 시간, 처방 상태 정보를 처방 시작 시간이 빠른 순서대로 보여주세요. 같은 시간에 시작한 약물은 이름 순으로 정렬해 주세요. 약물 이름이 있는 처방만 보여주세요.`
+
+  canonical query는 `pharmacy`를 source로 사용했다.
+  canonical status 값은 `pharmacy.status`의 `Discontinued via patient discharge`였다.
+
+  solver 3/4는 같은 request를 보고 `prescriptions` 쪽을 자연스러운 처방 source로 선택했고,
+  status 값으로 `MAIN`을 제출했다. 1/4만 `pharmacy.status`까지 찾아가 canonical과 matched했다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 admission anchor에서 pharmacy 26건을 발견했고, 약물 5개 list로 수리해 나갔다.
+  order ambiguity와 null medication filter는 비교적 잘 처리했다. 그러나 마지막 source-role 판단에서
+  “처방 상태”가 `pharmacy.status`를 뜻한다는 점을 자연어에 충분히 드러내지 못했다.
+
+  solver reasoning은 더 명확하다. 대부분의 solver는 “처방된 약물”, “처방 상태”를 보고
+  `prescriptions` table의 약물/상태를 ordinary matching source로 판단했다. 이는 solver가 어려워서
+  틀린 것이 아니라, request가 여러 reachable source surface를 동시에 만족시키는 broad wording이었음을
+  보여준다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted. row count, ordering, null filter 자체는 괜찮지만, status field의
+  source role이 하나로 고정되지 않는다. 어려운 좋은 문제가 아니라 source status ambiguity다.
+
+  rejected data:
+  - submit 2는 low-quality rejected. 26-row list, null label, unstable order가 명확했다.
+  - submit 3은 binding repair 실패.
+  - submit 4는 filter phrase가 빠진 repairable draft였다.
+
+  따라서 `trial_89`는 accepted지만 만족 streak에 포함하지 않는다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. `pharmacy.status`와 `prescriptions.status`의 의미 차이를
+  테이블명/컬럼명/문자열 리터럴로 판정하는 방식은 금지 원칙 위반이고 precision 100%가 아니다.
+
+  Prompt-first 원칙에 따라 Source Surface Policy를 status field에 더 직접적으로 적용했다.
+  source status text는 source-specific이며 broad object status나 current/derived state로 묶으면 안 된다고
+  system prompt를 압축 보강했다.
+
+  `submit_draft` tool schema에는 result/status/type/category binding 설명을 보강했다.
+  related source의 status field는 서로 교환 가능하지 않고, 다른 reachable source가 자체 status를 가질 수
+  있으면 broad object status phrase가 invalid라고 명시했다.
+
+  `user_request` schema와 `query` schema/description도 같은 원칙을 reminder로 반영했다.
+  status/type/result output은 related surface가 다를 수 있으면 selected source role을 자연어로 이름 붙여야
+  한다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+    통과 (`1 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`114 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_89`는 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

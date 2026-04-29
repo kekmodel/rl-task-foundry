@@ -708,8 +708,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                                 "Do not make note/comment/description text "
                                 "look like a result/status/value field unless "
                                 "the request names that text surface. Do not "
-                                "make source status text look like current/"
-                                "derived state wording."
+                                "make source status text look like broad "
+                                "object status or current/derived state wording."
                             ),
                         },
                     },
@@ -854,7 +854,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Before submit_draft, ensure user_request/topic name the "
                     "selected source role when multiple reachable sources could "
                     "answer the broad noun; label/output field names do not "
-                    "disambiguate source surface. If naming the chosen source "
+                    "disambiguate source surface. Status/type/result outputs "
+                    "must name the selected source role when related surfaces "
+                    "can differ. If naming the chosen source "
                     "role would sound awkward, choose another label/source "
                     "instead of submitting broad wording. "
                     "Copy returned row values exactly into the label, including "

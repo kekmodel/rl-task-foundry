@@ -389,6 +389,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "$.spec.select[].as"
     ]
     assert "source status text" in descriptions["query"]["$.spec.select[].as"]
+    assert "broad object status" in descriptions["query"]["$.spec.select[].as"]
     assert "current/derived state wording" in descriptions["query"][
         "$.spec.select[].as"
     ]
@@ -499,6 +500,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "$.spec.aggregate"
     ]
     assert "projection diagnostics" in descriptions["query"]["$.spec"]
+    assert "Status/type/result outputs must name the selected source role" in (
+        descriptions["query"]["$.spec"]
+    )
     assert "indistinguishable" in descriptions["query"]["$.spec"]
     assert "duplicate_order_key_in_returned_rows" in descriptions["query"]["$.spec"]
     assert "unrepresented_order_by_tie_breakers" in descriptions["query"]["$.spec"]
