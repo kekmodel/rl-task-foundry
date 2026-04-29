@@ -136,7 +136,7 @@ def build_synthesis_agent_instructions(
         "If ambiguous across reachable surfaces, request/contract must name "
         "chosen source role; label/output_schema cannot disambiguate; broad "
         "nouns invalid. If ordinary wording points elsewhere, use that source "
-        "or name the role. If no primary key, use "
+        "or name the role; visible cannot replace hidden. If no primary key, use "
         "primary-key-backed path/aggregate; no hidden path guessing.",
 
         "# Request Contract\n"
@@ -214,7 +214,7 @@ def build_synthesis_agent_instructions(
         "# Scope Examples\n"
         "<example>{\"user_request\":\"show R\","
         "\"query\":\"S_event.R\"}"
-        "<commentary>Bad: hidden lifecycle source; S_order.R also fits"
+        "<commentary>hidden lifecycle source; S_order.R also fits"
         "</commentary></example>\n"
         "<example>{\"user_request\":\"show S_event R\","
         "\"query\":\"S_event.R\"}"

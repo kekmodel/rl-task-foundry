@@ -9427,6 +9427,77 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Iteration 145 — Visible field is not a semantic substitute
+
+- **질문**:
+  `trial_67`은 accepted였지만 `solver_pass_rate=0.25`였다. 승인 데이터가 정말 좋은가,
+  아니면 low-quality accepted인가?
+
+- **실험/결과**:
+  composer는 MIMIC demo의 ICU `outputevents`에서 배출 유형, 배출량, 기록 시간을 오래된 순서대로
+  5개 요청하는 task를 만들었다.
+
+  최종 request:
+  `이번 ICU 입원 중 배출 유형과 배출량과 기록 시간을 가장 오래된 것부터 5개 보여주세요`
+
+  canonical answer는 `recorded_time`에 `storetime`을 넣었다. 하지만 solver 4개 중 3개는 같은
+  요청을 보고 `charttime`을 기록 시간으로 해석했고, 그래서 canonical의 2~5번째 시간이 달라졌다.
+  `charttime`은 blocked라 label에 직접 노출할 수 없지만, 그렇다고 `storetime`을 같은 의미의
+  “기록 시간”으로 바꿔 넣으면 request/label/source role이 어긋난다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 첫 제출에서 `charttime`이 blocked라는 피드백을 받은 뒤 `storetime`을
+  user-visible 대체 필드로 선택했다. 하나의 solver도 reasoning에서 `charttime`이 blocked임을
+  인지하고 `storetime`을 제출했지만, 나머지 solver들은 자연어 “기록 시간”을 실제 이벤트 기록
+  시간인 `charttime`으로 판단했다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted. row set 자체는 괜찮지만, 출력 필드 의미가 애매해서 정답이
+  하나로 고정되지 않는다. 어려운 좋은 문제가 아니라 composer가 visibility repair 중 source
+  role을 바꿔버린 문제다.
+
+  rejected data: 앞선 rejected들은 대체로 좋은 방향의 repair였다. 7건 list와 blocked field는
+  정확히 거절됐고, binding repair도 필요한 거절이었다. 문제는 마지막 accepted에서 visible field
+  대체의 의미 차이가 통과한 점이다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. `charttime`/`storetime` 같은 컬럼명을 토큰 또는 문자 기반으로
+  해석해 잡는 방식은 금지 원칙 위반이고, 모든 DB에서 precision 100%를 보장할 수 없다.
+
+  대신 prompt-first 원칙에 따라 Source Surface Policy를 보강했다. visible field는 hidden field를
+  의미적으로 대체할 수 없으며, ordinary wording이 hidden source role을 가리키면 다른 source/label을
+  선택해야 한다.
+
+  `query.select` tool schema description도 같은 원칙을 구체화했다. 선택한 field는 canonical label
+  field가 되므로 blocked/internal source를 피하려고 의미가 다른 user-visible field를 선택하면
+  안 되고, alias로 그 의미 차이를 숨길 수도 없다고 명시했다.
+
+  `label_non_user_visible_source` feedback은 새 지시가 아니라 위 원칙의 reminder로만 보강했다.
+  blocked field를 alias로 노출하지 말라는 기존 reminder에, 다른 visible field로 대체하려면
+  user_request가 그 selected source role을 자연스럽게 물어야 한다는 문장을 추가했다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_from_non_user_visible_query_source -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_turn_budget_prompt.py -q`
+    통과 (`6 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`112 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+- **현재 streak**:
+  `trial_67`은 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 144 — Generic value fields must be requestable
 
 - **질문**:

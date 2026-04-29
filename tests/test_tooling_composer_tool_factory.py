@@ -373,6 +373,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "request names that text surface" in descriptions["query"][
         "$.spec.select[].as"
     ]
+    assert "visible substitute" in descriptions["query"]["$.spec.select[].as"]
+    assert "different blocked source role" in descriptions["query"][
+        "$.spec.select[].as"
+    ]
     assert "source status text" in descriptions["query"]["$.spec.select[].as"]
     assert "current/derived state wording" in descriptions["query"][
         "$.spec.select[].as"
@@ -387,6 +391,11 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "source value role in ordinary language" in descriptions["query"][
         "$.spec.select"
     ]
+    assert "Do not substitute a different user-visible field" in descriptions[
+        "query"
+    ]["$.spec.select"]
+    assert "blocked/internal source" in descriptions["query"]["$.spec.select"]
+    assert "blocked source role" in descriptions["query"]["$.spec.select"]
     assert "For aggregate queries, do not use select" in descriptions["query"][
         "$.spec.select"
     ]

@@ -4479,6 +4479,8 @@ async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
     assert "field marked internal or blocked" in message
     assert "only user-visible non-handle answer fields" in message
     assert "do not expose the blocked field under a new alias" in message
+    assert "do not substitute a different visible field" in message
+    assert "selected source role" in message
     assert "rewrite the full user_request cleanly" in message
     assert "do not splice malformed phrases" in message
     assert "is_handle: true" not in message

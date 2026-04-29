@@ -311,6 +311,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "label/output_schema cannot disambiguate" in instructions
     assert "ordinary wording points elsewhere" in instructions
     assert "use that source or name the role" in instructions
+    assert "visible cannot replace hidden" in instructions
     assert "If no primary key" in instructions
     assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
