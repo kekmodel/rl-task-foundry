@@ -162,6 +162,39 @@ def _format_missing_order_label_binding_guidance(
     )
 
 
+def _format_incremental_error_guidance(
+    diagnostics: dict[str, object] | None,
+) -> str:
+    if diagnostics is None:
+        return ""
+    raw_errors = diagnostics.get("answer_contract_incremental_errors")
+    if not isinstance(raw_errors, list):
+        return ""
+    errors = [str(error) for error in raw_errors[:5] if isinstance(error, str)]
+    if not errors:
+        return ""
+    guidance = " Incremental diagnostics: " + ", ".join(errors) + "."
+    if any(
+        error in {"list_output_only", "no_new_structural_constraint"}
+        for error in errors
+    ):
+        guidance += (
+            " Difficulty-Up Policy reminder: same-row output additions only "
+            "widen the displayed answer; they do not add lookup, comparison, "
+            "group/aggregate, visible-order, or related-row reasoning."
+        )
+    if any(
+        error in {"operation_changed", "list_row_filter_added", "cardinality_weakened"}
+        for error in errors
+    ):
+        guidance += (
+            " Restore the last solver-evaluated row set, order, limit, and "
+            "output sources before adding a strengthening dimension; remove "
+            "target switches, added row filters, or cardinality changes."
+        )
+    return guidance
+
+
 def _format_duplicate_output_binding_guidance(
     diagnostics: dict[str, object] | None,
 ) -> str:
@@ -207,9 +240,10 @@ def _too_easy_retry_guidance(*, answer_kind: str | None = None) -> str:
         "current anchor and target; for list labels preserve the evaluated row "
         "set, order, limit, source meanings, and existing output field request "
         "phrases. Do not add a narrowing row filter or lower the row count as a "
-        "difficulty-up move. Add one grounded meaningful dimension supported by "
-        "new evidence that changes lookup, comparison, visible ordering, or "
-        "related-row reasoning while keeping those rows. Do not only add display "
+        "difficulty-up move. Add one grounded meaningful dimension with "
+        "structural effect, supported by new evidence that changes lookup, "
+        "comparison, group/aggregate, visible ordering, or related-row "
+        "reasoning while keeping those rows. Do not only add display "
         "fields for the same selected row; same-row display/derived fields alone "
         "are still too direct. If that was just tried, switch answer work with "
         "aggregate, comparison, grouping, visible ordering, or related-row "

@@ -12575,3 +12575,76 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_113`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 193 — Difficulty-up should require structural work, not width
+
+- **질문**:
+  `trial_114`는 accepted가 없었지만, 실패 원인이 데이터 저품질인지, 너무 쉬운 좋은 데이터인지, 또는
+  too-easy repair 정책/표현 문제인지?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T131114Z:e74bbe32`.
+  첫 solver-evaluated draft는 pass rate `1.0` (`4/4`)으로 `calibration_inconclusive`였다.
+  마지막 오류는 `answer_contract_not_incremental`이었다.
+
+  진행 흐름:
+  - 첫 draft는 최근 입원 5건 list였고 `discharge_location`에 null이 있어
+    `label_null_value_forbidden`으로 거절됐다.
+  - composer는 `discharge_location`을 `insurance`로 바꿔 null 문제를 고쳤다.
+  - 이 입원 list는 solver 4개가 모두 맞춰 `pass_rate=1.0`으로 too easy였다.
+  - 이후 composer는 ICU join으로 난이도를 올리려 했지만 hidden `stay_id is_not_null` filter를 추가해
+    row set/cardinality를 바꾸었고 `answer_contract_hidden_filter_unanchored`,
+    `answer_contract_not_incremental`로 거절됐다.
+  - 마지막에는 evaluated baseline으로 돌아와 `marital_status`를 추가했지만, 이는 같은 row의 passive output width라
+    `list_output_only`, `no_new_structural_constraint`로 budget exhausted됐다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 null `discharge_location`을 보고 제거/대체해야 한다고 정확히 판단했다. 또한 too-easy feedback 뒤
+  "row set을 보존하고 grounded meaningful dimension을 추가해야 한다"는 원칙도 말로는 이해했다.
+
+  실제 행동은 두 번 어긋났다.
+  1. ICU join은 related-row reasoning처럼 보였지만, 최근 입원 5건 baseline을 보존하지 않고 ICU 입원 row set으로 바꾸었다.
+  2. 마지막 repair는 baseline row set은 보존했지만 `marital_status`를 단순 출력 필드로 추가했을 뿐, lookup/comparison/
+     group/aggregate/order/related-row reasoning을 추가하지 않았다.
+
+  따라서 solver가 못 푼 좋은 어려운 문제가 아니다. 너무 쉬운 clean draft를 어렵게 만드는 repair에서 policy를 실행하지
+  못한 low-quality rejected다. validator가 이를 solver accepted로 보내지 않은 것은 올바른 동작이다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - solver-evaluated 입원 list는 clean하지만 너무 쉽다. admissions table에서 subject filter, admittime desc, limit 5,
+    selected fields만 읽으면 되므로 4/4가 자연스럽다.
+  - ICU retry는 저품질이다. hidden ICU existence filter가 row membership을 바꾸었고 evaluated baseline과 다른 task가 됐다.
+  - final marital_status retry도 저품질이다. 출력 폭만 넓혔고 문제 해결 구조는 그대로다.
+
+- **변경**:
+  prompt-first 원칙에 따라 durable Difficulty-Up Policy 표현을 정리했다.
+  - `smallest grounded related/derived dimension`을 `smallest grounded structural dimension`으로 바꾸었다.
+  - strengthening option에 `group/aggregate`를 명시하고, passive same-row field와의 혼동을 줄였다.
+
+  feedback은 새 지시를 만들지 않고 기존 validator diagnostics를 surface한다.
+  - `answer_contract_not_incremental` feedback에 `answer_contract_incremental_errors`를 표시한다.
+  - `list_output_only`/`no_new_structural_constraint`이면 same-row output width는 lookup/comparison/group/aggregate/
+    visible-order/related-row reasoning을 추가하지 못한다고 상기한다.
+  - row set/filter/cardinality drift이면 last solver-evaluated row set/order/limit/output source를 복원하라고 상기한다.
+
+  precision 100 관점에서 새 hard validator는 없다. `answer_contract_incremental_errors`는 이미 구조 비교로 산출되던
+  diagnostics이며, 리터럴/토큰/DB 의미 휴리스틱을 추가하지 않았다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_preserves_readable_path tests/test_synthesis_runtime.py::test_submit_draft_too_easy_feedback_is_list_aware tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract -q`
+  통과 (`4 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_114`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

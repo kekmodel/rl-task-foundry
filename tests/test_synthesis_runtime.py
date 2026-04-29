@@ -3281,7 +3281,10 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "existing output field request phrases" in message
     assert "Do not add a narrowing row filter or lower the row count" in message
     assert "one grounded meaningful dimension" in message
-    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in message
+    assert (
+        "changes lookup, comparison, group/aggregate, visible ordering, or "
+        "related-row reasoning"
+    ) in message
     assert "Do not only add display fields for the same selected row" in message
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
@@ -3351,7 +3354,10 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "existing output field request phrases" in message
     assert "Do not add a narrowing row filter or lower the row count" in message
     assert "one grounded meaningful dimension" in message
-    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in message
+    assert (
+        "changes lookup, comparison, group/aggregate, visible ordering, or "
+        "related-row reasoning"
+    ) in message
     assert "Do not only add display fields for the same selected row" in message
     assert "same-row display/derived fields alone are still too direct" in message
     assert "switch answer work with aggregate, comparison, grouping" in message
@@ -5541,6 +5547,9 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
     assert "not later failed detours" in second_message
     assert "Restore that evaluated task's target scope" in second_message
     assert "predicates, row set, and output sources" in second_message
+    assert "Incremental diagnostics" in second_message
+    assert "no_new_structural_constraint" in second_message
+    assert "do not add lookup, comparison, group/aggregate" in second_message
     assert "Scalar aggregate retries may become grouped aggregate lists" in second_message
     assert "keep every prior output field/source" in second_message
     assert "including fields already added by earlier too-easy retries" in second_message

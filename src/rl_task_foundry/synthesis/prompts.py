@@ -236,11 +236,11 @@ def build_synthesis_agent_instructions(
         "- baseline is the last evaluated draft; preserve "
         "anchor/target. Lists preserve row set/order/limit/output fields/source "
         "meanings/phrases; scalar aggregates may add group/compare. Add the "
-        "smallest grounded related/derived dimension; there is no fixed ladder/difficulty jump.\n"
-        "- Real strengthening changes answer work: not passive same-row fields. "
+        "smallest grounded structural dimension; no fixed ladder/difficulty jump.\n"
+        "- Real strengthening changes work: not passive same-row fields. "
         "If just tried, switch work. do not add narrowing filters, remove filters, "
         "shrink the fixed list, or replace fields. Add one dimension that keeps "
-        "the same rows but changes lookup, comparison, visible ordering, or "
+        "the same rows but changes lookup, comparison, group/aggregate, visible ordering, or "
         "related-row reasoning; ask for it in user_request/answer_contract.",
 
         "# Difficulty-Up Examples\n"

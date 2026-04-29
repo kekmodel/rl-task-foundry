@@ -27,6 +27,7 @@ from rl_task_foundry.synthesis.contracts import StrictModel
 from rl_task_foundry.synthesis.phase_monitor import PipelinePhaseMonitorLogger
 from rl_task_foundry.synthesis.submit_draft_messages import (
     _format_duplicate_output_binding_guidance,
+    _format_incremental_error_guidance,
     _format_missing_contract_phrase_guidance,
     _format_missing_order_label_binding_guidance,
     _format_missing_request_phrase_guidance,
@@ -3043,6 +3044,11 @@ class SubmitDraftController:
                     else None
                 )
             )
+        if (
+            error_codes
+            and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_NOT_INCREMENTAL
+        ):
+            primary += _format_incremental_error_guidance(diagnostics)
         if (
             error_codes
             and error_codes[0] is SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING

@@ -274,21 +274,24 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "if diagnostics pass, submit immediately" in instructions
     assert "no decorative global answer" in instructions
     assert "Difficulty-Up Policy" in instructions
-    assert "smallest grounded related/derived dimension" in instructions
-    assert "there is no fixed ladder" in instructions
+    assert "smallest grounded structural dimension" in instructions
+    assert "no fixed ladder" in instructions
     assert "baseline is the last evaluated draft" in instructions
     assert "preserve anchor/target" in instructions
     assert "Lists preserve row set/order/limit" in instructions
     assert "scalar aggregates may add group/compare" in instructions
-    assert "smallest grounded related/derived dimension" in instructions
-    assert "Real strengthening changes answer work" in instructions
+    assert "smallest grounded structural dimension" in instructions
+    assert "Real strengthening changes work" in instructions
     assert "not passive same-row fields" in instructions
     assert "If just tried, switch work" in instructions
     assert "do not add narrowing filters" in instructions
     assert "remove filters" in instructions
     assert "output fields/source meanings/phrases" in instructions
     assert "Add one dimension that keeps the same rows" in instructions
-    assert "changes lookup, comparison, visible ordering, or related-row reasoning" in instructions
+    assert (
+        "changes lookup, comparison, group/aggregate, visible ordering, or "
+        "related-row reasoning"
+    ) in instructions
     assert "ask for it in user_request/answer_contract" in instructions
     assert "shrink the fixed list" in instructions
     assert "replace fields" in instructions
