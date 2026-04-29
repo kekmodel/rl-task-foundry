@@ -441,6 +441,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     ]["$.spec.select"]
     assert "blocked/internal source" in descriptions["query"]["$.spec.select"]
     assert "blocked source role" in descriptions["query"]["$.spec.select"]
+    assert "label_source_diagnostics.submit_blocked" in descriptions["query"][
+        "$.spec.select"
+    ]
+    assert "rerun with visible outputs" in descriptions["query"]["$.spec.select"]
     assert "For aggregate queries, do not use select" in descriptions["query"][
         "$.spec.select"
     ]

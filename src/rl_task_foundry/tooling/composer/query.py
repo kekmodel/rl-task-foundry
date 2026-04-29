@@ -31,7 +31,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from rl_task_foundry.infra.visibility import is_user_visible_visibility
+from rl_task_foundry.infra.visibility import (
+    blocks_direct_label_exposure,
+    is_user_visible_visibility,
+)
 from rl_task_foundry.tooling.common.edges import TypedEdge, resolve_edge
 from rl_task_foundry.tooling.common.payload import ensure_int as _require_int
 from rl_task_foundry.tooling.common.schema import TableSpec
@@ -679,6 +682,43 @@ def _column_source_payload(
     return payload
 
 
+def _label_source_diagnostics(
+    column_sources: list[dict[str, object]],
+) -> dict[str, object] | None:
+    blocked_outputs: list[dict[str, object]] = []
+    for source in column_sources:
+        if source.get("value_exposes_source") is not True:
+            continue
+        if not blocks_direct_label_exposure(source.get("visibility")):
+            continue
+        blocked_outputs.append(
+            {
+                key: source.get(key)
+                for key in (
+                    "output",
+                    "kind",
+                    "table",
+                    "column",
+                    "visibility",
+                    "is_handle",
+                    "is_primary_key",
+                )
+                if key in source
+            }
+        )
+    if not blocked_outputs:
+        return None
+    return {
+        "non_user_visible_outputs": blocked_outputs,
+        "submit_blocked": True,
+        "message": (
+            "Selected outputs marked blocked/internal cannot be submitted as "
+            "label fields. Do not infer visibility from table, column, or "
+            "domain names; use the latest query metadata."
+        ),
+    }
+
+
 def _referenced_column_payload(
     *,
     usage: str,
@@ -1297,6 +1337,9 @@ async def query(
         "rows": materialized,
         "row_count": len(materialized),
     }
+    label_source_diagnostics = _label_source_diagnostics(column_sources)
+    if label_source_diagnostics is not None:
+        result["label_source_diagnostics"] = label_source_diagnostics
     ordering_diagnostics = _ordering_diagnostics(
         materialized,
         parsed=parsed,

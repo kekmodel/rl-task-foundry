@@ -12139,3 +12139,68 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_106`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 186 — Surface query visibility blocks before submit
+
+- **질문**:
+  `trial_107`의 마지막 `label_non_user_visible_source`는 composer가 단순히 submit feedback을 못 지킨 것인가,
+  아니면 query 단계에서 blocked/internal selected output을 더 구조적으로 드러내야 하는 문제인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T121709Z:8cdba29e`.
+  마지막 오류는 `label_non_user_visible_source`였다.
+
+  composer는 처음 `pharmacy`의 입원 중 약물 목록을 시도했다. 첫 draft는 `status` phrase가 user_request에 없고,
+  모든 returned row의 `starttime`이 같아 limited list membership/order가 안정적이지 않았다. 두 번째 draft는
+  `medication,starttime`으로 줄였지만, query 결과에 duplicate projected answer rows가 남았다.
+
+  이후 composer는 `diagnoses_icd`로 전환해 `icd_code,seq_num`을 selected output으로 제출했다:
+  `이번 입원 중 진단 목록을 순위순으로 5개 보여주세요`.
+  하지만 query metadata에서 두 output 모두 `visibility="blocked"`였고, submit validator가 정확히 거절했다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 약물 목록의 동점/중복 문제를 인지하고 label 전환을 시도했다. 여기까지는 올바른 방향이다.
+  실패 지점은 `seq_num`을 “테이블에 있으니 visible field일 수 있다”고 추론한 부분이다. 실제 query result의
+  `column_sources`에는 `icd_code`와 `seq_num`이 blocked로 표시되어 있었다.
+
+  이번 trial은 solver rollout 전에 종료되었으므로 solver reasoning은 없다. 따라서 품질 문제는 solver가 못 푼
+  어려운 좋은 문제가 아니라, composer가 metadata visibility를 보지 않고 domain/table/column 추론으로 label을
+  제출한 저품질 rejected다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - pharmacy 후보는 low-quality rejected. order ambiguity와 duplicate projected answer rows가 있었다.
+  - diagnosis 후보도 low-quality rejected. source sequence/code를 자연어로 포장했지만 query metadata상 blocked
+    output이므로 customer-facing label로 제출할 수 없다.
+  - 저품질이 solver까지 가지 않고 submit validator에서 거절된 것은 맞지만, composer가 submit 직전까지 blocked
+    output을 눈치채지 못한 점은 개선 대상이다.
+
+- **변경**:
+  1. `query` 결과에 `label_source_diagnostics`를 추가했다. selected output이 `blocked` 또는 `internal`이고
+     값이 source를 직접 노출하면 `submit_blocked=true`와 함께 해당 output/source/visibility를 구조화해 반환한다.
+     이는 literal/token/table-name 휴리스틱이 아니라 이미 존재하는 visibility metadata를 더 명확히 노출하는
+     100% 정밀도 개선이다.
+  2. `query.select` tool description에 `label_source_diagnostics.submit_blocked`를 blocking signal로 취급하고,
+     visible output으로 rerun하거나 다른 label을 고르라고 추가했다.
+  3. durable prompt의 Label Contract를 짧게 보강했다. label value visibility는 metadata 기준이며 이름 추론으로
+     결정하지 않는다고 명시했다.
+  4. `label_non_user_visible_source` feedback도 같은 원칙을 reminder로 맞췄다. 새 지시가 아니라 기존 Label
+     Contract를 상기하는 feedback이다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_query.py::test_query_returns_visibility_provenance_for_outputs_and_refs tests/test_tooling_composer_query.py::test_query_marks_label_sources_without_primary_key tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_from_non_user_visible_query_source tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`5 passed`).
+
+  Related:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_tooling_composer_query.py::test_query_returns_visibility_provenance_for_outputs_and_refs tests/test_tooling_composer_query.py::test_query_marks_label_sources_without_primary_key tests/test_tooling_composer_query.py::test_query_rejects_blocked_non_handle_column_refs tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_from_non_user_visible_query_source tests/test_synthesis_runtime.py::test_submit_draft_rejects_query_without_visibility_metadata -q`
+  통과 (`28 passed`).
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_107`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

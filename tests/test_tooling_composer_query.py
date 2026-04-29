@@ -407,6 +407,25 @@ async def test_query_returns_visibility_provenance_for_outputs_and_refs():
             "direction": "asc",
         },
     ]
+    assert result["label_source_diagnostics"] == {
+        "non_user_visible_outputs": [
+            {
+                "output": "contact",
+                "kind": "select",
+                "table": "customer",
+                "column": "email",
+                "visibility": "internal",
+                "is_handle": False,
+                "is_primary_key": False,
+            }
+        ],
+        "submit_blocked": True,
+        "message": (
+            "Selected outputs marked blocked/internal cannot be submitted as "
+            "label fields. Do not infer visibility from table, column, or "
+            "domain names; use the latest query metadata."
+        ),
+    }
 
 
 @pytest.mark.asyncio
@@ -447,6 +466,7 @@ async def test_query_marks_label_sources_without_primary_key():
             "value_exposes_source": True,
         }
     ]
+    assert "label_source_diagnostics" not in result
 
 
 @pytest.mark.asyncio

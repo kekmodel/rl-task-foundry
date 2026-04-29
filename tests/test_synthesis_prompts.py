@@ -402,6 +402,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "semantic API-style field names" in instructions
     assert "not raw DB aliases" in instructions
     assert "values stay user-visible non-handles" in instructions
+    assert "by metadata, not names" in instructions
     assert "Bind answer representation exactly" in instructions
     assert "no code/reference-to-display" in instructions
     assert "source-field-to-related-field upgrade" in instructions

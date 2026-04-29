@@ -4779,6 +4779,8 @@ async def test_submit_draft_rejects_label_from_non_user_visible_query_source(
     message = await controller.submit(payload)
 
     assert "field marked internal or blocked" in message
+    assert "only by that metadata" in message
+    assert "not by table names, column names, or domain guesses" in message
     assert "only user-visible non-handle answer fields" in message
     assert "do not expose the blocked field under a new alias" in message
     assert "do not substitute a different visible field" in message

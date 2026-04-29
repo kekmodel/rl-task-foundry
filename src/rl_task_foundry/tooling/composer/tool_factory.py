@@ -695,6 +695,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "unless that sequence is the natural domain answer. "
                     "Do not expose row values from a table "
                     "without a primary key; choose a primary-key-backed path."
+                    " After query returns, treat "
+                    "label_source_diagnostics.submit_blocked as blocking; "
+                    "rerun with visible outputs or choose another label."
                 ),
                 "items": {
                     "type": "object",
