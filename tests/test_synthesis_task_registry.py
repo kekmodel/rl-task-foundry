@@ -99,7 +99,6 @@ def _sample_draft(
         rendered_user_prompt=build_rendered_user_prompt(
             task,
             anchor_entity=anchor_entity,
-            canonical_answer=canonical_answer,
         ),
         anchor_entity=anchor_entity,
         canonical_answer_json=canonical_answer_json,

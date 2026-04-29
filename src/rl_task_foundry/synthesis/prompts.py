@@ -318,16 +318,12 @@ def build_synthesis_input(
     requested_topic: str | None,
     task_language: str,
     schema_summary: dict[str, object],
-    tool_surface_summary: dict[str, object],
     runtime_config: SynthesisRuntimeConfig,
     anchor_hint: dict[str, object] | None = None,
     data_profile: DataProfile | None = None,
     examples_pack: ExamplePack | None = None,
     affordance_map: dict[str, object] | None = None,
 ) -> str:
-    # The callable tool surface is injected by the Agents SDK via the API
-    # `tools` field, so it is intentionally not mirrored into user context.
-    del tool_surface_summary
     sections: list[str] = []
 
     # ── Anchor (top for salience) ──

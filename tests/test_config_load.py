@@ -52,10 +52,8 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
     assert config.synthesis.runtime.category_backoff_duration_s == 3600
     assert config.synthesis.runtime.schema_summary_max_tables == 32
-    assert config.synthesis.runtime.tool_surface_summary_max_entries == 24
     assert config.synthesis.runtime.prompt_schema_orientation_max_tables == 8
     assert config.synthesis.runtime.prompt_schema_orientation_max_columns == 8
-    assert config.synthesis.runtime.prompt_tool_surface_hint_limit == 16
     assert config.synthesis.runtime.label_preview_field_limit == 8
     assert config.synthesis.runtime.diagnostic_item_limit == 5
     assert config.synthesis.runtime.recent_tool_call_limit == 20

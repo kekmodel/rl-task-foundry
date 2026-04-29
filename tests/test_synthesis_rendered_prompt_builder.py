@@ -50,7 +50,6 @@ def test_build_rendered_user_prompt_uses_only_entity_and_user_request() -> None:
     prompt = build_rendered_user_prompt(
         task,
         anchor_entity={"customer_id": 148},
-        canonical_answer=[{"day": 1, "city": "Seoul"}],
     )
 
     assert prompt.startswith("<entity>\n")
@@ -97,7 +96,6 @@ def test_build_rendered_user_prompt_rejects_prebuilt_entity_block() -> None:
         build_rendered_user_prompt(
             task,
             anchor_entity={"customer_id": 148},
-            canonical_answer={"store_id": 1},
         )
 
 

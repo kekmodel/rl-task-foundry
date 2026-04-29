@@ -76,10 +76,8 @@ synthesis:
     max_consecutive_category_discards: 3
     category_backoff_duration_s: 3600
     schema_summary_max_tables: 32
-    tool_surface_summary_max_entries: 24
     prompt_schema_orientation_max_tables: 8
     prompt_schema_orientation_max_columns: 8
-    prompt_tool_surface_hint_limit: 16
     label_preview_field_limit: 8
     diagnostic_item_limit: 5
     recent_tool_call_limit: 20

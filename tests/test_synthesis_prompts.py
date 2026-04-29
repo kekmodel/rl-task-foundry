@@ -1,78 +1,12 @@
 from __future__ import annotations
 
 import re
-from types import SimpleNamespace
 
 from rl_task_foundry.config import load_config
-from rl_task_foundry.synthesis.composer_tools import summarize_composer_tool_surface
 from rl_task_foundry.synthesis.prompts import (
     build_synthesis_agent_instructions,
     build_synthesis_input,
 )
-
-
-def _composer_surface() -> dict[str, object]:
-    return {
-        "tool_count": 5,
-        "tools": [
-            {
-                "name": "schema_map",
-                "description": "Schema graph slice with hub/bridge tags.",
-            },
-            {
-                "name": "profile",
-                "description": "Row/distinct/null counts + top-k frequency.",
-            },
-            {
-                "name": "sample",
-                "description": "Up to n representative rows with optional seed.",
-            },
-            {
-                "name": "neighborhood",
-                "description": "Anchor row + per-edge sample IDs.",
-            },
-            {
-                "name": "query",
-                "description": "JSON DSL compiler for canonical answers.",
-            },
-        ],
-        "solver_primitives": {
-            "resource_creating": [
-                "create_record_set",
-                "filter_record_set",
-                "filter_record_set_by_values",
-                "filter_record_set_by_pattern",
-                "filter_record_set_by_related",
-                "follow_relation",
-            ],
-            "resource_combining": ["intersect_record_sets", "sort_record_set"],
-            "data_fetching": [
-                "list_record_refs",
-                "list_records",
-                "count_records",
-                "aggregate_records",
-            ],
-            "row_reading": ["get_record"],
-        },
-    }
-
-
-def test_composer_surface_summary_exposes_only_callable_tools() -> None:
-    summary = summarize_composer_tool_surface(
-        [
-            SimpleNamespace(name="schema_map", description="schema"),
-            SimpleNamespace(name="query", description="query"),
-        ]
-    )
-
-    assert summary == {
-        "tool_count": 2,
-        "tools": [
-            {"name": "schema_map", "description": "schema"},
-            {"name": "query", "description": "query"},
-        ],
-    }
-    assert "solver_primitives" not in summary
 
 
 def test_synthesis_input_does_not_mirror_sdk_tool_surface() -> None:
@@ -97,7 +31,6 @@ def test_synthesis_input_does_not_mirror_sdk_tool_surface() -> None:
                 },
             ],
         },
-        tool_surface_summary=_composer_surface(),
         affordance_map={
             "table_affordances": [
                 {
@@ -520,7 +453,6 @@ def test_synthesis_input_can_include_tool_only_anchor_hint() -> None:
         task_language="ko",
         runtime_config=config.synthesis.runtime,
         schema_summary={"table_count": 1, "tables": []},
-        tool_surface_summary=_composer_surface(),
         anchor_hint={
             "table": "film",
             "pk_column": "film_id",
@@ -550,7 +482,6 @@ def test_synthesis_input_can_include_candidate_anchor_pool() -> None:
         task_language="ko",
         runtime_config=config.synthesis.runtime,
         schema_summary={"table_count": 1, "tables": []},
-        tool_surface_summary=_composer_surface(),
         anchor_hint={
             "candidate_entities": [
                 {
@@ -592,7 +523,6 @@ def test_synthesis_input_defaults_to_schema_map_entity_selection() -> None:
         task_language="ko",
         runtime_config=config.synthesis.runtime,
         schema_summary={"table_count": 1, "tables": []},
-        tool_surface_summary=_composer_surface(),
     )
 
     assert "<starting_entity>" not in prompt

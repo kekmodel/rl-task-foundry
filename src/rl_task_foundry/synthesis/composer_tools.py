@@ -11,10 +11,6 @@ conversation:
 
 - `build_instrumented_composer_tools` composes the two pieces.
 
-- `summarize_composer_tool_surface` produces a small JSON summary that
-  the synthesis prompt can consume without hidden evaluator/runtime
-  inventory.
-
 The `agents` package is imported lazily so this module stays importable
 without the SDK.
 """
@@ -98,28 +94,7 @@ def build_instrumented_composer_tools(
     return [instrument_composer_tool(tool, controller) for tool in raw_tools]
 
 
-def summarize_composer_tool_surface(
-    tools: list["FunctionTool"],
-) -> dict[str, object]:
-    """JSON summary of the callable composer toolset.
-
-    Keep evaluator/runtime internals out of the composer prompt. The composer
-    needs to know which tools it may call, not which hidden tools will later
-    judge or reproduce the answer.
-    """
-    entries: list[dict[str, object]] = []
-    for tool in tools:
-        entries.append(
-            {"name": tool.name, "description": tool.description}
-        )
-    return {
-        "tool_count": len(tools),
-        "tools": entries,
-    }
-
-
 __all__ = [
     "build_instrumented_composer_tools",
     "instrument_composer_tool",
-    "summarize_composer_tool_surface",
 ]

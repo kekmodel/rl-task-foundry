@@ -272,7 +272,6 @@ async def test_synthesis_backend_continues_after_final_output_without_submit(
         task_language="en",
         scenario_description="end user support",
         schema_summary={},
-        tool_surface_summary={},
         max_turns=5,
     )
 
@@ -388,7 +387,6 @@ async def test_synthesis_backend_enforces_run_timeout(monkeypatch) -> None:
             task_language="en",
             scenario_description="end user support",
             schema_summary={},
-            tool_surface_summary={},
             max_turns=5,
         )
 
@@ -539,7 +537,6 @@ async def test_synthesis_backend_continues_after_feedback_without_resubmit(
         task_language="en",
         scenario_description="end user support",
         schema_summary={},
-        tool_surface_summary={},
         max_turns=5,
     )
 
@@ -634,7 +631,6 @@ async def test_synthesis_backend_logs_unified_event_before_reraising_runner_erro
             task_language="en",
             scenario_description="end user support",
             schema_summary={},
-            tool_surface_summary={},
             max_turns=50,
         )
 
@@ -745,7 +741,6 @@ async def test_synthesis_backend_requires_tool_use_and_finalizes_on_submit(
         task_language="en",
         scenario_description="end user support",
         schema_summary={},
-        tool_surface_summary={},
         max_turns=50,
     )
 

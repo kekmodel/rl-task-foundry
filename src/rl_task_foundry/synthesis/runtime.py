@@ -25,7 +25,6 @@ from rl_task_foundry.synthesis.affordance_map import build_db_affordance_map
 from rl_task_foundry.synthesis.canonicalize import canonical_json
 from rl_task_foundry.synthesis.composer_tools import (
     build_instrumented_composer_tools,
-    summarize_composer_tool_surface,
 )
 from rl_task_foundry.synthesis.contracts import (
     RolloutConstraintsContract,
@@ -94,7 +93,6 @@ class _SynthesisBackendProtocol(Protocol):
         task_language: str,
         scenario_description: str,
         schema_summary: dict[str, object],
-        tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
         data_profile: DataProfile | None = None,
         examples_pack: object | None = None,
@@ -542,7 +540,7 @@ class SynthesisAgentRuntime:
             composer_session = ComposerSession(
                 snapshot=schema_snapshot, connection=conn
             )
-            conversation, tool_surface_summary = self._build_conversation(
+            conversation = self._build_conversation(
                 session=composer_session,
                 controller=controller,
                 shuffle_seed=shuffle_seed,
@@ -552,7 +550,6 @@ class SynthesisAgentRuntime:
                 db_id=db_id,
                 requested_topic=requested_topic,
                 schema_summary=schema_summary,
-                tool_surface_summary=tool_surface_summary,
                 anchor_hint=anchor_hint,
                 data_profile=data_profile,
                 affordance_map=affordance_map,
@@ -784,7 +781,6 @@ class SynthesisAgentRuntime:
         db_id: str,
         requested_topic: str | None,
         schema_summary: dict[str, object],
-        tool_surface_summary: dict[str, object],
         anchor_hint: dict[str, object] | None = None,
         data_profile: DataProfile | None = None,
         affordance_map: dict[str, object] | None = None,
@@ -810,7 +806,6 @@ class SynthesisAgentRuntime:
                     task_language=self.config.domain.language,
                     scenario_description=self.config.domain.scenario_description,
                     schema_summary=schema_summary,
-                    tool_surface_summary=tool_surface_summary,
                     max_turns=self.config.synthesis.runtime.max_turns,
                     anchor_hint=anchor_hint,
                     data_profile=data_profile,
@@ -848,8 +843,8 @@ class SynthesisAgentRuntime:
         session: ComposerSession,
         controller: SubmitDraftController,
         shuffle_seed: str,
-    ) -> tuple[SynthesisConversation, dict[str, object]]:
-        """Build a conversation + a composer tool-surface summary.
+    ) -> SynthesisConversation:
+        """Build a conversation with instrumented composer tools.
 
         The ComposerSession is held open by the caller for the lifetime
         of the conversation; the FunctionTools close over
@@ -858,13 +853,11 @@ class SynthesisAgentRuntime:
         """
         raw_tools = build_composer_tools(session)
         instrumented = build_instrumented_composer_tools(raw_tools, controller)
-        conversation = SynthesisConversation(
+        return SynthesisConversation(
             controller=controller,
             sdk_tools=instrumented,
             shuffle_seed=shuffle_seed,
         )
-        surface_summary = summarize_composer_tool_surface(instrumented)
-        return conversation, surface_summary
 
     def _build_draft_from_submission(
         self,
@@ -890,7 +883,6 @@ class SynthesisAgentRuntime:
         rendered_user_prompt = build_rendered_user_prompt(
             task,
             anchor_entity=submission.parsed_entity,
-            canonical_answer=canonical_input,
         )
         materialized_at = datetime.now(timezone.utc)
         task_bundle = self._materialize_task_bundle(
