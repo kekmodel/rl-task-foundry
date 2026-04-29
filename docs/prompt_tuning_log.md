@@ -10868,6 +10868,60 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_91`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 171 — Trial 92 rejected blocked codes and too-easy procedure count
+
+- **질문**:
+  `trial_92`에서 accepted 품질 개선이 재현되는가? 실패한다면 거절 데이터는 어떤 성격인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`.
+
+  제출 2:
+  `이번 입원 중에 기록된 진단 코드 목록을 순서대로 알려주세요.`
+  - 오류: `label_non_user_visible_source`
+  - `diagnoses_icd.seq_num`, `diagnoses_icd.icd_code`가 blocked source였다.
+  - 정성 평가: low-quality rejected. 코드/순번 중심 label은 user-visible answer가 아니다.
+
+  제출 3:
+  `이번 입원의 입원 유형, 입원 시간, 퇴원 시간, 그리고 퇴원 장소를 알려주세요.`
+  - 오류: `answer_contract_list_size_invalid`, `answer_contract_phrase_missing`
+  - single admission detail을 list로 제출했다.
+  - 정성 평가: low-quality rejected.
+
+  제출 5:
+  `이번 입원 중에 기록된 시술 건수는 몇 건인가요?`
+  - solver pass_rate `1.0` (`4/4`)
+  - 오류: `calibration_inconclusive`
+  - canonical은 `procedures_icd` count `3`.
+
+- **reasoning 교차 분석**:
+  composer는 diagnosis code가 blocked라는 feedback 후 admissions detail로 이동했고, 그 다음 procedures count
+  scalar로 이동했다. 마지막 후보는 solver 4/4가 모두 맞춘 단순 count다.
+
+  solver reasoning 중 하나는 “시술”이 `procedures_icd`와 `procedureevents` 둘 다 관련될 수 있다고
+  언급했다. 다만 최종적으로는 모두 `procedures_icd` count를 제출했다. accepted였다면 broad source-role
+  위험을 더 따졌어야 하지만, 이번에는 too-easy로 rejected됐다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - diagnosis code list와 admission detail list는 low-quality rejected.
+  - procedure count는 good-but-too-easy rejected이며, broad source wording 위험도 있다.
+
+- **변경**:
+  코드 변경 없음.
+
+  이유: blocked code/source, list shape, too-easy scalar가 모두 기존 validator/solver calibration으로
+  거절됐다. 저품질 accepted는 발생하지 않았다.
+
+- **검증**:
+  별도 코드 변경이 없으므로 추가 테스트는 실행하지 않았다.
+
+- **현재 streak**:
+  `trial_92`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
