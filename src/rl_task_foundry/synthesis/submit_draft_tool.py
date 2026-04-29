@@ -1892,8 +1892,9 @@ class SubmitDraftController:
                 "message": (
                     "ToolBudgetFeedback: Binding repair reminder: "
                     "answer_contract_binding_missing is contract-only. This is "
-                    "not a data result; stop exploration and do not call data "
-                    "tools after this message. Preserve the current label/query "
+                    "a hard protocol boundary, not a data result. The next "
+                    "tool call must be submit_draft; do not call data tools "
+                    "after this message. Preserve the current label/query "
                     "values and resubmit with repaired user_request/"
                     "answer_contract."
                 ),
@@ -1912,10 +1913,11 @@ class SubmitDraftController:
                     "ToolBudgetFeedback: Draft Submission Budget reminder: "
                     "call submit_draft after at most "
                     f"{FIRST_SUBMIT_MAX_DATA_TOOLS} data tools before the first "
-                    "submit_draft. This is a protocol boundary, not a data "
-                    "result. Stop exploration. If no final label query exists, "
-                    "run exactly one label query; otherwise submit_draft next. "
-                    "After that label query, submit."
+                    "submit_draft. This is a hard protocol boundary, not a "
+                    "data result. Your next tool call must be submit_draft "
+                    "unless no final label query exists; in that case run "
+                    "exactly one label query, then submit_draft. Do not switch "
+                    "targets or call more data tools after this message."
                 ),
                 "calls_since_boundary": calls_since_boundary,
                 "limit": FIRST_SUBMIT_MAX_DATA_TOOLS,
@@ -1931,9 +1933,11 @@ class SubmitDraftController:
                 "feedback, call submit_draft after at most "
                 f"{FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools. If the repair "
                 "query has returned label values, submit them now. This is a "
-                "protocol boundary, not a data result. Stop exploration. Only "
-                "one final label query is allowed when rows are missing or "
-                "diagnostics require repair; after that query, submit."
+                "hard protocol boundary, not a data result. Your next tool "
+                "call must be submit_draft unless no repair query has returned "
+                "label values; in that case run exactly one final label query, "
+                "then submit_draft. Do not switch targets or call more data "
+                "tools after this message."
             ),
             "calls_since_boundary": calls_since_boundary,
             "limit": FEEDBACK_REPAIR_MAX_DATA_TOOLS,

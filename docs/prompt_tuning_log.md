@@ -9584,6 +9584,82 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_68`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 147 — ToolBudgetFeedback is a hard boundary
+
+- **질문**:
+  `trial_69`은 왜 다시 `MaxTurnsExceeded`가 되었는가? `trial_68`에서 고친
+  phrase/binding-only repair 문제와 같은 원인인가, 아니면 다른 원인인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed / MaxTurnsExceeded`.
+
+  제출 1:
+  `이번 중환자실 입원 중에 시행된 처치 목록 중 시작 시간 순서대로 상위 5개를 알려줘`
+  - 오류: `answer_contract_evidence_mismatch`, `answer_contract_duplicate_answer_rows`
+  - `20 Gauge` procedure 두 row가 모든 projected answer field에서 동일했다. composer는 query
+    diagnostics로 duplicate를 인지했고 category/location 등 visible field를 추가하려 했지만, 일부
+    query는 budget boundary에 막혔다. 그 뒤 blocked/failed query의 값을 label에 섞어
+    evidence mismatch도 만들었다.
+
+  제출 2:
+  `이번 중환자실 입원 중에 주입된 약물 중 시작 시간 순서대로 상위 5개를 알려줘`
+  - 오류: `label_values_not_grounded`, `answer_contract_phrase_missing`,
+    `answer_contract_evidence_mismatch`, `answer_contract_duplicate_answer_rows`
+  - inputevents 성격의 값을 실제 latest query evidence 없이 작성했고, 같은 projected rows가 반복됐다.
+
+  제출 3:
+  `이번 중환자실 입원 중 발생한 토어양 측정 기록을 시간 순서대로 모두 보여줬`
+  - 오류: `answer_contract_list_size_invalid`, `answer_contract_phrase_missing`
+  - outputevents는 2건뿐이라 list shape가 맞지 않았다. request Korean도 깨졌다.
+
+- **reasoning 교차 분석**:
+  composer는 첫 procedure query에서 duplicate row를 정확히 인지했다. 그러나 `ToolBudgetFeedback`이
+  “한 번의 final query 후 submit”을 요구한 뒤에도 profile/query/neighborhood/sample을 계속 호출했다.
+  reasoning에는 “budget limit again”, “need to submit”이 반복되지만 실제 다음 tool은 다시 data tool인
+  경우가 많았다.
+
+  즉 이번 문제의 핵심은 phrase/binding-only repair가 아니다. label duplicate나 row-count 문제는
+  정상적으로 rejected됐고, 이후 composer가 protocol boundary를 hard boundary로 취급하지 못해 turn을
+  낭비한 것이 직접 원인이다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - 제출 1/2는 low-quality rejected. duplicate projected rows와 evidence mismatch가 명확하다.
+  - 제출 3도 low-quality rejected. 2-row list와 깨진 request 때문에 좋은 어려운 문제가 아니다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 이 케이스는 이미 validator가 정확히 reject하고 있다.
+
+  Prompt-first 원칙에 따라 Draft Submission Budget 문구를 보강했다.
+  `ToolBudgetFeedback`을 hard boundary로 명명하고, exploration 중단, `submit_draft` 우선, final
+  query가 허용된 경우에도 한 번만 실행한 뒤 submit해야 한다고 압축해 명시했다.
+
+  data tool budget feedback message도 같은 원칙의 reminder로 보강했다.
+  다음 tool call이 `submit_draft`여야 하며, final label/repair query가 아직 없을 때만 정확히 한 번
+  query를 허용하고, 그 뒤 target switch나 추가 data tool을 하지 말라고 직접 표현했다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_turn_budget_prompt.py -q` 통과 (`6 passed`).
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_first_submit tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_feedback_repair tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_binding_only_data_repair -q`
+    통과 (`3 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`112 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+- **현재 streak**:
+  `trial_69`도 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 144 — Generic value fields must be requestable
 
 - **질문**:

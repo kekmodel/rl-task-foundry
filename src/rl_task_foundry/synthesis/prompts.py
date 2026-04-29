@@ -228,11 +228,11 @@ def build_synthesis_agent_instructions(
         "</commentary></example>",
 
         "# Feedback And Difficulty-Up Policy\n"
-        "FeedbackError is not a new durable instruction source; pointer to an "
+        "FeedbackError not a new durable instruction source; pointer to an "
         "existing named policy. Preserve anchor/language; preserve target for "
         "repair/difficulty-up; switch target when policy says another "
         "label/scope. phrase repair: rewrite one clean fluent request; never "
-        "splice malformed fragments. phrase/binding-only uses no exploration.\n"
+        "splice malformed fragments. phrase/binding-only: no exploration.\n"
         "- Specificity: baseline is the last evaluated draft; preserve "
         "anchor/target. Lists preserve row set/order/limit/output fields/source "
         "meanings/phrases; scalar aggregates may add group/compare. Add the "
