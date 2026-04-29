@@ -7041,6 +7041,61 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 169 — Post-scalar validator smoke produced a good accepted list task
+
+- **질문**:
+  Iteration 168의 scalar-not-aggregate validator 뒤, MIMIC demo smoke에서 accepted data가
+  정말 좋은가?
+
+- **실험/결과**:
+  `trial_51`은 accepted됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_51`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - pass rate: `3/4 = 0.75`
+  - failed solver runs: `0`
+  - registry committed
+
+  accepted task는 hidden `hadm_id=22987108` 기준으로 최근 eMAR 투약 기록 5건의
+  `chart_time`, `medication`, `event_text`를 묻는 list다.
+
+- **reasoning 교차 분석**:
+  composer는 처음에 `emar_id`를 anchor로 두고 `hadm_id` hidden filter를 사용해
+  `answer_contract_hidden_filter_unanchored` feedback을 받았다. repair에서는 label row set을
+  바꾸지 않고 anchor를 `hadm_id`로 전환했으며, request에 `투약 일시`, `약물명`, `투약 상태`
+  phrase도 자연스럽게 넣었다. 즉 feedback은 기존 정책을 상기했고 composer는 같은 label을
+  정책에 맞게 수리했다.
+
+  solver 3개는 모두 eMAR 테이블을 선택해 `hadm_id` filter, `charttime desc`, limit 5로 정확히
+  풀었다. 실패한 solver 1개는 `prescriptions`를 선택해 `starttime/stoptime/drug`로 답했다.
+  이는 request가 완전히 trivial하지 않음을 보여주지만, 다수 solver는 `투약 상태`를 eMAR
+  `event_txt`로 해석했다.
+
+- **데이터 직접 검증**:
+  DB에서 `mimiciv_hosp.emar where hadm_id=22987108 order by charttime desc limit 10`을
+  재조회했다. canonical top 5는 실제 top 5와 정확히 일치했다.
+
+  - `2146-07-12 20:50:00`, `Morphine Sulfate`, `Stopped - Unscheduled`
+  - `2146-07-12 19:00:00`, `Morphine Sulfate`, `Confirmed`
+  - `2146-07-12 18:27:00`, `Morphine Sulfate`, `Infusion Reconciliation`
+  - `2146-07-12 18:00:00`, `Lorazepam`, `Not Given`
+  - `2146-07-12 17:25:00`, `Midazolam`, `Not Given`
+
+- **정성 평가**:
+  accepted data: good accepted.
+
+  row set은 anchor admission의 투약 기록으로 자연스럽고, order/limit도 request에 명시됐다.
+  output fields는 user-facing이며 hidden handle 출력이 없다. `charttime` top 5에 boundary tie가
+  없고, duplicate projected answer rows도 없다. pass rate `0.75`는 현재 실험 밴드 안이다.
+
+  다만 composer가 첫 submit 전 `submit_draft_required` feedback을 받고도 data tool을 추가 호출한
+  점은 메타 프로토콜 개선 후보로 남긴다. 이번 accepted data 자체를 저품질로 만들지는 않았다.
+
+- **상태**:
+  만족스러운 accepted smoke `1/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
