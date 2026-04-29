@@ -10922,6 +10922,62 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_92`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 172 — Trial 93 accepted a good medical-order list
+
+- **질문**:
+  `trial_93` accepted, pass_rate `0.75`는 정말 좋은 데이터인가? 1개 solver mismatch는 저품질 신호인가,
+  아니면 난이도/solver 실수인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 accepted, pass_rate `0.75` (`3/4` matched).
+
+  accepted request:
+  `이 입원 기간 동안의 의료 지시 목록을 보여주세요. 지시 시간이 가장 최근인 것부터 순서대로 최상위 5개를 표시하고, 같은 시간에 내린 지시는 순번이 높은 것부터 표시해 주세요. 각 지시의 순번, 지시 시간, 지시 유형, 거래 유형, 입원 유형을 포함해 주세요.`
+
+  canonical query:
+  - source: `poe` joined to `admissions`
+  - scope: `hadm_id = 20044587`
+  - order: `poe.ordertime desc`, `poe.poe_seq desc`
+  - output: `order_sequence`, `order_time`, `order_category`, `transaction_type`, `admission_type`
+  - row count: 5
+  - null 없음, duplicate/order diagnostics 없음.
+
+- **reasoning 교차 분석**:
+  composer는 첫 query에서 nullable `order_detail`과 order ambiguity를 발견하고 제거/수리했다.
+  최종 query는 `order_type`을 지시 유형으로, `transaction_type`을 거래 유형으로, admission join을 통해
+  입원 유형을 반환했다.
+
+  solver 3/4는 같은 source와 field mapping으로 정확히 matched했다. 1개 solver는 `지시 유형`을 더 세부
+  subtype 쪽으로 해석해 `order_category: null`을 제출하면서 schema validation에 실패했다.
+
+- **정성 평가**:
+  accepted data: good accepted.
+  - 의료 지시라는 source role이 자연스럽다.
+  - row membership/order가 request와 query에서 일치한다.
+  - 순번 tie-break는 request에 명시되어 있고, output에도 포함되어 solver가 검증할 수 있다.
+  - 입원 유형 join은 단순 passive field일 수 있지만, 전체 task가 order/filter/join을 요구하므로 너무 쉬운
+    direct lookup은 아니다.
+
+  rejected data:
+  - submit 2는 low-quality rejected. nullable field와 order ambiguity가 있었다.
+  - submit 3은 binding repair 단계였고, 최종 submit에서 정상 수리됐다.
+
+  mismatch 1건은 low-quality accepted 신호라기보다는 solver가 `order_type` vs subtype 계열을 잘못 고른
+  케이스로 본다. request에 `거래 유형`이 별도 field로 있어 canonical source 역할은 충분히 구분된다.
+
+- **변경**:
+  코드 변경 없음.
+
+  이유: accepted 품질이 충분히 좋고, solver 1개 mismatch를 precision 100% validator나 리터럴 휴리스틱으로
+  잡을 근거가 없다.
+
+- **검증**:
+  별도 코드 변경이 없으므로 추가 테스트는 실행하지 않았다.
+
+- **현재 streak**:
+  `trial_93`은 good accepted로 판정하므로 만족 streak는 `1/5`.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
