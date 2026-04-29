@@ -6573,6 +6573,68 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 161 — Order bindings need ordering words, not bare field nouns
+
+- **질문**:
+  Iteration 160 뒤 `trial_43`에서 order-binding feedback 노출이 실제 composer 행동을 개선했는가?
+
+- **실험/결과**:
+  `trial_43`은 solver rollout 전 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_43`
+  - outcome: `synthesis_failed`
+  - final error: `submit_payload_invalid` (`json_decode_error: Extra data`)
+  - solver 도달 없음
+
+- **reasoning 교차 분석**:
+  composer는 `microbiologyevents` anchor를 골랐고, 환자의 최근 미생물 검사 3건을 만들었다.
+
+  진행은 다음 순서였다.
+
+  1. 첫 draft는 `entity={microevent_id}`인데 query는 `subject_id` sibling list라
+     `answer_contract_hidden_filter_unanchored`로 reject.
+  2. composer는 reasoning에서 이 문제를 이해하고 `entity={subject_id}`로 고쳤다.
+  3. 그 다음 `answer_contract_binding_missing`이 발생했다. 원인은 `sample_time` 출력 phrase와
+     order binding phrase를 모두 `시간`으로 둔 `order_binding_reused_output_phrases`.
+  4. composer reasoning은 "시간은 출력 phrase이고 order phrase는 더 자연스러운 tie-break wording이어야
+     한다"고 정확히 말했지만, 실제 submit에서는 request/contract를 바꾸지 못했다.
+  5. 이후 `charttime is_not_null`을 넣었다가 `answer_contract_filter_unbound`로 막혔고,
+     filter를 제거한 뒤에도 같은 bare-noun order binding을 반복했다.
+  6. 마지막에는 budget feedback 뒤 `label_json`/`entity_json`을 잘린 문자열로 제출해서
+     `submit_payload_invalid`가 났다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. row set 자체는 3건이고 null은 없었지만, 처음에는 hidden scope가
+  잘못됐고, 이후에는 request/contract가 list order를 유일하게 고정하지 못했다. solver가 못 푼
+  어려운 문제가 아니라 composer가 contract repair를 완료하지 못한 문제다.
+
+- **개선 판단**:
+  이번 실패는 리터럴/DB 특화 휴리스틱으로 고칠 문제가 아니다. `시간` 같은 특정 단어를 금지하면
+  금지 원칙 위반이다.
+
+  일반 원칙은 이미 있었다: order binding은 output binding과 달라야 하고, order role을 명시해야 한다.
+  다만 wording이 "display-only wording is not enough"에 머물러 composer가 bare field noun을 계속
+  order phrase로 재사용했다. 따라서 prompt/schema/feedback에 "order phrase는 방향/최신성/순위/tie-break
+  역할을 포함해야 하며, bare output noun만으로는 안 된다"를 일반 규칙으로 명시한다.
+
+- **변경**:
+  - Label Contract prompt의 binding 문장을 압축하면서 `direction/recency/tie-break wording`,
+    `not the bare output noun`을 추가했다.
+  - `AnswerOrderBinding` 및 `answer_contract.order_bindings` schema description에 같은 원칙을 추가했다.
+  - `query.order_by` tool schema에도 selected output field가 곧 order request가 아니며, request가
+    direction/recency/rank/tie-break role을 말해야 한다고 보강했다.
+  - `answer_contract_binding_missing` feedback도 같은 named policy를 상기하도록 수정했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_tooling_composer_tool_factory.py -q`
+  통과 (`108 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

@@ -355,6 +355,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "no more than two order keys total" in descriptions["query"][
         "$.spec.order_by"
     ]
+    assert "not an order request unless the request also states" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
     assert "choose another label or return tied rows" in descriptions["query"][
         "$.spec.order_by"
     ]

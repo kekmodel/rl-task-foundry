@@ -410,11 +410,13 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "output/order bindings" in instructions
     assert "No tables, columns, operators, or SQL" in instructions
     assert "every phrase must be an exact substring of `user_request`" in instructions
-    assert "Binding phrases must name returned field roles" in instructions
-    assert "order-key roles" in instructions
+    assert "Binding phrases name returned roles" in instructions
+    assert "order roles" in instructions
+    assert "direction/recency/tie-break wording" in instructions
+    assert "not the bare output noun" in instructions
     assert "display-only wording is not enough" in instructions
-    assert "order is multi-key" in instructions
-    assert "do not bind one vague phrase to multiple concepts" in instructions
+    assert "Multi-key order needs distinct request phrases" in instructions
+    assert "never bind one vague phrase to multiple concepts" in instructions
     assert "List Determinism Policy" in instructions
     assert "exact result: membership, order, limit, tie-breaks" in instructions
     assert "Row-set controls must be in entity/request/contract" in instructions

@@ -217,8 +217,9 @@ class AnswerOrderBinding(StrictModel):
             "Exact contiguous substring from user_request that asks for the "
             "row order, recency, ranking, or natural tie-break. Each tie-break "
             "phrase must name that specific order key and its ordering role; "
-            "display-only output wording is not enough; do not reuse one broad "
-            "order phrase for multiple different keys."
+            "include direction/recency/tie-break wording, not only the bare "
+            "output noun; display-only output wording is not enough; do not "
+            "reuse one broad order phrase for multiple different keys."
         ),
     )
     direction: Literal["asc", "desc"] | None = Field(
@@ -306,7 +307,8 @@ class AnswerContract(StrictModel):
             "order key is returned in label_json; otherwise use null. Omit or "
             "use null only when the query has no ordering. For limited lists, "
             "this ordering also selects row membership; avoid drafts requiring "
-            "one hidden selection order and another display order."
+            "one hidden selection order and another display order. A bare field "
+            "noun that only asks to display the field is not an order binding."
         ),
     )
 
@@ -2759,7 +2761,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING: (
                 "Rejected. Label Contract reminder: for list labels, answer_contract.output_bindings cover every returned label field, and answer_contract.order_bindings cover each query.order_by entry in order using phrases copied from user_request. If an order key is only a tie-break, user_request still needs natural visible tie-break wording before that key can be bound; otherwise rerun query without that order key or return tied rows."  # noqa: E501
-                " Each returned output field also needs its own natural role phrase; do not reuse one broad output phrase for multiple returned concepts. Display-only output wording is not enough for an order binding. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
+                " Each returned output field also needs its own natural role phrase; do not reuse one broad output phrase for multiple returned concepts. Order binding phrases need direction/recency/tie-break wording, not only the bare output noun; Display-only output wording is not enough. Do not reuse one broad order phrase for multiple different order keys."  # noqa: E501
             ),
             SubmitDraftErrorCode.LABEL_NON_USER_VISIBLE_SOURCE: (
                 "Rejected. Label Contract reminder: the submitted label directly exposes a field marked internal or blocked in latest query metadata."  # noqa: E501

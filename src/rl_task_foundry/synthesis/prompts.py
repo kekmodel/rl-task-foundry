@@ -191,11 +191,10 @@ def build_synthesis_agent_instructions(
         "answer_phrase, constraints, limit, output/order bindings. No tables, "
         "columns, operators, or SQL; every phrase must be an exact substring "
         "of `user_request`.\n"
-        "- Binding phrases must name returned field roles and order-key roles. "
-        "If a returned key orders/tie-breaks, request must state that order role; "
-        "display-only wording is not enough. If roles/surfaces differ or order is "
-        "multi-key, user_request must distinguish them; do not bind one vague "
-        "phrase to multiple concepts.",
+        "- Binding phrases name returned roles and order roles. For an order key, "
+        "use direction/recency/tie-break wording, not the bare output noun; "
+        "display-only wording is not enough. Multi-key order needs distinct "
+        "request phrases; never bind one vague phrase to multiple concepts.",
 
         "# List Determinism Policy\n"
         "Lists need exact result: membership, order, limit, tie-breaks. Row-set controls "

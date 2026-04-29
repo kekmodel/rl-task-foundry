@@ -2197,6 +2197,7 @@ async def test_submit_draft_feedbacks_order_binding_reusing_output_phrase(
 
     message = await controller.submit(payload)
 
+    assert "bare output noun" in message
     assert "Display-only output wording is not enough" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
@@ -2306,6 +2307,7 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
 
     assert "answer_contract.order_bindings" in message
     assert "natural visible tie-break wording" in message
+    assert "bare output noun" in message
     assert "Display-only output wording is not enough" in message
     assert "Do not reuse one broad order phrase" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
@@ -2449,8 +2451,10 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "one request-to-order binding for each query.order_by entry" in schema_surface
     assert "Each tie-break phrase must name that specific order key" in schema_surface
     assert "its ordering role" in schema_surface
+    assert "not only the bare output noun" in schema_surface
     assert "display-only output wording is not enough" in schema_surface
     assert "do not reuse one broad order phrase" in schema_surface
+    assert "bare field noun that only asks to display the field" in schema_surface
     assert "not a source table or SQL column" in schema_surface
     assert "names this field's distinct role" in schema_surface
     assert "do not reuse one vague phrase" in schema_surface

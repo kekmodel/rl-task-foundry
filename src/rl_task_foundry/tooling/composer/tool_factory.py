@@ -692,7 +692,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "ties and limited lists; order_by must not introduce "
                     "unrequested or hidden row-order controls. Use no more "
                     "than two order keys total; if more are needed, choose "
-                    "another label or return tied rows."
+                    "another label or return tied rows. A selected output "
+                    "field is not an order request unless the request also "
+                    "states its direction, recency, rank, or tie-break role."
                 ),
                 "items": {
                     "type": "object",
