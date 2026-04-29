@@ -6816,6 +6816,65 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Iteration 165 — Difficulty-up must preserve output request phrases
+
+- **질문**:
+  Iteration 164의 `query.order_by` max-2 schema/parser enforcement 뒤 다음 smoke가 solver
+  rollout까지 안정적으로 도달하는가?
+
+- **실험/결과**:
+  `trial_47`은 solver rollout까지 도달했지만 accepted되지는 않았다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_47`
+  - 첫 draft: 환자 입원 기록 list 1개
+    - `answer_contract_list_size_invalid`, `answer_contract_evidence_mismatch`
+  - 두 번째 이후: eMAR 약물 투여 기록 list로 전환
+  - solver-evaluated draft: pass rate `4/4 = 1.0`, `calibration_inconclusive`
+  - final draft: difficulty-up 후 `answer_contract_phrase_missing`
+
+- **reasoning 교차 분석**:
+  composer는 eMAR list에서 `charttime desc, medication asc` 2-key order를 만들었고,
+  약물명/투여 시간/투여 상태 field와 order binding을 수리해 solver rollout까지 도달했다.
+  solver 4개는 모두 정답을 맞췄다. 이 draft는 깨끗하지만 너무 쉬운 데이터다.
+
+  too-easy feedback 뒤 composer는 `event_txt = Administered` row-membership filter와
+  admissions join으로 난이도를 올리려 했다. 방향은 기존 Difficulty-Up Policy에 맞는다.
+  그러나 기존 output field인 `administration_status`를 계속 label에 남겼으면서,
+  새 user_request에는 `투여 상태`를 표시해 달라는 phrase를 넣지 않았다. `투여 완료된`은
+  filter phrase일 수는 있지만 output field phrase가 아니므로 `answer_contract_phrase_missing`이
+  precision 100으로 거절했다.
+
+- **정성 평가**:
+  accepted data: 없음. 저품질 accepted도 없음.
+
+  rejected data:
+  - solver-evaluated draft는 clean-good but too easy. 좋은 데이터 후보였지만 학습 목표에는 너무 쉽다.
+  - final rejected draft는 low-quality rejected. difficulty-up의 structural direction은 좋았지만,
+    기존 output field request phrase를 보존하지 못해 사용자 요청과 label contract가 어긋났다.
+
+- **개선 판단**:
+  durable prompt에는 list difficulty-up에서 output fields/source meanings를 보존하라고 되어 있었지만,
+  output field의 request phrase까지 보존해야 한다는 압력이 약했다. feedback-only로 새 지시를 만들면
+  지침 이원화가 되므로 prompt-first로 durable policy를 보강한다.
+
+  phrase_missing feedback은 이미 "missing field phrase를 natural request wording으로 추가하라"고
+  말하고 있으므로, too-easy feedback도 같은 source of truth를 상기하도록 정렬한다.
+
+- **변경**:
+  - Feedback And Difficulty-Up Policy prompt에서 list retries가
+    `output fields/source meanings/phrases`를 보존한다고 명시했다.
+  - too-easy feedback reminder에도 existing output field request phrases 보존을 추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py -q`
+  통과 (`159 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_messages.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+  통과.
+
+  prompt length: `7944`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

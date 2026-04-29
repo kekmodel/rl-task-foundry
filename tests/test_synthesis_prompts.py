@@ -280,7 +280,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "not same-row fields, even via join" in instructions
     assert "If just tried, switch work" in instructions
     assert "keep filters, order, limit" in instructions
-    assert "output fields/source meanings" in instructions
+    assert "output fields/source meanings/phrases" in instructions
     assert "Append one grounded dimension" in instructions
     assert "changes lookup, comparison, order, or row reasoning" in instructions
     assert "passive display fields are weak" in instructions

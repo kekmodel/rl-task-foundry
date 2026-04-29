@@ -2843,6 +2843,7 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
     assert "Preserve the current anchor and target" in message
     assert "for list labels preserve row set, order, limit" in message
     assert "source meanings" in message
+    assert "existing output field request phrases" in message
     assert "one grounded meaningful dimension" in message
     assert "changes lookup, comparison, order, or row reasoning" in message
     assert "Do not only add display fields for the same selected row" in message
@@ -2908,6 +2909,7 @@ async def test_submit_draft_too_easy_feedback_is_list_aware(
     assert "specificity feedback on the current draft" in message
     assert "Preserve the current anchor and target" in message
     assert "for list labels preserve row set, order, limit" in message
+    assert "existing output field request phrases" in message
     assert "one grounded meaningful dimension" in message
     assert "changes lookup, comparison, order, or row reasoning" in message
     assert "Do not only add display fields for the same selected row" in message

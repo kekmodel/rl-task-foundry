@@ -242,7 +242,7 @@ def build_synthesis_agent_instructions(
         "order/related-row selection/row membership; not same-row fields, "
         "even via join. If just tried, switch work.\n"
         "- For lists, keep filters, order, limit, output "
-        "fields/source meanings. Append one grounded dimension that changes "
+        "fields/source meanings/phrases. Append one grounded dimension that changes "
         "lookup, comparison, order, or row reasoning; passive display fields are "
         "weak; ask for it in user_request/answer_contract.\n"
         "- Do not shrink the fixed list, remove/rename/replace fields, or "
