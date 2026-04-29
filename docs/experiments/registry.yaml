@@ -1,0 +1,55 @@
+schema_version: 1
+
+current_baseline: B0000
+current_phase_target: v1
+
+evaluation_policies:
+  - id: DQS-v1
+    rubric: docs/experiments/rubric_dqs_v1.md
+    hard_gates:
+      accepted_low_quality: 0
+      no_db_literal_or_token_heuristic: true
+      precision_100_rejectors_only: true
+      no_severe_mode_collapse: true
+      evaluation_policy_changes_recorded: true
+    db_set:
+      - mimiciv_demo
+      - postgres_air
+      - pagila
+    notes: >
+      DQS is a quantitative rollup of qualitative rubric labels. Promotion
+      also requires hard gates and adversarial review.
+
+nodes:
+  - id: B0000
+    type: baseline
+    branch: main
+    commit: "36471d1"
+    parent: null
+    parent_commit: null
+    status: current
+    phase_target: v1
+    hypothesis: >
+      Current main is the root baseline for the next experiment graph.
+    architecture_summary: >
+      Existing synthesis pipeline after composer prompt, submit_draft validation,
+      entity_json contract, and KISS prompt plumbing cleanup.
+    fixed_principles:
+      - no_evaluation_hacking
+      - db_generalizable_generation
+      - no_db_specific_literal_or_token_heuristics
+      - precision_100_rejectors_only
+      - source_of_truth_separation
+      - low_quality_accepted_hard_failure
+      - diversity_required
+      - diagnose_bad_db_regions
+    evaluation_policy: DQS-v1
+    quality_eval: null
+    branching_notes:
+      continue_from_here:
+        - "Create architecture experiment nodes without preserving current composer/solver structure by default."
+        - "Prefer thin slices for label-first, verifier-first, or DB readiness gates."
+      avoid:
+        - "Do not encode benchmark DB literals or known failed draft strings."
+        - "Do not promote on accept count without DQS-v1 qualitative review."
+
