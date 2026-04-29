@@ -9368,3 +9368,61 @@ Solver 30/30 완료 결과:
   Ruff:
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/submit_draft_messages.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
   통과.
+
+## Iteration 143 — Prefer full timestamp order over split date/time keys
+
+- **질문**:
+  `trial_65`는 accepted 없이 `MaxTurnsExceeded`로 끝났다. reject가 좋은 저품질 차단인지,
+  아니면 또 다른 일반 개선점이 있는지 확인한다.
+
+- **실험/결과**:
+  submit은 네 번 있었다.
+
+  1. eMAR 단일 이벤트 detail:
+     1건 list, non-user-visible source 포함으로 reject.
+  2. ICD diagnosis code/version list:
+     blocked code source와 evidence mismatch로 reject.
+  3. microbiology 최근 5건:
+     request는 자연스러웠지만 “날짜순” 방향/동점이 모호해 `answer_contract_order_ambiguous`.
+  4. microbiology order repair:
+     request를 `검사일과 검사시간이 가장 최근인 순서대로`로 고쳤지만, order binding phrase가
+     exact substring이 아니었고, chart date + chart time split ordering 후에도 같은 time의
+     test sequence tie가 남아 order ambiguity가 계속됐다.
+
+- **reasoning 교차 분석**:
+  solver rollout은 없었다. composer reasoning은 microbiology repair에서 핵심 원인을 드러낸다.
+
+  composer는 처음에 `chartdate + test_seq`를 쓰다가 동점이 남자 `chartdate + charttime`으로
+  바꾸려 했다. 그런데 `charttime`은 이미 date+time을 포함하는 더 세밀한 timestamp 성격의
+  필드라, `chartdate`와 함께 쓰면 order key 하나를 낭비한다. 자연스러운 수리는
+  `charttime desc, test_seq desc`처럼 full timestamp를 primary order key로 쓰고, date/time은
+  표시용으로 나눠 출력하는 쪽이다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - 1/2번은 low-quality rejected.
+  - 3/4번은 row set은 가능성이 있지만 order contract가 아직 저품질이다. 어려운 좋은 문제가
+    아니라, composer가 시간 granularity를 잘못 모델링해서 유일한 order를 만들지 못한 케이스다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. `chartdate`, `charttime` 같은 컬럼 이름을 토큰으로 해석해
+  검사하면 금지 원칙 위반이다.
+
+  대신 `query.order_by` tool schema description에 DB-agnostic 원칙을 추가했다.
+  full timestamp가 있으면 date-only와 time-only를 별도 order key로 소비하지 말고 full timestamp를
+  time order key로 쓰며, date/time split은 display 용도로만 쓰라고 했다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`112 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
