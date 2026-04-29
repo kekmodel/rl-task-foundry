@@ -8,7 +8,7 @@
 - [../AGENTS.md](../AGENTS.md)
   - 현재 실험/개선 작업의 최상위 원칙과 필수 읽기 순서
 - [spec.md](./spec.md)
-  - 현재 제품/런타임/도구 계약의 spec index
+  - 현재 제품/런타임/도구 계약 snapshot의 index. 원칙/DQS를 지키는 한 변경 가능
 - [experiments/first_principles.md](./experiments/first_principles.md)
   - 평가 해킹 방지 원칙과 실험 그래프의 불변 규칙
 - [experiments/rubric_dqs_v1.md](./experiments/rubric_dqs_v1.md)

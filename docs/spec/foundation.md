@@ -28,7 +28,7 @@ implementations.
 
 1. Hard to solve, easy to verify.
 2. Label correctness and uniqueness matter more than throughput.
-3. Quality gates are authoritative; generation is disposable.
+3. Quality gates decide the current acceptance path; generation is disposable.
 4. Each task bundle belongs to exactly one database.
 5. Reward is binary exact match only.
 6. New databases can be added without hand-written task logic.
@@ -193,10 +193,10 @@ structure, live rows, and exact tool evidence. When a concept matters, it must
 come from explicit config, DB metadata, observed data, or a 100%-precision
 contract, not from name tokens.
 
-## Decision Ledger
+## Current Decision Ledger
 
-Normative project decisions should be recorded here when they affect multiple
-spec areas.
+Cross-cutting design decisions for the current spec snapshot should be recorded
+here when they affect multiple spec areas.
 
 1. The project is DB-swappable by design. Common code, prompts, feedback, and
    generated tool schemas adapt from introspection and live observations; they
@@ -363,13 +363,13 @@ edge-case experiment context, never as the default generation target.
 
 ## Clean Break Policy
 
-The old path-centric stack is not authoritative.
+The old path-centric stack is outside the current contract.
 
 - legacy `tools/`, `tasks/`, `truth/`, and `verification/` are deleted
-- the authoritative runtime surface is `synthesis/`, `solver/`, and `pipeline/solver_orchestrator.py`
+- the current runtime surface is `synthesis/`, `solver/`, and `pipeline/solver_orchestrator.py`
 - the source of truth is DB-grounded label construction, not generated verifier code
 
-## Authoritative Modules
+## Current Modules
 
 - `config/`
 - `infra/`

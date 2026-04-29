@@ -5,6 +5,8 @@ current_phase_target: v1
 
 architecture_policy:
   mutable_components:
+    - specs
+    - runtime_contracts
     - composer
     - solver
     - tools

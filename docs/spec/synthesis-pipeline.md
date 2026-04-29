@@ -1,8 +1,8 @@
 # Synthesis Pipeline
 
-## Authoritative Flow
+## Current Flow
 
-The authoritative synthesis flow is label-first and is executed by a single synthesis agent.
+The current synthesis flow is label-first and is executed by a single synthesis agent.
 
 ```text
 explore real tools
@@ -150,7 +150,7 @@ In the composer input, the pool is rendered as `Candidate Starting Points`, not
 
 The agent selects a `topic` string for the candidate task bundle.
 
-The topic is a soft orientation aid. The authoritative semantics are still set by the label.
+The topic is a soft orientation aid. The task semantics are still set by the label.
 
 ## Label Construction
 
@@ -405,11 +405,11 @@ schemas before trial changes are trusted. Current invariants:
 Generation retries are allowed, but retries are not the source of truth.
 
 - See [Pipeline Lifecycle And State Boundaries](./pipeline-lifecycle.md) for
-  the authoritative state-transition map. In particular, feedback-only
+  the current state-transition map. In particular, feedback-only
   `submit_draft` repair and terminal trial discard are different states; do not
   add retry feedback for failures that should discard the trial and let harvest
   start fresh.
-- the label remains authoritative
+- the label remains the source of truth
 - `submit_draft` feedback can request a harder retry
 - retries must change latent task semantics, not just wording
 - retry feedback must stay structural and database-neutral; it should point to

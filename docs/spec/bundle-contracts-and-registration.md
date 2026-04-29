@@ -73,7 +73,7 @@ Materialized answer data contains:
 
 The runtime, not the synthesis agent, derives `output_schema` from the canonical answer.
 
-This keeps the label authoritative and removes schema drift between generated schema text and actual label shape.
+This keeps the label as the source of truth and removes schema drift between generated schema text and actual label shape.
 
 ## Registry Commit Policy
 
@@ -92,4 +92,4 @@ Registry deduplication uses:
 - exact signatures
 - semantic dedup text (MinHash LSH over question + topic + output shape)
 
-The exact signature is authoritative for commit-time identity.
+The exact signature is the source of truth for commit-time identity.

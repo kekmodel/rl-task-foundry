@@ -1,6 +1,6 @@
 # First Principles
 
-이 문서는 실험 그래프의 불변 원칙을 정의한다. composer, solver, tools, prompt, pipeline, architecture, SDK agent 종류/수/context 공유 방식은 모두 변경 가능하지만, 이 원칙과 평가 메트릭은 평가 해킹을 막기 위한 고정점이다.
+이 문서는 실험 그래프의 불변 원칙을 정의한다. spec, composer, solver, tools, prompt, pipeline, architecture, SDK agent 종류/수/context 공유 방식은 모두 변경 가능하지만, 이 원칙과 평가 메트릭은 평가 해킹을 막기 위한 고정점이다.
 
 ## 제1원칙
 
@@ -103,6 +103,8 @@ DB 또는 DB region에 다음이 부족하면 생성 불가를 보고한다.
 ### 8. Versioned evaluation
 
 Rubric, solver band, solver model, solver count, DB set, architecture, prompt version, qualitative judgment는 모두 실험 노드에 기록한다. Evaluation policy 변경은 별도 실험 노드다.
+
+Spec과 runtime contract 변경도 architecture 변경이다. Spec은 현재 설계 snapshot이지 불변 공리가 아니며, 바꿀 수 있다. 단, 변경 이유와 영향은 실험 노드에 기록해야 하고, 이 문서의 원칙과 DQS-v1 hard gate를 우회하는 새 규범으로 쓰면 안 된다.
 
 Agent topology도 기록한다. 여러 SDK agent, subagent, planner/verifier/naturalizer 분리, shared context, isolated context, blind-ish evaluator context는 모두 자유롭게 설계할 수 있지만 평가 재현성을 위해 명시해야 한다.
 

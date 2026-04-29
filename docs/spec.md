@@ -1,6 +1,13 @@
 # RL Task Foundry Spec Index
 
-This file is the entrypoint to the RL Task Foundry specification. Normative content is split into focused documents under [`docs/spec/`](./spec/).
+This file is the entrypoint to the current RL Task Foundry product/runtime
+contract snapshot. These specs are mutable experiment artifacts, not immutable
+axioms. They may be rewritten, replaced, or deleted when an experiment changes
+the architecture, as long as the change obeys `AGENTS.md`,
+`docs/experiments/first_principles.md`, and `docs/experiments/rubric_dqs_v1.md`.
+
+When a spec changes, record the reason and evaluation impact in the experiment
+node metadata.
 
 ## Reading Order
 
@@ -26,8 +33,14 @@ This file is the entrypoint to the RL Task Foundry specification. Normative cont
 - [Bundle Format, Contracts, and Registration](./spec/bundle-contracts-and-registration.md): bundle filesystem, schemas, static registration policy
 - [Registry and Operations](./spec/registry-and-operations.md): quality gate, scheduler, registry, review, proof environment, success criteria
 
-## Authoritative Rule
+## Current Contract Scope
 
-When a rule appears in only one linked document, that linked document is authoritative for that topic. This index is intentionally short and should not duplicate normative details.
+When a rule appears in only one linked spec document, that linked document
+describes the current contract for that topic. This index is intentionally
+short and should not duplicate details.
 
-The absolute no-semantic-token-heuristics rule in [Foundation](./spec/foundation.md) applies across the whole project and overrides local convenience arguments in synthesis, tooling, visibility, validation, feedback, and registry logic.
+Spec documents do not create new immutable principles. If a spec conflicts with
+the experiment first principles or DQS-v1 hard gates, the first-principles and
+DQS documents win. The no-semantic-token-heuristics language in
+[Foundation](./spec/foundation.md) is a spec-level restatement of that higher
+rule, not a separate fixed spec constraint.

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-이 저장소의 최상위 목표는 현재 evaluator를 통과하는 것이 아니라, 실제로 일반화 가능하고 검증 가능한 고품질 RL task dataset을 생성하는 것이다. 원칙과 평가 메트릭을 제외한 composer, solver, tools, prompt, pipeline, architecture, SDK agent 종류/수/context 공유 방식은 모두 변경 가능하다.
+이 저장소의 최상위 목표는 현재 evaluator를 통과하는 것이 아니라, 실제로 일반화 가능하고 검증 가능한 고품질 RL task dataset을 생성하는 것이다. 원칙과 평가 메트릭을 제외한 spec, composer, solver, tools, prompt, pipeline, architecture, SDK agent 종류/수/context 공유 방식은 모두 변경 가능하다.
 
 ## 제1원칙
 
@@ -57,6 +57,7 @@ DQS는 정성 라벨의 정량 집계이며 promotion 판단을 돕는 지표다
 - `docs/experiments/evaluator_subagent.md`
 - `docs/experiments/registry.yaml`
 - `docs/experiments/tree.md`
+- `docs/spec.md`
 
 현재 v1 평가 DB set:
 
