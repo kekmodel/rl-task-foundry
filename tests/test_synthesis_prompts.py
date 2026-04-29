@@ -322,6 +322,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "preserve target for repair/difficulty-up" in instructions
     assert "switch target when policy says another label/scope" in instructions
     assert "phrase repair: rewrite one clean fluent request" in instructions
+    assert "phrase/binding-only uses no exploration" in instructions
     assert "malformed fragments" in instructions
 
     # User-facing language and ID guidance stay general and English.

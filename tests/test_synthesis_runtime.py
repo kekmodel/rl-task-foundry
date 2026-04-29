@@ -1811,6 +1811,8 @@ async def test_submit_draft_feedbacks_missing_list_output_binding(
     assert "answer_contract.output_bindings" in message
     assert "rewrite user_request so every binding phrase appears exactly there" in message
     assert "instead of repairing only answer_contract" in message
+    assert "When only phrase/binding errors remain" in message
+    assert "repair the same label in place" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 
@@ -1930,6 +1932,8 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     first_message = await controller.submit(first_payload)
 
     assert "exact contiguous substring" in first_message
+    assert "When only phrase/binding errors remain" in first_message
+    assert "repair the same label in place" in first_message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
 
     second_payload = SubmitDraftPayload.model_validate(

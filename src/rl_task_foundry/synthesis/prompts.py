@@ -232,7 +232,7 @@ def build_synthesis_agent_instructions(
         "existing named policy. Preserve anchor/language; preserve target for "
         "repair/difficulty-up; switch target when policy says another "
         "label/scope. phrase repair: rewrite one clean fluent request; never "
-        "splice diagnostics/keys/malformed fragments.\n"
+        "splice malformed fragments. phrase/binding-only uses no exploration.\n"
         "- Specificity: baseline is the last evaluated draft; preserve "
         "anchor/target. Lists preserve row set/order/limit/output fields/source "
         "meanings/phrases; scalar aggregates may add group/compare. Add the "

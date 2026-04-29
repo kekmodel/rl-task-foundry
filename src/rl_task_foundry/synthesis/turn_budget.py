@@ -10,10 +10,10 @@ def build_tool_call_budget_instruction(*, max_tool_calls: int) -> str:
     first_submit_deadline = max(1, max_tool_calls // 3)
     return (
         "# Draft Submission Budget\n"
-        f"{max_tool_calls} tool calls total: data tools + `submit_draft`.\n"
-        f"- Use `submit_draft` by first {first_submit_deadline} "
+        f"{max_tool_calls} tool calls total: data tools, submit_draft.\n"
+        f"- submit_draft by first {first_submit_deadline} "
         "tool calls; "
-        f"max {FIRST_SUBMIT_MAX_DATA_TOOLS} data tools pre-submit.\n"
+        f"max {FIRST_SUBMIT_MAX_DATA_TOOLS} data tools.\n"
         f"- After feedback, max {FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools; "
         "binding feedback uses none. ToolBudgetFeedback: stop exploration; "
         "submit next. If one final label `query` is needed, submit after it.\n"

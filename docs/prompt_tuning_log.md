@@ -9498,6 +9498,92 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_67`은 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
 
+## Iteration 146 — Phrase/binding-only feedback must repair in place
+
+- **질문**:
+  `trial_68`은 왜 accepted 없이 `MaxTurnsExceeded`가 되었는가? composer reasoning을 보면
+  어느 부분이 저품질이고, 어느 부분을 개선해야 하는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed / MaxTurnsExceeded`.
+
+  제출 1:
+  `나의 검사 결과 중 이상이 확인된 최근 5개 항목을 최신순으로 보여줘`
+  - 오류: `answer_contract_phrase_missing`, `answer_contract_order_ambiguous`
+  - 5개 row가 모두 같은 `test_time`이라 “최신순”만으로 limited row membership/order가 고정되지 않았다.
+  - rejected data 판정: low-quality rejected. 어려운 문제가 아니라 order contract가 잘못된 문제.
+
+  제출 2:
+  `나의 입원 이력 중 최근 3개의 입원 기록을 입원일 순으로 보여줘`
+  - 오류: `answer_contract_list_size_invalid`, `answer_contract_phrase_missing`
+  - 실제 입원 기록은 2건인데 request는 3건을 요구했다.
+  - rejected data 판정: low-quality rejected. list shape 불일치.
+
+  제출 3:
+  `나의 최근 5개의 약물 투여 기록을 투여 시간 순으로 보여줘`
+  - 오류: `answer_contract_phrase_missing`, `answer_contract_binding_missing`
+  - label 자체는 약물명, 투여 상태, 예정 시간, 투여 시간 phrase를 request에 추가하면 수리 가능한
+    후보였다. 그러나 composer는 phrase/binding repair를 하지 않고 microbiology, ICU stay,
+    prescriptions 쪽으로 새 탐색을 하다가 turn을 소진했다.
+  - rejected data 판정: 수리 가능 후보였지만 request/contract만 미완성. 이것은 composer 행동
+    문제다.
+
+- **reasoning 교차 분석**:
+  composer는 첫 lab 후보에서 tie를 인지했고, `labevent_id`를 tie-break로 쓰려는 생각까지 했다.
+  이는 기술 handle/order wording으로 갈 위험이 있어 좋은 방향이 아니다. rejection 후 target 전환은
+  합리적이었다.
+
+  admission 후보에서는 profile로 row_count=2를 보고도 “최근 3개” list를 제출했다. 이 역시 잘
+  거절됐다.
+
+  핵심 문제는 세 번째 이후다. feedback은 phrase/binding-only였는데 reasoning은 “scalar aggregate를
+  쓰겠다”, “microbiology”, “ICU stays”, “prescriptions”로 계속 새 target을 탐색했다. 이는
+  Feedback Handling Policy의 “phrase repair는 request/answer_contract 수리” 원칙을 충분히
+  따르지 못한 것이다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - 제출 1/2는 low-quality rejected.
+  - 제출 3은 hard-good이 아니라 “수리 가능한 draft를 수리하지 못한” 케이스다. data 자체는
+    잠재적으로 괜찮았지만, 같은 label의 자연어/contract repair가 필요했다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. “이 label이 수리 가능한가”는 자연어 품질 판단을 포함하므로
+  precision 100% validator로 만들 수 없다.
+
+  Prompt-first 원칙에 따라 Feedback Handling Policy를 보강했다.
+  phrase/binding-only feedback은 새 탐색을 하지 않고, 같은 label의 `user_request`와
+  `answer_contract`를 수리해야 한다고 명시했다.
+
+  `answer_contract_phrase_missing`과 `answer_contract_binding_missing` feedback은 새 지시가
+  아니라 같은 정책의 reminder로 보강했다. “When only phrase/binding errors remain, do not call
+  data tools; repair the same label in place.”라는 문구를 추가했다.
+
+  prompt 길이 예산을 유지하기 위해 Draft Submission Budget 표현만 짧게 압축했다. 의미 변경은 없다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow -q`
+    통과 (`1 passed`).
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_reset_after_contract_repair_feedback tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_list_output_binding -q`
+    통과 (`2 passed`).
+  - `uv run pytest tests/test_turn_budget_prompt.py -q`
+    통과 (`6 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`112 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
+- **현재 streak**:
+  `trial_68`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 144 — Generic value fields must be requestable
 
 - **질문**:
