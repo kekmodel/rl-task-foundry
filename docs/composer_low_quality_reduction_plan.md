@@ -131,48 +131,21 @@ This does not solve semantics by itself. It forces the composer to expose its
 claim in structured form, making drift easier to catch by prompt feedback,
 qualitative audit, and future exact checks.
 
-### Planning Tool
+### Retired: Separate Planning Tool
 
-If binding contracts do not reduce surface drift enough, add a
-`plan_task_surface` composer tool.
+A separate composer planning tool was tried and then removed. In the smoke
+trial that validated the current total-only tool budget, the composer did not
+call the planning tool at all; the accepted task came from ordinary
+schema/neighborhood/profile/query exploration. Keeping an unused planning tool
+adds surface area without measured quality gain.
 
-The tool should return structural candidates, not final prose:
+Current rule:
 
-```json
-{
-  "anchor": {"table": "T_anchor", "entity": {"pk": "..."}},
-  "surface_path": ["T_anchor", "T_child", "T_display"],
-  "record_surface": {
-    "table": "T_child",
-    "has_primary_key": true,
-    "solver_revisitable": true
-  },
-  "candidate_outputs": [
-    {"field": "event_time", "visible": true, "source_role": "row field"},
-    {"field": "display_name", "visible": true, "source_role": "related display"}
-  ],
-  "candidate_orders": [
-    {
-      "field": "event_time",
-      "direction": "desc",
-      "requires_user_phrase": true
-    }
-  ],
-  "structural_risks": ["same-order ties need an exposed tie-break"]
-}
-```
-
-Correct use:
-
-- orient the composer toward primary-key-backed, solver-revisitable surfaces
-- identify candidate visible outputs and order fields
-- expose structural risks early
-
-Incorrect use:
-
-- writing the final task for the composer
-- deciding quality with an LLM-like judgment
-- hiding policy or examples inside tool output
+- keep the composer tool surface small unless an experiment shows a tool
+  changes accepted quality or reduces low-quality accepted drafts
+- prefer improving existing `query`, `profile`, `sample`, and `neighborhood`
+  contracts before adding another callable
+- do not add precision-weak feedback just to force adoption of a new tool
 
 ### Subagent Decomposition
 
@@ -308,38 +281,27 @@ Stop criteria:
 
 - reachability status depends on semantic guesses rather than tool capability
 
-### Experiment 5: `plan_task_surface` Tool Prototype
+### Experiment 5: Retired Planning Tool Prototype
 
-Change:
+Outcome:
 
-- Add a composer-only planning tool that returns solver-compatible candidate
-  surfaces and structural risks.
-- The final canonical answer still comes from `query`.
+- Removed from the active code path after smoke evidence showed no contribution
+  to the accepted trial.
+- The final canonical answer continues to come from `query`.
 
-Purpose:
+Reason:
 
-- Reduce role overload before adding subagents.
-
-Success criteria:
-
-- improved clean accepted count or reduced low-quality rejected count in
-  MIMIC demo without topic hints
-- no collapse into repetitive templates
-- accepted tasks remain natural and DB-swappable
-
-Stop criteria:
-
-- tool becomes a hidden task generator
-- trace diversity collapses
-- composer ignores the tool or treats candidates as mandatory topics
+- The composer ignored the prototype and still produced a good accepted task
+  once the tool budget stopped cutting exploration off too early.
+- Retaining unused tools makes the prompt/tool schema surface harder to reason
+  about.
 
 ### Experiment 6: Surface Scout Subagent
 
 Change:
 
 - Split only the surface planning step into a subagent or internal planning
-  backend. It produces the same structured candidate format as
-  `plan_task_surface`.
+  backend with a narrow structured output contract.
 - Draft Writer remains the final composer conversation.
 
 Purpose:

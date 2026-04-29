@@ -9522,6 +9522,40 @@ Solver 30/30 완료 결과:
   선택용이고 label evidence가 아니다”를 더 자연스럽게 유도하되, 실제 사용률과 accepted 품질을 함께
   본다.
 
+## Iteration 174 — Remove unused surface planning tool
+
+- **질문**:
+  Iteration 173의 accepted trial에서 `plan_task_surface`가 한 번도 호출되지 않았다. 그러면 이 tool을
+  유지할 근거가 있는가?
+
+- **판단**:
+  제거한다. 성공 원인은 planning tool이 아니라 3-data-tool 제한 제거와 30-tool total budget이었다.
+  호출되지 않은 tool은 accepted 품질에 기여하지 않았고, tool surface만 넓힌다.
+
+- **변경**:
+  - composer toolset에서 `plan_task_surface` 제거.
+  - schema snapshot tooling manifest에서 제거.
+  - anchor/candidate prompt에서 해당 tool 호출 지시 제거.
+  - 전용 implementation/test 삭제.
+  - low-quality reduction plan에는 separate planning tool prototype을 retired로 기록.
+
+- **원칙 검토**:
+  - prompt-first/feedback-reminder 원칙 준수. precision 100이 아닌 강제 feedback으로 adoption을
+    만들지 않았다.
+  - literal/token heuristic 없음.
+  - DB-swappable 원칙 유지. 남은 active tool은 schema/profile/sample/neighborhood/query처럼 DB
+    구조와 실제 row evidence를 직접 다룬다.
+
+- **검증**:
+  - `uv run pytest tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_config_load.py tests/test_cli_commands.py -q`
+    통과.
+  - `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/tooling/composer/__init__.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/snapshot_materializer.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
+    통과.
+
+- **다음 방향**:
+  total-only budget은 유지한다. 다음 개선은 새 tool 추가가 아니라 accepted/rejected 정성평가에서
+  반복되는 실제 실패를 보고, 기존 tool schema/description 또는 prompt의 최소 문구로 해결한다.
+
 ## Iteration 149 — Temporal source roles must be requestable
 
 - **질문**:

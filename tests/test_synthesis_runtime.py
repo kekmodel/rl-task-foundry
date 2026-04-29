@@ -1269,10 +1269,10 @@ def test_data_tool_budget_feedback_allows_free_exploration_before_total_budget(
             tool_name="sample",
             params={"index": index},
             result={"rows": [{"value": index}]},
-        )
+    )
 
     assert controller.data_tool_budget_feedback(tool_name="sample") is None
-    assert controller.data_tool_budget_feedback(tool_name="plan_task_surface") is None
+    assert controller.data_tool_budget_feedback(tool_name="profile") is None
     assert controller.data_tool_budget_feedback(tool_name="query") is None
 
 

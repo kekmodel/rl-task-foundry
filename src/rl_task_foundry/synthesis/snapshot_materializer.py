@@ -27,7 +27,6 @@ _COMPOSER_TOOLS: tuple[str, ...] = (
     "profile",
     "sample",
     "neighborhood",
-    "plan_task_surface",
     "query",
 )
 _ATOMIC_PRIMITIVES: tuple[str, ...] = (

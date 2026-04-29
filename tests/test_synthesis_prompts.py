@@ -260,7 +260,6 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "the DB decides the domain" in instructions
     assert "hidden entity values must be grounded" in instructions
     assert "choose root" in instructions
-    assert "Plan not label evidence" in instructions
     assert "Build a requestable label candidate" in instructions
     assert "interesting, unique, verifiable, scoped" in instructions
     assert "Check requestability" in instructions
@@ -532,7 +531,7 @@ def test_synthesis_input_can_include_tool_only_anchor_hint() -> None:
     assert "<anchor_primary_key_column>\nfilm_id\n</anchor_primary_key_column>" in prompt
     assert "<submit_draft_entity_json>" in prompt
     assert "never pass `row_id: null`" in prompt
-    assert "Then call `plan_task_surface` before extra samples" in prompt
+    assert "Use final `query(spec)` to produce the exact label" in prompt
     assert prompt.index("<starting_entity>") < prompt.index("<session_context>")
 
 
@@ -571,7 +570,7 @@ def test_synthesis_input_can_include_candidate_anchor_pool() -> None:
     assert "do not attach a candidate to an otherwise global task" in prompt
     assert "smallest id" in prompt
     assert "first call `neighborhood`" in prompt
-    assert "then call `plan_task_surface` before extra samples" in prompt
+    assert "Use final `query(spec)` to produce the exact label" in prompt
     assert "`preview` and `relationship_summary` are orientation context" in prompt
     assert "not final label evidence" in prompt
     assert "must never expose raw primary-key or row_id values" in prompt
