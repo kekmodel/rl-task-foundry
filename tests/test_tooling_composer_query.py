@@ -1362,6 +1362,23 @@ async def test_query_rejects_invalid_order_direction():
 
 
 @pytest.mark.asyncio
+async def test_query_rejects_more_than_two_order_keys():
+    session, _ = _stub_session()
+    with pytest.raises(ValueError, match="at most two order objects"):
+        await query(
+            session,
+            spec={
+                "from": _from("customer", "c"),
+                "order_by": [
+                    _order_ref("c", "first_name", "asc"),
+                    _order_ref("c", "last_name", "asc"),
+                    _order_ref("c", "customer_id", "asc"),
+                ],
+            },
+        )
+
+
+@pytest.mark.asyncio
 async def test_query_rejects_order_by_with_both_ref_and_output():
     session, _ = _stub_session()
     with pytest.raises(TypeError):

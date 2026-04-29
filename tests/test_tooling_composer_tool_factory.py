@@ -355,6 +355,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "no more than two order keys total" in descriptions["query"][
         "$.spec.order_by"
     ]
+    query_schema = tools["query"].params_json_schema
+    assert query_schema["properties"]["spec"]["properties"]["order_by"][
+        "maxItems"
+    ] == 2
     assert "not an order request unless the request also states" in descriptions[
         "query"
     ]["$.spec.order_by"]

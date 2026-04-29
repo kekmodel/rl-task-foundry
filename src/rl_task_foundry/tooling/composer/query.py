@@ -302,6 +302,11 @@ def _parse_order_by(raw: object) -> list[_SortClause]:
         return []
     if not isinstance(raw, list):
         raise TypeError("'order_by' must be a list of order objects")
+    if len(raw) > 2:
+        raise ValueError(
+            "'order_by' may include at most two order objects; choose another "
+            "label or return tied rows instead"
+        )
     clauses: list[_SortClause] = []
     for index, entry in enumerate(raw):
         payload = _require_mapping(entry, f"order_by[{index}]")

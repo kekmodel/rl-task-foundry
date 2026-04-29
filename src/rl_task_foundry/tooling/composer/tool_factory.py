@@ -686,6 +686,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
             },
             "order_by": {
                 "type": "array",
+                "maxItems": 2,
                 "description": (
                     "Deterministic ordering. Direction must match user_request "
                     "wording exactly. Follow the List Determinism Policy for "

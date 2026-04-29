@@ -6762,6 +6762,60 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 164 — Query schema should enforce the two-key order contract
+
+- **질문**:
+  Iteration 163의 handle order diagnostics 뒤 다음 smoke가 solver rollout까지 도달하는가?
+
+- **실험/결과**:
+  `trial_46`도 solver rollout 전 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_46`
+  - 첫 draft: patient service record 1개를 list로 제출
+    - `answer_contract_list_size_invalid`, `label_null_value_forbidden`,
+      `answer_contract_phrase_missing`
+  - 이후 pharmacy list로 target 전환
+  - 마지막 feedback: `answer_contract_order_too_complex`
+  - solver 도달 없음
+
+- **reasoning 교차 분석**:
+  첫 draft는 1-row list, null field, raw field-name phrases를 포함한 명백한 저품질 draft였다.
+  이후 composer는 pharmacy 5-row list로 전환했고, `starttime` 단독 order가 duplicate라는 점을
+  이해했다.
+
+  composer는 natural visible tie-break를 찾으려 했지만 `starttime + stoptime`도 동점이 남자
+  `medication`까지 세 번째 order key로 추가했다. 이 query는 5 rows를 안정적으로 만들었지만,
+  durable List Determinism Policy의 `max two order keys`를 위반했다. submit validator는
+  이를 `answer_contract_order_too_complex`로 정확히 거절했다.
+
+- **정성 평가**:
+  accepted data: 없음. 저품질 accepted도 없음.
+
+  rejected data: low-quality rejected. pharmacy row 후보 자체는 나쁘지 않았지만, 세 개의
+  ordering concept를 자연스러운 요청으로 묶어야만 유일해지는 draft는 mechanical하고 policy 위반이다.
+  좋은 어려움이 아니라 composer가 "다른 label 선택" 대신 long order contract를 강행한 문제다.
+
+- **개선 판단**:
+  `query.order_by`의 tool schema description은 이미 "no more than two order keys total"이라고
+  말하고 있었다. 하지만 schema/parser가 이를 강제하지 않아 composer가 3-key query를 실제로
+  실행하고, submit 단계에서야 reject됐다.
+
+  원칙상 tool-local contract는 tool schema와 parser에서 닫는 것이 맞다. 이건 DB 리터럴이나
+  의미 휴리스틱이 아니라 query DSL의 구조 제약이며 precision 100으로 판정 가능하다.
+
+- **변경**:
+  - `query.order_by` JSON schema에 `maxItems: 2`를 추가했다.
+  - query parser가 order key 3개 이상을 `ValueError`로 거절한다.
+  - schema/parser 테스트를 추가했다.
+
+- **검증**:
+  `uv run pytest tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`159 passed`).
+
+  `uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
