@@ -95,6 +95,13 @@ def _legacy_constraint_phrases(
                 normalized.append(entry["phrase"])
     return normalized
 
+
+def _answer_contract_kind(answer_contract: object | None) -> object:
+    if isinstance(answer_contract, dict):
+        return answer_contract.get("kind")
+    return getattr(answer_contract, "kind", None)
+
+
 def _record_query_evidence(
     controller: SubmitDraftController,
     label: object,
@@ -105,22 +112,34 @@ def _record_query_evidence(
     query_params: dict[str, object] | None = None,
     result_extra: dict[str, object] | None = None,
 ) -> None:
-    del answer_contract
     rows = [label] if isinstance(label, dict) else label
     columns: list[str] = []
     if isinstance(rows, list) and rows and isinstance(rows[0], dict):
         columns = list(rows[0].keys())
     if column_sources is None:
-        column_sources = [
-            {
-                "output": column,
-                "kind": "select",
-                "visibility": "user_visible",
-                "is_handle": False,
-                "value_exposes_source": True,
-            }
-            for column in columns
-        ]
+        if _answer_contract_kind(answer_contract) == "scalar":
+            column_sources = [
+                {
+                    "output": column,
+                    "kind": "aggregate",
+                    "fn": "count",
+                    "visibility": "user_visible",
+                    "is_handle": False,
+                    "value_exposes_source": False,
+                }
+                for column in columns
+            ]
+        else:
+            column_sources = [
+                {
+                    "output": column,
+                    "kind": "select",
+                    "visibility": "user_visible",
+                    "is_handle": False,
+                    "value_exposes_source": True,
+                }
+                for column in columns
+            ]
     result: dict[str, object] = {
         "columns": columns,
         "column_sources": column_sources,
@@ -670,10 +689,18 @@ class _FakeBackend:
             result={"payment_id": 11},
         )
         if self.reject_payload is not None:
-            _record_query_evidence(controller, self.reject_payload.label)
+            _record_query_evidence(
+                controller,
+                self.reject_payload.label,
+                answer_contract=self.reject_payload.answer_contract,
+            )
             await controller.submit(self.reject_payload)
         if self.accept_payload is not None:
-            _record_query_evidence(controller, self.accept_payload.label)
+            _record_query_evidence(
+                controller,
+                self.accept_payload.label,
+                answer_contract=self.accept_payload.answer_contract,
+            )
             await controller.submit(self.accept_payload)
         return type(
             "ConversationResult",
@@ -1341,6 +1368,7 @@ async def test_submit_draft_records_answer_contract_binding_diagnostics(
     _record_query_evidence(
         controller,
         payload.label,
+        answer_contract=payload.answer_contract,
         referenced_columns=[
             {
                 "usage": "order_by",
@@ -1808,7 +1836,11 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
     first_payload_data = _accepted_payload().model_dump(mode="json")
     first_payload_data["answer_contract"]["answer_phrase"] = "요청에 없는 문구"
     first_payload = SubmitDraftPayload.model_validate(first_payload_data)
-    _record_query_evidence(controller, first_payload.label)
+    _record_query_evidence(
+        controller,
+        first_payload.label,
+        answer_contract=first_payload.answer_contract,
+    )
 
     first_message = await controller.submit(first_payload)
 
@@ -1824,7 +1856,11 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
             "answer_contract": _scalar_answer_contract(phrase="전체 고객 수"),
         }
     )
-    _record_query_evidence(controller, second_payload.label)
+    _record_query_evidence(
+        controller,
+        second_payload.label,
+        answer_contract=second_payload.answer_contract,
+    )
 
     second_message = await controller.submit(second_payload)
 
@@ -1918,7 +1954,11 @@ async def test_submit_draft_rejects_label_reset_after_binding_feedback(
             "answer_contract": _scalar_answer_contract(phrase="입원 기록 수"),
         }
     )
-    _record_query_evidence(controller, second_payload.label)
+    _record_query_evidence(
+        controller,
+        second_payload.label,
+        answer_contract=second_payload.answer_contract,
+    )
 
     second_message = await controller.submit(second_payload)
 
@@ -2833,9 +2873,14 @@ async def test_submit_draft_too_easy_feedback_preserves_readable_path(
         params={"op": "eq", "value": 1, "sort_by": "customer_id", "direction": "asc", "limit": 3},
         result=[{"customer_id": 1}, {"customer_id": 2}],
     )
-    _record_query_evidence(controller, _too_easy_readable_payload().label)
+    payload = _too_easy_readable_payload()
+    _record_query_evidence(
+        controller,
+        payload.label,
+        answer_contract=payload.answer_contract,
+    )
 
-    message = await controller.submit(_too_easy_readable_payload())
+    message = await controller.submit(payload)
 
     assert "needs more specificity" in message
     assert "Policy reminder: Difficulty-Up Policy" in message
@@ -3166,6 +3211,7 @@ async def test_submit_draft_does_not_require_contract_to_restate_query_predicate
     _record_query_evidence(
         controller,
         payload.label,
+        answer_contract=payload.answer_contract,
         referenced_columns=[
             {
                 "usage": "where",
@@ -3876,6 +3922,46 @@ async def test_submit_draft_rejects_duplicate_projected_list_rows(
 
 
 @pytest.mark.asyncio
+async def test_submit_draft_rejects_scalar_row_detail_without_aggregate_query(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="admission",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=30,
+            total_solver_runs=30,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    _seed_min_initial_exploration(controller)
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "admission",
+            "label": {
+                "admission_type": "DIRECT OBSERVATION",
+                "admission_time": "2148-09-14T14:19:00",
+            },
+            "entity": {"admission_id": 25559382},
+            "user_request": "이 입원의 입원 유형과 입원 시간을 알려 주세요.",
+            "answer_contract": _scalar_answer_contract(phrase="입원 유형과 입원 시간"),
+        }
+    )
+    _record_query_evidence(controller, payload.label)
+
+    message = await controller.submit(payload)
+
+    assert "answer_contract.kind='scalar' is only for aggregate query results" in message
+    assert "single-record detail lookup" in message
+    assert controller.last_feedback_error_codes == (
+        "answer_contract_scalar_not_aggregate",
+    )
+    assert controller.attempts == []
+    assert controller.accepted_draft is None
+
+
+@pytest.mark.asyncio
 async def test_submit_draft_rejects_multirow_list_without_order_by(
     tmp_path: Path,
 ) -> None:
@@ -4344,7 +4430,10 @@ async def test_submit_draft_rejects_label_from_table_without_primary_key(
     assert "primary-key-backed path" in message
     assert "derived aggregate" in message
     assert "do not resubmit the same row-value label" in message
-    assert controller.last_feedback_error_codes == ("label_no_primary_key_source",)
+    assert controller.last_feedback_error_codes == (
+        "label_no_primary_key_source",
+        "answer_contract_scalar_not_aggregate",
+    )
     assert controller.accepted_draft is None
 
 
@@ -4436,7 +4525,8 @@ async def test_submit_draft_allows_handle_label_when_visibility_policy_allows_it
         column_sources=[
             {
                 "output": "assigned_location_reference",
-                "kind": "select",
+                "kind": "aggregate",
+                "fn": "max",
                 "table": "location",
                 "column": "location_id",
                 "visibility": "user_visible",
@@ -4935,7 +5025,11 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
     )
     _seed_min_initial_exploration(controller)
     first_payload = _accepted_payload()
-    _record_query_evidence(controller, first_payload.label)
+    _record_query_evidence(
+        controller,
+        first_payload.label,
+        answer_contract=first_payload.answer_contract,
+    )
 
     first_message = await controller.submit(first_payload)
 
@@ -4953,7 +5047,11 @@ async def test_submit_draft_too_easy_requires_incremental_answer_contract(
             ),
         }
     )
-    _record_query_evidence(controller, second_payload.label)
+    _record_query_evidence(
+        controller,
+        second_payload.label,
+        answer_contract=second_payload.answer_contract,
+    )
 
     second_message = await controller.submit(second_payload)
 

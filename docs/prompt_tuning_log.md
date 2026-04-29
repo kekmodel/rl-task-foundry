@@ -6979,6 +6979,68 @@ Solver 30/30 완료 결과:
     대응 원칙을 추가했다.
   - duplicate-answer feedback 메시지는 같은 durable policy를 짧게 상기하도록 수정했다.
 
+## Iteration 168 — Scalar contract must come from aggregate evidence
+
+- **질문**:
+  Iteration 167 뒤 다음 smoke에서 duplicate-row repair는 개선됐는가? 그리고 rejected data는
+  어려운 좋은 문제인가, 아니면 저품질 문제인가?
+
+- **실험/결과**:
+  `trial_50`은 accepted 없이 `MaxTurnsExceeded`로 실패했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_50`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - topic hint: 없음
+
+  composer는 처음에 pharmacy list를 만들었고, duplicate projected answer rows 피드백 뒤에는
+  `sequence_number` 같은 artificial order output으로 구제하지 않았다. 대신 route/frequency/dose
+  같은 자연 field를 추가하려 했다. 이 점에서 Iteration 167 변경은 의도대로 작동했다.
+
+  그러나 pharmacy rows는 여전히 projected duplicate가 남았고, composer는 마지막에 단일 입원 record의
+  `admission_type`, `admission_time`을 `answer_contract.kind='scalar'`로 제출했다. solver pass rate는
+  `4/4 = 1.0`으로 too easy였고, 데이터는 단일 row detail lookup이라 학습 데이터로 좋지 않았다.
+
+- **reasoning 교차 분석**:
+  reasoning content는 저장되고 있었다. composer reasoning을 보면 duplicate rows를 해결해야 한다는
+  원칙을 이해했고, hidden handle이나 sequence output을 피하려고 했다. 이후 예산 압박 때문에 쉬운
+  단일 admission detail로 전환했고, selected row object를 scalar처럼 취급했다.
+
+  solver reasoning은 이 admission detail이 탐색/추론 없이 직접 조회에 가까운 문제였음을 보여줬다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. pharmacy list는 중복 answer rows가 해결되지 않은 저품질이고,
+  admission scalar는 너무 쉬운 단일 record detail lookup이다. 어려워서 좋은 문제가 아니라 composer가
+  유효한 label을 끝까지 만들지 못한 케이스다.
+
+- **개선 판단**:
+  `admission_type` 같은 컬럼명이나 값 문자열을 보고 막으면 리터럴/토큰 기반 휴리스틱이므로 금지 원칙
+  위반이다.
+
+  대신 최신 `query` 결과의 구조적 `column_sources[].kind`는 SDK/tool이 생성한 증거다. 따라서
+  `answer_contract.kind='scalar'`인데 최신 query output source 중 `aggregate`가 하나도 없으면,
+  selected row object를 scalar로 제출한 것이므로 precision 100으로 reject할 수 있다.
+
+- **변경**:
+  - `submit_draft`에 `answer_contract_scalar_not_aggregate` feedback error를 추가했다.
+  - scalar draft는 최신 query evidence에 aggregate output source가 없으면 solver rollout 전에 reject한다.
+  - feedback은 Label Contract의 기존 원칙, 즉 scalar는 aggregate query result라는 정책을 상기한다.
+  - 테스트 헬퍼는 scalar contract를 받은 경우 aggregate evidence를 기록하도록 고쳤고, 직접 row detail
+    오용 케이스는 명시적 select evidence로 회귀 테스트한다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_runtime.py -q`
+  통과 (`81 passed`).
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`110 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

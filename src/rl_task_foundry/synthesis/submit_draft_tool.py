@@ -79,6 +79,7 @@ class SubmitDraftErrorCode(StrEnum):
     ANSWER_CONTRACT_LIST_SIZE_INVALID = "answer_contract_list_size_invalid"
     ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE = "answer_contract_list_limit_too_wide"
     ANSWER_CONTRACT_FILTER_UNBOUND = "answer_contract_filter_unbound"
+    ANSWER_CONTRACT_SCALAR_NOT_AGGREGATE = "answer_contract_scalar_not_aggregate"
     ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED = (
         "answer_contract_hidden_filter_unanchored"
     )
@@ -130,6 +131,7 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
         SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_SIZE_INVALID,
         SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND,
+        SubmitDraftErrorCode.ANSWER_CONTRACT_SCALAR_NOT_AGGREGATE,
         SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED,
         SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING,
         SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING,
@@ -1452,6 +1454,13 @@ def _query_projection_has_duplicate_answer_rows(
     )
 
 
+def _query_lacks_scalar_aggregate_evidence(query_result: dict[str, object]) -> bool:
+    column_sources = _as_object_list(query_result.get("column_sources"))
+    if column_sources is None:
+        return False
+    return not any(source.get("kind") == "aggregate" for source in column_sources)
+
+
 def _query_result_has_no_rows(query_result: dict[str, object]) -> bool:
     rows = query_result.get("rows")
     if isinstance(rows, list):
@@ -2322,6 +2331,19 @@ class SubmitDraftController:
                 invalid_diagnostics["projection_diagnostics"] = latest_query_result.get(
                     "projection_diagnostics"
                 )
+            if (
+                payload.answer_contract.kind == "scalar"
+                and _query_lacks_scalar_aggregate_evidence(latest_query_result)
+            ):
+                error_codes.append(
+                    SubmitDraftErrorCode.ANSWER_CONTRACT_SCALAR_NOT_AGGREGATE
+                )
+                invalid_diagnostics["scalar_column_source_kinds"] = [
+                    source.get("kind")
+                    for source in (
+                        _as_object_list(latest_query_result.get("column_sources")) or []
+                    )
+                ]
 
         # After a too-easy rejection, require an answer change that is
         # visible to exact label verification.
@@ -2768,6 +2790,9 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_FILTER_UNBOUND: (
                 "Rejected. Request Contract reminder: user-visible row-set filters need a dedicated constraint phrase in user_request/answer_contract; output field wording is not enough. If that filter is not intended, rerun the label query without it."  # noqa: E501
+            ),
+            SubmitDraftErrorCode.ANSWER_CONTRACT_SCALAR_NOT_AGGREGATE: (
+                "Rejected. Label Contract reminder: answer_contract.kind='scalar' is only for aggregate query results. A selected row object is not a scalar label; use a 3-5 row list, use an aggregate, or choose another scoped label. Do not submit a single-record detail lookup as scalar just because it is easy."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
                 "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If the latest query relays from a child/current record through a parent to sibling answer rows, rewording as child-related is not enough: either put the parent/current-subject handle in entity and rerun the label query from that scope, or choose a label directly scoped to the existing entity."  # noqa: E501
