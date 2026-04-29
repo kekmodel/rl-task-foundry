@@ -106,8 +106,7 @@ def build_synthesis_agent_instructions(
 ) -> str:
     return "\n\n".join([
         "# Role\n"
-        "Make grounded customer-facing task drafts; use "
-        "`submit_draft`",
+        "Make grounded customer-facing task drafts; submit_draft",
 
         build_tool_call_budget_instruction(
             max_tool_calls=runtime_config.max_turns,
@@ -119,14 +118,14 @@ def build_synthesis_agent_instructions(
         "Do not invent ids; hidden entity values must be grounded.\n"
         "3. Build a requestable label candidate: interesting, unique, "
         "verifiable, scoped.\n"
-        "4. Check requestability: realistic customer can ask "
-        "fields/row controls without technical or awkward controls or "
-        "formatting quirks; "
+        "4. Check requestability: realistic customer can ask without technical "
+        "or awkward controls or formatting quirks; "
         "else choose another label.\n"
         "5. Derive `user_request` and `topic` from that label; request "
         "exactly the label fields and row controls.\n"
         "6. Final `query(spec)` supplies copied label JSON before "
-        "`submit_draft`; no decorative global answer.",
+        "`submit_draft`; if diagnostics do not block it, submit immediately; "
+        "no decorative global answer.",
 
         "# Core Definitions\n"
         "- Verifiable label: final `query(spec)` exactly reproduces submitted "
@@ -134,14 +133,14 @@ def build_synthesis_agent_instructions(
         "- Unique label: one correct structured answer for hidden entity/request. "
         "Return, distinguish, aggregate, or avoid visible ties; never rely on "
         "hidden ids/order/filters.\n"
-        "- Source surface: user wording, label fields, query path name same "
+        "- Source surface: user wording, label fields, query path same "
         "role. If one phrase can map to several reachable surfaces, "
         "request/contract must name chosen source role; label/output_schema "
         "names cannot disambiguate; broad nouns invalid. If no primary key, "
         "use primary-key-backed path/aggregate; no hidden path guessing.",
 
         "# Request Contract\n"
-        "Use configured target language:\n"
+        "configured target language:\n"
         "- Use first-person only for requester/account/session/order/records; "
         "otherwise use neutral wording.\n"
         "- customer does not know DB tables, ids, technical sequences/refs, or "
@@ -155,19 +154,19 @@ def build_synthesis_agent_instructions(
         "translate/transliterate them.\n"
         "- Keep request compact; use ordinary target-language words, "
         "no malformed terms. Field keys stay in JSON; no aliases/choices in "
-        "parentheses. If long tie-breaks/mechanical field lists are needed, "
+        "parentheses. If long tie-breaks/mechanical field lists needed, "
         "choose another label.\n"
         "- Bind modifiers/filters to exact object/scope/source. Non-null/status/"
         "type filters need row-set wording and matching query.where, not output "
         "names. If only returned, ask records plus field.",
 
         "# Label Contract\n"
-        "Label is structured result, not final prose.\n"
+        "Label structured result, not final prose.\n"
         "- `answer_contract.kind='scalar'` only for aggregate answers; "
         "`list` for selected rows.\n"
         "- Label Grounding Policy: copy label values from latest successful "
         "`query(spec)` result; Do not reformat; no null fields.\n"
-        "- Scope label to hidden current subject/context; "
+        "- Scope to hidden current subject/context; "
         "unrelated global answer is invalid.\n"
         "- Use semantic API-style field names, not raw DB aliases; values stay "
         "user-visible non-handles; handle refs need query/user visibility; "
@@ -198,7 +197,7 @@ def build_synthesis_agent_instructions(
         "must be in entity/request/contract; boundary "
         "words and direction agree (newest/latest vs oldest/earliest; asc/desc).\n"
         "- Rows must be distinguishable through requested output fields. If "
-        "`query` reports duplicate projected answer rows, add natural visible "
+        "duplicate projected answer rows appear, add natural visible "
         "field/aggregate; if only sequence/reference/record-order can "
         "distinguish them, switch label. Do not shrink limits or add hidden handles.\n"
         "- If order leaves distinct-answer ties, ask for a natural visible "
@@ -209,11 +208,11 @@ def build_synthesis_agent_instructions(
 
         "# Scope Examples\n"
         "<example><draft_bad>{\"user_request\":\"show R\","
-        "\"label\":\"s1_r\",\"query\":\"S1.R;S2.R\"}"
+        "\"query\":\"S1.R;S2.R\"}"
         "</draft_bad><commentary>Bad: hidden source choice"
         "</commentary></example>\n"
         "<example><draft_good>{\"user_request\":\"show S1 R\","
-        "\"label\":\"s1_r\",\"query\":\"S1.R\"}</draft_good>"
+        "\"query\":\"S1.R\"}</draft_good>"
         "<commentary>Good: source/label align"
         "</commentary></example>\n"
         "<example><draft_bad>entity={C.pk}; query C->P->siblings</draft_bad>"

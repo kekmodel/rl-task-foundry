@@ -7096,6 +7096,73 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted smoke `1/5`.
 
+## Iteration 170 — ToolBudgetFeedback must stop exploration, not just warn
+
+- **질문**:
+  `trial_52` 실패는 어려운 좋은 데이터 때문인가, 아니면 composer가 저품질 draft를
+  반복한 것인가? reasoning 내용은 어떤 패턴을 보여주는가?
+
+- **실험/결과**:
+  `trial_52`는 accepted 없이 `MaxTurnsExceeded`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_52`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - accepted data: 없음
+
+  세 번의 submit은 모두 feedback으로 막혔다.
+
+  1. pharmacy list: query limit 5를 쓰면서 request/contract에 limit phrase가 없었고,
+     `start_time` order가 boundary tie를 만들었다.
+  2. eMAR list: nullable medication을 label에 포함했고, source sequence를 output/order로
+     사용했으며, limit phrase/evidence도 어긋났다.
+  3. diagnosis list: blocked `seq_num` 계열 값을 `diagnosis_sequence`로 노출했고, 성별/입원
+     유형은 반복값이라 user-facing answer로도 약했다.
+
+- **reasoning 교차 분석**:
+  reasoning sidecar는 정상 저장됐다. composer는 `submit_draft_required`와 “budget limit”을
+  인지했지만, 그 뒤에도 schema/profile 탐색을 이어 갔다. 특히 최종 label query 뒤에 더
+  탐색하다가 턴을 소모했고, budget 압박 속에서 blocked sequence를 포함한 약한 label로
+  제출했다.
+
+  이건 solver가 못 푼 어려운 문제라기보다, composer가 이미 있는 Draft Submission Budget과
+  Label/List 정책을 끝까지 따르지 못한 문제다.
+
+- **정성 평가**:
+  accepted data: 없음. 따라서 low-quality accepted도 없음.
+
+  rejected data: 모두 low-quality rejected. pharmacy draft는 list boundary가 유일하지 않았고,
+  eMAR draft는 null/evidence/sequence 문제가 있었으며, diagnosis draft는 blocked field와 반복
+  출력 문제를 포함했다. 거절 자체는 바람직하다.
+
+- **변경**:
+  새 hard validator는 추가하지 않았다. 어떤 label switch가 정말 불가피한지, 또는 sequence-like
+  field가 실제 사용자에게 자연스러운지 100% precision으로 판별하기 어렵기 때문이다.
+
+  대신 prompt-first 원칙대로 기존 정책의 source of truth를 맞췄다.
+
+  - Draft Submission Budget: `ToolBudgetFeedback`는 탐색 경계이며, 이후에는 submit해야 한다고
+    명시했다.
+  - 예외는 “rows missing/blocking diagnostics”일 때의 최종 label `query` 1회뿐이며, 그 query
+    뒤에는 submit해야 한다고 명시했다.
+  - `query` tool schema description도 성공한 최종 label query 뒤에는 schema/profile/sample/
+    neighborhood 탐색을 하지 말고 submit하라고 맞췄다.
+  - `submit_draft_required` feedback 문구도 같은 durable policy를 상기하도록 수정했다.
+
+  이 변경은 새 지시를 feedback에 숨긴 것이 아니라, 이미 존재하던 budget 정책을 prompt,
+  tool description, feedback reminder가 모두 같은 방식으로 말하게 한 것이다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`110 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/turn_budget.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_turn_budget_prompt.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **상태**:
+  `trial_52`는 accepted가 아니므로 만족스러운 accepted 연속 기록은 다시 `0/5`로 본다.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

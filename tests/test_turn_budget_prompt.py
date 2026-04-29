@@ -16,7 +16,9 @@ def test_budget_instruction_uses_tool_call_language_not_turns() -> None:
     assert "data tools" in text
     assert "After feedback, max 3 data tools" in text
     assert "binding feedback uses none" in text
-    assert "only label `query`" in text
+    assert "stop exploration" in text
+    assert "only one final label `query`" in text
+    assert "after that query, submit" in text
     assert "ToolBudgetFeedback" in text
     assert "submit next" in text
     for leaked in ("composer tools", "too_easy", "too_hard", "trial"):

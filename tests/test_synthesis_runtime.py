@@ -1048,6 +1048,8 @@ def test_data_tool_budget_feedback_blocks_late_first_submit(tmp_path: Path) -> N
     assert feedback["calls_since_boundary"] == FIRST_SUBMIT_MAX_DATA_TOOLS
     assert feedback["limit"] == FIRST_SUBMIT_MAX_DATA_TOOLS
     assert "first submit_draft" in str(feedback["message"])
+    assert "Stop exploration" in str(feedback["message"])
+    assert "After that label query, submit" in str(feedback["message"])
 
 
 def test_data_tool_budget_feedback_allows_first_label_query_after_limit(
@@ -1121,6 +1123,8 @@ def test_data_tool_budget_feedback_blocks_late_feedback_repair(tmp_path: Path) -
     assert feedback["calls_since_boundary"] == FEEDBACK_REPAIR_MAX_DATA_TOOLS
     assert feedback["limit"] == FEEDBACK_REPAIR_MAX_DATA_TOOLS
     assert "after feedback" in str(feedback["message"])
+    assert "Stop exploration" in str(feedback["message"])
+    assert "after that query, submit" in str(feedback["message"])
 
 
 def test_data_tool_budget_feedback_allows_repair_query_after_limit(
@@ -1229,6 +1233,7 @@ def test_data_tool_budget_feedback_blocks_binding_only_data_repair(
     assert feedback["limit"] == 0
     assert "contract-only" in str(feedback["message"])
     assert "Preserve the current label/query values" in str(feedback["message"])
+    assert "stop exploration" in str(feedback["message"])
 
 
 def test_data_tool_budget_feedback_allows_query_repair_for_empty_query(

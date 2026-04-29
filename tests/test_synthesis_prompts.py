@@ -268,6 +268,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Derive `user_request` and `topic` from that label" in instructions
     assert "exactly the label fields and row controls" in instructions
     assert "supplies copied label JSON" in instructions
+    assert "if diagnostics do not block it, submit immediately" in instructions
     assert "no decorative global answer" in instructions
     assert "Difficulty-Up Policy" in instructions
     assert "smallest single structural strengthening" in instructions

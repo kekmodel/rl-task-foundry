@@ -793,6 +793,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "description": (
                     "Structured read-only query spec. Use immediately before "
                     "submit_draft; returned rows are canonical label evidence. "
+                    "After a successful final label query, submit_draft instead "
+                    "of calling schema/profile/sample/neighborhood tools; only "
+                    "rerun query when returned diagnostics block submission. "
                     "Inspect returned diagnostics before submit_draft: ordering "
                     "diagnostics flag unstable list order, and projection "
                     "diagnostics flag answer rows that are indistinguishable "
