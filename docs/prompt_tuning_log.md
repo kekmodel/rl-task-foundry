@@ -10104,6 +10104,78 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_80`은 accepted지만 low-quality accepted로 보므로 만족 streak는 `0/5` 유지.
 
+## Iteration 159 — Order phrase repair must stay fluent
+
+- **질문**:
+  sequence/order repair 보강 뒤 `trial_81`은 개선됐는가? accepted가 없었다면 거절 데이터는
+  어려운 좋은 문제였는가, 저품질이었는가, 아니면 너무 쉬워서 정상 거절된 문제였는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`.
+
+  제출 흐름:
+  - submit 1: `composer_submit_draft_missing`
+  - submit 2:
+    `내 최근 투약 기록 5개를 투약 시간 순서대로 보여주세요.`
+    - 오류: `answer_contract_evidence_mismatch`, `label_non_user_visible_source`
+    - 원인: `emar_id`가 label에 포함됨
+  - submit 3:
+    `내 최근 투약 기록 5개를 투약 시간을 기준으로 최신순이부터 보여주세요.`
+    - 오류: `answer_contract_phrase_missing`
+  - submit 4:
+    `내 최근 투약 기록 5개를 투약 시간, 투약 명칭, 투약 상태 순으로 멀어진 시간순방업물뉘보여주세요.`
+    - 오류: `answer_contract_phrase_missing`
+  - submit 5 budget exhausted:
+    `내 최근 투약 기록 5개를 투약 시간, 투약 명칭, 투약 상태 순으로 멀어진 시간순으로 보여주세요.`
+    - pass rate: `4/4 = 1.0`
+    - 오류: `calibration_inconclusive`
+
+- **reasoning 교차 분석**:
+  sequence/order field 보강은 부분적으로 효과가 있었다. 이번에는 최종 label에 `record_sequence`나
+  source sequence field가 들어가지 않았다.
+
+  그러나 phrase repair에서 다른 문제가 드러났다. composer는 `상태`가 request에 없다는 feedback을
+  본 뒤 같은 label을 수리하려 했고, 이후 order phrase mismatch를 고치려다 `최신순이부터`,
+  `멀어진 시간순방업물뉘` 같은 깨진 한국어를 만들었다. 마지막에는 문구를 거의 고쳤지만 이미
+  제출 budget을 소모했고, solver 4개가 모두 맞혀 too-easy로 reject됐다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - submit 2는 hidden/non-visible field가 label에 섞인 low-quality rejected.
+  - submit 3/4는 label 자체는 방향이 맞지만 phrase repair가 깨져 low-quality rejected.
+  - submit 5는 solver가 모두 풀 수 있는 too-easy rejected. 데이터 자체는 나쁘다기보다
+    난이도 부족이며, 현재 upper band 기준에서는 reject가 맞다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 깨진 자연어/어색한 방향 표현을 100% precision으로 검출하는
+  방법은 없고, 문자/토큰 기반 휴리스틱은 금지다.
+
+  대신 기존 fluency 원칙을 order phrase가 들어가는 정확한 surface에 더 직접적으로 반영했다.
+  - `submit_draft.answer_contract.order_bindings[].requested_by_phrase` schema:
+    ordinary target-language direction words를 쓰고, typo-like tie-break term을 만들지 말라고 명시.
+  - `answer_contract_phrase_missing` feedback:
+    phrase repair 때도 ordinary direction words를 쓰고 malformed order phrase를 추가하지 말라고
+    기존 Request/List Determinism 정책을 상기.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_rejects_answer_contract_phrase_absent_from_request -q`
+    통과 (`2 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_81`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

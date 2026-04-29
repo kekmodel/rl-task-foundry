@@ -258,10 +258,10 @@ class AnswerOrderBinding(StrictModel):
             "reuse one broad order phrase for multiple different keys. If "
             "several temporal fields are reachable or returned, generic "
             "latest/recent time wording is not enough; name the chosen time "
-            "role. Do not "
-            "invent malformed tie-break terms to satisfy this schema. If a "
-            "source sequence/order phrase would be mechanical or awkward, "
-            "choose another label instead of adding that field."
+            "role. Use ordinary target-language direction words; do not "
+            "invent malformed or typo-like tie-break terms to satisfy this "
+            "schema. If a source sequence/order phrase would be mechanical "
+            "or awkward, choose another label instead of adding that field."
         ),
     )
     direction: Literal["asc", "desc"] | None = Field(
@@ -2845,7 +2845,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING: (
                 "Rejected. Label Contract reminder: every answer_contract phrase must be an exact contiguous substring copied from user_request. Feedback Handling Policy reminder: preserve the natural user_request wording and prior label_json fields/values; rewrite the full sentence cleanly when adding missing natural phrases to user_request/answer_contract instead of deleting, renaming, or splicing label fields. When only phrase/binding errors remain, do not call data tools; repair the same label in place."  # noqa: E501
-                " List Determinism Policy reminder: order wording must keep the same query/label row order; do not add an opposite display-order phrase during repair."  # noqa: E501
+                " List Determinism Policy reminder: order wording must keep the same query/label row order; use ordinary target-language direction words, and do not add an opposite display-order phrase or malformed order phrase during repair."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING: (
                 "Rejected. Label Contract reminder: final query evidence must immediately precede submit_draft, and the canonical label is copied from the latest successful query result."  # noqa: E501

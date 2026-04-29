@@ -2656,7 +2656,9 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "fluent customer wording" in schema_surface
     assert "misleading term" in schema_surface
     assert "rewrite the whole request cleanly" in schema_surface
-    assert "malformed tie-break terms" in schema_surface
+    assert "malformed or typo-like tie-break terms" in schema_surface
+    assert "ordinary target-language direction words" in schema_surface
+    assert "typo-like tie-break terms" in schema_surface
     assert "sequence/reference/order fields during repair" in schema_surface
     assert "source sequence/order phrase would be mechanical or awkward" in schema_surface
     assert "For list labels, provide one binding for every returned label field" in schema_surface
@@ -3203,6 +3205,8 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
     assert "preserve the natural user_request wording" in message
     assert "prior label_json fields/values" in message
     assert "rewrite the full sentence cleanly" in message
+    assert "ordinary target-language direction words" in message
+    assert "malformed order phrase" in message
     assert "splicing label fields" in message
     assert controller.last_feedback_error_codes == ("answer_contract_phrase_missing",)
     assert controller.accepted_draft is None
