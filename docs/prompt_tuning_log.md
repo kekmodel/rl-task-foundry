@@ -12334,3 +12334,67 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_109`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 189 — Tie-break candidate use must sync request and contract
+
+- **질문**:
+  `trial_110`은 Iteration 187의 selected visible tie-break candidate diagnostic이 도움이 되었는가, 그리고 남은
+  실패는 어떤 종류인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T124505Z:8400c293`.
+  마지막 오류는 `answer_contract_phrase_missing`, `answer_contract_query_mismatch`였다.
+
+  composer는 ICU stay `35889503`의 procedureevents 7개를 골랐다. 첫 유효 query는 `starttime asc`로 7개 row를
+  반환했고, diagnostics는 duplicate order key와 함께 `selected_visible_tie_breaker_candidates`로
+  `procedure_name`, `end_time`을 제시했다. 이후 composer는 `end_time`을 secondary order key로 추가하고
+  `limit=5`를 넣어 안정적인 query를 만들었다.
+
+  하지만 final user_request는 여전히
+  `해당 ICU 입원 기간 중에 시행된 시술 목록을 시작 시간 순으로 보여주세요`
+  였다. label에는 `end_time`이 남아 있고 query는 `starttime asc, endtime asc, limit 5`였지만, request에는
+  `종료 시간`, `종료 시간 빠른 순`, `5개`가 없었다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 개선된 diagnostic을 실제로 사용했다. duplicate `start_time` 문제를 보고 `end_time`을
+  tie-break로 추가했다. 따라서 Iteration 187의 방향은 유효하다.
+
+  남은 실패는 tool 후보 선택 자체가 아니라, 후보를 사용한 뒤 Request/Label Contract를 동기화하지 않은 것이다.
+  selected output phrase는 output binding일 뿐 order wording이 아니며, fixed limit은 반드시 user_request와
+  `answer_contract.limit_phrase`에 드러나야 한다. 이 원칙은 기존 validator가 정확히 잡았다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - procedure list 후보 자체는 꽤 좋은 데이터다. ICU stay scope, procedureevents row set, d_items label path,
+    start/end time output이 모두 solver tool로 재현 가능하다.
+  - 그러나 final draft는 low-quality rejected다. request가 실제 query order/limit/output을 설명하지 못하므로
+    solver에게 정확한 row membership/order를 기대할 수 없다.
+  - 저품질이 solver까지 가지 않고 submit validator에서 거절된 것은 올바른 동작이다.
+
+- **변경**:
+  `query` tool description에서 `selected_visible_tie_breaker_candidates` 사용 후의 책임을 명확히 했다.
+  후보를 order key로 추가하면 반드시 `user_request`와 `answer_contract`가 그 order role을 exact natural phrase로
+  이름 붙여야 하며, selected output wording alone은 order wording이 아니고 fixed limit은 별도 limit phrase가
+  필요하다고 추가했다.
+
+  이는 새 hard validator가 아니다. 기존 `answer_contract_phrase_missing`, `answer_contract_query_mismatch`,
+  `answer_contract_binding_missing` validator가 이미 precision 100으로 잡던 조건을 tool schema에서 미리 상기하는
+  개선이다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_110`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
