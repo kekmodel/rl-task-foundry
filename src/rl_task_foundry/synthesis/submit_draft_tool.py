@@ -180,6 +180,19 @@ def _validation_error_diagnostics(error: ValidationError) -> list[dict[str, obje
     ]
 
 
+def _submit_draft_required_feedback_message(final_output_text: str) -> str | None:
+    try:
+        payload = json.loads(final_output_text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("error") != "submit_draft_required":
+        return None
+    message = payload.get("message")
+    return message if isinstance(message, str) and message.strip() else None
+
+
 class AnswerOutputBinding(StrictModel):
     label_field: str = Field(
         min_length=1,
@@ -2100,17 +2113,26 @@ class SubmitDraftController:
             return "BudgetExhaustedError: No more attempts."
 
         attempts_left_after = self.submissions_left() - 1
-        primary = (
-            "Protocol reminder: Plain final output is invalid for this role; "
-            "the synthesis composer Workflow requires submit_draft."
-        )
+        budget_feedback = _submit_draft_required_feedback_message(final_output_text)
+        if budget_feedback is None:
+            primary = (
+                "Protocol reminder: Plain final output is invalid for this role; "
+                "the synthesis composer Workflow requires submit_draft."
+            )
+            next_step = (
+                "Use data tools if more evidence is missing, then call "
+                "submit_draft. Do not end the run with text only."
+            )
+        else:
+            primary = (
+                "Protocol reminder: ToolBudgetFeedback is a hard boundary; "
+                "do not continue data-tool exploration inside the same run."
+            )
+            next_step = budget_feedback
         message = _render_structured_message(
             kind="FeedbackError",
             primary=primary,
-            next_step=(
-                "Use data tools if more evidence is missing, then call "
-                "submit_draft. Do not end the run with text only."
-            ),
+            next_step=next_step,
             attempts_left=max(0, attempts_left_after),
         )
         diagnostics: dict[str, object] = {

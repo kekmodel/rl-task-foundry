@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -795,6 +796,32 @@ def test_synthesis_tool_use_behavior_keeps_feedback_as_tool_response() -> None:
 
     assert finalize.is_final_output is False
     assert finalize.final_output is None
+
+
+def test_synthesis_tool_use_behavior_finalizes_tool_budget_feedback() -> None:
+    class FakeToolsToFinalOutputResult:
+        def __init__(self, *, is_final_output: bool, final_output: str | None):
+            self.is_final_output = is_final_output
+            self.final_output = final_output
+
+    sdk = SimpleNamespace(ToolsToFinalOutputResult=FakeToolsToFinalOutputResult)
+    controller = SimpleNamespace(_terminated_too_hard=False)
+    backend = _make_tool_use_behavior_backend()
+    conversation = _conversation_with_controller(controller)
+    output = json.dumps(
+        {
+            "error": "submit_draft_required",
+            "message": "ToolBudgetFeedback: submit next.",
+        }
+    )
+
+    finalize = backend._build_tool_use_behavior(sdk, conversation)(
+        None,
+        [SimpleNamespace(tool=SimpleNamespace(name="query"), output=output)],
+    )
+
+    assert finalize.is_final_output is True
+    assert finalize.final_output == output
 
 
 def test_synthesis_tool_use_behavior_finalizes_budget_exhausted_feedback() -> None:

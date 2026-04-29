@@ -9427,6 +9427,80 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
+
+- **질문**:
+  `trial_70`에서 강화된 ToolBudgetFeedback 문구를 composer가 실제로 따랐는가?
+  reasoning content가 반환되고 있으므로, 피드백 전후 판단까지 확인한다.
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed / MaxTurnsExceeded`.
+
+  제출 1:
+  `이 검체 채취에 대한 미생물 검사 결과를 보여주세요. 검사 시간, 검체 종류, 시험 이름, 균주 이름을 확인하고 싶습니다.`
+  - 오류: `answer_contract_list_size_invalid`, `label_null_value_forbidden`,
+    `label_values_not_grounded`, `answer_contract_phrase_missing`,
+    `answer_contract_evidence_mismatch`, `answer_contract_hidden_filter_unanchored`,
+    `answer_contract_duplicate_answer_rows`
+  - 단일 row에 `organism: null`이 포함됐고, hidden filter anchor도 부족했다.
+  - rejected data 판정: low-quality rejected.
+
+  제출 2:
+  `이 중환자실 입원 동안의 배양검사 결과 목록을 시간순으로 보여주세요. 검사 시간, 검체 종류, 시험 이름, 균주 이름을 확인하고 싶습니다.`
+  - 오류: `label_null_value_forbidden`, `label_values_not_grounded`,
+    `answer_contract_evidence_mismatch`, `label_no_primary_key_source`,
+    `answer_contract_query_mismatch`, `answer_contract_order_ambiguous`
+  - 5개 microbiology row가 모두 `organism: null`이고, 같은 시간대 row가 섞여 order도 안정적이지 않았다.
+  - rejected data 판정: low-quality rejected.
+
+- **reasoning 교차 분석**:
+  composer는 ToolBudgetFeedback을 읽고 "submit해야 한다"는 판단을 여러 번 했다.
+  그러나 같은 SDK tool-use segment 안에서 다시 schema/profile/query를 호출했다.
+  즉 문구가 약해서 못 알아들은 문제가 아니라, tool result가 모델에게 계속 tool call을 허용하는
+  run 내부 응답으로 남아 있었다.
+
+  이 문제는 프롬프트 정책 위반을 더 큰 문구로 반복할수록 중복 지시가 늘어날 위험이 있다.
+  이미 tool이 구조화된 `{"error": "submit_draft_required"}`를 반환하므로, 이 신호를 런타임에서
+  final output으로 승격하고 다음 composer turn에 feedback으로 재주입하는 것이 더 정확하다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - 제출 1/2 모두 어려운 좋은 문제가 아니라 low-quality rejected다.
+  - null label, duplicate projected row, evidence mismatch, unstable order가 명확하며 solver가 못 푼
+    것이 아니라 composer가 저품질 draft를 제출했다.
+
+- **변경**:
+  hard validator나 리터럴 휴리스틱은 추가하지 않았다.
+  이번 변경은 데이터 내용, 테이블명, 컬럼명, 문자열 값을 보지 않는다.
+
+  OpenAI Agents backend의 tool-use finalizer가 non-submit tool result라도 JSON payload의
+  `error == "submit_draft_required"`이면 final output으로 끊도록 했다.
+  이 신호는 우리 data tool budget gate가 직접 생성한 구조화된 protocol error이므로 precision 100%
+  적용 대상이다.
+
+  `record_missing_submit_feedback`은 이 final output을 plain-text 누락과 구분한다.
+  ToolBudgetFeedback boundary에서는 "증거가 부족하면 data tool을 더 쓰라"는 일반 문구를 넣지 않고,
+  원래 tool budget message를 그대로 next step으로 재주입한다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_backend_openai_agents.py::test_synthesis_tool_use_behavior_finalizes_tool_budget_feedback tests/test_synthesis_runtime.py::test_submit_draft_records_tool_budget_missing_submit_feedback -q`
+    통과 (`2 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/backend_openai_agents.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_70`도 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 145 — Visible field is not a semantic substitute
 
 - **질문**:

@@ -2755,6 +2755,38 @@ def test_submit_draft_records_missing_submit_protocol_feedback(tmp_path: Path) -
     assert controller.submissions_left() == 2
 
 
+def test_submit_draft_records_tool_budget_missing_submit_feedback(tmp_path: Path) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="assignment",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=lambda payload: payload,
+        max_submissions=3,
+    )
+    budget_message = (
+        "ToolBudgetFeedback: Draft Submission Budget reminder: "
+        "call submit_draft now."
+    )
+
+    feedback = controller.record_missing_submit_feedback(
+        final_output_text=json.dumps(
+            {"error": "submit_draft_required", "message": budget_message}
+        ),
+        tool_calls=("schema_map",),
+    )
+
+    assert feedback.startswith("FeedbackError:")
+    assert "ToolBudgetFeedback is a hard boundary" in feedback
+    assert budget_message in feedback
+    assert "Use data tools if more evidence is missing" not in feedback
+    assert controller.feedback_events == 1
+    assert controller.last_feedback_error_codes == ("composer_submit_draft_missing",)
+    assert controller.submissions_left() == 2
+
+
 @pytest.mark.asyncio
 async def test_submit_draft_calls_out_id_only_anchor_path_for_ungrounded_strings(
     tmp_path: Path,

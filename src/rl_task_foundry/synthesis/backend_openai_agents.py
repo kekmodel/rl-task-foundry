@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -71,6 +72,19 @@ def _tool_calls_from_result(run_result: object) -> tuple[str, ...]:
         for item in getattr(run_result, "new_items", []) or []
         if (tool_name := _extract_tool_call_name(item)) is not None
     )
+
+
+def _tool_output_text(tool_result: object) -> str | None:
+    output = getattr(tool_result, "output", None)
+    return output if isinstance(output, str) else None
+
+
+def _is_submit_draft_required_output(output: str) -> bool:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and payload.get("error") == "submit_draft_required"
 
 
 def _add_token_usage(
@@ -275,10 +289,20 @@ class OpenAIAgentsSynthesisBackend:
 
         def _finalize_on_submit(_context_wrapper: object, tool_results: list[object]) -> object:
             for tool_result in tool_results:
-                if getattr(getattr(tool_result, "tool", None), "name", None) != "submit_draft":
+                tool_name = getattr(getattr(tool_result, "tool", None), "name", None)
+                output = _tool_output_text(tool_result)
+                if (
+                    tool_name != "submit_draft"
+                    and output is not None
+                    and _is_submit_draft_required_output(output)
+                ):
+                    return sdk.ToolsToFinalOutputResult(
+                        is_final_output=True,
+                        final_output=output,
+                    )
+                if tool_name != "submit_draft":
                     continue
-                output = getattr(tool_result, "output", None)
-                if not isinstance(output, str):
+                if output is None:
                     continue
                 normalized = output.strip()
                 if (
