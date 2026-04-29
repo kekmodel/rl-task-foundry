@@ -9499,6 +9499,83 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_71`은 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
 
+## Iteration 150 — Abandon lists when two order keys still tie
+
+- **질문**:
+  `trial_72`는 왜 accepted 없이 끝났는가? temporal source-role 개선이 문제였는가, 아니면 다른
+  list determinism 실패인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed / SynthesisArtifactGenerationError`.
+
+  제출 1:
+  - `composer_submit_draft_missing`
+  - `sample`이 `submit_draft_required`를 반환했고, 런타임 boundary가 정상적으로 feedback으로
+    승격했다. 데이터 품질 문제가 아니라 protocol boundary 확인이다.
+
+  제출 2:
+  `해당 입원 기간 동안 투약 이벤트 중 가장 먼저 발생한 5개의 약물명, 투약 시간, 그리고 투약 상태를 투약 시간순으로 알려주세요`
+  - 오류: `label_null_value_forbidden`, `answer_contract_hidden_filter_unanchored`
+  - `medication: null` row가 포함됐고, child emar record에서 admission sibling rows를 조회하면서
+    parent scope가 entity에 고정되지 않았다.
+  - rejected data 판정: low-quality rejected.
+
+  제출 4/5:
+  pharmacy 처방 목록으로 전환했지만 모든 row의 `prescription_start_time`이 같았다.
+  `entered_time`을 visible tie-break로 추가해도 첫 세 row가 같은 `entered_time`을 공유해
+  `duplicate_order_key_in_returned_rows`와 `limit_boundary_tie`가 남았다.
+  마지막 request는 `빨른 것으부터`처럼 한국어도 깨져 `answer_contract_phrase_missing`까지 발생했다.
+  - rejected data 판정: low-quality rejected. 어려운 좋은 문제가 아니라 deterministic list 후보를
+    버리지 못한 문제다.
+
+- **reasoning 교차 분석**:
+  composer는 pharmacy 후보에서 hidden `pharmacy_id` tie-break가 부적절하다는 점은 인지했다.
+  그 다음 visible `entered_time`을 추가했지만, query diagnostics가 여전히
+  `duplicate_order_key_in_returned_rows`와 `limit_boundary_tie`를 보여줬다.
+  이 시점에서 이 ordered limited list 후보는 버려야 했다. 그러나 composer는 같은 label을 문구 수리로
+  밀어붙였고, budget boundary 이후에도 “valid label result”로 오인했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - emar draft는 null field와 hidden scope 문제가 명확한 low-quality rejected.
+  - pharmacy draft는 두 order key로도 membership/order가 유일하지 않은 low-quality rejected.
+  - 마지막 phrase 오류는 부차적이다. root cause는 order diagnostics를 보고도 label을 버리지 않은 것.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 이미 query/submit diagnostics가 정확히 ambiguity를 탐지한다.
+
+  Prompt-first 원칙에 따라 List Determinism Policy를 보강했다.
+  두 order key를 써도 tie가 남으면 label을 switch해야 한다고 명시했다.
+
+  tool schema와 feedback은 같은 원칙의 reminder로 보강했다.
+  `query.order_by` description은 `duplicate_order_key` 또는 `limit_boundary_tie`가 두 order key 후에도
+  남으면 ordered limited list를 abandon하거나 tied rows를 return해야 한다고 설명한다.
+  `ANSWER_CONTRACT_ORDER_AMBIGUOUS` feedback도 wording-only repair 제출을 금지하고, 다른 label 또는
+  tied rows를 요구한다.
+
+  ToolBudgetFeedback 문구도 “repair query가 label values를 반환했다”가 아니라 “blocking diagnostics
+  없이 label values를 반환했다”일 때만 submit하라고 수정했다. diagnostics가 block하면 그 후보는
+  boundary 전에 버렸어야 한다는 점을 명확히 했다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_feedback_repair tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_query tests/test_synthesis_runtime.py::test_submit_draft_rejects_ambiguous_limited_list_order -q`
+    통과 (`5 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_72`는 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:

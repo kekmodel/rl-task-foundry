@@ -1952,8 +1952,10 @@ class SubmitDraftController:
                 "ToolBudgetFeedback: Draft Submission Budget reminder: after "
                 "feedback, call submit_draft after at most "
                 f"{FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools. If the repair "
-                "query has returned label values, submit them now. This is a "
-                "hard protocol boundary, not a data result. Your next tool "
+                "query has returned label values without blocking diagnostics, "
+                "submit them now. If diagnostics still block the label, this "
+                "candidate should have been abandoned before this boundary. "
+                "This is a hard protocol boundary, not a data result. Your next tool "
                 "call must be submit_draft unless no repair query has returned "
                 "label values; in that case run exactly one final label query, "
                 "then submit_draft. Do not switch targets or call more data "
@@ -2831,6 +2833,7 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_AMBIGUOUS: (
                 "Rejected. List Determinism Policy reminder: the latest list query does not uniquely determine submitted order or limited row membership for exact verification. For feedback retries, preserve the current anchor and target; repair ordering with a natural visible tie-break before query.order_by, choose unique ordering, or return tied rows. If the tie-break is sequence/rank-like, request wording must name source record sequence instead of a generated display rank. Do not repair this with hidden handles or artificial id wording. Request Contract reminder: preserve fluent request wording; use ordinary target-language words, not malformed terms. If a repair needs long/mechanical field lists, choose another label instead of stacking tie-break fields."  # noqa: E501
+                " If two order keys still leave duplicate_order_key or limit_boundary_tie diagnostics, choose another label or return tied rows; do not submit wording-only repairs."  # noqa: E501
                 " If query ordering_diagnostics still flags ambiguity, do not resubmit with wording-only changes; rerun a repaired label query or choose another label."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_ORDER_TOO_COMPLEX: (

@@ -1202,6 +1202,10 @@ def test_data_tool_budget_feedback_blocks_late_feedback_repair(tmp_path: Path) -
     assert "exactly one final label query, then submit_draft" in str(
         feedback["message"]
     )
+    assert "without blocking diagnostics" in str(feedback["message"])
+    assert "candidate should have been abandoned before this boundary" in str(
+        feedback["message"]
+    )
     assert "Do not switch targets" in str(feedback["message"])
 
 
@@ -1286,6 +1290,7 @@ def test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_qu
 
     assert feedback is not None
     assert feedback["error"] == "submit_draft_required"
+    assert "without blocking diagnostics" in str(feedback["message"])
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 
@@ -3673,6 +3678,8 @@ async def test_submit_draft_rejects_ambiguous_limited_list_order(
     assert "not malformed terms" in message
     assert "long/mechanical field lists" in message
     assert "choose another label instead of stacking tie-break fields" in message
+    assert "two order keys still leave duplicate_order_key" in message
+    assert "limit_boundary_tie diagnostics" in message
     assert "do not resubmit with wording-only changes" in message
     assert controller.last_feedback_error_codes == ("answer_contract_order_ambiguous",)
     assert controller.attempts == []

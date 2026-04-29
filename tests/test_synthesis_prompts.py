@@ -446,6 +446,7 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "newest/latest vs oldest/earliest" in instructions
     assert "order leaves distinct-answer ties" in instructions
     assert "ask for a natural visible tie-break before" in instructions
+    assert "if two keys still tie, switch label" in instructions
     assert "Use sequence/rank only for named source record order" in instructions
     assert "not generated rank" in instructions
     assert "artificial technical sequence/id/order wording" in instructions

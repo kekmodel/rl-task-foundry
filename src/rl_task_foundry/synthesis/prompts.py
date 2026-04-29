@@ -141,13 +141,13 @@ def build_synthesis_agent_instructions(
 
         "# Request Contract\n"
         "configured target language:\n"
-        "- Use first-person only for requester/session records; otherwise use neutral wording.\n"
-        "- customer does not know DB tables, ids, or technical sequences/refs. "
+        "- Use first-person only for requester records; otherwise use neutral wording.\n"
+        "- customer does not know DB tables or technical sequences/refs. "
         "Hidden filter ids go in `entity`, never raw wording.\n"
         "- Match hidden scope: parent/list/history requests query that scope, "
         "not one child event/record unless asked. child->parent->sibling rows: "
         "entity needs the parent/current-subject key; current-record handle "
-        "lookup asks record facts. Do not attach `entity` to a global report.\n"
+        "lookup asks facts. Do not attach `entity` to a global report.\n"
         "- Hidden-handle-only: do not expose it. "
         "Copy scoped evidence values exactly; do not "
         "translate/transliterate them.\n"
@@ -206,7 +206,8 @@ def build_synthesis_agent_instructions(
         "distinguish them, switch label. Do not shrink limits or add hidden handles.\n"
         "- If order leaves distinct-answer ties, ask for a natural visible "
         "tie-break before `query.order_by`, choose unique ordering, or return "
-        "tied rows. Use sequence/rank only for named source record order, "
+        "tied rows; if two keys still tie, switch label. Use sequence/rank "
+        "only for named source record order, "
         "not generated rank. No artificial technical "
         "sequence/id/order wording. Max two order keys.",
 

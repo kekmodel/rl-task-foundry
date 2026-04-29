@@ -428,6 +428,15 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "not an order request unless the request also states" in descriptions[
         "query"
     ]["$.spec.order_by"]
+    assert "two order keys still leave duplicate_order_key" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
+    assert "limit_boundary_tie diagnostics" in descriptions["query"][
+        "$.spec.order_by"
+    ]
+    assert "abandon that ordered limited list" in descriptions["query"][
+        "$.spec.order_by"
+    ]
     assert "full timestamp" in descriptions["query"]["$.spec.order_by"]
     assert "split date/time only for display" in descriptions["query"][
         "$.spec.order_by"
