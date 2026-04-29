@@ -2635,6 +2635,10 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "the current record's category versus a referenced item's category" in schema_surface
     assert "Do not bind note/comment/description text to broad result/value" in schema_surface
     assert "unless user_request asks for that text surface" in schema_surface
+    assert "Date/time fields are source-sensitive too" in schema_surface
+    assert "do not bind two time-like outputs to generic time phrases" in schema_surface
+    assert "stored/entered time" in schema_surface
+    assert "generic latest/recent time wording is not enough" in schema_surface
     assert "multiple reachable source surfaces could answer them" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
     assert "JSON string for the hidden current-context grounding handle" in schema_surface

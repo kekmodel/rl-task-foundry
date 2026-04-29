@@ -315,6 +315,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "If no primary key" in instructions
     assert "primary-key-backed path/aggregate" in instructions
     assert "hidden path guessing" in instructions
+    assert "Timestamp/date surfaces are distinct too" in instructions
+    assert "event time, stored/entered time, scheduled time" in instructions
+    assert "generic time/date wording is invalid" in instructions
     assert "# Feedback And Difficulty-Up Policy" in instructions
     assert "not a new durable instruction source" in instructions
     assert "pointer to an existing named policy" in instructions

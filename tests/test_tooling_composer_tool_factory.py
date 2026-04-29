@@ -381,6 +381,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "current/derived state wording" in descriptions["query"][
         "$.spec.select[].as"
     ]
+    assert "For temporal values, preserve the chosen role" in descriptions["query"][
+        "$.spec.select[].as"
+    ]
+    assert "do not hide competing time surfaces" in descriptions["query"][
+        "$.spec.select[].as"
+    ]
     assert "Prefer user-visible non-handle" in descriptions["query"]["$.spec.select"]
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
     assert "without a primary key" in descriptions["query"]["$.spec.select"]
@@ -389,6 +395,10 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "$.spec.select"
     ]
     assert "source value role in ordinary language" in descriptions["query"][
+        "$.spec.select"
+    ]
+    assert "multiple date/time-like values" in descriptions["query"]["$.spec.select"]
+    assert "naturally requestable distinct source role" in descriptions["query"][
         "$.spec.select"
     ]
     assert "Do not substitute a different user-visible field" in descriptions[
@@ -422,6 +432,12 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "split date/time only for display" in descriptions["query"][
         "$.spec.order_by"
     ]
+    assert "If several temporal fields are reachable or selected" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
+    assert "generic latest/recent time wording is not enough" in descriptions[
+        "query"
+    ]["$.spec.order_by"]
     assert "choose another label or return tied rows" in descriptions["query"][
         "$.spec.order_by"
     ]

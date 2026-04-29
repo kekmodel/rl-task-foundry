@@ -9427,6 +9427,78 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
   통과.
 
+## Iteration 149 — Temporal source roles must be requestable
+
+- **질문**:
+  `trial_71`은 accepted였지만 pass rate가 `1/4 = 0.25`였다. 이것을 만족할 만한 좋은 accepted로
+  볼 수 있는가, 아니면 low-quality accepted인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `accepted`, quality gate도 accept였다.
+
+  최종 request:
+  `이 중환자실 입원 기간의 날짜 및 시간 이벤트 5개를 입력된 시간이 가장 최근인 순서로, 동일 시간대에는 항목명 순서로 정렬해서 보여주세요. 각 이벤트의 항목명, 기록된 시간값, 시간값 유형, 입력된 시간을 포함해서 알려주세요.`
+
+  canonical answer는 `datetimeevents`에서 `storetime desc, d_items.label asc`로 고른 5개 row였다.
+  출력 필드는 `item_label`, `recorded_timestamp`(`value`), `timestamp_type`(`valueuom`),
+  `recorded_at`(`storetime`)였다.
+
+  solver 결과:
+  - 1개 solver만 `storetime desc, item label asc`로 맞췄다.
+  - 2개 solver는 `입력된 시간`을 `value` 또는 `charttime` 성격의 시간으로 해석해 다른 5개 row를 제출했다.
+  - 1개 solver는 tool call XML을 final text처럼 냈다가 `missing_submit_result`가 됐다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 ToolBudgetFeedback 이후에 submit boundary가 작동했음을 보여준다.
+  `sample`이 `{"error":"submit_draft_required"}`를 반환한 뒤, 런타임이 `composer_submit_draft_missing`
+  feedback을 만들고 다음 segment로 넘어갔다. Iteration 148의 런타임 수정은 의도대로 작동했다.
+
+  낮은 pass rate의 원인은 runtime boundary가 아니다. solver reasoning을 보면 실패한 solver들은
+  request의 `입력된 시간`을 composer가 의도한 `storetime`이 아니라 `charttime` 또는 `value` 쪽
+  시간으로 해석했다. 같은 task 안에 `기록된 시간값`과 `입력된 시간`이 같이 있어 자연어 surface가
+  충분히 분리되지 않았다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted. 저품질이 accept된 경우라 만족 streak에는 넣지 않는다.
+  데이터 row 자체는 groundable하고 duplicate/order diagnostics도 통과했지만, 자연어 요청이 여러 시간
+  surface 중 하나를 안정적으로 가리키지 못했다.
+
+  rejected data:
+  - 첫 feedback은 data 품질 문제가 아니라 protocol boundary 확인용 `composer_submit_draft_missing`이었다.
+  - 두 번째 제출은 order/binding repair 단계였고, 최종 accepted로 수리되긴 했지만 temporal role
+    모호성은 남았다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 여러 timestamp/date surface 중 어떤 자연어가 어느 source role을
+  뜻하는지 100% precision으로 판정하는 것은 리터럴/컬럼명 휴리스틱이 되기 쉽다.
+
+  Prompt-first 원칙에 따라 Source Surface 정의를 보강했다.
+  timestamp/date surface도 event time, stored/entered time, scheduled time처럼 서로 다른 source
+  surface이며, 여러 surface가 맞을 수 있으면 generic time/date wording이 invalid라고 명시했다.
+
+  tool schema/submit_draft schema는 같은 원칙의 reminder만 추가했다.
+  `query.select`, `query.select[].as`, `query.order_by`는 여러 date/time-like value를 고를 때 각
+  field/alias/order wording이 자연스럽게 distinct source role을 가져야 한다고 설명한다.
+  `answer_contract` binding schema도 time-like output 두 개를 generic time phrase에 묶지 말라고
+  상기한다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned -q`
+    통과 (`3 passed`).
+
+  Broader relevant checks:
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+  통과 (`124 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_71`은 accepted지만 low-quality accepted로 판정하므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
