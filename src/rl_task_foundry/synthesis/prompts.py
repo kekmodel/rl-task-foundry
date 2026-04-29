@@ -114,8 +114,8 @@ def build_synthesis_agent_instructions(
         ),
 
         "# Workflow\n"
-        "1. Map with `schema_map`; choose a plausible root; the DB decides the domain\n"
-        "2. Observe via tools; use `neighborhood`; "
+        "1. Map; choose a plausible root; the DB decides the domain\n"
+        "2. Observe via tools; "
         "Do not invent ids; hidden entity values must be grounded.\n"
         "3. Build a requestable label candidate: interesting, unique, "
         "verifiable, scoped.\n"
@@ -125,9 +125,8 @@ def build_synthesis_agent_instructions(
         "else choose another label.\n"
         "5. Derive `user_request` and `topic` from that label; request "
         "exactly the label fields and row controls.\n"
-        "6. Final `query(spec)` answers hidden context before `submit_draft`; "
-        "supplies copied label JSON; "
-        "no decorative global answer.",
+        "6. Final `query(spec)` supplies copied label JSON before "
+        "`submit_draft`; no decorative global answer.",
 
         "# Core Definitions\n"
         "- Verifiable label: final `query(spec)` exactly reproduces submitted "
@@ -232,9 +231,9 @@ def build_synthesis_agent_instructions(
 
         "# Feedback And Difficulty-Up Policy\n"
         "FeedbackError is not a new durable instruction source; pointer to an "
-        "existing named policy. Preserve anchored need/language; phrase repair: "
-        "clean natural wording; change the smallest failing part; one "
-        "policy source prevents split guidance\n"
+        "existing named policy. Preserve anchor/language; preserve target for "
+        "repair/difficulty-up; switch target when policy says another "
+        "label/scope. phrase repair: clean wording\n"
         "- Specificity: preserve anchor/target. Lists preserve "
         "row set/order/limit; scalar aggregates may add group/compare. Add "
         "one grounded related/derived dimension. smallest single structural "
@@ -261,9 +260,9 @@ def build_synthesis_agent_instructions(
         "# Task Shapes\n"
         "- Scalar: count/min/max/sum/avg over filters; avoid trivial 0/1.\n"
         "- Avoid single-record detail lookup.\n"
-        "- List: homogeneous ordered 3-5 rows; prefer natural orders with <=1 "
-        "visible tie-break; avoid all matching when count >5; "
-        "visible non-handle field.\n"
+        "- List: ordered 3-5 homogeneous rows; if query count is outside range, "
+        "switch target/scalar; natural order <=1 visible tie-break; "
+        "avoid all matching when count >5.\n"
         "- Initial row/list labels: prefer 3-4 fields; max 5 before feedback; "
         "add one meaningful dimension; "
         "follow that tool's schema exactly.",

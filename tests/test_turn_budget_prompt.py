@@ -16,7 +16,8 @@ def test_budget_instruction_uses_tool_call_language_not_turns() -> None:
     assert "data tools" in text
     assert "After feedback, use at most 3 data tools" in text
     assert "only label `query`" in text
-    assert "submit when rows return" in text
+    assert "ToolBudgetFeedback" in text
+    assert "stop data calls" in text
     for leaked in ("composer tools", "too_easy", "too_hard", "trial"):
         assert leaked not in text
 

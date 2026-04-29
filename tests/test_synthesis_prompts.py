@@ -310,10 +310,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "# Feedback And Difficulty-Up Policy" in instructions
     assert "not a new durable instruction source" in instructions
     assert "pointer to an existing named policy" in instructions
-    assert "Preserve anchored need/language" in instructions
-    assert "phrase repair: clean natural wording" in instructions
-    assert "change the smallest failing part" in instructions
-    assert "one policy source prevents split guidance" in instructions
+    assert "Preserve anchor/language" in instructions
+    assert "preserve target for repair/difficulty-up" in instructions
+    assert "switch target when policy says another label/scope" in instructions
+    assert "phrase repair: clean wording" in instructions
 
     # User-facing language and ID guidance stay general and English.
     assert "# Request Contract" in instructions
@@ -435,10 +435,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Scalar: count/min/max/sum/avg" in instructions
     assert "avoid trivial 0/1" in instructions
     assert "Avoid single-record detail lookup" in instructions
-    assert "List: homogeneous ordered 3-5 rows" in instructions
-    assert "prefer natural orders with <=1 visible tie-break" in instructions
+    assert "List: ordered 3-5 homogeneous rows" in instructions
+    assert "if query count is outside range, switch target/scalar" in instructions
+    assert "natural order <=1 visible tie-break" in instructions
     assert "avoid all matching when count >5" in instructions
-    assert "visible non-handle field" in instructions
     assert "Initial row/list labels" in instructions
     assert "prefer 3-4 fields" in instructions
     assert "max 5 before feedback" in instructions

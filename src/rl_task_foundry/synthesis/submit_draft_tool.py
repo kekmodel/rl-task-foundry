@@ -1865,7 +1865,9 @@ class SubmitDraftController:
                     "ToolBudgetFeedback: Draft Submission Budget reminder: "
                     "call submit_draft after at most "
                     f"{FIRST_SUBMIT_MAX_DATA_TOOLS} data tools before the first "
-                    "submit_draft. Use the best grounded label query now."
+                    "submit_draft. This is not a data result; do not call more "
+                    "data tools after this message. Use the best grounded label "
+                    "query and submit_draft next."
                 ),
                 "calls_since_boundary": calls_since_boundary,
                 "limit": FIRST_SUBMIT_MAX_DATA_TOOLS,
@@ -1878,7 +1880,8 @@ class SubmitDraftController:
                 "ToolBudgetFeedback: Draft Submission Budget reminder: after "
                 "feedback, call submit_draft after at most "
                 f"{FEEDBACK_REPAIR_MAX_DATA_TOOLS} data tools. If the repair "
-                "query has returned label values, submit them now."
+                "query has returned label values, submit them now. This is not "
+                "a data result; do not call more data tools after this message."
             ),
             "calls_since_boundary": calls_since_boundary,
             "limit": FEEDBACK_REPAIR_MAX_DATA_TOOLS,
@@ -2708,7 +2711,7 @@ class SubmitDraftController:
                 "Rejected. List Determinism Policy reminder: the latest list query returns duplicate projected answer rows, so returned rows are not distinguishable through requested output fields. Preserve the list size; add one natural visible distinguishing field or aggregate, then rerun the label query and submit_draft. Request Contract reminder: if rows are still duplicate or the repair needs long/mechanical field lists, choose another label instead of stacking fields."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_SIZE_INVALID: (
-                "Rejected. Task Shapes reminder: list labels must return 3-5 rows. A 1-2 row list is too direct; choose another scoped list with 3-5 distinguishable rows, or use a scalar aggregate when the request asks for a summary."  # noqa: E501
+                "Rejected. Task Shapes reminder: list labels must return 3-5 rows. A 1-2 row list is too direct; do not keep probing the same target after it still returns fewer than 3 rows. Choose another scoped list with 3-5 distinguishable rows, or use a scalar aggregate when the request asks for a summary."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE: (
                 "Rejected. Task Shapes reminder: fixed list labels must stay at 3-5 rows. Do not use 6+ rows to add difficulty; keep the same target/query scope and resubmit a smaller natural 3-5 row limit. List Determinism Policy reminder: when adding the smaller limit, the limit phrase must select the same row boundary as query.order_by; rerun the query with matching order if needed, and do not mix one hidden selection order with another display order."  # noqa: E501
@@ -2772,7 +2775,7 @@ class SubmitDraftController:
         preserve_guidance = ""
         if self._last_monitored_label_data is not None:
             preserve_guidance = (
-                "Policy reminder: Feedback Handling Policy preserves the same anchored user need and changes only the failing part when possible."  # noqa: E501
+                "Policy reminder: Feedback Handling Policy preserves anchor/language and changes the smallest failing part; preserve target only when the named policy does not require another scoped label."  # noqa: E501
             )
         additional_messages: list[str] = []
         for error_code in error_codes[1:3]:

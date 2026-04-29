@@ -6384,6 +6384,78 @@ Solver 30/30 완료 결과:
   `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py`
   통과.
 
+## Iteration 150 — Feedback target preservation must not block target switch
+
+- **질문**:
+  `trial_40`에서 reasoning content가 실제로 반환되는 상태에서, composer가 왜 submit까지
+  가지 못하고 `MaxTurnsExceeded`로 끝났는가?
+
+- **실험/결과**:
+  `trial_40`은 solver rollout까지 가지 못했다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_40`
+  - composer/solver 설정: OpenRouter Kimi K2.5, solver 4개 설정이지만 solver 미도달
+  - 결과: `synthesis_failed`, `SynthesisPhaseExecutionError`, `MaxTurnsExceeded`
+
+- **reasoning 교차 분석**:
+  reasoning 로그는 11개 item이 저장됐다. composer는 첫 anchor로
+  `admissions.hadm_id=21101111`을 골랐고, pharmacy list를 만들었다.
+
+  첫 draft는 다음 이유로 feedback됐다.
+
+  - label에 `medication: null` 포함
+  - request에 `약물 종류`, `처방 시작 시간`, `처방 상태` phrase 누락
+  - starttime 단일 order가 5개 row 모두 같은 시간이라 order ambiguity
+
+  이후 composer는 feedback을 받고 emar/labevents/inputevents/admissions를 탐색했다. 중간에
+  `ToolBudgetFeedback`도 여러 번 반환됐고, reasoning에서도 "submit now"라고 인지했다.
+  하지만 계속 data tool을 호출했다. 두 번째 draft는 환자 admission history였는데 row가 1개뿐이고,
+  `subject_id` hidden filter가 entity에 없어서 feedback됐다.
+
+  두 번째 feedback 뒤 composer reasoning은 "same anchored user need를 보존해야 한다"로
+  해석했고, 동일 patient admissions를 다시 query했다. 환자 admission이 1개뿐임을 확인한 뒤
+  prescriptions로 바꾸려 했지만, submit 전에 max turns에 도달했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. pharmacy draft는 null/order ambiguity가 명확했고,
+  admissions draft는 1-row list + hidden parent scope 문제였다. 좋은 어려움이 아니라
+  composer가 feedback을 해석하며 target switch 타이밍을 놓친 문제다.
+
+- **개선 판단**:
+  기존 generic feedback 문구의 "same anchored user need"가 `list labels must return 3-5 rows;
+  choose another scoped list`와 충돌했다. 원칙상 feedback은 durable prompt를 상기해야 하며,
+  지침이 이원화되면 안 된다.
+
+  따라서 target 보존을 무조건 강조하지 않고 다음처럼 정렬했다.
+
+  - anchor/language는 보존한다.
+  - contract repair / difficulty-up에서는 target을 보존한다.
+  - named policy가 another label/scope를 요구하면 target switch가 허용된다.
+
+- **변경**:
+  - Feedback And Difficulty-Up Policy 문구를 위 원칙으로 재정렬했다.
+  - Task Shapes에 "query count가 3-5 범위 밖이면 target/scalar로 전환"을 추가했다.
+  - `answer_contract_list_size_invalid` feedback에 같은 target을 계속 probe하지 말라고
+    상기했다.
+  - `ToolBudgetFeedback` 문구에 "data result가 아니며, 이후 data tool을 더 호출하지 말고
+    submit_draft next"를 명시했다.
+
+  hard validator는 추가하지 않았다. 이번 문제는 이미 precision 100 validator들이 잡고 있고,
+  실패 원인은 feedback 해석/turn 소모다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_turn_budget_prompt.py -q`
+  통과 (`7 passed`).
+
+  `uv run pytest tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_first_submit tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_late_feedback_repair tests/test_synthesis_runtime.py::test_submit_draft_rejects_single_row_list_as_too_direct tests/test_synthesis_runtime.py::test_submit_draft_rejects_limited_single_row_before_order_repair tests/test_synthesis_runtime.py::test_submit_draft_rejects_null_list_output_field tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_reset_after_contract_repair_feedback -q`
+  통과 (`6 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
