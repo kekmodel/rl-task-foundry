@@ -7163,6 +7163,78 @@ Solver 30/30 완료 결과:
 - **상태**:
   `trial_52`는 accepted가 아니므로 만족스러운 accepted 연속 기록은 다시 `0/5`로 본다.
 
+## Iteration 171 — Accepted medication task still had source-role ambiguity
+
+- **질문**:
+  Iteration 170의 budget boundary 정렬 뒤 다음 smoke는 좋은 accepted data를 만들었는가?
+
+- **실험/결과**:
+  `trial_53`은 accepted됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_53`
+  - composer/solver: OpenRouter Kimi K2.5
+  - solver rollout: 4
+  - pass rate: `2/4 = 0.5`
+  - failed solver runs: `0`
+  - registry committed
+
+  accepted task는 hidden `hadm_id=25177949` 기준으로 가장 최근에 시작된 약물 5개의
+  `medication`, `status`, `starttime`, `stoptime`, `proc_type`을 묻는 list였다.
+
+- **reasoning 교차 분석**:
+  Iteration 170 개선은 부분적으로 의도대로 작동했다. composer는 `ToolBudgetFeedback` 이후
+  schema/profile 탐색으로 새지 않고 label query를 실행했다. 첫 query의 order ambiguity를 보고
+  `starttime desc, medication asc`로 query를 다시 실행했고, 그 뒤 submit했다. 첫 submit의
+  feedback은 `약물명 순` phrase가 user_request에 exact substring으로 없어서 발생했고,
+  두 번째 submit에서는 label을 바꾸지 않고 문장만 고쳤다.
+
+  하지만 solver reasoning은 source ambiguity를 드러냈다. 2개 solver는 `pharmacy` table을 찾아
+  정답을 맞혔다. 나머지 2개 solver는 먼저 `prescriptions` surface를 탔고, 같은 약물/시간 row
+  set은 맞혔지만 `drug_type=MAIN`을 `status` 또는 `proc_type`으로 제출해 틀렸다.
+
+- **데이터 직접 검증**:
+  DB에서 `mimiciv_hosp.pharmacy where hadm_id=25177949 order by starttime desc, medication asc
+  limit 10`을 재조회했다. canonical top 5는 pharmacy 기준 실제 top 5와 일치했다.
+
+  같은 조건의 `mimiciv_hosp.prescriptions`도 재조회했다. top 5 약물명/시간은 pharmacy와
+  같았지만, `prescriptions.drug_type`은 모두 `MAIN`이고 pharmacy의 `status/proc_type`과
+  representation이 다르다. 즉 row set은 어렵게 좋은 문제가 아니라, answer surface가 둘로
+  갈리는 문제였다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted.
+
+  row membership/order 자체는 정확하고, hidden handle도 노출하지 않았다. 그러나 user_request가
+  "약물/처방 상태/처리 유형"이라는 broad source wording에 머물러 pharmacy record surface를
+  충분히 고정하지 못했다. solver가 못 푼 것이 아니라, `pharmacy`와 `prescriptions`라는 reachable
+  source surfaces가 모두 그럴듯한 답 후보가 된 것이다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. 어떤 broad noun이 여러 source surfaces를 만든다는 판단은
+  DB 의미 해석이 들어가므로 precision 100으로 보장하기 어렵다.
+
+  대신 tool description을 기존 Source surface 정책에 맞췄다.
+
+  - `query.spec` description에, final query 뒤 submit 전에 user_request/topic이 선택한 source
+    role을 이름 붙였는지 확인하라고 추가했다.
+  - 여러 reachable source가 broad noun에 답할 수 있으면 label/output field name은 source surface를
+    disambiguate하지 못한다는 점을 명시했다.
+
+  이건 새 정책이 아니라 system prompt의 "Source surface" 원칙을 final query evidence를 보는
+  순간에 상기시키는 변경이다.
+
+- **검증**:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+- **상태**:
+  `trial_53`은 accepted였지만 low-quality accepted로 판정한다. 만족스러운 accepted 연속 기록은
+  여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

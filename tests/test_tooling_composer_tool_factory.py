@@ -296,6 +296,14 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "After a successful final label query, submit_draft" in description
         for description in descriptions["query"].values()
     )
+    assert any(
+        "user_request/topic name the selected source role" in description
+        for description in descriptions["query"].values()
+    )
+    assert any(
+        "label/output field names do not disambiguate source surface" in description
+        for description in descriptions["query"].values()
+    )
 
     assert any(
         "Each column is scoped to the selected table" in description
