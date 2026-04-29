@@ -360,6 +360,9 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "evidence marks them user-visible" in descriptions["query"]["$.spec.select"]
     assert "without a primary key" in descriptions["query"]["$.spec.select"]
     assert "primary-key-backed path" in descriptions["query"]["$.spec.select"]
+    assert "For aggregate queries, do not use select" in descriptions["query"][
+        "$.spec.select"
+    ]
     assert "Direction must match user_request wording exactly" in descriptions[
         "query"
     ]["$.spec.order_by"]
@@ -392,7 +395,11 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "List Determinism Policy" in descriptions["query"]["$.spec.limit"]
     assert "final list query with limit" in descriptions["query"]["$.spec.limit"]
     assert "same fixed size requested and bound" in descriptions["query"]["$.spec.limit"]
+    assert "group_by replaces select" in descriptions["query"]["$.spec.group_by"]
     assert "without group_by so it returns one row" in descriptions["query"][
+        "$.spec.aggregate"
+    ]
+    assert "Do not combine aggregate with select" in descriptions["query"][
         "$.spec.aggregate"
     ]
     assert "projection diagnostics" in descriptions["query"]["$.spec"]

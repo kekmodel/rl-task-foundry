@@ -654,6 +654,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "canonical label field, so select only values the "
                     "user_request asks to receive. Use where/order_by for "
                     "helper context without selecting those helper fields. "
+                    "For aggregate queries, do not use select; use group_by "
+                    "for copied group keys and aggregate for metric fields. "
                     "Preserve output source meanings under the Source Surface "
                     "Policy and Difficulty-Up Policy. Prefer user-visible "
                     "non-handle values; expose handle-like values only when "
@@ -742,7 +744,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "Group keys for aggregate lists. Prefer user-visible "
                     "non-handle values for copied label keys; expose "
                     "handle-like values only when evidence marks them "
-                    "user-visible and the request asks for that reference."
+                    "user-visible and the request asks for that reference. "
+                    "When aggregate is present, group_by replaces select."
                 ),
                 "items": {
                     "type": "object",
@@ -761,7 +764,9 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                 "type": "array",
                 "description": (
                     "Aggregate outputs. For scalar submit_draft labels, use "
-                    "an aggregate query without group_by so it returns one row."
+                    "an aggregate query without group_by so it returns one row. "
+                    "Do not combine aggregate with select; grouped aggregate "
+                    "lists use group_by plus aggregate only."
                 ),
                 "items": {
                     "type": "object",

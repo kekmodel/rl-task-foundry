@@ -7302,6 +7302,72 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 173 — Aggregate query specs should not mix select with aggregate
+
+- **질문**:
+  Iteration 172의 exact string reminder 뒤 다음 smoke에서 좋은 accepted가 나왔는가?
+
+- **실험/결과**:
+  `trial_55`는 accepted 없이 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_55`
+  - composer/solver: OpenRouter Kimi K2.5
+  - accepted data: 없음
+
+  흐름은 다음과 같았다.
+
+  1. Foley catheter 총 소변 배출량 scalar: solver `4/4 = 1.0`으로 너무 쉬워 reject.
+  2. output type별 총 배출량 ranking: scalar aggregate를 grouped aggregate로 올리려는 방향은
+     좋았지만, request는 "두 번째로 높은 유형"을 묻고 label은 전체 ranking list를 제출했다.
+     또한 기존 Foley predicate를 제거해 `answer_contract_not_incremental`.
+  3. Foley vs second-highest comparison: 여전히 predicate 제거로 reject.
+  4. latest Foley output measurements: user_request가 JSON escape처럼 깨졌고, hidden/non-visible
+     source와 binding 문제까지 발생해 reject.
+  5. Foley total+average scalar: solver `4/4 = 1.0`으로 여전히 너무 쉬워 budget exhausted.
+
+- **reasoning 교차 분석**:
+  composer는 첫 scalar가 too easy라는 feedback을 이해했고, grouped/ranked aggregate로
+  difficulty-up하려 했다. 이 방향 자체는 의미 있다. 다만 실제 제출은 request/label이 어긋났고,
+  기존 Foley predicate를 어떤 방식으로 보존하거나 group_by로 lift해야 하는지 명확히 처리하지
+  못했다.
+
+  또 trial_54에 이어 aggregate query spec에서 `select`와 `aggregate`를 같이 넣는 오류가 반복됐다.
+  이건 DB 의미 판단이 아니라 tool DSL 사용법 문제다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - 첫 Foley scalar와 마지막 total+average scalar는 clean하지만 너무 쉬운 good rejected.
+  - grouped output ranking은 어려운 좋은 후보가 될 수 있었지만, 현재 제출은 request가 "second"
+    하나를 묻고 label은 전체 list를 내는 mismatch가 있어 low-quality rejected가 맞다.
+  - escaped Korean request와 hidden/non-visible source draft는 low-quality rejected다.
+
+- **변경**:
+  predicate-to-group_by 완화는 보류했다. 구조적으로 precision 100 완화 아이디어는 가능하지만,
+  이번 실제 retry는 request/label mismatch까지 함께 있었기 때문에 바로 허용하면 low-quality
+  accepted 위험이 있다.
+
+  대신 반복된 tool DSL 오류를 줄이도록 query tool schema description을 보강했다.
+
+  - aggregate query에서는 `select`를 쓰지 말고, copied group keys는 `group_by`, metric fields는
+    `aggregate`에 넣으라고 명시했다.
+  - `group_by` description에도 aggregate가 있을 때 group_by가 select를 대체한다고 추가했다.
+  - `aggregate` description에도 aggregate와 select를 함께 쓰지 말라고 추가했다.
+
+  이 변경은 validator가 아니라 tool schema/description 정렬이다.
+
+- **검증**:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`1 passed`).
+
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
