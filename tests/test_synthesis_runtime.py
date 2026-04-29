@@ -3023,6 +3023,11 @@ def test_submit_draft_records_tool_budget_missing_submit_feedback(tmp_path: Path
     assert repeated_feedback["limit"] == 1
     assert "Missing-submit boundary reminder" in str(repeated_feedback["message"])
     assert "only one final query is allowed" in str(repeated_feedback["message"])
+    assert "must be the current label target" in str(repeated_feedback["message"])
+    assert "do not escape to a single-row detail" in str(repeated_feedback["message"])
+    assert "scalar labels require an aggregate query" in str(
+        repeated_feedback["message"]
+    )
     assert "Do not switch targets" in str(repeated_feedback["message"])
 
 

@@ -12029,3 +12029,58 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_104`는 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 184 — Do not escape missing-submit boundary to one-row detail
+
+- **질문**:
+  `trial_105`의 마지막 `answer_contract_scalar_not_aggregate`는 어려운 좋은 문제인가, 아니면 missing-submit
+  boundary에서 단일 row detail로 도망간 저품질 후보인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T115650Z:2525c340`.
+  마지막 오류는 `answer_contract_scalar_not_aggregate`였다.
+
+  composer는 emar anchor에서 시작했다. 첫 draft는 입원 기간 약물 투여 목록이었지만 60-row list였고,
+  null field와 missing binding phrases가 있었다. 두 번째 draft는 최근 5개로 줄였지만, 여전히
+  `administration_sequence`를 output으로 사용했고 `administration_time` 동점으로 order ambiguity가 남았다.
+  이후 missing-submit boundary 뒤에 admissions 단일 row detail을 query하고 `kind="scalar"`로 제출했다.
+
+- **reasoning 교차 분석**:
+  reasoning상 composer는 “더 단순하고 null 없는 label”을 찾겠다며 admissions로 전환했다. 하지만 query 결과는
+  aggregate가 아니라 selected row object였다:
+  `admission_type`, `admission_time`, `admission_location`, `discharge_location`.
+  `Task Shapes`와 `Label Contract`상 scalar는 count/min/max/sum/avg 같은 aggregate에만 허용된다.
+
+  따라서 이 문제는 solver가 못 푸는 어려운 좋은 문제가 아니다. composer가 실패한 list repair에서 빠져나오려고
+  단일 admission detail을 scalar처럼 제출한 저품질 rejected다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - 60-row emar list는 low-quality rejected. list shape, null field, missing phrase, sequence/order 문제가
+    동시에 있었다.
+  - 5-row emar 수리도 low-quality rejected. sequence output과 unstable order가 남았다.
+  - 최종 admissions scalar도 low-quality rejected. 단일 row detail은 scalar label이 아니다.
+
+- **변경**:
+  `_missing_submit_after_tool_budget` boundary feedback을 보강했다. “한 번의 final query가 허용된다”는 문구가
+  새 target으로 도망가도 된다는 뜻이 아님을 명시했다. final query는 current label target이어야 하고,
+  Task Shapes는 여전히 적용되며, single-row detail로 escape하지 말고 scalar는 aggregate query가 필요하다고
+  상기한다.
+
+  이는 새 검증이 아니다. 기존 `answer_contract_scalar_not_aggregate` validator가 precision 100%로 차단하던
+  조건을 protocol boundary에서 미리 상기하는 feedback-reminder 개선이다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_records_missing_submit_protocol_feedback tests/test_synthesis_runtime.py::test_submit_draft_rejects_scalar_row_detail_without_aggregate_query -q`
+  통과 (`2 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_105`는 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

@@ -2005,8 +2005,11 @@ class SubmitDraftController:
                     "the previous run stopped after ToolBudgetFeedback without "
                     "submit_draft. This remains a hard protocol boundary. "
                     "Call submit_draft now; only one final query is allowed "
-                    "after that boundary when no query has run yet. Do not "
-                    "switch targets or call more data tools."
+                    "after that boundary when no query has run yet, and it "
+                    "must be the current label target. Task Shapes still apply: "
+                    "do not escape to a single-row detail, and scalar labels "
+                    "require an aggregate query. Do not switch targets or call "
+                    "more data tools."
                 ),
                 "calls_since_boundary": calls_since_boundary,
                 "limit": 1,
