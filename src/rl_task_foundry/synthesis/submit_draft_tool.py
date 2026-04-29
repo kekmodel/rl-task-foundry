@@ -396,7 +396,7 @@ class SubmitDraftPayload(StrictModel):
             "decorative anchor: the canonical label must be scoped to this "
             "context, either directly or through observed values derived from it. "
             "If the answer rows come from a parent/list/history scope, put that "
-            "parent or current-subject key in entity instead of only a child "
+            "parent or current-subject key in entity_json instead of only a child "
             "record key."
         ),
     )
@@ -404,8 +404,8 @@ class SubmitDraftPayload(StrictModel):
         min_length=1,
         description=(
             "Natural user-facing request body in the configured task language. "
-            "Do not include the hidden <entity> block; provide only the request "
-            "body. The user does not know DB tables/columns, rows, PK/FK "
+            "Do not include hidden runtime context metadata; provide only the "
+            "request body. The user does not know DB tables/columns, rows, PK/FK "
             "handles, hidden structural handles, or table/source jargon; do "
             "not merely translate table or column names. Use a visible value "
             "only when it appeared in tool evidence; copy visible source "
@@ -505,7 +505,7 @@ class SubmitDraftPayload(StrictModel):
         if not raw:
             raise ValueError("text fields must not be blank")
         if raw.startswith("<entity>"):
-            raise ValueError("user_request must not include a hidden entity block")
+            raise ValueError("user_request must not include hidden context metadata")
         return raw
 
     @field_validator("answer_contract", mode="before")
@@ -2732,8 +2732,8 @@ class SubmitDraftController:
             ),
             SubmitDraftErrorCode.USER_REQUEST_INVALID: (
                 "Rejected. Request Contract reminder: user_request must be only "
-                "the natural request body. Hidden entity context belongs in "
-                "entity_json, not in a <entity> block."
+                "the natural request body. Hidden context belongs in entity_json, "
+                "not in user_request."
             ),
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
                 "Rejected. Tool schema reminder: label_json must be a valid JSON string."
@@ -2797,7 +2797,7 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: answer_contract.kind='scalar' is only for aggregate query results. A selected row object is not a scalar label; use a 3-5 row list, use an aggregate, or choose another scoped label. Do not submit a single-record detail lookup as scalar just because it is easy."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_HIDDEN_FILTER_UNANCHORED: (
-                "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity, not only hidden inside query filters. If the latest query relays from a child/current record through a parent to sibling answer rows, rewording as child-related is not enough: either put the parent/current-subject handle in entity and rerun the label query from that scope, or choose a label directly scoped to the existing entity."  # noqa: E501
+                "Rejected. Request Contract reminder: hidden row-scope handles used by the latest query must be anchored in entity_json, not only hidden inside query filters. If the latest query relays from a child/current record through a parent to sibling answer rows, rewording as child-related is not enough: either put the parent/current-subject handle in entity_json and rerun the label query from that scope, or choose a label directly scoped to the existing entity."  # noqa: E501
                 " List Determinism Policy reminder: anchor repair does not justify adding source sequence/reference/order fields or malformed tie-break wording."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_VISIBILITY_EVIDENCE_MISSING: (

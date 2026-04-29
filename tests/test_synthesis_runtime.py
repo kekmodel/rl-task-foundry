@@ -2662,7 +2662,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "JSON string for the canonical submit_result payload" in schema_surface
     assert "decorative anchor" in schema_surface
     assert "observed values derived from it" in schema_surface
-    assert "parent or current-subject key in entity" in schema_surface
+    assert "parent or current-subject key in entity_json" in schema_surface
     assert "global answer that can be produced without the hidden entity" in schema_surface
     assert "Include only answer fields the user_request asks to receive" in schema_surface
     assert "rerun query with only the fields intended for submit_result" in schema_surface
@@ -4319,7 +4319,7 @@ async def test_submit_draft_rejects_hidden_filter_missing_from_entity(
     message = await controller.submit(payload)
 
     assert "hidden row-scope handles" in message
-    assert "must be anchored in entity" in message
+    assert "must be anchored in entity_json" in message
     assert "parent/current-subject handle" in message
     assert controller.last_feedback_error_codes == (
         "answer_contract_hidden_filter_unanchored",

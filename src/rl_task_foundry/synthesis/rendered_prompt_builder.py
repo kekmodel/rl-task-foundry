@@ -21,7 +21,7 @@ def build_rendered_user_prompt(
     entity_block = json.dumps(anchor_entity or {}, ensure_ascii=False, sort_keys=True)
     normalized_question = task.question.strip()
     if normalized_question.startswith("<entity>\n"):
-        return normalized_question
+        raise ValueError("TaskContract.question must not include an entity block")
     return (
         "<entity>\n"
         f"{entity_block}\n"

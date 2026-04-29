@@ -338,13 +338,14 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "No DB/table/column jargon" in instructions
     assert "domain roles" in instructions
     assert "technical sequences" in instructions
-    assert "Hidden filter ids go in `entity`" in instructions
+    assert "Hidden filter ids go in `entity_json`" in instructions
     assert "Use first-person only" in instructions
     assert "otherwise use neutral wording" in instructions
     assert "Bad patterns" not in instructions
     assert "'<entity type> 38'" not in instructions
     assert "'<table>_id=38'" not in instructions
     assert "'number 38 <entity>'" not in instructions
+    assert "<entity>" not in instructions
     assert "hidden handle" in instructions
     assert "hidden current subject/context" in instructions
     assert "Bind modifiers/filters to exact object/scope" in instructions
@@ -357,7 +358,9 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "not one child event/record unless asked" in instructions
     assert "current-record handle lookup" in instructions
     assert "child->parent->sibling rows" in instructions
-    assert "entity needs the parent/current-subject key" in instructions
+    assert "`entity_json` needs the parent/current-subject key" in (
+        instructions
+    )
     assert "# Scope Examples" in instructions
     assert '"user_request":"show R"' in instructions
     assert '"answer_contract":{"answer_phrase":"R"}' in instructions
@@ -367,11 +370,11 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert '"user_request":"show S_event R"' in instructions
     assert "<query>S_event.R</query>" in instructions
     assert "Good: source role visible" in instructions
-    assert "entity={C.pk}; C->P->sib" in instructions
+    assert "entity_json={C.pk}; C->P->sib" in instructions
     assert "Bad: C wording" in instructions
-    assert "entity={P.pk}; P->sib" in instructions
+    assert "entity_json={P.pk}; P->sib" in instructions
     assert "Good: rows share parent" in instructions
-    assert "Do not attach `entity` to a global report" in instructions
+    assert "Do not attach `entity_json` to a global report" in instructions
     assert "Copy scoped evidence values exactly" in instructions
     assert "scoped evidence" in instructions
     assert "do not translate/transliterate them" in instructions
@@ -451,7 +454,10 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "never bind one vague phrase to multiple concepts" in instructions
     assert "List Determinism Policy" in instructions
     assert "exact result: membership, order, limit, tie-breaks" in instructions
-    assert "Row-set controls must be in entity/request/contract" in instructions
+    assert (
+        "Row-set controls must be in `entity_json`/request/contract"
+        in instructions
+    )
     assert "boundary words and direction agree" in instructions
     assert "newest/latest vs oldest/earliest" in instructions
     assert "One list order" in instructions

@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from rl_task_foundry.synthesis.contracts import (
     ConstraintKind,
     ConstraintSummaryItem,
@@ -75,7 +77,7 @@ def test_build_rendered_user_prompt_uses_only_entity_and_user_request() -> None:
         assert authoring_term not in prompt
 
 
-def test_build_rendered_user_prompt_does_not_duplicate_prebuilt_entity_block() -> None:
+def test_build_rendered_user_prompt_rejects_prebuilt_entity_block() -> None:
     task = TaskContract(
         question='<entity>\n{"customer_id": 148}\n</entity>\n\n고객의 배정 상태를 알려 주세요.',
         topic="assignment",
@@ -91,15 +93,12 @@ def test_build_rendered_user_prompt_does_not_duplicate_prebuilt_entity_block() -
         ),
     )
 
-    prompt = build_rendered_user_prompt(
-        task,
-        anchor_entity={"customer_id": 148},
-        canonical_answer={"store_id": 1},
-    )
-
-    assert prompt.count("<entity>") == 1
-    assert prompt.startswith('<entity>\n{"customer_id": 148}\n</entity>\n\n')
-    assert "# Submit Result Format" not in prompt
+    with pytest.raises(ValueError, match="must not include an entity block"):
+        build_rendered_user_prompt(
+            task,
+            anchor_entity={"customer_id": 148},
+            canonical_answer={"store_id": 1},
+        )
 
 
 def test_synthesis_rendered_prompt_builder_module_has_zero_legacy_imports() -> None:
