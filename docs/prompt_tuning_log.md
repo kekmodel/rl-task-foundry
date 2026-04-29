@@ -9556,6 +9556,57 @@ Solver 30/30 완료 결과:
   total-only budget은 유지한다. 다음 개선은 새 tool 추가가 아니라 accepted/rejected 정성평가에서
   반복되는 실제 실패를 보고, 기존 tool schema/description 또는 prompt의 최소 문구로 해결한다.
 
+## Iteration 175 — Current settings reproducibility smoke
+
+- **질문**:
+  `plan_task_surface` 제거 후 현재 설정이 trial_05의 좋은 accepted를 재현하는가?
+
+- **실험**:
+  `artifacts/trial_20260429_mimiciv_demo_plan_surface_kimi_4solver_no_topic_smoke_01/trial_06`
+  - DB: `mimiciv_demo`
+  - Composer/Solver: OpenRouter `moonshotai/kimi-k2.5`
+  - Solver batch: 4
+  - Topic hint: 없음
+  - Synthesis max turns: 30
+  - Active composer tools: `schema_map`, `profile`, `neighborhood`, `sample`, `query`
+
+- **결과**:
+  Accepted.
+  - task: `pharmacy_medication_records`
+  - request: 입원 중 투약된 약물 정보를 약물명, 투약 유형, 상태, 시작 시간, 종료 시간 항목으로
+    가장 최근 시작한 순서 5개 요청
+  - pass rate: `1/4 = 0.25`
+  - solver failed runs: `0`
+  - first submit feedback: `answer_contract_phrase_missing`
+
+- **accepted data 정성 평가**:
+  DB 원본 cross-check 기준 canonical answer는 `pharmacy` 테이블에서
+  `hadm_id=28157142`, `order by starttime desc limit 5`와 일치한다. 최상위 5개 `starttime`에는
+  동점이 없어 hidden tie-break 문제도 보이지 않는다.
+
+  하지만 clean accepted로 보기는 어렵다. low-quality accepted 또는 borderline accepted로 판단한다.
+  - request의 “투약된 약물 정보”는 `pharmacy`, `prescriptions`, `emar` 중 어느 source인지 자연어만으로
+    분명하지 않다.
+  - `proc_type`을 “투약 유형”으로 요청한 것은 source-specific table role에 가깝고, 일반 사용자 표현으로
+    충분히 명확하지 않다.
+  - `status`도 broad status라 `pharmacy.status`인지 `emar.event_txt`인지 헷갈릴 수 있다.
+  - 실제 solver 3개 실패도 이 ambiguity와 일치한다. 한 solver는 `prescriptions`를 써서 `drug_type=MAIN`
+    및 빈 status를 제출했고, 다른 solver는 `emar` 쪽 event/status로 이동하다 틀렸거나 max turns에
+    걸렸다.
+
+- **재현성 판단**:
+  raw accept는 재현됐다. trial_05와 trial_06이 모두 accepted라 `2/2`.
+
+  clean accepted는 아직 재현됐다고 보기 어렵다. trial_05는 good accepted였지만, trial_06은 source-role
+  ambiguity가 강한 borderline accepted다. 현재 설정은 “생성은 된다”는 점은 재현됐지만, “항상 좋은
+  accepted를 낸다”는 점은 재현되지 않았다.
+
+- **다음 방향**:
+  새 tool 추가가 아니라 기존 원칙의 적용 문제다. 반복되면 broad source-role wording이 있는 accepted를
+  더 엄격히 막아야 한다. 단 hard validator는 precision 100이어야 하므로, 우선은 query/tool description
+  또는 prompt에서 source-specific status/type fields를 자연어 request에 더 구체적으로 드러내도록
+  유도하는 방향이 맞다.
+
 ## Iteration 149 — Temporal source roles must be requestable
 
 - **질문**:
