@@ -349,6 +349,155 @@ def test_incremental_evidence_rejects_list_output_only_field_additions() -> None
     assert "no_new_structural_constraint" in errors
 
 
+def test_incremental_evidence_allows_list_related_aggregate_dimension() -> None:
+    previous = _query_evidence_signature(
+        {
+            "column_sources": [
+                {
+                    "output": "admittime",
+                    "kind": "select",
+                    "table": "admissions",
+                    "column": "admittime",
+                    "value_exposes_source": True,
+                },
+                {
+                    "output": "dischtime",
+                    "kind": "select",
+                    "table": "admissions",
+                    "column": "dischtime",
+                    "value_exposes_source": True,
+                },
+                {
+                    "output": "admission_type",
+                    "kind": "select",
+                    "table": "admissions",
+                    "column": "admission_type",
+                    "value_exposes_source": True,
+                },
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "admissions",
+                    "column": "subject_id",
+                    "op": "eq",
+                    "value": 10015931,
+                },
+                {
+                    "usage": "order_by",
+                    "table": "admissions",
+                    "column": "admittime",
+                    "direction": "desc",
+                },
+            ],
+            "rows": [
+                {
+                    "admittime": "2177-03-24T21:47:00",
+                    "dischtime": "2177-03-29T14:15:00",
+                    "admission_type": "URGENT",
+                },
+                {
+                    "admittime": "2176-12-16T23:31:00",
+                    "dischtime": "2176-12-31T17:35:00",
+                    "admission_type": "OBSERVATION ADMIT",
+                },
+                {
+                    "admittime": "2176-11-14T18:02:00",
+                    "dischtime": "2176-11-27T13:30:00",
+                    "admission_type": "OBSERVATION ADMIT",
+                },
+            ],
+        },
+        answer_kind="list",
+        query_params={"spec": {"from": {"table": "admissions", "as": "adm"}}},
+    )
+    current = _query_evidence_signature(
+        {
+            "column_sources": [
+                {
+                    "output": "admittime",
+                    "kind": "group_by",
+                    "table": "admissions",
+                    "column": "admittime",
+                    "value_exposes_source": True,
+                },
+                {
+                    "output": "dischtime",
+                    "kind": "group_by",
+                    "table": "admissions",
+                    "column": "dischtime",
+                    "value_exposes_source": True,
+                },
+                {
+                    "output": "admission_type",
+                    "kind": "group_by",
+                    "table": "admissions",
+                    "column": "admission_type",
+                    "value_exposes_source": True,
+                },
+                {
+                    "output": "diagnosis_count",
+                    "kind": "aggregate",
+                    "fn": "count",
+                    "table": "diagnoses_icd",
+                    "column": "hadm_id",
+                    "value_exposes_source": False,
+                },
+            ],
+            "referenced_columns": [
+                {
+                    "usage": "where",
+                    "table": "admissions",
+                    "column": "subject_id",
+                    "op": "eq",
+                    "value": 10015931,
+                },
+                {
+                    "usage": "order_by",
+                    "table": "admissions",
+                    "column": "admittime",
+                    "direction": "desc",
+                },
+            ],
+            "rows": [
+                {
+                    "admittime": "2177-03-24T21:47:00",
+                    "dischtime": "2177-03-29T14:15:00",
+                    "admission_type": "URGENT",
+                    "diagnosis_count": 23,
+                },
+                {
+                    "admittime": "2176-12-16T23:31:00",
+                    "dischtime": "2176-12-31T17:35:00",
+                    "admission_type": "OBSERVATION ADMIT",
+                    "diagnosis_count": 27,
+                },
+                {
+                    "admittime": "2176-11-14T18:02:00",
+                    "dischtime": "2176-11-27T13:30:00",
+                    "admission_type": "OBSERVATION ADMIT",
+                    "diagnosis_count": 30,
+                },
+            ],
+        },
+        answer_kind="list",
+        query_params={
+            "spec": {
+                "from": {"table": "admissions", "as": "adm"},
+                "join": [
+                    {
+                        "from": "adm",
+                        "via_edge": "admissions<-diagnoses_icd.hadm_id",
+                        "as": "diag",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert _query_evidence_incremental_errors(previous=previous, current=current) == []
+
+
 def test_incremental_evidence_rejects_added_list_row_filter() -> None:
     previous = _query_evidence_signature(
         {

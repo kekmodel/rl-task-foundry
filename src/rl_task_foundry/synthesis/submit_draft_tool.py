@@ -1183,6 +1183,20 @@ def _query_output_signature(source: dict[str, object]) -> str | None:
     return canonical_json(payload, default=str)
 
 
+def _preserved_output_signature(signature: str) -> str:
+    try:
+        payload = json.loads(signature)
+    except json.JSONDecodeError:
+        return signature
+    if not isinstance(payload, dict):
+        return signature
+    if payload.get("kind") in {"select", "group_by"}:
+        payload = dict(payload)
+        payload["kind"] = "row_value"
+        return canonical_json(payload, default=str)
+    return signature
+
+
 @dataclass(frozen=True, slots=True)
 class QueryEvidenceSignature:
     kind: str
@@ -1301,7 +1315,16 @@ def _query_evidence_incremental_errors(
         errors.append("kind_changed")
     previous_outputs = set(previous.output_sources)
     current_outputs = set(current.output_sources)
-    if not scalar_to_grouped and not previous_outputs.issubset(current_outputs):
+    previous_preserved_outputs = {
+        _preserved_output_signature(signature) for signature in previous_outputs
+    }
+    current_preserved_outputs = {
+        _preserved_output_signature(signature) for signature in current_outputs
+    }
+    if (
+        not scalar_to_grouped
+        and not previous_preserved_outputs.issubset(current_preserved_outputs)
+    ):
         errors.append("operation_changed")
 
     previous_predicates = set(previous.predicates)
@@ -1319,6 +1342,21 @@ def _query_evidence_incremental_errors(
     added_predicate = bool(current_predicates - previous_predicates)
     added_order = bool(current_order - previous_order)
     added_output_source = bool(current_outputs - previous_outputs)
+    previous_tables = set(previous.query_tables)
+    current_tables = set(current.query_tables)
+    query_tables_allow_related_aggregate = (
+        not previous_tables
+        or not current_tables
+        or bool(current_tables - previous_tables)
+    )
+    list_related_aggregate_strengthens = (
+        current.kind == previous.kind == "list"
+        and "aggregate" in current.output_kinds
+        and "group_by" in current.output_kinds
+        and "aggregate" not in previous.output_kinds
+        and previous_preserved_outputs.issubset(current_preserved_outputs)
+        and query_tables_allow_related_aggregate
+    )
     if current.kind == "list" and added_predicate:
         errors.append("list_row_filter_added")
     strengthened_cardinality = False
@@ -1342,6 +1380,7 @@ def _query_evidence_incremental_errors(
         current.kind == "list"
         and added_output_source
         and not (added_predicate or added_order or strengthened_cardinality)
+        and not list_related_aggregate_strengthens
     )
     if output_only_list_retry:
         errors.append("list_output_only")
@@ -1351,6 +1390,7 @@ def _query_evidence_incremental_errors(
         added_predicate
         or added_order
         or output_source_strengthens
+        or list_related_aggregate_strengthens
         or strengthened_cardinality
     ):
         errors.append("no_new_structural_constraint")

@@ -10522,6 +10522,75 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_87`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 166 — List difficulty-up may add a related aggregate dimension
+
+- **질문**:
+  `trial_88`에서 too-easy 이후 composer가 같은 row set에 related aggregate dimension을 추가했는데도
+  `answer_contract_not_incremental`로 reject된 것이 정당한가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`.
+
+  submit 2:
+  `내 입원 이력을 최신순으로 보여주세요. 입원 시간, 퇴원 시간, 입원 유형, 입원 장소, 퇴원 장소를 알려주세요.`
+  - solver pass_rate `1.0` (`4/4`)
+  - 너무 쉬워서 rejected.
+  - 정성 평가: 데이터 자체는 정확하고 자연스럽지만 난이도상 너무 쉬운 direct list다.
+
+  submit 4/5:
+  `내 입원 이력을 ... 해당 입원 기록에 포함된 진단 개수도 알려주세요.`
+  - 같은 3개 admission row, 같은 admission time desc order, 기존 admission fields 유지.
+  - 새 field는 `diagnosis_count`: `admissions<-diagnoses_icd.hadm_id` related aggregate count.
+  - 오류: `answer_contract_not_incremental`
+  - diagnostics: `operation_changed`, `list_output_only`, `no_new_structural_constraint`.
+
+- **reasoning 교차 분석**:
+  composer는 too-easy feedback을 읽고 “related-row reasoning / aggregate dimension”을 추가해야 한다고
+  정확히 판단했다. 이후 edge를 잘못 추측한 detour가 있었지만, 최종 query는 admission별 diagnosis
+  count aggregate를 만들었다.
+
+  이 draft는 원칙상 좋은 difficulty-up이다. list row set을 좁히지 않았고, prior output fields/order를
+  유지하면서 related aggregate lookup을 추가했다. solver rollout까지 갔다면 너무 쉬운 direct list보다
+  더 나은 학습 trace가 되었을 가능성이 높다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data:
+  - submit 2는 good-but-too-easy rejected.
+  - submit 4/5는 hard-good 후보를 validator가 과하게 막은 false reject로 본다.
+
+- **변경**:
+  precision 100% 구조 판정만 수정했다. 리터럴/컬럼명 휴리스틱은 쓰지 않았다.
+
+  `_query_evidence_incremental_errors`에서 list difficulty-up을 평가할 때:
+  - 이전 `select` output과 현재 aggregate query의 `group_by` output이 같은 table/column이면 같은 row-value
+    output 보존으로 본다.
+  - list retry가 기존 row-value outputs/order/predicate를 보존하고, related table aggregate output을
+    새로 추가하면 `list_output_only`가 아니라 structural strengthening으로 인정한다.
+
+  기존 passive same-row output-only addition은 계속 reject된다.
+
+- **검증**:
+  Targeted:
+  - `uv run pytest tests/test_synthesis_runtime.py::test_incremental_evidence_rejects_list_output_only_field_additions tests/test_synthesis_runtime.py::test_incremental_evidence_allows_list_related_aggregate_dimension tests/test_synthesis_runtime.py::test_incremental_evidence_rejects_added_list_row_filter tests/test_synthesis_runtime.py::test_submit_draft_too_easy_requires_incremental_answer_contract -q`
+    통과 (`4 passed`).
+
+  Broader relevant checks:
+  - `uv run pytest tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+    통과 (`97 passed`).
+  - `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py tests/test_synthesis_backend_openai_agents.py -q`
+    통과 (`125 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_backend_openai_agents.py tests/test_turn_budget_prompt.py`
+  통과.
+
+- **현재 streak**:
+  `trial_88`은 accepted가 없으므로 만족 streak는 `0/5` 유지. 다만 false reject를 수정했으므로 다음
+  trial에서 too-easy 이후 related aggregate difficulty-up이 통과되는지 확인한다.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
