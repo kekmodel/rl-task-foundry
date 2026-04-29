@@ -11971,3 +11971,61 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_103` accepted는 만족 가능한 데이터로 판단하므로 연속 만족 accepted streak는 `1/5`.
+
+## Iteration 183 — Keep Label Contract visible at tool-budget boundaries
+
+- **질문**:
+  `trial_104` 실패는 어려운 좋은 문제였나, 아니면 budget boundary에서 broad request를 제출한 저품질
+  candidate였나?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T115002Z:915202d8`.
+  마지막 오류는 `answer_contract_phrase_missing`였다.
+
+  composer는 먼저 admission-scoped microbiology list를 만들었다. non-null organism filter를 넣자 row가
+  2개뿐이라 `answer_contract_list_size_invalid`로 거절됐다. 이 거절은 타당하다. 이후 더 풍부한 emar/pharmacy
+  쪽으로 label을 바꾸려 했지만, feedback 이후 data tool budget boundary까지 간 뒤 broad request를 제출했다:
+  `해당 입원 기간 동안의 최신 약물 투약 기록 5건을 확인하고 싶어`.
+
+  최종 label에는 `administration_time`, `sequence_number`, `medication_name`, `event_status`가 있었지만
+  user_request에는 `투약 일시`, `순번`, `약물명`, `투약 상태`, `최신 순서로` 같은 binding phrases가 없었다.
+  그래서 `answer_contract_phrase_missing`로 budget exhausted가 발생했다.
+
+- **reasoning 교차 분석**:
+  composer는 2-row microbiology list가 부족하다는 점은 이해했다. 하지만 emar duplicate 문제를 수리하는 과정에서
+  다시 `emar_seq` 기반 `sequence_number`를 output/order field로 사용했고, budget boundary 이후에는
+  user_request를 broad하게 유지한 채 제출했다.
+
+  이 문제는 solver가 풀기 어려운 좋은 문제라기보다 composer가 Label Contract를 최종 제출 직전에 지키지 못한
+  저품질 rejected다. 특히 “budget boundary라 submit해야 한다”는 메시지가 “binding phrase가 빠진 broad request도
+  제출해도 된다”로 해석되면 안 된다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`로 리셋한다.
+
+  rejected data:
+  - microbiology 2-row list는 low-quality rejected. list task shape에 맞지 않았다.
+  - emar label은 low-quality rejected. sequence/order 중심 수리와 missing binding phrases가 있었다.
+  - 저품질이 solver까지 가지 않고 submit validator에서 거절된 것은 올바른 동작이다.
+
+- **변경**:
+  FEEDBACK_REPAIR_MAX_DATA_TOOLS boundary feedback에 Label Contract reminder를 추가했다.
+  “repair query가 blocking diagnostics 없이 label values를 반환했으면 submit”이라는 protocol reminder 뒤에,
+  submit 전에도 user_request가 모든 output/order binding의 exact natural phrases를 포함해야 하며 broad wording으로
+  missing binding phrases를 남기면 안 된다고 명시했다.
+
+  이는 새 durable policy가 아니라 기존 Label Contract의 boundary-time reminder다. precision-100 hard validator는
+  이미 `answer_contract_phrase_missing`으로 동작하고 있으므로 추가하지 않았다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_query tests/test_synthesis_runtime.py::test_submit_draft_rejects_binding_phrase_absent_from_request -q`
+  통과 (`2 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **현재 streak**:
+  `trial_104`는 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.

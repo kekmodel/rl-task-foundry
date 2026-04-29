@@ -1440,6 +1440,10 @@ def test_data_tool_budget_feedback_blocks_repeated_query_repair_for_ambiguous_qu
     assert feedback is not None
     assert feedback["error"] == "submit_draft_required"
     assert "without blocking diagnostics" in str(feedback["message"])
+    assert "exact natural phrases for every output/order binding" in str(
+        feedback["message"]
+    )
+    assert "broad wording with missing binding phrases" in str(feedback["message"])
     assert controller.data_tool_budget_feedback(tool_name="sample") is not None
 
 
