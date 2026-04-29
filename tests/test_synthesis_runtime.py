@@ -2676,6 +2676,8 @@ async def test_submit_draft_feedbacks_missing_order_binding_for_selected_order_k
     assert "bare output noun" in message
     assert "Display-only output wording is not enough" in message
     assert "Do not reuse one broad order phrase" in message
+    assert "split wording into distinct request substrings" in message
+    assert "one primary order phrase and one tie-break phrase" in message
     assert controller.last_feedback_error_codes == ("answer_contract_binding_missing",)
     assert controller.attempts == []
 

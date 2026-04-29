@@ -12441,3 +12441,67 @@ Solver 30/30 완료 결과:
 
 - **현재 streak**:
   `trial_111`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
+
+## Iteration 191 — Multi-key order feedback should ask for split phrases
+
+- **질문**:
+  `trial_112`는 좋은 후보였는데 왜 accepted까지 못 갔고, 어떤 개선이 원칙에 맞는가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, flow_id는 `real_db_trial:20260429T125629Z:5e68ba78`.
+  마지막 오류는 `composer_submit_draft_missing`이었다.
+
+  composer는 ICU stay `38540883`의 procedureevents list를 만들었다. 첫 query는
+  `starttime desc`, `limit=5`였고 `limit_boundary_tie=true`가 나왔다. query diagnostics는
+  `selected_visible_tie_breaker_candidates`로 `procedure_name`, `category`를 제시했다.
+
+  composer는 이를 잘 활용해 `starttime desc, procedure_name asc`로 rerun했고, query diagnostics는 clear됐다.
+  데이터 자체는 꽤 좋은 후보였다:
+  - hidden ICU stay scope가 자연스럽다.
+  - procedureevents + d_items label/category path가 solver tool로 재현 가능하다.
+  - start time recency + same-start procedure name tie-break가 visible/requestable하다.
+
+  하지만 request/contract repair에서 실패했다. composer는 처음에는 `시작 시간이 가장 최근인` phrase를
+  user_request에 넣지 않았고, 이후에는 `시작 시간이 가장 최근이면서 같은 시작 시간이면 시술명 순으로` 같은 하나의
+  긴 phrase를 두 order key에 모두 binding했다. submit validator는 duplicate order binding phrase를 정확히 막았다.
+  마지막에는 contract-only feedback 이후 data tool을 호출했고, protocol boundary에서 missing submit으로 종료됐다.
+
+- **reasoning 교차 분석**:
+  reasoning상 composer는 “한 broad phrase를 두 order key에 재사용하면 안 된다”까지 이해했다. 하지만 실질적인 repair
+  방법을 “두 개의 독립된 request substring으로 나누기”로 실행하지 못하고, tie-break를 제거하는 query를 호출하려 했다.
+
+  이건 solver가 못 푸는 어려운 문제는 아니다. solver까지 갔다면 좋은 후보가 될 가능성이 높았지만, 제출물은
+  answer_contract binding이 깨진 상태였기 때문에 low-quality rejected가 맞다.
+
+- **정성 평가**:
+  accepted data: 없음. streak는 `0/5`.
+
+  rejected data:
+  - final procedure list candidate는 내용상 좋은 데이터에 가까웠다.
+  - rejection 원인은 데이터 저품질이 아니라 composer의 contract repair 실패다. 특히 multi-key order wording을
+    하나의 combined phrase로 묶은 것이 핵심이다.
+  - contract-only feedback 뒤 data tool을 호출해 missing submit으로 끝난 것도 protocol failure다.
+
+- **변경**:
+  `answer_contract_binding_missing` feedback을 보강했다. multi-key order에서는 하나의 broad order phrase를 재사용하지
+  말고, user_request 안에 primary order phrase와 tie-break phrase를 별도의 exact substring으로 나누라고 명시했다.
+
+  이는 새 durable policy가 아니다. 기존 Label Contract의 “multi-key order needs distinct request phrases”를 더
+  조작적인 reminder로 바꾼 것이다. hard validator는 이미 duplicate order binding phrase를 precision 100으로 잡고
+  있었으므로 추가하지 않았다.
+
+- **검증**:
+  Targeted:
+  `uv run pytest tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_duplicate_order_binding_phrase tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_order_binding_reusing_output_phrase tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_for_selected_order_key tests/test_synthesis_runtime.py::test_submit_draft_feedbacks_missing_order_binding_by_query_order_count -q`
+  통과 (`4 passed`).
+
+  Ruff:
+  `uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_synthesis_runtime.py`
+  통과.
+
+  Full:
+  `uv run pytest -q` 통과 (`509 passed`).
+
+- **현재 streak**:
+  `trial_112`은 accepted가 없으므로 연속 만족 accepted streak는 `0/5`.
