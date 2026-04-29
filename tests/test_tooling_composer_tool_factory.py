@@ -304,6 +304,11 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
         "label/output field names do not disambiguate source surface" in description
         for description in descriptions["query"].values()
     )
+    assert any(
+        "including spacing; do not trim, normalize, or rewrite strings"
+        in description
+        for description in descriptions["query"].values()
+    )
 
     assert any(
         "Each column is scoped to the selected table" in description

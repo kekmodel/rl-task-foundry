@@ -800,6 +800,8 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                     "selected source role when multiple reachable sources could "
                     "answer the broad noun; label/output field names do not "
                     "disambiguate source surface. "
+                    "Copy returned row values exactly into the label, including "
+                    "spacing; do not trim, normalize, or rewrite strings. "
                     "Inspect returned diagnostics before submit_draft: ordering "
                     "diagnostics flag unstable list order, and projection "
                     "diagnostics flag answer rows that are indistinguishable "

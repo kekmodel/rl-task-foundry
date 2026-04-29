@@ -3153,6 +3153,8 @@ async def test_submit_draft_rejects_label_that_does_not_match_latest_query(
     message = await controller.submit(payload)
 
     assert "label must exactly match the latest successful query result" in message
+    assert "including string spacing" in message
+    assert "Do not trim, normalize, or rewrite strings" in message
     assert "list uses the query rows array" in message
     assert "helper/context fields are not label fields unless requested" in message
     assert "rerun the exact label query immediately before submit_draft" in message

@@ -2771,7 +2771,7 @@ class SubmitDraftController:
                 "Rejected. Label Contract reminder: final query evidence must immediately precede submit_draft, and the canonical label is copied from the latest successful query result."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISMATCH: (
-                "Rejected. Label Contract reminder: label must exactly match the latest successful query result; scalar uses the one aggregate row object, list uses the query rows array, and helper/context fields are not label fields unless requested. Do not run helper/profile/count queries after final label evidence; if that happened, rerun the exact label query immediately before submit_draft."  # noqa: E501
+                "Rejected. Label Contract reminder: label must exactly match the latest successful query result, including string spacing; scalar uses the one aggregate row object, list uses the query rows array, and helper/context fields are not label fields unless requested. Do not trim, normalize, or rewrite strings. Do not run helper/profile/count queries after final label evidence; if that happened, rerun the exact label query immediately before submit_draft."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_QUERY_MISMATCH: (
                 "Rejected. Label Contract reminder: the latest successful query must contain structural evidence for this answer; if a list query limit fixes membership, that fixed size must be bound in user_request and answer_contract.limit_phrase."  # noqa: E501

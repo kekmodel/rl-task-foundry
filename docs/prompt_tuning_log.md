@@ -7235,6 +7235,73 @@ Solver 30/30 완료 결과:
   `trial_53`은 accepted였지만 low-quality accepted로 판정한다. 만족스러운 accepted 연속 기록은
   여전히 `0/5`.
 
+## Iteration 172 — Exact string spacing must be preserved from query rows
+
+- **질문**:
+  Iteration 171의 source-role reminder 뒤 다음 smoke에서 low-quality accepted가 줄었는가?
+
+- **실험/결과**:
+  `trial_54`는 accepted 없이 `MaxTurnsExceeded`로 종료됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_54`
+  - composer/solver: OpenRouter Kimi K2.5
+  - accepted data: 없음
+
+  submit 흐름은 다음과 같았다.
+
+  1. DRG code list: row 수 2개, null 값 포함, no-primary-key source로 feedback.
+  2. lab item count aggregate: count top 5는 좋은 후보였지만 동점 count가 많아
+     `answer_contract_order_ambiguous`.
+  3. microbiology result list: `chartdate desc, storedate desc`로 order ambiguity는 고쳤지만,
+     `comments` 문자열의 trailing/double space를 label에서 정규화해
+     `answer_contract_evidence_mismatch`.
+
+- **reasoning 교차 분석**:
+  composer는 첫 feedback 뒤 no-PK DRG row-value label을 버리고 lab aggregate로 이동했다. 이
+  선택은 방향상 맞지만, aggregate query spec에서 `select`와 `aggregate`를 같이 넣어 한 번 실패한
+  뒤 수정했다. lab aggregate는 tied count가 많았고, hidden handle boundary가 diagnostics에
+  드러나 reject됐다.
+
+  마지막 microbiology 후보에서 composer는 query diagnostics를 보고 `storedate` tie-break를
+  추가했다. 이 부분은 좋았다. 그러나 query result의 `comments` 값에는 `"No MRSA isolated.  "`
+  같은 공백이 있었고, 제출 label은 `"No MRSA isolated. "`처럼 공백이 줄어 있었다. validator가
+  이 reformat을 precision 100으로 잡아냈다.
+
+- **정성 평가**:
+  accepted data: 없음. low-quality accepted도 없음.
+
+  rejected data:
+  - DRG draft는 low-quality rejected가 맞다.
+  - lab aggregate는 어려운 좋은 후보였지만, 현재 draft는 tie/boundary가 해결되지 않아 reject가
+    맞다.
+  - microbiology draft는 row/order 구조는 좋은 후보였으나, result representation과 문자열
+    exact-copy가 아직 약했다. 현 reject는 바람직하다.
+
+- **변경**:
+  hard validator는 이미 있었다. `answer_contract_evidence_mismatch`가 latest query rows와 label의
+  canonical JSON을 비교하므로 precision 100이다.
+
+  개선은 prompt/feedback reminder 정렬이다.
+
+  - `query.spec` description에 returned row values를 label로 복사할 때 spacing까지 그대로
+    보존하고 trim/normalize/rewrite하지 말라고 추가했다.
+  - `answer_contract_evidence_mismatch` feedback에도 string spacing 포함 exact match와
+    trim/normalize/rewrite 금지를 명시했다.
+
+  이 변경은 새 semantic heuristic이 아니라 Label Grounding Policy의 "Do not reformat"을
+  구체화한 것이다.
+
+- **검증**:
+  `uv run pytest tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned tests/test_synthesis_runtime.py::test_submit_draft_rejects_label_that_does_not_match_latest_query -q`
+  통과 (`2 passed`).
+
+  `uv run ruff check src/rl_task_foundry/tooling/composer/tool_factory.py src/rl_task_foundry/synthesis/submit_draft_tool.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py`
+  통과.
+
+- **상태**:
+  만족스러운 accepted 연속 기록은 여전히 `0/5`.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
