@@ -115,8 +115,11 @@ hard_gates:
   no_literal_hack: true
   precision_100_rejectors_only: true
   no_source_of_truth_duplication: true
+  db_readiness_not_forced: true
   no_mode_collapse: true
   evaluation_policy_recorded: true
+  llm_judge_components_versioned: true
+  llm_semantic_not_structural_reject: true
 
 per_draft:
   - draft_id: ""

@@ -30,8 +30,12 @@ evaluation_policies:
       no_db_literal_or_token_heuristic: true
       precision_100_rejectors_only: true
       no_severe_mode_collapse: true
+      no_source_of_truth_duplication: true
+      db_readiness_not_forced: true
+      independent_dqs_report_required: true
       evaluation_policy_changes_recorded: true
       llm_judge_components_versioned: true
+      llm_semantic_not_structural_reject: true
     db_set:
       - mimiciv_demo
       - postgres_air

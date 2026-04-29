@@ -166,3 +166,5 @@ v1 달성 기준:
 - 각 DB 평균 `diversity_score >= 3.5`
 - severe mode collapse 없음
 - DB readiness diagnosis가 불가능 region/DB를 구조적으로 설명함
+
+여기서 `rejected_good`은 `rejected_good_too_easy + rejected_good_too_hard`이다.
