@@ -156,6 +156,14 @@ nodes:
       run-real-db-trial: "single trial microscope; inspect analysis.jsonl"
       harvest: "default improvement experiment and production viability entrypoint"
       export-bundle: "post-accept registry materialization only"
+    verification_wording:
+      preflight_only:
+        - smoke-proof-task
+        - run-real-db-trial
+      improvement_verification_requires:
+        - harvest
+        - DQS-v1 qualitative review
+      forbidden_summary: "Do not claim an improvement was verified by smoke and real-db trial alone."
     quality_eval: null
     branching_notes:
       continue_from_here:

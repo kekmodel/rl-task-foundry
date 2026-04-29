@@ -57,6 +57,13 @@ Production viability:
 - `harvest`: 개선 실험의 기본 평가 entrypoint다. target, workers, productive budget을 둔 반복 생산 루프이며, DQS-v1 평가와 production viability 판단은 harvest 산출물 기준으로 한다.
 - `export-bundle`: registry에 commit된 accepted data를 serving/demo/handoff bundle로 materialize하는 별도 단계다. trial이나 harvest의 품질 판단에 bundle 생성을 섞지 않는다.
 
+검증 용어 규칙:
+
+- `smoke-proof-task`와 `run-real-db-trial`만으로 "개선이 검증됐다"고 쓰지 않는다.
+- 두 명령은 preflight/sanity check/diagnosis라고 부른다.
+- 개선 검증, node comparison, production viability 판단은 반드시 `harvest` 결과와 DQS-v1 정성평가를 근거로 한다.
+- "smoke 및 real-db trial로 검증"이라는 보고는 불완전하다. 올바른 표현은 "smoke와 single trial로 배관/사례를 확인했고, 개선 효과는 harvest + DQS-v1로 검증한다"이다.
+
 표준 개선 루프:
 
 1. 큰 변경 후 `smoke-proof-task`로 배관을 확인한다.

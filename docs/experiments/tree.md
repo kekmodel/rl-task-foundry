@@ -67,6 +67,13 @@
 - `harvest`: default improvement experiment entrypoint. Use its target/budget output plus DQS-v1 qualitative review to compare nodes.
 - `export-bundle`: explicit post-accept registry export. It is not part of trial quality evaluation.
 
+Verification wording:
+
+- `smoke-proof-task` and `run-real-db-trial` are preflight/diagnostic commands.
+- They can support debugging, but they do not verify an improvement.
+- Improvement verification requires `harvest` plus DQS-v1 qualitative review.
+- A report that says "verified with smoke and real-db trial" is incomplete unless harvest evidence follows.
+
 Default improvement sequence:
 
 1. Run `smoke-proof-task` after risky plumbing changes.

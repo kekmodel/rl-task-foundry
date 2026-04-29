@@ -80,6 +80,13 @@ Command roles:
 - `harvest`: default improvement experiment and DQS/production viability input.
 - `export-bundle`: explicit registry-to-serving materialization after data is accepted.
 
+Verification wording:
+
+- Do not report an improvement as verified from `smoke-proof-task` or
+  `run-real-db-trial` alone.
+- Those commands are preflight and diagnosis. Improvement verification requires
+  `harvest` output plus DQS-v1 qualitative review.
+
 `harvest` defaults to the v1 production check: accepted 3 within 15 productive
 minutes. A method that cannot produce 3 accepted tasks inside that productive
 budget is a failed production-viability node.
