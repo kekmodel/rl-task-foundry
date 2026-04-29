@@ -10,7 +10,11 @@ from rl_task_foundry.config.models import DatabaseConfig
 from rl_task_foundry.infra.db import _apply_session_settings, control_session_settings
 from rl_task_foundry.infra.visibility import Visibility
 from rl_task_foundry.schema.graph import ColumnProfile, ForeignKeyEdge, SchemaGraph, TableProfile
-from rl_task_foundry.schema.sensitivity import ColumnRef, classify_columns
+from rl_task_foundry.schema.sensitivity import (
+    ColumnRef,
+    classify_columns,
+    resolve_handle_aware_visibility,
+)
 
 _TABLE_QUERY = """
 SELECT
@@ -311,6 +315,15 @@ class PostgresSchemaIntrospector:
             table_key = (row["schema_name"], row["table_name"])
             table = table_profiles[table_key]
             column_name = row["column_name"]
+            column_ref = ColumnRef(
+                schema_name=row["schema_name"],
+                table_name=row["table_name"],
+                column_name=column_name,
+            )
+            is_handle = (
+                column_name in primary_keys.get(table_key, ())
+                or (row["schema_name"], row["table_name"], column_name) in fk_members
+            )
             table.columns.append(
                 ColumnProfile(
                     schema_name=row["schema_name"],
@@ -319,11 +332,20 @@ class PostgresSchemaIntrospector:
                     data_type=row["data_type"],
                     ordinal_position=int(row["ordinal_position"]),
                     is_nullable=bool(row["is_nullable"]),
-                    visibility=sensitivity_by_column[
-                        (row["schema_name"], row["table_name"], column_name)
-                    ],
+                    visibility=resolve_handle_aware_visibility(
+                        column_ref,
+                        is_handle=is_handle,
+                        default_visibility=sensitivity_by_column[
+                            (row["schema_name"], row["table_name"], column_name)
+                        ],
+                        overrides=self.visibility_overrides,
+                    ),
                     is_primary_key=column_name in primary_keys.get(table_key, ()),
-                    is_foreign_key=(row["schema_name"], row["table_name"], column_name)
+                    is_foreign_key=(
+                        row["schema_name"],
+                        row["table_name"],
+                        column_name,
+                    )
                     in fk_members,
                     is_unique=(column_name,) in unique_constraints.get(table_key, []),
                     n_distinct=n_distinct_by_column.get(

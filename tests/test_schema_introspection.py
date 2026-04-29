@@ -4,7 +4,11 @@ import pytest
 
 from rl_task_foundry.config.load import load_config
 from rl_task_foundry.schema.introspect import PostgresSchemaIntrospector
-from rl_task_foundry.schema.sensitivity import ColumnRef, classify_columns
+from rl_task_foundry.schema.sensitivity import (
+    ColumnRef,
+    classify_columns,
+    resolve_handle_aware_visibility,
+)
 
 
 def test_classify_columns_prefers_qualified_overrides():
@@ -78,6 +82,42 @@ def test_classify_columns_keeps_all_fields_visible_by_default_without_name_rules
     ]
 
 
+def test_handle_visibility_requires_explicit_override_when_default_is_visible():
+    column = ColumnRef(
+        schema_name="public",
+        table_name="procedureevents",
+        column_name="orderid",
+    )
+
+    assert (
+        resolve_handle_aware_visibility(
+            column,
+            is_handle=True,
+            default_visibility="user_visible",
+            overrides={},
+        )
+        == "blocked"
+    )
+    assert (
+        resolve_handle_aware_visibility(
+            column,
+            is_handle=True,
+            default_visibility="user_visible",
+            overrides={"procedureevents.orderid": "user_visible"},
+        )
+        == "user_visible"
+    )
+    assert (
+        resolve_handle_aware_visibility(
+            column,
+            is_handle=False,
+            default_visibility="user_visible",
+            overrides={},
+        )
+        == "user_visible"
+    )
+
+
 @pytest.mark.asyncio
 async def test_postgres_schema_introspector_reads_pagila_schema():
     config = load_config("rl_task_foundry.yaml")
@@ -96,6 +136,7 @@ async def test_postgres_schema_introspector_reads_pagila_schema():
     customer = graph.get_table("customer", schema_name="public")
     assert customer.primary_key == ("customer_id",)
     assert customer.get_column("customer_id").is_primary_key is True
+    assert customer.get_column("customer_id").visibility == "blocked"
     assert customer.get_column("email").visibility == config.visibility.default_visibility
 
     language = graph.get_table("language", schema_name="public")

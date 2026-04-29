@@ -6875,6 +6875,60 @@ Solver 30/30 완료 결과:
 
   prompt length: `7944`.
 
+## Iteration 166 — Handle outputs must require explicit visibility overrides
+
+- **질문**:
+  Iteration 165 뒤 `trial_48`의 accepted data는 정말 좋은 데이터인가?
+
+- **실험/결과**:
+  `trial_48`은 accepted됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_48`
+  - topic: `ICU 중환자실 시술 및 처치 내역`
+  - pass rate: `3/4 = 0.75`
+  - failed solver runs: `0`
+  - registry committed
+
+- **정성 평가**:
+  accepted data는 low-quality accepted로 판단한다.
+
+  row set 자체는 ICU stay의 procedureevents 5개로 자연스럽고, solver pass rate도 band 안이었다.
+  그러나 canonical answer에 `procedure_id`가 포함됐다. user_request는 "각 시술의 이름, 분류,
+  시작/종료 시간, 상태"를 요청했지 procedure id/reference를 요청하지 않았다. answer_contract는
+  `procedure_id`를 "시술"이라는 broad phrase로 묶어 통과했다.
+
+  또한 "시술 및 처치 5개를 시작 시간 순서대로"는 membership boundary가 약하다. 다만 이번 변경은
+  가장 명확한 precision-100 원인인 handle output 노출부터 막는다.
+
+- **reasoning 교차 분석**:
+  composer reasoning은 `procedureevents`의 `orderid`를 "user visible" field로 보고
+  procedure identifier처럼 출력했다. 실제 schema snapshot에서도 `orderid`는 primary key인데
+  default visibility가 `user_visible`이라 column source가 `user_visible`로 기록됐다. 따라서
+  submit validator가 `label_non_user_visible_source`로 막을 수 없었다.
+
+- **개선 판단**:
+  DB별 `orderid` 문자열 금지는 금지 원칙 위반이다. 대신 primary/foreign key handle은 스키마
+  metadata로 precision 100 판정 가능한 구조다.
+
+  원칙상 raw handle은 hidden scope/filter/order에는 사용할 수 있어도 direct label output은
+  명시적으로 user-visible reference로 override된 경우에만 허용해야 한다. 따라서 default visibility가
+  `user_visible`이어도 PK/FK handle은 explicit visibility override가 없으면 `blocked`로 처리한다.
+  특정 DB나 컬럼명에 의존하지 않는다.
+
+- **변경**:
+  - schema sensitivity에 `resolve_handle_aware_visibility`를 추가했다.
+  - PostgreSQL introspector가 PK/FK handle column을 explicit override 없이는 `blocked`로 분류한다.
+  - 테스트에서 default-visible handle이 blocked되고, explicit override가 있으면 user-visible로
+    남는 것을 확인한다.
+
+- **검증**:
+  `uv run pytest tests/test_schema_introspection.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py tests/test_tooling_composer_schema_map.py tests/test_tooling_composer_profile.py tests/test_tooling_composer_sample.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py -q`
+  통과 (`204 passed`).
+
+  `uv run ruff check src/rl_task_foundry/schema/sensitivity.py src/rl_task_foundry/schema/introspect.py tests/test_schema_introspection.py`
+  통과.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:
