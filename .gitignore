@@ -21,22 +21,7 @@ venv/
 # Output
 output/
 review_packs/
-artifacts/sample_dbs/
-artifacts/opencode_smoke_*/
-artifacts/ab_submit_examples_*/
-artifacts/smoke/
-artifacts/eval_*/
-artifacts/trial_*/
-artifacts/controlled_solver_*/
-artifacts/tasks/
-artifacts/*/tasks/
-artifacts/task_registry.db*
-artifacts/*/task_registry.db*
-artifacts/tmp_configs/smoke_*.yaml
-artifacts/tmp_configs/trial_*.yaml
-artifacts/tmp_configs/iter*.yaml
-artifacts/tmp_configs/trial_*/
-artifacts/tool_schema_surface.md
+artifacts/
 
 # Generated schema visualizations
 docs/*_schema_large.svg
