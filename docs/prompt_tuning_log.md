@@ -10416,6 +10416,58 @@ Solver 30/30 완료 결과:
 - **현재 streak**:
   `trial_85`는 accepted가 없으므로 만족 streak는 `0/5` 유지.
 
+## Iteration 164 — Trial 86 caught helper-field evidence and sequence repair
+
+- **질문**:
+  `trial_86`에서 accepted가 없었다면, 실패 원인은 새 정책 부재인가 아니면 기존 정책 위반을
+  feedback이 잘 잡은 것인가?
+
+- **실험/결과**:
+  설정은 MIMIC demo, OpenRouter Kimi K2.5 composer/solver, 4 solver, topic 주입 없음.
+  결과는 `synthesis_failed`, solver rollout 없음.
+
+  제출 흐름:
+  - submit 1: `composer_submit_draft_missing`
+  - submit 2:
+    `이번 입원 중 투약 기록 중 앞에서 5가지를 보여주세요`
+    - 오류: `answer_contract_evidence_mismatch`, `answer_contract_order_ambiguous`
+    - latest query는 `admission_type` helper field를 선택했지만 label에는 빼서 evidence mismatch가 났고,
+      event_time 동점으로 order도 불안정했다.
+  - submit 3:
+    `이번 입원 중 투약 기록 중 가장 먼저 이루어진 5가지를 시간 순서대로 보여주세요`
+    - 오류: `answer_contract_evidence_mismatch`
+    - query에 `emar_sequence`를 추가했지만 label/request/contract 싱크가 맞지 않았다.
+  - submit 4:
+    같은 request
+    - 오류: `answer_contract_binding_missing`
+    - label에 `emar_sequence`가 들어갔지만 user_request가 이를 요청하지 않았다.
+  - submit 5: `composer_submit_draft_missing`
+
+- **reasoning 교차 분석**:
+  composer는 event_time tie를 보고 `emar_seq`를 “natural tie-breaker”라고 판단했다. 하지만 이후
+  binding feedback에서 `emar_sequence`가 단지 tie-break를 위해 추가된 sequence field라는 점을 인지하고
+  제거/return tied rows 방향으로 가려 했다. 다만 phrase/binding-only feedback 뒤 data tool을 호출해
+  ToolBudgetFeedback에 막혔고, 최종 submit까지 복구하지 못했다.
+
+- **정성 평가**:
+  accepted data: 없음.
+
+  rejected data: low-quality rejected. 첫 후보는 helper field/evidence mismatch와 order ambiguity,
+  이후 후보는 sequence field repair 문제다. 어려운 좋은 문제가 아니라 composer가 기존 Label Contract와
+  List Determinism Policy를 충분히 따르지 못한 케이스다.
+
+- **변경**:
+  코드 변경 없음. `query.select`/Label Contract는 이미 “selected field는 label field가 된다”와
+  “latest successful query result를 그대로 복사”를 말한다. List Determinism Policy와 binding feedback도
+  sequence/order field를 tie-break repair로 정당화하지 말라고 말한다. 새 validator를 추가하려면
+  sequence-like 컬럼명 리터럴 휴리스틱으로 흐를 위험이 있어 금지 원칙에 맞지 않는다.
+
+- **검증**:
+  코드 변경 없음.
+
+- **현재 streak**:
+  `trial_86`은 accepted가 없으므로 만족 streak는 `0/5` 유지.
+
 ## Iteration 148 — ToolBudgetFeedback must break the SDK tool loop
 
 - **질문**:
