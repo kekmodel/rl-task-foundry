@@ -330,7 +330,7 @@ def test_composer_tool_schema_descriptions_are_prompt_aligned():
     assert "ordinary user wording points to another reachable source" in descriptions[
         "query"
     ]["$.spec.from.table"]
-    assert "make this source role explicit" in descriptions["query"][
+    assert "make this source/lifecycle role explicit" in descriptions["query"][
         "$.spec.from.table"
     ]
     assert "Filters define row membership" in descriptions["query"]["$.spec.where"]

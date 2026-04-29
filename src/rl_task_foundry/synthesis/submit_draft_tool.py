@@ -390,7 +390,7 @@ class SubmitDraftPayload(StrictModel):
             "values exactly instead of translating or transliterating them. "
             "When multiple reachable source surfaces could satisfy broad "
             "wording, use the ordinary matching source or name the chosen "
-            "source role in ordinary language. "
+            "source/lifecycle role in ordinary language. "
             "Use 'my'/'own' wording "
             "only when the hidden context naturally represents the requester "
             "or their records and the latest query is scoped to that context. "

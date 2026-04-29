@@ -346,11 +346,11 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "entity needs the parent/current-subject key" in instructions
     assert "# Scope Examples" in instructions
     assert '"user_request":"show R"' in instructions
-    assert '"query":"S2.R"' in instructions
-    assert "when S1.R also fits" in instructions
-    assert "Bad: hidden source choice" in instructions
-    assert '"user_request":"show S2-source R"' in instructions
-    assert "selected source role is visible" in instructions
+    assert '"query":"S_event.R"' in instructions
+    assert "hidden lifecycle source" in instructions
+    assert "S_order.R also fits" in instructions
+    assert '"user_request":"show S_event R"' in instructions
+    assert "source role visible" in instructions
     assert "entity={C.pk}; query C->P->siblings" in instructions
     assert "rewording as C-related is not enough" in instructions
     assert "entity={P.pk}; query P->siblings" in instructions

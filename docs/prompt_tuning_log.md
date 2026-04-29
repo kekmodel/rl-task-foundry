@@ -7790,6 +7790,74 @@ Solver 30/30 완료 결과:
 - **상태**:
   만족스러운 accepted 연속 기록은 여전히 `0/5`.
 
+## Iteration 180 — Accepted ICU medication task hid the source lifecycle
+
+- **질문**:
+  Iteration 179의 non-visible source feedback 보강 뒤 다음 smoke에서 좋은 accepted가 나왔는가?
+
+- **실험/결과**:
+  `trial_62`는 accepted됐다.
+
+  - artifact:
+    `artifacts/trial_20260429_mimiciv_demo_post_repair_contracts_kimi_4solver_no_topic_smoke_01/trial_62`
+  - composer/solver: OpenRouter Kimi K2.5
+  - pass rate: `1/4 = 0.25`
+  - registry status: committed
+
+  최종 task는 특정 ICU stay의 최근 5회 투약 내역을 묻고, 약품명/투여량/단위/시작 시각을 반환했다.
+  canonical query는 `inputevents`를 `stay_id`로 필터링하고 `starttime desc`, related item label asc로
+  정렬했다.
+
+- **reasoning 교차 분석**:
+  1개 solver는 `inputevents`를 골라 canonical과 일치했다. 나머지 solver들은 `prescriptions`,
+  `emar`, `pharmacy` 같은 다른 medication lifecycle/source surface로 이동했다. 특히 한 solver는
+  `stay_id -> hadm_id`를 찾은 뒤 admission 전체의 prescriptions를 사용해 ICU stay 밖의 더 늦은
+  처방을 반환했다. 두 solver는 MaxTurnsExceeded였다.
+
+  즉 row/order가 본질적으로 불가능한 문제가 아니라, request가 "투약 내역"이라고만 말해
+  `inputevents` source lifecycle을 고정하지 못했다.
+
+- **정성 평가**:
+  accepted data: low-quality accepted.
+
+  canonical row set 자체는 DB로 재현 가능하고, 한 solver는 주어진 atomic tools로 정확히 풀었다.
+  하지만 "투약 내역"은 prescriptions/eMAR/pharmacy/input events를 모두 떠올릴 수 있는 broad wording이다.
+  request가 "ICU input/infusion event" 같은 source lifecycle을 자연어로 고정하지 않았기 때문에,
+  다른 solver들의 실패는 단순 난이도가 아니라 composer가 낸 문제의 ambiguity다.
+
+  rejected data:
+  - 앞선 order/binding feedback은 적절했다.
+  - 중간 request의 `케팜드대로`는 malformed phrase였고, 최종 request는 문장은 자연스러워졌지만
+    source lifecycle ambiguity가 남았다.
+
+- **변경**:
+  hard validator는 추가하지 않았다. broad medication wording이 어느 lifecycle/source를 ordinary하게
+  가리키는지는 자연어 의미 판단이므로 precision 100 구조 검사가 아니다.
+
+  prompt-first/tool-local contract 원칙으로 source-surface 예시와 schema description을 보강했다.
+
+  - Scope Example을 `S_event.R` vs `S_order.R` 형태로 바꿔, broad object/action wording이 lifecycle
+    source를 숨기는 bad case를 보여주었다.
+  - `submit_draft.user_request` description: broad wording이면 ordinary source를 쓰거나 chosen
+    source/lifecycle role을 ordinary language로 이름 붙이라고 보강했다.
+  - `query.from.table` description: selected source/lifecycle role을 user_request/topic/answer_contract에
+    드러내라고 맞췄다.
+
+  이 변경도 특정 DB table/column/value 리터럴에 의존하지 않는다.
+
+- **검증**:
+  `uv run pytest tests/test_synthesis_prompts.py::test_synthesis_agent_instructions_describe_composer_workflow tests/test_synthesis_runtime.py::test_submit_draft_tool_schema_descriptions_are_prompt_aligned tests/test_tooling_composer_tool_factory.py::test_composer_tool_schema_descriptions_are_prompt_aligned -q`
+  통과 (`3 passed`).
+
+  `uv run ruff check src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_synthesis_prompts.py tests/test_synthesis_runtime.py tests/test_tooling_composer_tool_factory.py`
+  통과.
+
+  `uv run pytest tests/test_synthesis_prompts.py tests/test_tooling_composer_tool_factory.py tests/test_synthesis_runtime.py tests/test_turn_budget_prompt.py -q`
+  통과 (`111 passed`).
+
+- **상태**:
+  low-quality accepted이므로 만족스러운 accepted 연속 기록은 `0/5`로 유지한다.
+
 ## Iteration 144 — List difficulty-up can use relationship or row-preserving constraints
 
 - **질문**:

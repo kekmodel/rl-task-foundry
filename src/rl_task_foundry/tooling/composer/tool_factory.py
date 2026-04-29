@@ -571,7 +571,7 @@ def build_query_tool(session: ComposerSession) -> "FunctionTool":
                             "Root table handle and selected source surface. "
                             "If ordinary user wording points to another "
                             "reachable source, query that source or make this "
-                            "source role explicit in user_request/topic/"
+                            "source/lifecycle role explicit in user_request/topic/"
                             "answer_contract."
                         ),
                     },
