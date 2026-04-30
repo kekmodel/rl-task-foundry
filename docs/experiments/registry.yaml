@@ -172,3 +172,109 @@ nodes:
       avoid:
         - "Do not use smoke-proof-task as a quality signal."
         - "Do not promote on accept count without DQS-v1 qualitative review."
+  - id: N0002
+    type: experiment
+    branch: exp/N0002-kimi-submit-normalization
+    commit: "0efda44"
+    parent: B0001
+    parent_commit: "b3aa244"
+    status: production_viability_failed
+    phase_target: v1
+    hypothesis: >
+      If Kimi returns malformed standard tool-call arguments while also
+      exposing its native tool-call template in reasoning/content, replacing
+      only invalid standard calls with parsed same-tool native-template calls
+      should reduce submit_draft payload transport failures without changing
+      task quality policy.
+    metadata_note: >
+      This node is a provider/tool compatibility sibling of N0001, branched
+      from main at b3aa244 to isolate Kimi submit/tool-output stability from
+      N0001's final-label diagnostics quality hypothesis.
+    architecture_summary: >
+      Keep composer, solver, validator, scoring, and prompts unchanged. Extend
+      the OpenAI-compatible SDK response normalization layer for Kimi: parse
+      native Kimi tool-call templates from reasoning/content even when
+      provider-standard tool_calls are present, replace only same-name standard
+      tool calls whose arguments are not valid JSON objects, and escape
+      unescaped control characters inside provider-template JSON strings.
+    change_summary:
+      - "Kimi response normalization now repairs invalid same-tool standard tool_calls from native template text instead of skipping parsing whenever tool_calls is present."
+      - "Kimi native template parser now tolerates unescaped control characters inside JSON strings by escaping them before JSON decoding."
+      - "Existing valid standard tool_calls remain authoritative and are not replaced by native-template parses."
+    principles_touched:
+      - source_of_truth_separation
+      - db_generalizable_generation
+      - no_db_specific_literal_or_token_heuristics
+      - provider_compatibility
+    evaluation_policy: DQS-v1
+    evaluation_protocol: independent-dqs-v1
+    agent_topology:
+      builder_agents: "single Codex coding agent modifying shared SDK provider normalization"
+      evaluator_agents: "none; no accepted samples and no promotion candidate"
+      context_policy: "no subagents; no independent evaluator context used"
+      llm_judges: []
+    quality_eval:
+      status: production_viability_failed
+      tests:
+        - command: "uv run pytest -q tests/test_sdk_helpers.py tests/test_tool_choice_for_model.py tests/test_reasoning_replay_hook.py"
+          result: "passed: 27 tests"
+        - command: "uv run ruff check src/rl_task_foundry/infra/sdk_helpers.py tests/test_sdk_helpers.py"
+          result: "passed"
+        - command: "uv run pytest -q tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py::test_submit_draft_tool_rejects_malformed_tool_input_without_crashing"
+          result: "passed: 12 tests"
+      preflight:
+        - command: "uv run rl-task-foundry smoke-proof-task artifacts/experiments/N0002/smoke/kimi_submit_normalization"
+          role: "plumbing smoke only; not a quality metric"
+          result: "quality_gate_status=accept; solver_pass_rate=0.5; solver_matched_runs=3/6; elapsed_seconds=0.331; registry_status=duplicate"
+      diagnostic_trial:
+        command: "uv run rl-task-foundry run-real-db-trial pagila artifacts/experiments/N0002/diagnostic/pagila_trial_001"
+        artifact: "artifacts/experiments/N0002/diagnostic/pagila_trial_001/debug/analysis.jsonl"
+        status: "synthesis_failed"
+        elapsed_seconds: 300.004
+        error_codes:
+          - trial_wall_clock_timeout
+        submit_payload_invalid: 0
+        submit_feedback_events: 1
+        submit_rejections:
+          calibration_inconclusive: 1
+        solver_evidence: "second submitted draft reached pass_rate=1.0 with 20/20 matched solver runs before being rejected as calibration_inconclusive"
+        decision_use: "diagnostic only; not an aggregate quality metric"
+      harvest:
+        command: "uv run rl-task-foundry harvest pagila artifacts/experiments/N0002/harvest/pagila_target3_kimi_submit_normalization --target 3 --productive-budget-min 15 --workers 1"
+        artifact: "artifacts/experiments/N0002/harvest/pagila_target3_kimi_submit_normalization/analysis.jsonl"
+        db_id: pagila
+        target_committed: 3
+        committed: 0
+        attempted: 3
+        elapsed_seconds: 900.0
+        productive_elapsed_seconds: 900.0
+        productive_budget_seconds: 900.0
+        provider_issue_trials: 0
+        provider_issue_elapsed_seconds: 0.0
+        production_viability_passed: false
+        productive_budget_exceeded: true
+        accepted_task_ids: []
+        trial_failures:
+          TrialWallClockTimeout: 3
+        submit_draft_feedback:
+          answer_contract_list_limit_too_wide: 2
+          answer_contract_binding_missing: 1
+        submit_draft_rejections:
+          submit_payload_invalid: 3
+        dqs_review: "not_run_no_accepted_tasks"
+      trial_notes:
+        - "The code-level repair is covered by unit tests and the single diagnostic trial had zero submit_payload_invalid events."
+        - "The target-3 harvest still produced three submit_payload_invalid rejections, so the repair does not cover all malformed Kimi submit_draft argument paths."
+        - "All three harvest trials hit the 300s trial wall-clock timeout; there were no provider issue trials."
+        - "No accepted tasks were committed, so DQS-v1 qualitative review has no accepted samples to inspect."
+      decision: "Do not promote N0002; partial Kimi tool-call repair did not make the production loop viable."
+      promotion_ready: false
+    branching_notes:
+      continue_from_here:
+        - "Investigate submit_draft tool-input JSON recovery at the FunctionTool invocation boundary, where malformed arguments can still reach the tool without a native-template replacement."
+        - "Capture or summarize raw malformed submit_draft arguments in diagnostics with safe previewing so future provider-normalization changes can be evidence-based."
+        - "Separately inspect Kimi loop timeouts; even valid submit attempts consume too much of the 300s trial budget."
+      avoid:
+        - "Do not treat this node as a quality improvement; accepted count is zero."
+        - "Do not classify the harvest failure as provider outage or rate limit; provider_issue_trials=0."
+        - "Do not promote without a later harvest that reaches accepted 3 and an independent DQS report."
