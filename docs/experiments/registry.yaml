@@ -175,7 +175,7 @@ nodes:
   - id: N0002
     type: experiment
     branch: exp/N0002-kimi-submit-normalization
-    commit: "0efda44"
+    commit: "6a13a90"
     parent: B0001
     parent_commit: "b3aa244"
     status: production_viability_failed
@@ -184,33 +184,44 @@ nodes:
       If Kimi returns malformed standard tool-call arguments while also
       exposing its native tool-call template in reasoning/content, replacing
       only invalid standard calls with parsed same-tool native-template calls
-      should reduce submit_draft payload transport failures without changing
-      task quality policy.
+      and accepting provider-compatible structured submit payloads should
+      reduce submit_draft transport failures without changing task quality
+      policy.
     metadata_note: >
       This node is a provider/tool compatibility sibling of N0001, branched
       from main at b3aa244 to isolate Kimi submit/tool-output stability from
       N0001's final-label diagnostics quality hypothesis.
     architecture_summary: >
-      Keep composer, solver, validator, scoring, and prompts unchanged. Extend
-      the OpenAI-compatible SDK response normalization layer for Kimi: parse
-      native Kimi tool-call templates from reasoning/content even when
-      provider-standard tool_calls are present, replace only same-name standard
-      tool calls whose arguments are not valid JSON objects, and escape
-      unescaped control characters inside provider-template JSON strings.
+      Extend the OpenAI-compatible SDK response normalization layer for Kimi
+      and the submit_draft boundary. Native Kimi tool-call templates are parsed
+      from reasoning/content when the provider-standard call is malformed.
+      submit_draft also accepts direct JSON object/array payloads for label and
+      entity, recovers provider-tailed submit input at the FunctionTool
+      boundary, normalizes common answer_contract aliases, and blocks data-tool
+      exploration after repair-only feedback.
     change_summary:
       - "Kimi response normalization now repairs invalid same-tool standard tool_calls from native template text instead of skipping parsing whenever tool_calls is present."
       - "Kimi native template parser now tolerates unescaped control characters inside JSON strings by escaping them before JSON decoding."
       - "Existing valid standard tool_calls remain authoritative and are not replaced by native-template parses."
+      - "submit_draft recovers provider-tailed submit input at the FunctionTool boundary before rejecting malformed transport payloads."
+      - "submit_draft label_json/entity_json now prefer direct JSON object/array values while preserving JSON-string compatibility."
+      - "answer_contract accepts output/phrase aliases, mapping-style bindings, and order_by_phrase inference when structurally unambiguous."
+      - "List answer_phrase exact-substring enforcement is relaxed only when output_bindings exactly cover every returned field."
+      - "Repair-only feedback now blocks further data-tool exploration unless a label change is explicitly required."
+      - "Permuted list labels are normalized to the latest successful query row order only when the submitted rows are the same multiset."
+      - "Kimi harvest profile uses max_generation_attempts=3, solver_batch_size=8, and max_solver_runs=8 to bound repair loops."
     principles_touched:
       - source_of_truth_separation
       - db_generalizable_generation
       - no_db_specific_literal_or_token_heuristics
       - provider_compatibility
+      - precision_100_structural_rejectors
+      - quality_over_yield
     evaluation_policy: DQS-v1
-    evaluation_protocol: independent-dqs-v1
+    evaluation_protocol: "harvest target 3 + DQS-v1 qualitative review; independent-dqs-v1 required only for promotion"
     agent_topology:
-      builder_agents: "single Codex coding agent modifying shared SDK provider normalization"
-      evaluator_agents: "none; no accepted samples and no promotion candidate"
+      builder_agents: "single Codex coding agent modifying shared SDK provider normalization and submit_draft runtime"
+      evaluator_agents: "none; local qualitative review only because this is not a promotion candidate"
       context_policy: "no subagents; no independent evaluator context used"
       llm_judges: []
     quality_eval:
@@ -222,59 +233,101 @@ nodes:
           result: "passed"
         - command: "uv run pytest -q tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py::test_submit_draft_tool_rejects_malformed_tool_input_without_crashing"
           result: "passed: 12 tests"
+        - command: "uv run pytest -q tests/test_sdk_helpers.py tests/test_tool_choice_for_model.py tests/test_reasoning_replay_hook.py tests/test_synthesis_backend_openai_agents.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_config_load.py tests/test_pipeline_solver_orchestrator.py tests/test_cli_commands.py::test_cli_validate_config_command"
+          result: "passed: 166 tests"
+        - command: "uv run ruff check src/rl_task_foundry/synthesis/submit_draft_tool.py src/rl_task_foundry/synthesis/prompts.py src/rl_task_foundry/synthesis/turn_budget.py tests/test_synthesis_runtime.py tests/test_synthesis_prompts.py tests/test_turn_budget_prompt.py tests/test_config_load.py tests/test_cli_commands.py"
+          result: "passed"
       preflight:
         - command: "uv run rl-task-foundry smoke-proof-task artifacts/experiments/N0002/smoke/kimi_submit_normalization"
           role: "plumbing smoke only; not a quality metric"
           result: "quality_gate_status=accept; solver_pass_rate=0.5; solver_matched_runs=3/6; elapsed_seconds=0.331; registry_status=duplicate"
-      diagnostic_trial:
-        command: "uv run rl-task-foundry run-real-db-trial pagila artifacts/experiments/N0002/diagnostic/pagila_trial_001"
-        artifact: "artifacts/experiments/N0002/diagnostic/pagila_trial_001/debug/analysis.jsonl"
-        status: "synthesis_failed"
-        elapsed_seconds: 300.004
-        error_codes:
-          - trial_wall_clock_timeout
-        submit_payload_invalid: 0
-        submit_feedback_events: 1
-        submit_rejections:
-          calibration_inconclusive: 1
-        solver_evidence: "second submitted draft reached pass_rate=1.0 with 20/20 matched solver runs before being rejected as calibration_inconclusive"
-        decision_use: "diagnostic only; not an aggregate quality metric"
-      harvest:
+        - command: "uv run rl-task-foundry smoke-proof-task artifacts/experiments/N0002/smoke/repair_boundary_list_phrase_row_order"
+          role: "plumbing smoke only; not a quality metric"
+          result: "quality_gate_status=accept; solver_pass_rate=0.5; solver_matched_runs=3/6; elapsed_seconds=0.326; registry_status=duplicate"
+      diagnostic_trials:
+        - command: "uv run rl-task-foundry run-real-db-trial pagila artifacts/experiments/N0002/diagnostic/pagila_trial_001"
+          artifact: "artifacts/experiments/N0002/diagnostic/pagila_trial_001/debug/analysis.jsonl"
+          status: "synthesis_failed"
+          elapsed_seconds: 300.004
+          error_codes:
+            - trial_wall_clock_timeout
+          submit_payload_invalid: 0
+          submit_feedback_events: 1
+          submit_rejections:
+            calibration_inconclusive: 1
+          solver_evidence: "second submitted draft reached pass_rate=1.0 with 20/20 matched solver runs before being rejected as calibration_inconclusive"
+          decision_use: "diagnostic only; not an aggregate quality metric"
+        - command: "uv run rl-task-foundry run-real-db-trial pagila artifacts/experiments/N0002/trials/pagila_trial_006_repair_boundary_list_phrase_row_order"
+          artifact: "artifacts/experiments/N0002/trials/pagila_trial_006_repair_boundary_list_phrase_row_order/debug/analysis.jsonl"
+          status: "trial_wall_clock_timeout"
+          elapsed_seconds: 300.0
+          observation: "repair_only_feedback blocked data-tool exploration after phrase/binding feedback, but Kimi still failed to add the required order binding before timeout."
+          decision_use: "diagnostic only; not an aggregate quality metric"
+        - command: "uv run rl-task-foundry run-real-db-trial pagila artifacts/experiments/N0002/trials/pagila_trial_007_max_attempts3_repair_boundary"
+          artifact: "artifacts/experiments/N0002/trials/pagila_trial_007_max_attempts3_repair_boundary/debug/analysis.jsonl"
+          status: "synthesis_failed"
+          elapsed_seconds: 266.477
+          observation: "max_generation_attempts=3 converted a long Kimi repair loop into bounded discard; last feedback was answer_contract_evidence_mismatch plus label_changed_during_repair."
+          decision_use: "diagnostic only; not an aggregate quality metric"
+      previous_harvest:
         command: "uv run rl-task-foundry harvest pagila artifacts/experiments/N0002/harvest/pagila_target3_kimi_submit_normalization --target 3 --productive-budget-min 15 --workers 1"
         artifact: "artifacts/experiments/N0002/harvest/pagila_target3_kimi_submit_normalization/analysis.jsonl"
-        db_id: pagila
-        target_committed: 3
         committed: 0
         attempted: 3
-        elapsed_seconds: 900.0
         productive_elapsed_seconds: 900.0
+        provider_issue_trials: 0
+        production_viability_passed: false
+        notable_failure: "three submit_payload_invalid rejections at the FunctionTool boundary"
+      harvest:
+        command: "uv run rl-task-foundry harvest pagila artifacts/experiments/N0002/harvest/pagila_target3_repair_boundary_attempts3 --target 3 --productive-budget-min 15 --workers 3"
+        artifact: "artifacts/experiments/N0002/harvest/pagila_target3_repair_boundary_attempts3/analysis.jsonl"
+        db_id: pagila
+        target_committed: 3
+        committed: 1
+        attempted: 6
+        elapsed_seconds: 519.9
+        productive_elapsed_seconds: 1087.8
         productive_budget_seconds: 900.0
+        productive_seconds_per_accepted: 1087.8
         provider_issue_trials: 0
         provider_issue_elapsed_seconds: 0.0
         production_viability_passed: false
         productive_budget_exceeded: true
-        accepted_task_ids: []
+        accepted_task_ids:
+          - "task_Film Category Lookup_96af33b8b00279c2"
         trial_failures:
-          TrialWallClockTimeout: 3
+          TrialWallClockTimeout: 2
+          SynthesisArtifactGenerationError: 1
         submit_draft_feedback:
-          answer_contract_list_limit_too_wide: 2
-          answer_contract_binding_missing: 1
+          answer_contract_phrase_missing: 4
+          answer_contract_binding_missing: 3
+          answer_contract_list_limit_too_wide: 1
         submit_draft_rejections:
-          submit_payload_invalid: 3
-        dqs_review: "not_run_no_accepted_tasks"
+          calibration_inconclusive: 1
+          submit_payload_invalid: 0
+        dqs_review:
+          reviewer: "builder local qualitative review; independent evaluator not run"
+          accepted_low_quality: 0
+          samples:
+            - task_id: "task_Film Category Lookup_96af33b8b00279c2"
+              label: ACCEPTED_BORDERLINE
+              rationale: "Evidence and label are aligned, solver pass_rate=0.875 with 7/8 matched runs, and the hidden entity handle is valid under the current pipeline contract. The task is still a weak current-entity category lookup with limited reasoning value, so it is not strong promotion evidence."
+          diversity_score: "not_scored_single_accepted"
+          independent_report: "not_run_not_promotion_candidate"
       trial_notes:
-        - "The code-level repair is covered by unit tests and the single diagnostic trial had zero submit_payload_invalid events."
-        - "The target-3 harvest still produced three submit_payload_invalid rejections, so the repair does not cover all malformed Kimi submit_draft argument paths."
-        - "All three harvest trials hit the 300s trial wall-clock timeout; there were no provider issue trials."
-        - "No accepted tasks were committed, so DQS-v1 qualitative review has no accepted samples to inspect."
-      decision: "Do not promote N0002; partial Kimi tool-call repair did not make the production loop viable."
+        - "The latest harvest had no submit_payload_invalid rejections, so the Kimi transport/tool-call issue is addressed for the observed path."
+        - "The remaining harvest failures are composer repair convergence and latency: missing phrase/order bindings, two trial wall-clock timeouts, one bounded synthesis failure, and one calibration_inconclusive rejection."
+        - "The repair-only data boundary fired as designed and prevented target switching after contract-only feedback, but Kimi still repeated insufficient answer_contract repairs."
+        - "One accepted task was committed, but it is only ACCEPTED_BORDERLINE and the loop missed target 3 within 900 productive seconds."
+        - "There were no provider issue trials; this should not be classified as provider outage, rate limit, or authentication failure."
+      decision: "Do not promote N0002; Kimi submit transport is fixed enough to reach one accepted sample, but harvest remains production-viability failed."
       promotion_ready: false
     branching_notes:
       continue_from_here:
-        - "Investigate submit_draft tool-input JSON recovery at the FunctionTool invocation boundary, where malformed arguments can still reach the tool without a native-template replacement."
-        - "Capture or summarize raw malformed submit_draft arguments in diagnostics with safe previewing so future provider-normalization changes can be evidence-based."
-        - "Separately inspect Kimi loop timeouts; even valid submit attempts consume too much of the 300s trial budget."
+        - "Improve Kimi answer_contract planning for order_bindings and exact natural request phrases, or move contract repair into a smaller deterministic adapter that remains DB-agnostic."
+        - "Reduce Kimi repair-loop latency before another production-viability harvest; max_generation_attempts=3 bounds failures but does not make the loop productive."
+        - "Run a follow-up node against the same target-3 harvest protocol after contract convergence changes, then require independent DQS evaluation only if it becomes a promotion candidate."
       avoid:
-        - "Do not treat this node as a quality improvement; accepted count is zero."
+        - "Do not treat the one accepted borderline task as production success."
         - "Do not classify the harvest failure as provider outage or rate limit; provider_issue_trials=0."
         - "Do not promote without a later harvest that reaches accepted 3 and an independent DQS report."
