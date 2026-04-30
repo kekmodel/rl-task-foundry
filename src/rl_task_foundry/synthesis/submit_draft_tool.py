@@ -127,6 +127,15 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
 JsonScalar = str | int | float | bool
 
 
+_PROVIDER_TOOL_INPUT_TAIL_PREFIXES = (
+    "<|tool_call",
+    "<|tool_calls",
+    "</tool_call",
+    "</function_call",
+    "```",
+)
+
+
 def _strip_required_text(value: str, *, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -161,6 +170,105 @@ def _validation_error_diagnostics(error: ValidationError) -> list[dict[str, obje
         }
         for error_item in error.errors()
     ]
+
+
+def _load_submit_draft_tool_input(
+    input_json: str,
+) -> tuple[object, dict[str, object] | None]:
+    if not input_json:
+        return {}, None
+    original_error: json.JSONDecodeError
+    try:
+        return json.loads(input_json), None
+    except json.JSONDecodeError as exc:
+        original_error = exc
+
+    repaired_control_chars = _escape_json_control_chars_in_strings(input_json)
+    if repaired_control_chars != input_json:
+        try:
+            return json.loads(repaired_control_chars), {
+                "kind": "escaped_unescaped_control_chars",
+                "input_chars": len(input_json),
+            }
+        except json.JSONDecodeError:
+            pass
+        parsed = _load_json_prefix_with_provider_tail(repaired_control_chars)
+        if parsed is not None:
+            value, parsed_chars = parsed
+            return value, {
+                "kind": "escaped_control_chars_and_trimmed_provider_tail",
+                "input_chars": len(input_json),
+                "parsed_chars": parsed_chars,
+            }
+
+    parsed = _load_json_prefix_with_provider_tail(input_json)
+    if parsed is not None:
+        value, parsed_chars = parsed
+        return value, {
+            "kind": "trimmed_provider_tail",
+            "input_chars": len(input_json),
+            "parsed_chars": parsed_chars,
+        }
+
+    raise original_error
+
+
+def _load_json_prefix_with_provider_tail(text: str) -> tuple[object, int] | None:
+    decoder = json.JSONDecoder()
+    start = len(text) - len(text.lstrip())
+    try:
+        value, end = decoder.raw_decode(text, start)
+    except json.JSONDecodeError:
+        return None
+    if not _is_ignorable_provider_tool_input_tail(text[end:]):
+        return None
+    return value, end
+
+
+def _is_ignorable_provider_tool_input_tail(tail: str) -> bool:
+    stripped = tail.strip()
+    if not stripped:
+        return True
+    return stripped.startswith(_PROVIDER_TOOL_INPUT_TAIL_PREFIXES)
+
+
+def _escape_json_control_chars_in_strings(text: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    changed = False
+    for char in text:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            result.append(char)
+            escaped = True
+            continue
+        if char == '"':
+            result.append(char)
+            in_string = not in_string
+            continue
+        if in_string and ord(char) < 0x20:
+            result.append(_json_control_char_escape(char))
+            changed = True
+            continue
+        result.append(char)
+    if not changed:
+        return text
+    return "".join(result)
+
+
+def _json_control_char_escape(char: str) -> str:
+    escapes = {
+        "\b": "\\b",
+        "\f": "\\f",
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+    }
+    return escapes.get(char, f"\\u{ord(char):04x}")
 
 
 def _submit_draft_required_feedback_message(final_output_text: str) -> str | None:
@@ -2042,7 +2150,7 @@ class SubmitDraftController:
         search_cost_observations = (
             len(self._raw_atomic_tool_calls) - self._tool_call_count_at_last_submission
         )
-        diagnostics = {"validation_errors": validation_errors}
+        diagnostics = {"validation_errors": validation_errors, **parsed}
         return self._record_rejection(
             submission_index=len(self.attempts) + 1,
             message=self._invalid_submission_message(
@@ -3093,7 +3201,7 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         try:
-            parsed_raw: object = json.loads(input_json) if input_json else {}
+            parsed_raw, repair_diagnostics = _load_submit_draft_tool_input(input_json)
         except json.JSONDecodeError as exc:
             return controller.reject_malformed_tool_input(
                 parsed={
@@ -3111,14 +3219,17 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
                 ],
             )
         if not isinstance(parsed_raw, dict):
+            parsed: dict[str, object] = {
+                "tool_input_type": type(parsed_raw).__name__,
+                "tool_input_preview": _preview_runtime_payload(
+                    parsed_raw,
+                    config=controller.config,
+                ),
+            }
+            if repair_diagnostics is not None:
+                parsed["tool_input_repair"] = repair_diagnostics
             return controller.reject_malformed_tool_input(
-                parsed={
-                    "tool_input_type": type(parsed_raw).__name__,
-                    "tool_input_preview": _preview_runtime_payload(
-                        parsed_raw,
-                        config=controller.config,
-                    ),
-                },
+                parsed=parsed,
                 validation_errors=[
                     {
                         "loc": ["tool_input"],
@@ -3128,8 +3239,16 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
                 ],
             )
         parsed = {str(key): value for key, value in parsed_raw.items()}
+        if repair_diagnostics is not None:
+            parsed["__tool_input_repair__"] = repair_diagnostics
         try:
-            payload = SubmitDraftPayload.model_validate(parsed)
+            payload = SubmitDraftPayload.model_validate(
+                {
+                    key: value
+                    for key, value in parsed.items()
+                    if key != "__tool_input_repair__"
+                }
+            )
         except ValidationError as exc:
             return controller.reject_invalid_payload(
                 parsed=parsed, error=exc

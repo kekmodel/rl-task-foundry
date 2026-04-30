@@ -31,6 +31,7 @@ from rl_task_foundry.synthesis.submit_draft_tool import (
     SubmitDraftController,
     SubmitDraftErrorCode,
     SubmitDraftPayload,
+    _load_submit_draft_tool_input,
     _query_evidence_incremental_errors,
     _query_evidence_signature,
     build_submit_draft_sdk_tool,
@@ -2691,6 +2692,31 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "copied exactly from the latest successful query result" in schema_surface
     for leaked in ("solver", "actor", "RLVR", "pass_rate", "training"):
         assert leaked not in schema_surface
+
+
+def test_submit_draft_tool_input_loader_trims_provider_marker_tail() -> None:
+    parsed, repair = _load_submit_draft_tool_input(
+        '{"topic": "assignment"}<|tool_call_end|><|tool_calls_section_end|>'
+    )
+
+    assert parsed == {"topic": "assignment"}
+    assert repair is not None
+    assert repair["kind"] == "trimmed_provider_tail"
+
+
+def test_submit_draft_tool_input_loader_rejects_arbitrary_trailing_text() -> None:
+    with pytest.raises(json.JSONDecodeError):
+        _load_submit_draft_tool_input('{"topic": "assignment"} trailing')
+
+
+def test_submit_draft_tool_input_loader_escapes_control_chars_in_strings() -> None:
+    parsed, repair = _load_submit_draft_tool_input(
+        '{"user_request": "first line\nsecond line"}'
+    )
+
+    assert parsed == {"user_request": "first line\nsecond line"}
+    assert repair is not None
+    assert repair["kind"] == "escaped_unescaped_control_chars"
 
 
 @pytest.mark.asyncio
