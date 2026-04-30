@@ -56,13 +56,26 @@ def normalize_chat_completion_reasoning_for_agents(
             reasoning = getattr(message, "reasoning", None)
             if reasoning:
                 setattr(message, "reasoning_content", reasoning)
-        if getattr(message, "tool_calls", None):
-            continue
         promoted = _extract_provider_text_tool_calls(
             message,
             allowed_tool_names=allowed_tool_names,
             parsers=text_tool_call_parsers,
         )
+        existing_tool_calls = getattr(message, "tool_calls", None)
+        if existing_tool_calls:
+            repaired = _replace_invalid_tool_calls_from_provider_text(
+                existing_tool_calls,
+                promoted,
+                allowed_tool_names=allowed_tool_names,
+            )
+            if repaired is existing_tool_calls:
+                continue
+            setattr(message, "tool_calls", repaired)
+            try:
+                setattr(choice, "finish_reason", "tool_calls")
+            except Exception:
+                pass
+            continue
         if not promoted:
             continue
         setattr(message, "tool_calls", promoted)
@@ -142,15 +155,13 @@ def _parse_kimi_template_tool_calls(
     text: str,
 ) -> list[dict[str, Any]]:
     parsed: list[dict[str, Any]] = []
-    decoder = json.JSONDecoder()
     for match in _KIMI_TOOL_ID_RE.finditer(text):
         name = match.group("name")
         args_start = _find_json_object_start(text, match.end())
         if args_start is None:
             continue
-        try:
-            arguments, _end = decoder.raw_decode(text[args_start:])
-        except json.JSONDecodeError:
+        arguments = _decode_provider_tool_arguments(text[args_start:])
+        if arguments is None:
             continue
         if not isinstance(arguments, dict):
             continue
@@ -162,6 +173,121 @@ def _parse_kimi_template_tool_calls(
             }
         )
     return parsed
+
+
+def _decode_provider_tool_arguments(text: str) -> Any | None:
+    decoder = json.JSONDecoder()
+    try:
+        arguments, _end = decoder.raw_decode(text)
+        return arguments
+    except json.JSONDecodeError:
+        repaired = _escape_unescaped_control_chars_in_json_strings(text)
+        if repaired == text:
+            return None
+    try:
+        arguments, _end = decoder.raw_decode(repaired)
+    except json.JSONDecodeError:
+        return None
+    return arguments
+
+
+def _escape_unescaped_control_chars_in_json_strings(text: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    changed = False
+    for char in text:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            result.append(char)
+            escaped = True
+            continue
+        if char == '"':
+            result.append(char)
+            in_string = not in_string
+            continue
+        if in_string and ord(char) < 0x20:
+            result.append(_json_control_char_escape(char))
+            changed = True
+            continue
+        result.append(char)
+    if not changed:
+        return text
+    return "".join(result)
+
+
+def _json_control_char_escape(char: str) -> str:
+    escapes = {
+        "\b": "\\b",
+        "\f": "\\f",
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+    }
+    return escapes.get(char, f"\\u{ord(char):04x}")
+
+
+def _replace_invalid_tool_calls_from_provider_text(
+    existing_tool_calls: Any,
+    promoted_tool_calls: list[Any],
+    *,
+    allowed_tool_names: set[str] | frozenset[str] | None,
+) -> Any:
+    if not promoted_tool_calls or not isinstance(existing_tool_calls, list | tuple):
+        return existing_tool_calls
+    promoted_by_name: dict[str, list[Any]] = {}
+    for call in promoted_tool_calls:
+        name = _tool_call_function_name(call)
+        if not name:
+            continue
+        promoted_by_name.setdefault(name, []).append(call)
+
+    changed = False
+    repaired: list[Any] = []
+    for call in existing_tool_calls:
+        name = _tool_call_function_name(call)
+        if (
+            name
+            and _tool_name_allowed(name, allowed_tool_names)
+            and not _tool_call_has_valid_object_arguments(call)
+            and promoted_by_name.get(name)
+        ):
+            repaired.append(promoted_by_name[name].pop(0))
+            changed = True
+            continue
+        repaired.append(call)
+    if not changed:
+        return existing_tool_calls
+    if isinstance(existing_tool_calls, tuple):
+        return tuple(repaired)
+    return repaired
+
+
+def _tool_call_function_name(call: Any) -> str | None:
+    function = _tool_call_function(call)
+    name = _dual_attr(function, "name")
+    return name if isinstance(name, str) and name else None
+
+
+def _tool_call_has_valid_object_arguments(call: Any) -> bool:
+    function = _tool_call_function(call)
+    arguments = _dual_attr(function, "arguments")
+    if isinstance(arguments, dict):
+        return True
+    if not isinstance(arguments, str):
+        return False
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, dict)
+
+
+def _tool_call_function(call: Any) -> Any:
+    return _dual_attr(call, "function")
 
 
 def _find_json_object_start(text: str, start: int) -> int | None:

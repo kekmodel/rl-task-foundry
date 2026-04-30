@@ -302,6 +302,87 @@ def test_normalize_kimi_tool_call_requires_allowed_tool_name() -> None:
     assert getattr(message, "tool_calls", None) is None
 
 
+def test_normalize_kimi_replaces_invalid_standard_tool_call_from_template() -> None:
+    reasoning = (
+        "<|tool_calls_section_begin|><|tool_call_begin|>"
+        'functions.submit_draft:0<|tool_call_argument_begin|>{"topic": "assignment"}'
+        "<|tool_call_end|><|tool_calls_section_end|>"
+    )
+    invalid_tool_call = SimpleNamespace(
+        id="bad-call",
+        type="function",
+        function=SimpleNamespace(
+            name="submit_draft",
+            arguments='{"topic": "assignment"} trailing',
+        ),
+    )
+    message = SimpleNamespace(reasoning=reasoning, tool_calls=[invalid_tool_call])
+    choice = SimpleNamespace(message=message, finish_reason="stop")
+    response = SimpleNamespace(choices=[choice])
+
+    normalize_chat_completion_reasoning_for_agents(
+        response,
+        model="moonshotai/kimi-k2.5",
+        allowed_tool_names=frozenset({"submit_draft"}),
+    )
+
+    assert choice.finish_reason == "tool_calls"
+    assert len(message.tool_calls) == 1
+    assert message.tool_calls[0].id == "functions.submit_draft:0"
+    assert message.tool_calls[0].function.name == "submit_draft"
+    assert json.loads(message.tool_calls[0].function.arguments) == {
+        "topic": "assignment"
+    }
+
+
+def test_normalize_kimi_keeps_valid_standard_tool_call() -> None:
+    reasoning = (
+        "<|tool_call_begin|><|tool_call_end|>"
+        'functions.lookup:0{"id": 99}<|tool_call_argument_begin|>'
+    )
+    valid_tool_call = SimpleNamespace(
+        id="standard-call",
+        type="function",
+        function=SimpleNamespace(
+            name="lookup",
+            arguments='{"id": 7}',
+        ),
+    )
+    message = SimpleNamespace(reasoning=reasoning, tool_calls=[valid_tool_call])
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="tool_calls")]
+    )
+
+    normalize_chat_completion_reasoning_for_agents(
+        response,
+        model="moonshotai/kimi-k2.5",
+        allowed_tool_names=frozenset({"lookup"}),
+    )
+
+    assert message.tool_calls == [valid_tool_call]
+    assert json.loads(message.tool_calls[0].function.arguments) == {"id": 7}
+
+
+def test_normalize_kimi_template_escapes_unescaped_control_characters() -> None:
+    reasoning = (
+        "<|tool_calls_section_begin|><|tool_call_begin|>"
+        'functions.submit_draft:0<|tool_call_argument_begin|>{"user_request": "first line\n'
+        'second line"}<|tool_call_end|><|tool_calls_section_end|>'
+    )
+    message = SimpleNamespace(reasoning=reasoning)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    normalize_chat_completion_reasoning_for_agents(
+        response,
+        model="moonshotai/kimi-k2.5",
+        allowed_tool_names=frozenset({"submit_draft"}),
+    )
+
+    assert json.loads(message.tool_calls[0].function.arguments) == {
+        "user_request": "first line\nsecond line"
+    }
+
+
 def test_normalize_kimi_tool_call_does_not_run_for_other_models() -> None:
     message = SimpleNamespace(
         reasoning='functions.lookup:0{"id": 7}',
