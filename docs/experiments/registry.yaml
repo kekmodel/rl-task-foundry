@@ -178,7 +178,7 @@ nodes:
     commit: "2d5aeac"
     parent: B0001
     parent_commit: "b3aa244"
-    status: running
+    status: production_viability_failed
     phase_target: v1
     hypothesis: >
       If query results expose structurally proven final-label blockers before
@@ -212,18 +212,48 @@ nodes:
       context_policy: "no subagents; no independent evaluator context used in this node yet"
       llm_judges: []
     quality_eval:
-      status: diagnostic_only
+      status: production_viability_failed
       tests:
-        - "uv run pytest -q tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py"
-        - "uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py"
+        - command: "uv run pytest -q tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py"
+          result: "passed: 68 tests"
+        - command: "uv run ruff check src/rl_task_foundry/tooling/composer/query.py src/rl_task_foundry/tooling/composer/tool_factory.py tests/test_tooling_composer_query.py tests/test_tooling_composer_tool_factory.py"
+          result: "passed"
+      preflight:
+        - command: "uv run rl-task-foundry smoke-proof-task artifacts/experiments/N0001/smoke/final_label_diagnostics_after_kimi_fix"
+          role: "plumbing smoke only; not a quality metric"
+          result: "quality_gate_status=accept; solver_pass_rate=0.5; solver_matched_runs=3/6; elapsed_seconds=0.333; registry_status=duplicate"
+      harvest:
+        command: "uv run rl-task-foundry harvest pagila artifacts/experiments/N0001/harvest/pagila_target3_after_diagnostics --target 3 --productive-budget-min 15 --workers 1"
+        artifact: "artifacts/experiments/N0001/harvest/pagila_target3_after_diagnostics/analysis.jsonl"
+        db_id: pagila
+        target_committed: 3
+        committed: 0
+        attempted: 3
+        elapsed_seconds: 900.0
+        productive_elapsed_seconds: 900.0
+        productive_budget_seconds: 900.0
+        provider_issue_trials: 0
+        provider_issue_elapsed_seconds: 0.0
+        production_viability_passed: false
+        productive_budget_exceeded: true
+        accepted_task_ids: []
+        trial_failures:
+          TrialWallClockTimeout: 3
+        submit_draft_rejections:
+          submit_payload_invalid: 2
+        dqs_review: "not_run_no_accepted_tasks"
       trial_notes:
         - "Earlier diagnostic artifact artifacts/experiments/N0001/diagnostic/pagila_trial_004_kimi_normalized confirmed Kimi tool calls execute after the shared infra fix, but the trial hit trial_wall_clock_timeout at 300s."
-        - "No harvest target-3 run or DQS-v1 qualitative review has been completed for this node."
+        - "The target-3 harvest produced zero accepted tasks in the 900s productive budget, so there is no accepted dataset sample to review under DQS-v1."
+        - "Two submit_draft attempts failed before semantic quality review because the tool payload JSON was invalid."
+        - "Trial 0003 showed a query over a blocked payment_date output; the analysis preview indicates submission_diagnostics existed but was omitted from the preview, so this run does not prove the composer used the advisory signal."
+      decision: "Do not promote N0001; production viability failed before DQS-v1 qualitative review could apply."
       promotion_ready: false
     branching_notes:
       continue_from_here:
-        - "Run one or two run-real-db-trial samples to inspect whether submission_diagnostics changes composer recovery behavior."
-        - "Use harvest target 3 with productive budget 900s before claiming improvement."
+        - "Investigate Kimi submit_draft JSON payload normalization and slow trial completion as the next branch."
+        - "If continuing this advisory-diagnostic idea, measure whether the composer actually reads and reacts to submission_diagnostics instead of only receiving it."
       avoid:
         - "Do not treat submission_diagnostics as a hard rejector."
         - "Do not promote this node without independent DQS-v1 evaluator report."
+        - "Do not claim quality improvement from this node; the harvest produced no accepted samples."
