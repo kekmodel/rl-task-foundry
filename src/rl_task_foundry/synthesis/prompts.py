@@ -36,7 +36,7 @@ def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
                 "If you choose one, first call `neighborhood` with that "
                 "candidate's `table` and `row_id`. Use final `query(spec)` "
                 "to produce the exact label. Copy only the "
-                "chosen candidate's `entity` object, encoded as JSON, into "
+                "chosen candidate's `entity` object into "
                 "`submit_draft.entity_json`.",
             ),
             _render_context_block(
@@ -60,7 +60,7 @@ def _render_anchor_hint(anchor_hint: dict[str, object]) -> str:
         _render_context_value("anchor_table", table),
         _render_context_value("anchor_primary_key_column", pk_column),
         _render_context_json("anchor_row_id", row_id),
-        _render_context_json("submit_draft_entity_json", entity),
+        _render_context_json("submit_draft_entity", entity),
         _render_context_block(
             "anchor_tool_instruction",
             f"When calling `neighborhood`, use `table` = {table!r} and "
@@ -132,14 +132,13 @@ def build_synthesis_agent_instructions(
         "- Unique label: one correct structured answer. "
         "Handle visible ties; never rely on hidden ids/order/filters.\n"
         "- Source surface: user wording, label fields, query path. "
-        "Compare reachable surfaces. If same broad noun returns "
-        "different rows, broad nouns invalid; "
-        "request/contract must name chosen source role; label/output_schema "
-        "cannot disambiguate. If ordinary wording points elsewhere, use that source "
-        "or name the role; visible cannot replace hidden. If no primary key, use "
-        "primary-key-backed path/aggregate; no hidden path guessing. "
-        "Timestamp/date surfaces differ: event time, stored/entered "
-        "time, scheduled time; generic time/date wording is invalid.",
+        "Compare reachable surfaces: if same broad noun returns different "
+        "rows, broad nouns invalid; request/contract must name chosen source role; "
+        "label/output_schema cannot disambiguate. "
+        "If ordinary wording points elsewhere, use that source or name the role; "
+        "visible cannot replace hidden. If no primary key, use primary-key-backed "
+        "path/aggregate; no hidden path guessing. Timestamp/date surfaces differ: "
+        "event time, stored/entered time, scheduled time; generic time/date wording is invalid.",
 
         "# Request Contract\n"
         "Target language:\n"
@@ -184,16 +183,17 @@ def build_synthesis_agent_instructions(
         "Note/comment text needs that surface, "
         "not broad result/value. "
         "Distinguish source sequence from display rank; never add sequence/"
-        "order output only to make duplicate rows unique. Keep output names faithful; broad/"
-        "vague words are invalid when several reachable sources fit.\n"
+        "order output only to make duplicate rows unique. Keep output names "
+        "faithful; broad/vague words are invalid when several reachable sources fit.\n"
         "- `query.select` includes only returned label fields; every selected field "
         "becomes exact answer. Do not select helper values unless user asks.\n"
         "- When one answer item combines facts from the same event/record, follow "
         "that path. Avoid independent sibling joins.\n"
-        "- `answer_contract` only binds request phrases to label/order: kind, "
-        "answer_phrase, constraints, limit, output/order bindings. No tables, "
-        "columns, operators, or SQL; every phrase must be an exact substring "
-        "of `user_request`.\n"
+        "- `answer_contract` binds request phrases to label/order: kind, "
+        "answer_phrase, constraints, limit, output/order. No table/SQL. "
+        "Scalar answer_phrase plus all constraint/limit/output/order phrases "
+        "must be exact substrings. For lists, answer_phrase may summarize "
+        "when output_bindings cover every field.\n"
         "- Binding phrases name returned/order roles, not patched glosses. "
         "For an order key, use "
         "direction/recency/tie-break wording, not the bare output noun; "
@@ -201,8 +201,8 @@ def build_synthesis_agent_instructions(
         "request phrases; never bind one vague phrase to multiple concepts.",
 
         "# List Determinism Policy\n"
-        "Lists need exact result: membership, order, limit, tie-breaks. Row-set controls "
-        "must be in `entity_json`/request/contract; boundary "
+        "Lists need exact membership/order/limit/tie-breaks. Row-set controls "
+        "belong in `entity_json`/request/contract; boundary "
         "words and direction agree (newest/latest vs oldest/earliest; asc/desc). "
         "One list order; no selection/display split.\n"
         "- Rows must be distinguishable through requested output fields. If "

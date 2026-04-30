@@ -80,7 +80,7 @@ synthesis:
     sdk_sessions_enabled: false
     anchor_candidates_enabled: true
     anchor_candidate_limit: 10
-    max_generation_attempts: 5
+    max_generation_attempts: 3
     max_consecutive_category_discards: 3
     category_backoff_duration_s: 3600
     schema_summary_max_tables: 32
@@ -106,8 +106,8 @@ calibration:
   lower_pass_rate: 0.5
   upper_pass_rate: 0.9
   ci_alpha: 0.1
-  solver_batch_size: 4
-  max_solver_runs: 20
+  solver_batch_size: 8
+  max_solver_runs: 8
   safe_early_termination: true
 
 dedup:

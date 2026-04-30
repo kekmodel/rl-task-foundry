@@ -374,10 +374,14 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Avoid independent sibling joins" in instructions
     assert "never make a raw handle the main answer" in instructions
     assert "handle refs need query/user visibility" in instructions
-    assert "`answer_contract` only binds request phrases" in instructions
-    assert "output/order bindings" in instructions
-    assert "No tables, columns, operators, or SQL" in instructions
-    assert "every phrase must be an exact substring of `user_request`" in instructions
+    assert "`answer_contract` binds request phrases" in instructions
+    assert "output/order" in instructions
+    assert "No table/SQL" in instructions
+    assert "Scalar answer_phrase plus all constraint/limit/output/order phrases" in (
+        instructions
+    )
+    assert "For lists, answer_phrase may summarize" in instructions
+    assert "output_bindings cover every field" in instructions
     assert "Binding phrases name returned/order roles" in instructions
     assert "order roles" in instructions
     assert "direction/recency/tie-break wording" in instructions
@@ -386,11 +390,8 @@ def test_synthesis_agent_instructions_describe_composer_workflow() -> None:
     assert "Multi-key order needs distinct request phrases" in instructions
     assert "never bind one vague phrase to multiple concepts" in instructions
     assert "List Determinism Policy" in instructions
-    assert "exact result: membership, order, limit, tie-breaks" in instructions
-    assert (
-        "Row-set controls must be in `entity_json`/request/contract"
-        in instructions
-    )
+    assert "exact membership/order/limit/tie-breaks" in instructions
+    assert "Row-set controls belong in `entity_json`/request/contract" in instructions
     assert "boundary words and direction agree" in instructions
     assert "newest/latest vs oldest/earliest" in instructions
     assert "One list order" in instructions
@@ -467,7 +468,7 @@ def test_synthesis_input_can_include_tool_only_anchor_hint() -> None:
     assert '"film_id": 42' in prompt
     assert "<anchor_table>\nfilm\n</anchor_table>" in prompt
     assert "<anchor_primary_key_column>\nfilm_id\n</anchor_primary_key_column>" in prompt
-    assert "<submit_draft_entity_json>" in prompt
+    assert "<submit_draft_entity>" in prompt
     assert "never pass `row_id: null`" in prompt
     assert "Use final `query(spec)` to produce the exact label" in prompt
     assert prompt.index("<starting_entity>") < prompt.index("<session_context>")
@@ -508,6 +509,8 @@ def test_synthesis_input_can_include_candidate_anchor_pool() -> None:
     assert "smallest id" in prompt
     assert "first call `neighborhood`" in prompt
     assert "Use final `query(spec)` to produce the exact label" in prompt
+    assert "`entity` object into `submit_draft.entity_json`" in prompt
+    assert "encoded as JSON" not in prompt
     assert "`preview` and `relationship_summary` are orientation context" in prompt
     assert "not final label evidence" in prompt
     assert "must never expose raw primary-key or row_id values" in prompt

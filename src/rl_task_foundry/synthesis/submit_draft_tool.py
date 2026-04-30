@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import Field, PrivateAttr, ValidationError, field_validator
+from pydantic import Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 from rl_task_foundry.config.models import AppConfig
 from rl_task_foundry.infra.sdk_helpers import preview_payload
@@ -91,6 +91,13 @@ _LABEL_LOCKING_REPAIR_ERROR_VALUES = frozenset(
     }
 )
 
+_REPAIR_ONLY_DATA_BOUNDARY_ERROR_VALUES = frozenset(
+    {
+        *_LABEL_LOCKING_REPAIR_ERROR_VALUES,
+        SubmitDraftErrorCode.LABEL_CHANGED_DURING_REPAIR.value,
+    }
+)
+
 
 _FEEDBACK_ONLY_ERROR_CODES = frozenset(
     {
@@ -125,6 +132,8 @@ _FEEDBACK_ONLY_ERROR_CODES = frozenset(
 )
 
 JsonScalar = str | int | float | bool
+LabelJsonInput = str | dict[str, JsonScalar] | list[dict[str, JsonScalar]]
+EntityJsonInput = str | dict[str, JsonScalar]
 
 
 _PROVIDER_TOOL_INPUT_TAIL_PREFIXES = (
@@ -271,6 +280,88 @@ def _json_control_char_escape(char: str) -> str:
     return escapes.get(char, f"\\u{ord(char):04x}")
 
 
+def _normalize_binding_aliases(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    if "label_field" not in normalized and "output" in normalized:
+        normalized["label_field"] = normalized.pop("output")
+    if "requested_by_phrase" not in normalized and "phrase" in normalized:
+        normalized["requested_by_phrase"] = normalized.pop("phrase")
+    return normalized
+
+
+def _binding_phrase_surface(value: object) -> str:
+    return " ".join(str(value).casefold().split())
+
+
+def _is_binding_alias_object(value: dict[object, object]) -> bool:
+    return bool(
+        set(value).intersection(
+            {
+                "label_field",
+                "requested_by_phrase",
+                "output",
+                "phrase",
+                "direction",
+            }
+        )
+    )
+
+
+def _normalize_output_bindings_aliases(value: object) -> object:
+    if isinstance(value, dict):
+        if _is_binding_alias_object(value):
+            return [_normalize_binding_aliases(value)]
+        return [
+            {"label_field": str(label_field), "requested_by_phrase": phrase}
+            for label_field, phrase in value.items()
+        ]
+    if isinstance(value, list):
+        return [_normalize_binding_aliases(item) for item in value]
+    return value
+
+
+def _normalize_order_bindings_aliases(value: object) -> object:
+    if isinstance(value, dict):
+        if _is_binding_alias_object(value):
+            return [_normalize_binding_aliases(value)]
+        return [
+            {"label_field": str(label_field), "requested_by_phrase": phrase}
+            for label_field, phrase in value.items()
+        ]
+    if isinstance(value, list):
+        return [_normalize_binding_aliases(item) for item in value]
+    return value
+
+
+def _infer_order_label_field_from_phrase(
+    *,
+    order_phrase: object,
+    output_bindings: object,
+) -> str | None:
+    if not isinstance(order_phrase, str):
+        return None
+    order_surface = _binding_phrase_surface(order_phrase)
+    if not order_surface:
+        return None
+    if not isinstance(output_bindings, list):
+        return None
+    matches: list[str] = []
+    for binding in output_bindings:
+        if not isinstance(binding, dict):
+            continue
+        label_field = binding.get("label_field")
+        phrase = binding.get("requested_by_phrase")
+        if not isinstance(label_field, str) or not isinstance(phrase, str):
+            continue
+        phrase_surface = _binding_phrase_surface(phrase)
+        if phrase_surface and phrase_surface in order_surface:
+            matches.append(label_field)
+    unique_matches = list(dict.fromkeys(matches))
+    return unique_matches[0] if len(unique_matches) == 1 else None
+
+
 def _submit_draft_required_feedback_message(final_output_text: str) -> str | None:
     try:
         payload = json.loads(final_output_text)
@@ -326,6 +417,11 @@ class AnswerOutputBinding(StrictModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_binding_aliases(cls, value: object) -> object:
+        return _normalize_binding_aliases(value)
+
     @field_validator("label_field", "requested_by_phrase")
     @classmethod
     def _validate_required_text(cls, value: str) -> str:
@@ -368,6 +464,11 @@ class AnswerOrderBinding(StrictModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_binding_aliases(cls, value: object) -> object:
+        return _normalize_binding_aliases(value)
+
     @field_validator("requested_by_phrase")
     @classmethod
     def _validate_requested_by_phrase(cls, value: str) -> str:
@@ -391,8 +492,11 @@ class AnswerContract(StrictModel):
     answer_phrase: str = Field(
         min_length=1,
         description=(
-            "Exact contiguous substring from user_request that states what the "
-            "user wants returned. Do not restate tables, columns, or SQL."
+            "For scalar labels, exact contiguous substring from user_request "
+            "that states what the user wants returned. For list labels with "
+            "complete output_bindings, this may be a short natural summary of "
+            "the returned answer target; each returned field still needs an "
+            "exact output binding. Do not restate tables, columns, or SQL."
         ),
     )
     constraint_phrases: list[str] = Field(
@@ -447,6 +551,37 @@ class AnswerContract(StrictModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_contract_aliases(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "output_bindings" in normalized:
+            normalized["output_bindings"] = _normalize_output_bindings_aliases(
+                normalized["output_bindings"]
+            )
+        if "order_bindings" in normalized:
+            normalized["order_bindings"] = _normalize_order_bindings_aliases(
+                normalized["order_bindings"]
+            )
+        order_by_phrase = normalized.pop("order_by_phrase", None)
+        if (
+            order_by_phrase is not None
+            and not normalized.get("order_bindings")
+        ):
+            order_binding: dict[str, object] = {
+                "requested_by_phrase": order_by_phrase,
+            }
+            inferred_label_field = _infer_order_label_field_from_phrase(
+                order_phrase=order_by_phrase,
+                output_bindings=normalized.get("output_bindings"),
+            )
+            if inferred_label_field is not None:
+                order_binding["label_field"] = inferred_label_field
+            normalized["order_bindings"] = [order_binding]
+        return normalized
+
     @field_validator("answer_phrase")
     @classmethod
     def _validate_answer_phrase(cls, value: str) -> str:
@@ -472,13 +607,15 @@ class SubmitDraftPayload(StrictModel):
         min_length=1,
         description="Selected topic string derived from the grounded label and evidence.",
     )
-    label_json: str = Field(
+    label_json: LabelJsonInput = Field(
         min_length=1,
         description=(
-            "JSON string for the canonical submit_result payload, copied "
-            "exactly from the latest successful query result. For scalar, the "
-            "JSON must encode one object with the aggregate field. For list, "
-            "it must encode an array of row objects. Do not expose hidden "
+            "Canonical submit_result payload copied exactly from the latest "
+            "successful query result. Prefer passing the JSON object or array "
+            "directly instead of wrapping it as a quoted string; a JSON string "
+            "encoding that same object or array is accepted only for provider "
+            "compatibility. For scalar, use one object with the aggregate "
+            "field. For list, use an array of row objects. Do not expose hidden "
             "PK/FK handle values as answer values, and do not make a raw "
             "handle the main selected answer merely because it is easy to "
             "query. The label must answer the exact scope of user_request; if "
@@ -495,16 +632,18 @@ class SubmitDraftPayload(StrictModel):
             "asks to receive those values."
         ),
     )
-    entity_json: str = Field(
+    entity_json: EntityJsonInput = Field(
         min_length=1,
         description=(
-            "JSON string for the hidden current-context grounding handle, e.g. "
-            '{"<pk_name>": 123}. It may contain observed primary-key values; '
-            "those values should stay hidden from user_request. This is not a "
-            "decorative anchor: the canonical label must be scoped to this "
-            "context, either directly or through observed values derived from it. "
-            "If the answer rows come from a parent/list/history scope, put that "
-            "parent or current-subject key in entity_json instead of only a child "
+            "Hidden current-context grounding handle. Prefer passing the JSON "
+            'object directly, e.g. {"<pk_name>": 123}; a JSON string encoding '
+            "that object is accepted only for provider compatibility. It may "
+            "contain observed primary-key values; those values should stay "
+            "hidden from user_request. This is not a decorative anchor: the "
+            "canonical label must be scoped to this context, either directly "
+            "or through observed values derived from it. If the answer rows "
+            "come from a parent/list/history scope, put that parent or "
+            "current-subject key in entity_json instead of only a child "
             "record key."
         ),
     )
@@ -548,7 +687,9 @@ class SubmitDraftPayload(StrictModel):
             "exact user_request phrases for the answer target, entity scope, "
             "filters, ordering, tie-breaks, or fixed list size. Optional "
             "binding fields may map returned label fields and order wording "
-            "back to exact request phrases. Do not restate tables, columns, "
+            "back to exact request phrases. For list labels, complete "
+            "output_bindings can carry exact answer-target binding while "
+            "answer_phrase summarizes the returned answer. Do not restate tables, columns, "
             "operators, or SQL; the latest successful query supplies "
             "structural evidence."
         ),
@@ -888,12 +1029,17 @@ def _contract_component_phrase_errors(
     contract: AnswerContract,
     *,
     user_request: str,
+    canonical_answer: object,
 ) -> list[str]:
     missing_phrases: list[str] = []
-    components: list[tuple[str, str | None]] = [
-        ("answer_phrase", contract.answer_phrase),
-        ("limit", contract.limit_phrase),
-    ]
+    components: list[tuple[str, str | None]] = []
+    if not _list_answer_phrase_is_covered_by_output_bindings(
+        contract,
+        canonical_answer=canonical_answer,
+        user_request=user_request,
+    ):
+        components.append(("answer_phrase", contract.answer_phrase))
+    components.append(("limit", contract.limit_phrase))
     components.extend(
         (f"constraint_phrases[{index}]", phrase)
         for index, phrase in enumerate(contract.constraint_phrases)
@@ -919,6 +1065,30 @@ def _contract_component_phrase_errors(
         ):
             missing_phrases.append(path)
     return missing_phrases
+
+
+def _list_answer_phrase_is_covered_by_output_bindings(
+    contract: AnswerContract,
+    *,
+    canonical_answer: object,
+    user_request: str,
+) -> bool:
+    if contract.kind != "list":
+        return False
+    label_fields = set(_answer_field_names(canonical_answer))
+    if not label_fields:
+        return False
+    bindings = contract.output_bindings or []
+    bound_fields = {binding.label_field for binding in bindings}
+    if label_fields != bound_fields:
+        return False
+    return all(
+        _phrase_is_in_request(
+            phrase=binding.requested_by_phrase,
+            user_request=user_request,
+        )
+        for binding in bindings
+    )
 
 
 def _answer_field_names(value: object) -> list[str]:
@@ -1516,6 +1686,39 @@ def _canonical_label_matches_query_result(
     return canonical_json(label, default=str) == canonical_json(expected, default=str)
 
 
+def _canonical_label_row_order_repair(
+    *,
+    label: object,
+    query_result: dict[str, object],
+    answer_kind: str | None = None,
+) -> object | None:
+    expected = _canonical_from_latest_query_result(
+        query_result,
+        answer_kind=answer_kind,
+    )
+    if not isinstance(label, list) or not isinstance(expected, list):
+        return None
+    if len(label) != len(expected):
+        return None
+    label_rows = [
+        canonical_json(row, default=str)
+        for row in label
+        if isinstance(row, dict)
+    ]
+    expected_rows = [
+        canonical_json(row, default=str)
+        for row in expected
+        if isinstance(row, dict)
+    ]
+    if len(label_rows) != len(label) or len(expected_rows) != len(expected):
+        return None
+    if sorted(label_rows) != sorted(expected_rows):
+        return None
+    if label_rows == expected_rows:
+        return None
+    return expected
+
+
 def _query_limit_from_params(params: object) -> int | None:
     if not isinstance(params, dict):
         return None
@@ -1995,6 +2198,18 @@ class SubmitDraftController:
     def data_tool_budget_feedback(self, *, tool_name: str) -> dict[str, object] | None:
         if self.accepted_draft is not None or self._terminated_too_hard:
             return None
+        if self._data_tools_blocked_by_repair_only_feedback():
+            return {
+                "error": "repair_only_feedback",
+                "message": (
+                    "RepairOnlyFeedback: The last submit_draft feedback only "
+                    "requires repairing user_request/answer_contract wording "
+                    "or restoring the same latest-query label. Do not use "
+                    "data tools for a new target. Call submit_draft with the "
+                    "same label rows/order from the latest successful query "
+                    "and corrected exact request phrases."
+                ),
+            }
         del tool_name
         total_tool_calls = len(self._raw_atomic_tool_calls)
         max_tool_calls = max(1, self.config.synthesis.runtime.max_turns)
@@ -2018,6 +2233,14 @@ class SubmitDraftController:
             "total_tool_calls": total_tool_calls,
             "limit": max_tool_calls,
         }
+
+    def _data_tools_blocked_by_repair_only_feedback(self) -> bool:
+        if self._needs_label_change or not self._last_feedback_error_codes:
+            return False
+        return all(
+            code in _REPAIR_ONLY_DATA_BOUNDARY_ERROR_VALUES
+            for code in self._last_feedback_error_codes
+        )
 
     def _latest_successful_query_result_since_last_submission(self) -> dict[str, object] | None:
         call = self._latest_successful_query_call_since_last_submission()
@@ -2316,6 +2539,7 @@ class SubmitDraftController:
         contract_phrase_errors = _contract_component_phrase_errors(
             payload.answer_contract,
             user_request=payload.user_request,
+            canonical_answer=canonical_answer,
         )
         if contract_phrase_errors:
             error_codes.append(SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING)
@@ -2354,6 +2578,23 @@ class SubmitDraftController:
                     latest_query_params if isinstance(latest_query_params, dict) else None
                 ),
             )
+            row_order_repair = _canonical_label_row_order_repair(
+                label=canonical_answer,
+                query_result=latest_query_result,
+                answer_kind=payload.answer_contract.kind,
+            )
+            if row_order_repair is not None:
+                canonical_answer = row_order_repair
+                payload.label_json = canonical_json(canonical_answer, default=str)
+                payload._cached_canonical_answer = canonical_answer
+                label_signature = canonical_json(canonical_answer, default=str)
+                label_scalar_value_signature = _single_field_scalar_value_signature(
+                    canonical_answer
+                )
+                label_slot_count = _answer_slot_count(canonical_answer)
+                invalid_diagnostics.setdefault("payload_repair_codes", []).append(
+                    "label_row_order_normalized_to_latest_query"
+                )
             if not _canonical_label_matches_query_result(
                 label=canonical_answer,
                 query_result=latest_query_result,
@@ -2844,7 +3085,11 @@ class SubmitDraftController:
                 "not in user_request."
             ),
             SubmitDraftErrorCode.CANONICAL_ANSWER_JSON_INVALID: (
-                "Rejected. Tool schema reminder: label_json must be a valid JSON string."
+                "Rejected. Tool schema reminder: label_json must be the direct "
+                "JSON object/array copied from the latest query result, or a "
+                "valid JSON string encoding that same object/array. Prefer the "
+                "direct object/array form; do not write pseudo-JSON with "
+                "unquoted keys or values."
             ),
             SubmitDraftErrorCode.LABEL_BLANK_STRING_FORBIDDEN: (
                 "Rejected. Label Grounding Policy reminder: the canonical answer contains blank string fields; answer fields require grounded, non-empty values observed in tool results."  # noqa: E501
@@ -2865,10 +3110,10 @@ class SubmitDraftController:
                 "Rejected. Tool schema reminder: answer_contract is required."
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_JSON_INVALID: (
-                "Rejected. Tool schema reminder: answer_contract is a valid JSON object with kind, answer_phrase, constraint_phrases, and limit_phrase; it is not query result JSON, SQL structure, or a malformed JSON string."  # noqa: E501
+                "Rejected. Tool schema reminder: answer_contract is a valid JSON object with kind, answer_phrase, constraint_phrases, and limit_phrase. For list labels, output_bindings entries use label_field and requested_by_phrase; order_bindings entries use requested_by_phrase, direction, and label_field when the order key is returned. It is not query result JSON, SQL structure, or a malformed JSON string."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING: (
-                "Rejected. Label Contract reminder: every answer_contract phrase must be an exact contiguous substring copied from user_request. Feedback Handling Policy reminder: preserve the natural user_request wording and prior label_json fields/values; rewrite the full sentence cleanly when adding missing natural phrases to user_request/answer_contract instead of deleting, renaming, or splicing label fields. When only phrase/binding errors remain, do not call data tools; repair the same label in place."  # noqa: E501
+                "Rejected. Label Contract reminder: every required exact answer_contract phrase must be a contiguous substring copied from user_request. Feedback Handling Policy reminder: preserve the natural user_request wording and prior label_json fields/values; rewrite the full sentence cleanly when adding missing natural phrases to user_request/answer_contract instead of deleting, renaming, or splicing label fields. When only phrase/binding errors remain, do not call data tools; repair the same label in place."  # noqa: E501
                 " List Determinism Policy reminder: order wording must keep the same query/label row order; use ordinary target-language direction words, and do not add an opposite display-order phrase or malformed order phrase during repair."  # noqa: E501
             ),
             SubmitDraftErrorCode.ANSWER_CONTRACT_EVIDENCE_MISSING: (
@@ -3193,11 +3438,8 @@ class SubmitDraftController:
 
 def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
     from agents import FunctionTool
-    from agents.strict_schema import ensure_strict_json_schema
 
-    params_json_schema = ensure_strict_json_schema(
-        SubmitDraftPayload.model_json_schema()
-    )
+    params_json_schema = SubmitDraftPayload.model_json_schema()
 
     async def _invoke_tool(_tool_context: Any, input_json: str) -> str:
         try:
@@ -3263,5 +3505,5 @@ def build_submit_draft_sdk_tool(controller: SubmitDraftController) -> object:
         ),
         params_json_schema=params_json_schema,
         on_invoke_tool=_invoke_tool,
-        strict_json_schema=True,
+        strict_json_schema=False,
     )

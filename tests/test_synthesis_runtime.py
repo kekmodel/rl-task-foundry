@@ -1239,8 +1239,8 @@ def test_data_tool_budget_feedback_allows_free_exploration_before_total_budget(
         result={"anchor": {"table": "customer", "row_id": 45}},
     )
     controller._record_feedback(
-        message="FeedbackError: contract repair",
-        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_BINDING_MISSING],
+        message="FeedbackError: limit repair",
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_LIST_LIMIT_TOO_WIDE],
     )
     for index in range(3):
         controller.record_atomic_tool_call(
@@ -1252,6 +1252,36 @@ def test_data_tool_budget_feedback_allows_free_exploration_before_total_budget(
     assert controller.data_tool_budget_feedback(tool_name="sample") is None
     assert controller.data_tool_budget_feedback(tool_name="profile") is None
     assert controller.data_tool_budget_feedback(tool_name="query") is None
+
+
+def test_data_tool_budget_feedback_blocks_data_tools_for_repair_only_feedback(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(
+            tmp_path,
+            synthesis_runtime={"max_turns": 6},
+        ),
+        requested_topic="results",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+
+    controller._record_feedback(
+        message="FeedbackError: contract repair",
+        error_codes=[SubmitDraftErrorCode.ANSWER_CONTRACT_PHRASE_MISSING],
+    )
+
+    feedback = controller.data_tool_budget_feedback(tool_name="query")
+
+    assert feedback is not None
+    assert feedback["error"] == "repair_only_feedback"
+    assert "same latest-query label" in str(feedback["message"])
+    assert "Call submit_draft" in str(feedback["message"])
 
 
 def test_data_tool_budget_feedback_uses_only_total_tool_budget(
@@ -1341,15 +1371,26 @@ def test_submit_draft_payload_schema_does_not_require_constraint_summary() -> No
         "description"
     ]
 
-def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
+def test_submit_draft_payload_schema_prefers_structured_json_fields() -> None:
     schema = SubmitDraftPayload.model_json_schema()
     entity_schema = schema["properties"]["entity_json"]
     label_schema = schema["properties"]["label_json"]
 
-    assert entity_schema["type"] == "string"
-    assert label_schema["type"] == "string"
-    assert "JSON string" in entity_schema["description"]
-    assert "JSON string" in label_schema["description"]
+    assert {branch["type"] for branch in entity_schema["anyOf"]} == {
+        "object",
+        "string",
+    }
+    assert {branch["type"] for branch in label_schema["anyOf"]} == {
+        "array",
+        "object",
+        "string",
+    }
+    assert "Prefer passing the JSON object directly" in entity_schema["description"]
+    assert "Prefer passing the JSON object or array directly" in label_schema[
+        "description"
+    ]
+    assert "provider compatibility" in entity_schema["description"]
+    assert "provider compatibility" in label_schema["description"]
     assert "scoped to that entity" in label_schema["description"]
     assert "Use 'my'/'own' wording only" in schema["properties"]["user_request"]["description"]
     assert "hidden context naturally represents the requester" in (
@@ -1378,7 +1419,258 @@ def test_submit_draft_payload_schema_uses_strict_json_string_fields() -> None:
     legacy_label_payload["label"] = '{"customer_count": 1}'
     with pytest.raises(ValidationError):
         SubmitDraftPayload.model_validate(legacy_label_payload)
+    structured_payload = _accepted_payload().model_dump(mode="json")
+    structured_payload["label_json"] = {"store_id": 1, "customer_count": 5}
+    structured_payload["entity_json"] = {"customer_id": 1}
+    validated = SubmitDraftPayload.model_validate(structured_payload)
+    assert json.loads(validated.label_json) == {
+        "store_id": 1,
+        "customer_count": 5,
+    }
+    assert json.loads(validated.entity_json) == {"customer_id": 1}
     assert _loose_json_schema_paths(schema) == []
+
+
+def test_submit_draft_payload_normalizes_answer_contract_aliases() -> None:
+    payload_data = _accepted_payload().model_dump(mode="json")
+    payload_data["label_json"] = [
+        {
+            "film_title": "CONGENIALITY QUEST",
+            "rental_date": "2022-08-21T08:55:47+00:00",
+            "return_date": "2022-08-25T07:23:47+00:00",
+        },
+        {
+            "film_title": "DOCTOR GRAIL",
+            "rental_date": "2022-08-20T18:04:40+00:00",
+            "return_date": "2022-08-21T17:36:40+00:00",
+        },
+        {
+            "film_title": "VOYAGE LEGALLY",
+            "rental_date": "2022-08-17T21:41:10+00:00",
+            "return_date": "2022-08-24T20:31:10+00:00",
+        },
+    ]
+    payload_data["user_request"] = (
+        "최근 대여 영화 목록 3건을 대여일 기준 내림차순으로 보여주세요. "
+        "영화 제목, 대여일, 반납일을 포함해 주세요."
+    )
+    payload_data["answer_contract"] = {
+        "kind": "list",
+        "answer_phrase": "최근 대여 영화 목록",
+        "constraint_phrases": [],
+        "limit_phrase": "3건",
+        "order_by_phrase": "대여일 기준 내림차순",
+        "output_bindings": {
+            "film_title": "영화 제목",
+            "rental_date": "대여일",
+            "return_date": "반납일",
+        },
+    }
+
+    payload = SubmitDraftPayload.model_validate(payload_data)
+
+    assert payload.answer_contract.output_bindings is not None
+    assert [
+        binding.model_dump(mode="json")
+        for binding in payload.answer_contract.output_bindings
+    ] == [
+        {"label_field": "film_title", "requested_by_phrase": "영화 제목"},
+        {"label_field": "rental_date", "requested_by_phrase": "대여일"},
+        {"label_field": "return_date", "requested_by_phrase": "반납일"},
+    ]
+    assert payload.answer_contract.order_bindings is not None
+    assert [
+        binding.model_dump(mode="json")
+        for binding in payload.answer_contract.order_bindings
+    ] == [
+        {
+            "requested_by_phrase": "대여일 기준 내림차순",
+            "direction": None,
+            "label_field": "rental_date",
+        }
+    ]
+
+
+def test_submit_draft_payload_normalizes_binding_output_phrase_aliases() -> None:
+    payload_data = _accepted_payload().model_dump(mode="json")
+    payload_data["answer_contract"] = {
+        "kind": "list",
+        "answer_phrase": "배정된 매장과 전체 고객 수",
+        "constraint_phrases": [],
+        "limit_phrase": None,
+        "output_bindings": [
+            {"output": "store_id", "phrase": "배정된 매장"},
+            {"output": "customer_count", "phrase": "전체 고객 수"},
+        ],
+        "order_bindings": [
+            {
+                "output": "store_id",
+                "phrase": "배정된 매장",
+                "direction": "asc",
+            }
+        ],
+    }
+
+    payload = SubmitDraftPayload.model_validate(payload_data)
+
+    assert payload.answer_contract.output_bindings is not None
+    assert payload.answer_contract.output_bindings[0].label_field == "store_id"
+    assert (
+        payload.answer_contract.output_bindings[0].requested_by_phrase
+        == "배정된 매장"
+    )
+    assert payload.answer_contract.order_bindings is not None
+    assert payload.answer_contract.order_bindings[0].label_field == "store_id"
+    assert (
+        payload.answer_contract.order_bindings[0].requested_by_phrase
+        == "배정된 매장"
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_allows_list_summary_answer_phrase_when_outputs_bind(
+    tmp_path: Path,
+) -> None:
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="recent_rentals",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=_draft_with_task_bundle,
+        max_submissions=3,
+    )
+    label = [
+        {"film_title": "ALPHA", "rental_date": "2026-01-03"},
+        {"film_title": "BETA", "rental_date": "2026-01-02"},
+        {"film_title": "GAMMA", "rental_date": "2026-01-01"},
+    ]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "recent_rentals",
+            "label_json": label,
+            "entity_json": {"customer_id": 1},
+            "user_request": (
+                "최근 대여 3건을 대여일 내림차순으로 보여주세요. "
+                "영화 제목과 대여일을 포함해 주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "최근 대여 영화 목록",
+                "constraint_phrases": ["대여일 내림차순"],
+                "limit_phrase": "3건",
+                "output_bindings": [
+                    {"label_field": "film_title", "requested_by_phrase": "영화 제목"},
+                    {"label_field": "rental_date", "requested_by_phrase": "대여일"},
+                ],
+                "order_bindings": [
+                    {
+                        "requested_by_phrase": "대여일 내림차순",
+                        "direction": "desc",
+                        "label_field": "rental_date",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        label,
+        answer_contract=payload.answer_contract,
+        referenced_columns=[
+            {"usage": "order_by", "table": "rental", "column": "rental_date"}
+        ],
+        query_params={"spec": {"limit": 3}},
+        result_extra={
+            "ordering_diagnostics": {
+                "order_by_outputs": ["rental_date"],
+                "duplicate_order_key_in_returned_rows": False,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert message.startswith("Accepted")
+    assert controller.accepted_draft is not None
+
+
+@pytest.mark.asyncio
+async def test_submit_draft_normalizes_permuted_list_label_to_latest_query_order(
+    tmp_path: Path,
+) -> None:
+    captured_payloads: list[SubmitDraftPayload] = []
+
+    def build_draft(payload: SubmitDraftPayload):
+        captured_payloads.append(payload)
+        return _draft_with_task_bundle(payload)
+
+    controller = SubmitDraftController(
+        config=_config_with_synthesis_output(tmp_path),
+        requested_topic="recent_rentals",
+        solver_orchestrator=_FakeSolverOrchestrator(
+            matched_solver_runs=1,
+            total_solver_runs=2,
+        ),
+        build_draft=build_draft,
+        max_submissions=3,
+    )
+    query_rows = [
+        {"film_title": "ALPHA", "rental_date": "2026-01-03"},
+        {"film_title": "BETA", "rental_date": "2026-01-02"},
+        {"film_title": "GAMMA", "rental_date": "2026-01-01"},
+    ]
+    submitted_rows = [query_rows[1], query_rows[0], query_rows[2]]
+    payload = SubmitDraftPayload.model_validate(
+        {
+            "topic": "recent_rentals",
+            "label_json": submitted_rows,
+            "entity_json": {"customer_id": 1},
+            "user_request": (
+                "최근 대여 3건을 대여일 내림차순으로 보여주세요. "
+                "영화 제목과 대여일을 포함해 주세요."
+            ),
+            "answer_contract": {
+                "kind": "list",
+                "answer_phrase": "최근 대여 3건",
+                "constraint_phrases": ["대여일 내림차순"],
+                "limit_phrase": "3건",
+                "output_bindings": [
+                    {"label_field": "film_title", "requested_by_phrase": "영화 제목"},
+                    {"label_field": "rental_date", "requested_by_phrase": "대여일"},
+                ],
+                "order_bindings": [
+                    {
+                        "requested_by_phrase": "대여일 내림차순",
+                        "direction": "desc",
+                        "label_field": "rental_date",
+                    }
+                ],
+            },
+        }
+    )
+    _record_query_evidence(
+        controller,
+        query_rows,
+        answer_contract=payload.answer_contract,
+        referenced_columns=[
+            {"usage": "order_by", "table": "rental", "column": "rental_date"}
+        ],
+        query_params={"spec": {"limit": 3}},
+        result_extra={
+            "ordering_diagnostics": {
+                "order_by_outputs": ["rental_date"],
+                "duplicate_order_key_in_returned_rows": False,
+            }
+        },
+    )
+
+    message = await controller.submit(payload)
+
+    assert message.startswith("Accepted")
+    assert captured_payloads
+    assert captured_payloads[0].canonical_answer == query_rows
 
 
 def test_submit_draft_payload_rejects_hidden_entity_block_user_request(
@@ -1939,7 +2231,7 @@ async def test_submit_draft_rejects_label_reset_after_contract_repair_feedback(
 
     first_message = await controller.submit(first_payload)
 
-    assert "exact contiguous substring" in first_message
+    assert "required exact answer_contract phrase" in first_message
     assert "When only phrase/binding errors remain" in first_message
     assert "repair the same label in place" in first_message
     assert "same query/label row order" in first_message
@@ -2603,6 +2895,7 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     schema_surface = json.dumps(tool.params_json_schema, sort_keys=True)
 
     assert "Submit one grounded task draft" in tool.description
+    assert tool.strict_json_schema is False
     assert "successful query produced the exact label values" in tool.description
     assert "Answer shape copied from the latest query" in schema_surface
     assert "the query rows array" in schema_surface
@@ -2655,8 +2948,9 @@ def test_submit_draft_tool_schema_descriptions_are_prompt_aligned(tmp_path: Path
     assert "generic latest/recent time wording is not enough" in schema_surface
     assert "multiple reachable source surfaces could answer them" in schema_surface
     assert "Do not put source table or SQL column names here" in schema_surface
-    assert "JSON string for the hidden current-context grounding handle" in schema_surface
-    assert "JSON string for the canonical submit_result payload" in schema_surface
+    assert "Prefer passing the JSON object directly" in schema_surface
+    assert "Prefer passing the JSON object or array directly" in schema_surface
+    assert "accepted only for provider compatibility" in schema_surface
     assert "decorative anchor" in schema_surface
     assert "observed values derived from it" in schema_surface
     assert "parent or current-subject key in entity_json" in schema_surface
@@ -3194,7 +3488,7 @@ async def test_submit_draft_rejects_answer_contract_phrase_absent_from_request(
 
     message = await controller.submit(payload)
 
-    assert "every answer_contract phrase" in message
+    assert "every required exact answer_contract phrase" in message
     assert "preserve the natural user_request wording" in message
     assert "prior label_json fields/values" in message
     assert "rewrite the full sentence cleanly" in message
@@ -3240,7 +3534,7 @@ async def test_submit_draft_rejects_binding_phrase_absent_from_request(
 
     message = await controller.submit(payload)
 
-    assert "every answer_contract phrase" in message
+    assert "every required exact answer_contract phrase" in message
     assert "rewrite the full sentence cleanly" in message
     assert "splicing label fields" in message
     assert "Missing request phrases" in message
@@ -3279,6 +3573,8 @@ def test_submit_draft_reports_malformed_answer_contract_as_feedback(
     )
 
     assert "answer_contract is a valid JSON object" in message
+    assert "label_field and requested_by_phrase" in message
+    assert "order_bindings entries" in message
     assert "malformed JSON string" in message
     assert controller.attempts == []
     assert controller.submissions_left() == 2

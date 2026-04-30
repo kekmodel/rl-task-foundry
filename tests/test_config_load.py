@@ -49,7 +49,7 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.synthesis.runtime.run_timeout_s == 300
     assert config.synthesis.runtime.anchor_candidates_enabled is True
     assert config.synthesis.runtime.anchor_candidate_limit == 10
-    assert config.synthesis.runtime.max_generation_attempts == 5
+    assert config.synthesis.runtime.max_generation_attempts == 3
     assert config.synthesis.runtime.max_consecutive_category_discards == 3
     assert config.synthesis.runtime.category_backoff_duration_s == 3600
     assert config.synthesis.runtime.schema_summary_max_tables == 32
@@ -66,8 +66,8 @@ def test_load_config_uses_solver_run_count_source_of_truth():
     assert config.calibration.lower_pass_rate == 0.5
     assert config.calibration.upper_pass_rate == 0.9
     assert config.calibration.ci_alpha == 0.1
-    assert config.calibration.solver_batch_size == 4
-    assert config.calibration.max_solver_runs == 20
+    assert config.calibration.solver_batch_size == 8
+    assert config.calibration.max_solver_runs == 8
     assert config.provider_resilience.minimum_request_count == 2
     assert config.task_registry.minhash_num_perm == 128
     assert config.task_registry.default_query_limit == 20

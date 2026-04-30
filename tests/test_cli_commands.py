@@ -46,14 +46,14 @@ def test_cli_validate_config_command():
     normalized = result.stdout.replace("\n", "")
     assert result.exit_code == 0
     assert "solver_model_candidates=1" in normalized
-    assert "max_solver_runs=20" in normalized
+    assert "max_solver_runs=8" in normalized
     assert "composer=" in normalized
     assert (
         "atomic_tools=max_tools=300,bounded_result_limit=100,max_batch_values=128,float_precision=2"
     ) in normalized
     assert (
         "synthesis_runtime=max_turns=30,tracing=True,sdk_sessions_enabled=False,"
-        "max_generation_attempts=5,"
+        "max_generation_attempts=3,"
         "max_consecutive_category_discards=3,category_backoff_duration_s=3600"
     ) in normalized
     assert "estimated_total_db_connections=40" in normalized
